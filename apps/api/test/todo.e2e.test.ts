@@ -46,7 +46,7 @@ describe('to-dos, end to end', () => {
   it('5. "add Call the plumber" through chat; "list" shows it', async () => {
     const add = await alice.chat('add Call the plumber');
     expect(add.status).toBe(200);
-    expect(add.body.toolCalls).toEqual([{ tool: 'create-todo', ok: true }]);
+    expect(add.body.toolCalls).toEqual([{ tool: 'create-todo', ok: true, outcome: 'done' }]);
     const list = await alice.chat('list');
     expect(list.body.reply).toContain('Call the plumber');
   });

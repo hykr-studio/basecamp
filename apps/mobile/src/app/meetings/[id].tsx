@@ -1,77 +1,81 @@
-import { RescheduleMeetingSpec } from '@app/contracts';
-import { Link, useLocalSearchParams } from 'expo-router';
+import { ApiError } from '@app/api-client';
+import { type MeetingView, RescheduleMeetingSpec } from '@app/contracts';
+import { Link, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button } from '../../components/Button';
 import { CloseMeetingForm } from '../../components/CloseMeetingForm';
-import { StatusBadge, TodoRow } from '../../components/Rows';
+import { NoteRow, StatusBadge, TodoRow } from '../../components/Rows';
+import { SectionHeading } from '../../components/ScreenTitle';
 import { useScreenContext } from '../../framework/assistant-context';
-import { at, when } from '../../framework/dates';
+import { DateField, TimeField } from '../../framework/DateField';
+import { at, clock, isValidDate, isValidTime, when } from '../../framework/dates';
+import { EmptyState } from '../../framework/EmptyState';
+import { Field } from '../../framework/Field';
 import {
   errorMessage,
+  needsClosing,
   useCommand,
   useEntity,
   useEntityList,
   useEntityMutation,
 } from '../../framework/hooks';
-import { colors, styles } from '../../theme';
+import { Icon } from '../../framework/Icon';
+import { useToast } from '../../framework/Toast';
+import { colors, listRow, space, styles } from '../../theme';
 
-function Reschedule({
-  meetingId,
-  startsAt,
-  endsAt,
-  onDone,
-}: {
-  meetingId: string;
-  startsAt: string;
-  endsAt: string;
-  onDone: () => void;
-}) {
+function Reschedule({ meeting, onDone }: { meeting: MeetingView; onDone: () => void }) {
   const move = useCommand(RescheduleMeetingSpec);
-  const start = new Date(startsAt);
+  const toast = useToast();
+  const start = new Date(meeting.startsAt);
   const [date, setDate] = useState(start.toLocaleDateString('sv'));
   const [time, setTime] = useState(start.toTimeString().slice(0, 5));
-  const length = new Date(endsAt).getTime() - start.getTime();
+  const length = new Date(meeting.endsAt).getTime() - start.getTime();
   return (
     <View style={styles.card}>
-      <Text style={styles.heading}>Reschedule</Text>
+      <View style={[styles.row, { justifyContent: 'space-between' }]}>
+        <Text style={styles.heading}>Reschedule</Text>
+        <Button title="Cancel" variant="subtle" onPress={onDone} />
+      </View>
       <Text style={styles.muted}>Open to-dos with due dates move by the same number of days.</Text>
-      <View style={styles.row}>
-        <TextInput
-          style={[styles.input, { width: 150 }]}
-          value={date}
-          onChangeText={setDate}
-          placeholder="YYYY-MM-DD"
-          placeholderTextColor={colors.muted}
-        />
-        <TextInput
-          style={[styles.input, { width: 100 }]}
-          value={time}
-          onChangeText={setTime}
-          placeholder="HH:MM"
-          placeholderTextColor={colors.muted}
-        />
+      <View style={[styles.row, { flexWrap: 'wrap', alignItems: 'flex-end' }]}>
+        <DateField label="New date" value={date} onChange={setDate} />
+        <TimeField label="Starts" value={time} onChange={setTime} />
         <Button
-          title="Move"
+          title="Move meeting"
           busy={move.isPending}
+          disabled={!isValidDate(date) || !isValidTime(time)}
           onPress={async () => {
             const newStart = at(date, time);
             const result = await move.mutateAsync({
-              meetingId,
+              meetingId: meeting.id,
               startsAt: newStart,
               endsAt: new Date(new Date(newStart).getTime() + length).toISOString(),
             });
-            if (result.status === 'done') onDone();
+            if (result.status === 'done') {
+              const n = result.value.shifted.length;
+              toast.show({
+                tone: 'success',
+                message: `Moved to ${when(newStart)}${n ? `; ${n} to-do date${n === 1 ? '' : 's'} moved with it` : ''}`,
+              });
+              onDone();
+            }
           }}
         />
-        <Button title="Cancel" variant="ghost" onPress={onDone} />
       </View>
       {move.error && <Text style={styles.error}>{errorMessage(move.error)}</Text>}
     </View>
   );
 }
 
-/** One meeting: its notes and to-dos; edit, add, reschedule, close. */
+function statusLine(m: MeetingView): string | null {
+  if (m.status === 'closed') return 'Closed: its summary note and to-dos are below.';
+  if (needsClosing(m))
+    return 'This meeting has started. Close it to record its summary and to-dos.';
+  return null;
+}
+
+/** One meeting: its notes and to-dos; reschedule; close. */
 export default function MeetingDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   useScreenContext({ screen: 'meeting', meetingId: id });
@@ -85,105 +89,168 @@ export default function MeetingDetail() {
   const [newNote, setNewNote] = useState('');
   const [newTodo, setNewTodo] = useState('');
 
-  if (meeting.error)
-    return <Text style={[styles.error, { padding: 16 }]}>{errorMessage(meeting.error)}</Text>;
+  const back = (
+    <Link href="/meetings" asChild>
+      <Pressable
+        accessibilityRole="link"
+        style={StyleSheet.flatten([
+          styles.row,
+          { gap: space.xs, minHeight: 44, alignSelf: 'flex-start' as const },
+        ])}
+      >
+        <Icon name="chevron-left" color={colors.primary} />
+        <Text style={[styles.label, { color: colors.primary }]}>Meetings</Text>
+      </Pressable>
+    </Link>
+  );
+
+  if (meeting.error) {
+    const missing = meeting.error instanceof ApiError && [400, 404].includes(meeting.error.status);
+    return (
+      <View style={styles.content}>
+        {back}
+        <EmptyState
+          icon={missing ? 'calendar' : 'alert-circle'}
+          title={missing ? "This meeting doesn't exist" : "Couldn't load this meeting"}
+          body={
+            missing
+              ? 'It may have been deleted, or the link is wrong.'
+              : errorMessage(meeting.error)
+          }
+          action={
+            missing
+              ? { label: 'Back to meetings', onPress: () => router.navigate('/meetings') }
+              : { label: 'Try again', onPress: () => meeting.refetch() }
+          }
+        />
+      </View>
+    );
+  }
   const m = meeting.data;
-  if (!m) return <Text style={[styles.muted, { padding: 16 }]}>Loading…</Text>;
+  if (!m) return <Text style={[styles.muted, { padding: space.lg }]}>Loading…</Text>;
   const closed = m.status === 'closed';
+  const started = new Date(m.startsAt).getTime() <= Date.now();
+  const line = statusLine(m);
+  const summaryTitle = `Summary: ${m.title}`;
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <Link href="/meetings" style={[styles.muted, { color: colors.primary }]}>
-        ← Meetings
-      </Link>
-      <View style={styles.card}>
-        <View style={[styles.row, { justifyContent: 'space-between' }]}>
-          <Text style={styles.title}>{m.title}</Text>
-          <StatusBadge status={m.status} />
+      {back}
+      <View style={{ gap: space.sm }}>
+        <View style={[styles.row, { justifyContent: 'space-between', flexWrap: 'wrap' }]}>
+          <Text style={styles.title} accessibilityRole="header">
+            {m.title}
+          </Text>
+          <StatusBadge meeting={m} />
         </View>
         <Text style={styles.muted}>
-          {when(m.startsAt)} –{' '}
-          {new Date(m.endsAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+          {when(m.startsAt)}–{clock(m.endsAt)}
           {m.attendees.length ? ` · ${m.attendees.join(', ')}` : ''}
         </Text>
-        {!closed && (
-          <View style={[styles.row, { flexWrap: 'wrap' }]}>
-            {m.status === 'scheduled' && (
+        {line && (
+          <Text style={[styles.text, needsClosing(m) && { color: colors.warnText }]}>{line}</Text>
+        )}
+        {!closed && !panel && (
+          <View style={[styles.row, { flexWrap: 'wrap', marginTop: space.xs }]}>
+            <Button title="Close meeting" icon="check-circle" onPress={() => setPanel('close')} />
+            <Button
+              title="Reschedule"
+              variant="secondary"
+              icon="calendar"
+              onPress={() => setPanel('reschedule')}
+            />
+            {m.status === 'scheduled' && started && (
               <Button
-                title="Mark held"
-                variant="ghost"
+                title="Mark as held"
+                variant="subtle"
                 onPress={() =>
                   meetingMutation.update.mutate({ id: m.id, patch: { status: 'held' } })
                 }
               />
             )}
-            <Button title="Reschedule" variant="ghost" onPress={() => setPanel('reschedule')} />
-            <Button title="Close meeting" onPress={() => setPanel('close')} />
           </View>
         )}
       </View>
 
-      {panel === 'reschedule' && (
-        <Reschedule
-          meetingId={m.id}
-          startsAt={m.startsAt}
-          endsAt={m.endsAt}
-          onDone={() => setPanel(null)}
-        />
-      )}
+      {panel === 'reschedule' && <Reschedule meeting={m} onDone={() => setPanel(null)} />}
       {panel === 'close' && !closed && (
         <CloseMeetingForm meeting={m} onDone={() => setPanel(null)} />
       )}
 
-      <View style={styles.card}>
-        <Text style={styles.heading}>Notes</Text>
-        {notes.items.map((n) => (
-          <View key={n.id} style={{ gap: 2 }}>
-            <Text style={styles.text}>{n.title}</Text>
-            <Text style={styles.muted}>{n.body}</Text>
+      <View style={styles.section}>
+        <SectionHeading>Notes</SectionHeading>
+        {notes.items.length === 0 ? (
+          <Text style={styles.muted}>
+            {closed ? 'No notes.' : 'No notes yet. Closing the meeting writes a summary note.'}
+          </Text>
+        ) : (
+          <View>
+            {notes.items.map((n, i) => (
+              <View key={n.id} style={listRow(i, notes.items.length)}>
+                <NoteRow note={n.title === summaryTitle ? { ...n, title: 'Summary' } : n} />
+              </View>
+            ))}
           </View>
-        ))}
-        <View style={styles.row}>
-          <TextInput
-            style={[styles.input, { flex: 1 }]}
-            value={newNote}
-            onChangeText={setNewNote}
-            placeholder="Add a note"
-            placeholderTextColor={colors.muted}
-          />
-          <Button
-            title="Add"
-            disabled={!newNote.trim()}
-            onPress={async () => {
-              await noteMutation.create.mutateAsync({ title: newNote.trim(), meetingId: m.id });
-              setNewNote('');
-            }}
-          />
-        </View>
+        )}
+        {!closed && (
+          <View style={[styles.row, { alignItems: 'flex-end' }]}>
+            <Field
+              label="Add a note"
+              value={newNote}
+              onChangeText={setNewNote}
+              placeholder="Supplier quote received"
+            />
+            <Button
+              title="Add note"
+              icon="plus"
+              variant="secondary"
+              disabled={!newNote.trim()}
+              onPress={async () => {
+                await noteMutation.create.mutateAsync({ title: newNote.trim(), meetingId: m.id });
+                setNewNote('');
+              }}
+            />
+          </View>
+        )}
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.heading}>To-dos</Text>
-        {todos.items.map((t) => (
-          <TodoRow key={t.id} todo={t} />
-        ))}
-        <View style={styles.row}>
-          <TextInput
-            style={[styles.input, { flex: 1 }]}
-            value={newTodo}
-            onChangeText={setNewTodo}
-            placeholder="Add a to-do"
-            placeholderTextColor={colors.muted}
-          />
-          <Button
-            title="Add"
-            disabled={!newTodo.trim()}
-            onPress={async () => {
-              await todoMutation.create.mutateAsync({ title: newTodo.trim(), meetingId: m.id });
-              setNewTodo('');
-            }}
-          />
-        </View>
+      <View style={styles.section}>
+        <SectionHeading>To-dos</SectionHeading>
+        {todos.items.length === 0 ? (
+          <Text style={styles.muted}>
+            {closed
+              ? 'No to-dos.'
+              : 'No to-dos yet. Action items become to-dos when you close the meeting.'}
+          </Text>
+        ) : (
+          <View>
+            {todos.items.map((t, i) => (
+              <View key={t.id} style={listRow(i, todos.items.length)}>
+                <TodoRow todo={t} />
+              </View>
+            ))}
+          </View>
+        )}
+        {!closed && (
+          <View style={[styles.row, { alignItems: 'flex-end' }]}>
+            <Field
+              label="Add a to-do"
+              value={newTodo}
+              onChangeText={setNewTodo}
+              placeholder="Print the drawings"
+            />
+            <Button
+              title="Add to-do"
+              icon="plus"
+              variant="secondary"
+              disabled={!newTodo.trim()}
+              onPress={async () => {
+                await todoMutation.create.mutateAsync({ title: newTodo.trim(), meetingId: m.id });
+                setNewTodo('');
+              }}
+            />
+          </View>
+        )}
       </View>
     </ScrollView>
   );

@@ -7,8 +7,10 @@ import { AGENT_ID, INSTRUCTIONS, isFakeModel, modelId } from './version.js';
 
 /** Today's date and where the person is, from the chat endpoint's request context. */
 function instructions({ requestContext }: { requestContext?: { get(key: string): unknown } }) {
+  const timeZone = (requestContext?.get('timeZone') as string | undefined) ?? 'UTC';
   const today =
-    (requestContext?.get('today') as string | undefined) ?? new Date().toISOString().slice(0, 10);
+    (requestContext?.get('today') as string | undefined) ??
+    new Date().toLocaleDateString('sv', { timeZone });
   const screen = requestContext?.get('screen') as string | undefined;
   const meetingId = requestContext?.get('meetingId') as string | undefined;
   const where = meetingId
@@ -16,7 +18,9 @@ function instructions({ requestContext }: { requestContext?: { get(key: string):
     : screen
       ? `The user is on the ${screen} screen.`
       : '';
-  return INSTRUCTIONS.replace('{date}', today).replace('{screen}', where);
+  return INSTRUCTIONS.replace('{date}', today)
+    .replace('{timeZone}', timeZone)
+    .replace('{screen}', where);
 }
 
 export function createTodoAgent(): Agent {

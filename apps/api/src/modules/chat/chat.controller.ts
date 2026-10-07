@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { mastra } from '@app/agents';
-import { ChatRequest, type ChatResponse, type Principal } from '@app/contracts';
+import {
+  ChatRequest,
+  type ChatResponse,
+  type Principal,
+  type ToolCallSummary,
+} from '@app/contracts';
 import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@app/core';
 import { RequestContext } from '@mastra/core/request-context';
 import {
@@ -17,6 +22,16 @@ import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 import { createZodDto } from 'nestjs-zod';
 
 class ChatDto extends createZodDto(ChatRequest) {}
+
+function validTimeZone(zone: string | undefined): string {
+  if (!zone) return 'UTC';
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: zone });
+    return zone;
+  } catch {
+    return 'UTC';
+  }
+}
 
 // The shared Mastra instance: runs are traced and scored, and show up in Studio.
 const agent = mastra.getAgent('todoAgent');
@@ -46,7 +61,10 @@ export class ChatController {
     const requestContext = new RequestContext();
     requestContext.set('userId', p.actor.id);
     requestContext.set('runId', runId);
-    requestContext.set('today', new Date().toISOString().slice(0, 10));
+    // Times and "today" in the person's own time zone (an invalid zone falls back to UTC).
+    const timeZone = validTimeZone(body.timeZone);
+    requestContext.set('timeZone', timeZone);
+    requestContext.set('today', new Date().toLocaleDateString('sv', { timeZone }));
     // Where the person is: a hint only. Tools still load the meeting through the owner scope,
     // so a forged id finds nothing.
     if (body.context) {
@@ -67,12 +85,31 @@ export class ChatController {
       tracingOptions: { traceId: runId, metadata: { userId: p.actor.id } },
     });
 
-    const toolCalls = (result.toolResults ?? []).map((r) => {
+    // "ok" only means the API answered; the outcome says whether the work happened.
+    const toolCalls: ToolCallSummary[] = (result.toolResults ?? []).map((r) => {
       const x = ('payload' in r ? r.payload : r) as {
         toolName?: string;
-        result?: { ok?: boolean };
+        result?: {
+          ok?: boolean;
+          result?: { status?: string; approval?: { summary?: string | null } };
+          error?: { reason?: string; message?: unknown } | null;
+        };
       };
-      return { tool: String(x.toolName ?? 'tool'), ok: x.result?.ok !== false };
+      const tool = String(x.toolName ?? 'tool');
+      if (x.result?.ok === false) {
+        const reason = x.result.error?.reason ?? x.result.error?.message;
+        return {
+          tool,
+          ok: false,
+          outcome: 'refused',
+          ...(typeof reason === 'string' ? { detail: reason } : {}),
+        };
+      }
+      if (x.result?.result?.status === 'needs_approval') {
+        const summary = x.result.result.approval?.summary;
+        return { tool, ok: true, outcome: 'parked', ...(summary ? { detail: summary } : {}) };
+      }
+      return { tool, ok: true, outcome: 'done' };
     });
     // One summary line per turn: in this terminal, and in Studio → Logs (run = trace id).
     mastra.loggerVNext.info('chat turn', {
@@ -84,7 +121,7 @@ export class ChatController {
     });
     log.log(
       `run=${runId} user=${p.actor.id} tools=[${toolCalls
-        .map((c) => `${c.tool}:${c.ok ? 'ok' : 'refused'}`)
+        .map((c) => `${c.tool}:${c.outcome}`)
         .join(',')}] tokens=${result.totalUsage?.totalTokens ?? '?'} ${Date.now() - started}ms`,
     );
     return { reply: result.text, runId, toolCalls };

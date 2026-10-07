@@ -26,7 +26,9 @@ export function FilterChips({
             onPress={() => onSelect(c)}
             style={[s.chip, on && s.on]}
           >
-            <Text style={[styles.muted, on && { color: colors.primaryText }]}>{c.label}</Text>
+            <Text style={[styles.label, { color: on ? colors.primary : colors.muted }]}>
+              {c.label}
+            </Text>
           </Pressable>
         );
       })}
@@ -46,7 +48,7 @@ export function SearchBox({
 }) {
   return (
     <TextInput
-      style={[styles.input, { flex: 1, minWidth: 160 }]}
+      style={[styles.input, { flexGrow: 1, minWidth: 160 }]}
       placeholder={placeholder}
       placeholderTextColor={colors.muted}
       value={value}
@@ -64,5 +66,6 @@ const s = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  on: { backgroundColor: colors.primary, borderColor: colors.primary },
+  // Selected reads as selected, not as another primary button.
+  on: { backgroundColor: colors.primaryTint, borderColor: colors.primary },
 });

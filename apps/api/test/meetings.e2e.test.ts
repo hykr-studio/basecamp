@@ -65,8 +65,14 @@ describe('meetings, end to end', () => {
     ].join('\n');
     const chat = await ana.chat(notes, { screen: 'meeting', meetingId: siteReview.id });
     expect(chat.body.toolCalls).toEqual([
-      { tool: 'list-meetings', ok: true },
-      { tool: 'close-meeting', ok: true },
+      { tool: 'list-meetings', ok: true, outcome: 'done' },
+      // Parked, not done: the trace says so, with what is waiting.
+      {
+        tool: 'close-meeting',
+        ok: true,
+        outcome: 'parked',
+        detail: 'Close Site review with 1 note and 3 to-dos',
+      },
     ]);
     expect(chat.body.reply).toContain('approval');
 

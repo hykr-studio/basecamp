@@ -7,9 +7,16 @@ import {
   TodoSpec,
   type WriteResult,
 } from '@app/contracts';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  type InfiniteData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import type { z } from 'zod';
 import { api } from '../api';
+import { useToast } from './Toast';
 
 /** The entities the app shows, by the name used in routes and query keys. */
 export const specs = { todos: TodoSpec, notes: NoteSpec, meetings: MeetingSpec } as const;
@@ -110,3 +117,48 @@ export function errorMessage(e: unknown): string {
   }
   return e instanceof Error ? e.message : String(e);
 }
+
+/**
+ * The person's own delete: hidden at once, committed after a few seconds unless they press
+ * Undo. The same safety net the assistant's deletes get from approvals, without a dialog.
+ */
+export function useUndoableDelete<N extends EntityName>(name: N) {
+  const client = useQueryClient();
+  const toast = useToast();
+  const { remove } = useEntityMutation(name);
+  return (item: { id: string; title: string }) => {
+    const key = { queryKey: [name, 'list'] };
+    const before = client.getQueriesData(key);
+    client.setQueriesData<InfiniteData<{ items: { id: string }[] }>>(key, (data) =>
+      data
+        ? {
+            ...data,
+            pages: data.pages.map((p) => ({
+              ...p,
+              items: p.items.filter((i) => i.id !== item.id),
+            })),
+          }
+        : data,
+    );
+    let undone = false;
+    const timer = setTimeout(() => {
+      if (!undone) remove.mutate(item.id);
+    }, 5000);
+    toast.show({
+      message: `Deleted “${item.title}”`,
+      durationMs: 5000,
+      action: {
+        label: 'Undo',
+        onPress: () => {
+          undone = true;
+          clearTimeout(timer);
+          for (const [k, d] of before) client.setQueryData(k, d);
+        },
+      },
+    });
+  };
+}
+
+/** A meeting that already started and is not closed: its real job now is to be closed. */
+export const needsClosing = (m: { status: string; startsAt: string }) =>
+  m.status !== 'closed' && new Date(m.startsAt).getTime() <= Date.now();

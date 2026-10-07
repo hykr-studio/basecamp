@@ -25,6 +25,26 @@ type Step = { toolName: string; outcome: Outcome };
 
 let callCounter = 0;
 
+/** The person's time zone, as the instructions state it ("The user's time zone is X"). */
+function zoneOf(prompt: LanguageModelV2Prompt): string {
+  for (const message of prompt) {
+    if (message.role !== 'system') continue;
+    const m = /time zone is ([A-Za-z0-9_+\-/]+)/.exec(message.content);
+    if (m) return m[1];
+  }
+  return 'UTC';
+}
+
+/** The instant at which `day` (YYYY-MM-DD) starts in `zone`. */
+function startOfDay(day: string, zone: string): Date {
+  const utc = new Date(`${day}T00:00:00Z`);
+  const wall = (d: Date, tz: string) =>
+    new Date(d.toLocaleString('en-US', { timeZone: tz })).getTime();
+  return new Date(utc.getTime() - (wall(utc, zone) - wall(utc, 'UTC')));
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
 function lastUserText(prompt: LanguageModelV2Prompt): string {
   for (let i = prompt.length - 1; i >= 0; i--) {
     const message = prompt[i];
@@ -152,24 +172,35 @@ export function script(prompt: LanguageModelV2Prompt): LanguageModelV2Content[] 
       ];
     }
     case 'today': {
-      const day = new Date().toISOString().slice(0, 10);
+      const zone = zoneOf(prompt);
+      const day = new Date().toLocaleDateString('sv', { timeZone: zone });
       const meetings = result('list-meetings');
       if (!meetings) {
+        const start = startOfDay(day, zone);
         return [
           call('list-meetings', {
-            startsAt: { gte: `${day}T00:00:00Z`, lte: `${day}T23:59:59Z` },
+            startsAt: {
+              gte: start.toISOString(),
+              lte: new Date(start.getTime() + 86_399_999).toISOString(),
+            },
             sort: 'startsAt',
           }),
         ];
       }
       const todos = result('list-todos');
       if (!todos) return [call('list-todos', { done: false, dueOn: { lte: day }, sort: 'dueOn' })];
-      const m = items(meetings).map((x) => `- ${x.title} at ${String(x.startsAt).slice(11, 16)}`);
+      const at = (iso: unknown) =>
+        new Date(String(iso)).toLocaleTimeString('en-GB', {
+          timeZone: zone,
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      const m = items(meetings).map((x) => `- ${x.title} at ${at(x.startsAt)}`);
       const t = items(todos).map((x) => `- ${x.title}${x.dueOn ? ` (due ${x.dueOn})` : ''}`);
       return [
         text(
           [
-            `Today: ${m.length} meeting(s), ${t.length} to-do(s) due.`,
+            `Today: ${plural(m.length, 'meeting')}, ${plural(t.length, 'to-do')} due or overdue.`,
             ...m,
             ...(t.length ? ['To-dos:', ...t] : []),
           ].join('\n'),
