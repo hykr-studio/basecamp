@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        # GitHub's runners are amd64, where postgis/postgis has images.
+        image: postgis/postgis:17-3.5
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app -d app"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+
+    env:
+      DATABASE_URL: postgres://app:app@localhost:5432/app
+      MIGRATE_DATABASE_URL: postgres://app:app@localhost:5432/app
+      REDIS_URL: redis://localhost:6379
+      BETTER_AUTH_URL: http://localhost:3000
+      WEB_ORIGINS: http://localhost:8081
+      API_INTERNAL_URL: http://localhost:3000
+      # Test values only (32+ characters); nothing real runs in CI.
+      BETTER_AUTH_SECRET: ci-better-auth-secret-0123456789abcdef
+      AGENT_API_KEY: ci-agent-api-key-0123456789abcdef0123
+      # The scripted model: no OpenRouter key, no cost, same answers every run.
+      MODEL_MODE: fake
+      GUARDRAILS: "off"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version from package.json's packageManager
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Prepare the database (extensions, search path)
+        run: psql postgres://app:app@localhost:5432/app -v ON_ERROR_STOP=1 -f infra/postgres/init.sql
+
+      - run: pnpm lint
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint:deps
+      - run: pnpm db:migrate
+      - run: pnpm test
