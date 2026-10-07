@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { createTodoAgent } from '@app/agents';
+import { mastra } from '@app/agents';
 import { ChatRequest, type ChatResponse, type Principal } from '@app/contracts';
 import { RequestContext } from '@mastra/core/request-context';
 import {
   Body,
   Controller,
   HttpCode,
+  Logger,
   Post,
   ServiceUnavailableException,
   UseGuards,
@@ -17,7 +18,9 @@ import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '../../common/p
 
 class ChatDto extends createZodDto(ChatRequest) {}
 
-const agent = createTodoAgent();
+// The shared Mastra instance: runs are traced and scored, and show up in Studio.
+const agent = mastra.getAgent('todoAgent');
+const log = new Logger('Chat');
 
 /**
  * A person sends messages; the agent runs one turn acting for that person. Its tool
@@ -37,7 +40,9 @@ export class ChatController {
 
     // Who the agent acts for comes from the server-side principal, never the request
     // body: the model cannot choose whose to-dos it touches.
-    const runId = randomUUID();
+    // The run id doubles as the trace id (32 hex chars), so an audit row's run_id
+    // opens the matching trace in Studio.
+    const runId = randomUUID().replaceAll('-', '');
     const requestContext = new RequestContext();
     requestContext.set('userId', p.actor.id);
     requestContext.set('runId', runId);
@@ -48,7 +53,12 @@ export class ChatController {
         ? { role: 'user' as const, content: m.content }
         : { role: 'assistant' as const, content: m.content },
     );
-    const result = await agent.generate(messages, { requestContext, maxSteps: 8 });
+    const started = Date.now();
+    const result = await agent.generate(messages, {
+      requestContext,
+      maxSteps: 8,
+      tracingOptions: { traceId: runId, metadata: { userId: p.actor.id } },
+    });
 
     const toolCalls = (result.toolResults ?? []).map((r) => {
       const x = ('payload' in r ? r.payload : r) as {
@@ -57,6 +67,19 @@ export class ChatController {
       };
       return { tool: String(x.toolName ?? 'tool'), ok: x.result?.ok !== false };
     });
+    // One summary line per turn: in this terminal, and in Studio → Logs (run = trace id).
+    mastra.loggerVNext.info('chat turn', {
+      runId,
+      userId: p.actor.id,
+      tools: toolCalls,
+      tokens: result.totalUsage?.totalTokens,
+      ms: Date.now() - started,
+    });
+    log.log(
+      `run=${runId} user=${p.actor.id} tools=[${toolCalls
+        .map((c) => `${c.tool}:${c.ok ? 'ok' : 'refused'}`)
+        .join(',')}] tokens=${result.totalUsage?.totalTokens ?? '?'} ${Date.now() - started}ms`,
+    );
     return { reply: result.text, runId, toolCalls };
   }
 }

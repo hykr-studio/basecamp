@@ -4,12 +4,31 @@ import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import { apiFor } from '../context.js';
 
-/** Refusals become data the model can explain, not exceptions that end the run. */
-async function safely<T>(fn: () => Promise<T>) {
+type Logger = { info(m: string, d?: object): void; warn(m: string, d?: object): void };
+
+/**
+ * Refusals become data the model can explain, not exceptions that end the run. Each
+ * outcome is logged through the tool's trace-correlated logger (Studio → Logs).
+ */
+async function safely<T>(
+  tool: string,
+  ctx: { loggerVNext?: Logger } | undefined,
+  fn: () => Promise<T>,
+) {
   try {
-    return { ok: true as const, result: await fn() };
+    const result = await fn();
+    ctx?.loggerVNext?.info(`${tool} ok`, { tool });
+    return { ok: true as const, result };
   } catch (e) {
-    if (e instanceof ApiError) return { ok: false as const, status: e.status, error: e.body };
+    if (e instanceof ApiError) {
+      const body = e.body as { reason?: string; message?: unknown } | null;
+      ctx?.loggerVNext?.warn(`${tool} refused by the API (${e.status})`, {
+        tool,
+        status: e.status,
+        reason: body?.reason ?? body?.message,
+      });
+      return { ok: false as const, status: e.status, error: e.body };
+    }
     throw e;
   }
 }
@@ -18,14 +37,14 @@ export const listTodos = createTool({
   id: 'list-todos',
   description: "List the user's to-dos with their ids. Call this before changing anything.",
   inputSchema: z.object({}),
-  execute: async (_input, ctx) => safely(() => apiFor(ctx?.requestContext).listTodos()),
+  execute: async (_input, ctx) => safely('list-todos', ctx, () => apiFor(ctx).listTodos()),
 });
 
 export const addTodo = createTool({
   id: 'add-todo',
   description: 'Add a to-do for the user. dueOn is optional, format YYYY-MM-DD.',
   inputSchema: CreateTodoInput,
-  execute: async (input, ctx) => safely(() => apiFor(ctx?.requestContext).createTodo(input)),
+  execute: async (input, ctx) => safely('add-todo', ctx, () => apiFor(ctx).createTodo(input)),
 });
 
 export const updateTodo = createTool({
@@ -38,7 +57,7 @@ export const updateTodo = createTool({
     dueOn: CreateTodoInput.shape.dueOn,
   }),
   execute: async ({ id, ...changes }, ctx) =>
-    safely(() => apiFor(ctx?.requestContext).updateTodo(id, changes)),
+    safely('update-todo', ctx, () => apiFor(ctx).updateTodo(id, changes)),
 });
 
 export const deleteTodo = createTool({
@@ -46,5 +65,5 @@ export const deleteTodo = createTool({
   description:
     'Ask to delete a to-do. The user must approve it before it is removed: tell them it is waiting for their approval. Use an id from list-todos.',
   inputSchema: z.object({ id: z.string().describe('The to-do id from list-todos') }),
-  execute: async ({ id }, ctx) => safely(() => apiFor(ctx?.requestContext).deleteTodo(id)),
+  execute: async ({ id }, ctx) => safely('delete-todo', ctx, () => apiFor(ctx).deleteTodo(id)),
 });

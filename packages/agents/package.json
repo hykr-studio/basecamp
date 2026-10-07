@@ -12,15 +12,27 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "studio": "node scripts/studio.mjs",
+    "eval": "MODEL_MODE=fake tsx --env-file=../../.env evals/todo-agent.eval.ts",
+    "eval:live": "MODEL_MODE=live tsx --env-file=../../.env evals/todo-agent.eval.ts"
   },
   "dependencies": {
     "@app/api-client": "workspace:*",
     "@app/contracts": "workspace:*",
     "@mastra/core": "^1.74.0",
+    "@mastra/evals": "^1.10.5",
+    "@mastra/loggers": "^1.3.4",
+    "@mastra/observability": "^1.18.3",
+    "@mastra/pg": "^1.29.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "^2.0.3"
+    "@ai-sdk/provider": "^2.0.3",
+    "@hono/node-server": "^2.1.3",
+    "@mastra/hono": "^1.7.16",
+    "hono": "^4.13.13",
+    "mastra": "^1.32.1",
+    "tsx": "^4.23.15"
   }
 }

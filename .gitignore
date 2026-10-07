@@ -81,3 +81,7 @@ docker-compose.override.yml
 
 # Note: packages/db/drizzle/ (generated migrations) and pnpm-lock.yaml are
 # meant to be committed — do not ignore them.
+
+# Mastra dev server build and Studio presets
+.mastra/
+.studio/

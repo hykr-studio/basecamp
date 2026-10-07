@@ -1,6 +1,7 @@
 import { Agent } from '@mastra/core/agent';
 import { PromptInjectionDetector, UnicodeNormalizer } from '@mastra/core/processors';
 import { fakeModel } from './fake-model.js';
+import { listBeforeWrite, noRetryAfterRefusal } from './scorers.js';
 import { addTodo, deleteTodo, listTodos, updateTodo } from './tools/todo-tools.js';
 import { AGENT_ID, INSTRUCTIONS, isFakeModel, modelId } from './version.js';
 
@@ -18,6 +19,11 @@ export function createTodoAgent(): Agent {
       'add-todo': addTodo,
       'update-todo': updateTodo,
       'delete-todo': deleteTodo,
+    },
+    // Scored on every turn; results show in Studio when the agent is registered with storage.
+    scorers: {
+      listBeforeWrite: { scorer: listBeforeWrite, sampling: { type: 'ratio', rate: 1 } },
+      noRetryAfterRefusal: { scorer: noRetryAfterRefusal, sampling: { type: 'ratio', rate: 1 } },
     },
     inputProcessors: [
       new UnicodeNormalizer(),
