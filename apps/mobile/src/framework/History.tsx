@@ -4,6 +4,7 @@ import { Linking, Pressable, Text, View } from 'react-native';
 import { api } from '../api';
 import { STUDIO_URL } from '../config';
 import { colors, space, styles } from '../theme';
+import { AssistantMark } from './AssistantMark';
 import { Icon, type IconName } from './Icon';
 
 const done: Record<string, string> = {
@@ -67,7 +68,12 @@ export function History({ type, id }: { type: 'todo' | 'note' | 'meeting'; id: s
             key={`${e.at}:${e.action}:${e.outcome}:${e.actor}`}
             style={[styles.row, { alignItems: 'flex-start' }]}
           >
-            <Icon name={d.icon} color={d.tone} size={16} />
+            {/* The assistant's rows carry its mark; the words and colour say what became of them. */}
+            {e.actor === 'assistant' ? (
+              <AssistantMark size={18} />
+            ) : (
+              <Icon name={d.icon} color={d.tone} size={16} />
+            )}
             <View style={{ flex: 1, gap: 2 }}>
               <Text style={[styles.text, { color: d.tone }]}>{d.text}</Text>
               <Text style={styles.muted}>

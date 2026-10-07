@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { Principal } from '../principal.js';
 import type { ListConfig } from './list.js';
 
@@ -7,6 +7,10 @@ import type { ListConfig } from './list.js';
  * what is exposed to whom. The API adds the table, owner and rules (@app/core); the agent's
  * tools and the typed client are built from the spec alone, so neither needs @app/db.
  */
+
+/** Who made a record: the person, or the assistant acting for them. The framework sets it. */
+export const CreatedBy = z.enum(['person', 'assistant']);
+export type CreatedBy = z.infer<typeof CreatedBy>;
 
 export type Expose = 'all' | 'human' | 'internal';
 export type EntityAction = 'list' | 'get' | 'create' | 'update' | 'delete';

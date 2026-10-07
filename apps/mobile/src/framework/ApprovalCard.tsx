@@ -1,9 +1,10 @@
 import type { Approval } from '@app/contracts';
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Button } from '../components/Button';
 import { colors, space, styles } from '../theme';
 import { ApprovalPreview, labelOf } from './ApprovalPreview';
+import { AssistantMark } from './AssistantMark';
 import { expiresIn } from './dates';
 import { errorMessage, useApprovals } from './hooks';
 import { Icon } from './Icon';
@@ -36,19 +37,22 @@ export function useShownInline(id: string | undefined) {
   }, [id]);
 }
 
-/** The decision named for what it does: "Delete to-do", "Close meeting", "Move meeting". */
+/** The decision named for what it does: "Delete to-do", "Approve close", "Approve move". */
 function actionLabel(a: Approval): string {
   const verb = a.action.split('.').pop() ?? 'approve';
   const noun = labelOf(a.resourceType);
-  const verbs: Record<string, string> = {
-    delete: 'Delete',
-    close: 'Close',
-    reschedule: 'Move',
-    update: 'Apply change to',
-    create: 'Create',
+  const labels: Record<string, string> = {
+    delete: `Delete ${noun}`,
+    close: 'Approve close',
+    reschedule: 'Approve move',
+    update: `Apply change to ${noun}`,
+    create: `Create ${noun}`,
   };
-  return `${verbs[verb] ?? 'Approve'} ${noun}`;
+  return labels[verb] ?? 'Approve';
 }
+
+/** How long a newly shown decision ignores clicks, so a double-click can't land on it. */
+const ARM_MS = 600;
 
 /** One parked operation: what it is, who asked and why it waits, exactly what it will do, and the decision. */
 export function ApprovalItem({
@@ -67,8 +71,17 @@ export function ApprovalItem({
   const summary = approval.summary ?? approval.action;
   const deciding = decide.isPending && decide.variables?.id === approval.id;
   const confirm = actionLabel(approval);
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setArmed(true), ARM_MS);
+    return () => clearTimeout(t);
+  }, []);
 
+  // A double-click's second press arrives before the button re-renders as busy: ignore it here.
+  const inFlight = useRef(false);
   async function run(approve: boolean) {
+    if (!armed || inFlight.current) return;
+    inFlight.current = true;
     try {
       const result = await decide.mutateAsync({ id: approval.id, approve });
       if (result.status === 'approved')
@@ -85,6 +98,8 @@ export function ApprovalItem({
         toast.show({ tone: 'error', message: 'This request had expired. Nothing was changed.' });
     } catch (e) {
       toast.show({ tone: 'error', message: errorMessage(e) });
+    } finally {
+      inFlight.current = false;
     }
   }
 
@@ -92,10 +107,18 @@ export function ApprovalItem({
     <View style={s.item}>
       <View style={{ gap: 2 }}>
         <Text style={[styles.text, { fontWeight: '600' }]}>{summary}</Text>
-        <Text style={[styles.muted, { color: colors.approvalText }]}>
-          {approval.requestedBy === 'agent' ? 'Asked by the assistant' : 'Asked by you'} ·{' '}
-          {expiresIn(approval.expiresAt)}
-        </Text>
+        <View style={[styles.row, { gap: space.xs }]}>
+          {approval.requestedBy === 'agent' && <AssistantMark size={16} />}
+          <Text
+            style={[
+              styles.muted,
+              { color: approval.requestedBy === 'agent' ? colors.assistant : colors.approvalText },
+            ]}
+          >
+            {approval.requestedBy === 'agent' ? 'Asked by the assistant' : 'Asked by you'} ·{' '}
+            {expiresIn(approval.expiresAt)}
+          </Text>
+        </View>
         <Text style={styles.muted}>Why it waits: {approval.reason}.</Text>
         {destructive && !open && (
           <Text style={[styles.muted, { color: colors.danger, fontWeight: '600' }]}>
@@ -124,12 +147,23 @@ export function ApprovalItem({
           <ApprovalPreview approval={approval} />
         </View>
       )}
-      <View style={[styles.row, narrow && { alignSelf: 'stretch' }]}>
+      <View
+        style={[
+          styles.row,
+          narrow && { alignSelf: 'stretch' },
+          // On a phone, the safe choice takes the first slot and the delete sits apart from it.
+          narrow && destructive && { flexDirection: 'row-reverse' },
+        ]}
+      >
         <Button
           title={confirm}
           variant={destructive ? 'destructive' : 'primary'}
           icon={destructive ? 'trash-2' : 'check'}
-          accessibilityLabel={`${confirm}: ${summary}`}
+          accessibilityLabel={
+            destructive
+              ? `${confirm}: ${summary.replace(/^Delete /, '')}`
+              : `${confirm}: ${summary}`
+          }
           onPress={() => run(true)}
           busy={deciding && decide.variables?.approve === true}
           disabled={deciding}
@@ -138,7 +172,7 @@ export function ApprovalItem({
         <Button
           title={destructive ? 'Keep it' : 'Reject'}
           variant="secondary"
-          accessibilityLabel={`${destructive ? 'Keep it, reject' : 'Reject'}: ${summary}`}
+          accessibilityLabel={`${destructive ? 'Keep it' : 'Reject'}: ${summary}`}
           onPress={() => run(false)}
           disabled={deciding}
           fullWidth={narrow}
@@ -168,14 +202,19 @@ export function ApprovalCard({
   const approvals = all.filter((a) => !shownInline.includes(a.id));
   const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  // Once everything is decided, the next request starts folded again.
+  const none = approvals.length === 0;
+  useEffect(() => {
+    if (none) setOpen(false);
+  }, [none]);
   if (approvals.length === 0 || hidden) return null;
   const count = approvals.length;
   const heading = shownInline.length
     ? `${count} other request${count === 1 ? '' : 's'} waiting for your decision`
     : `${count} request${count === 1 ? '' : 's'} waiting for your decision`;
-  const collapsed = variant === 'dock' || shownInline.length > 0;
-
-  if (collapsed && !open) {
+  // Folded by default on every screen size: the page keeps its own focus, and nothing
+  // expands on its own (so a request never appears under the cursor after another decision).
+  if (!open) {
     return (
       <Pressable
         accessibilityRole="button"
@@ -200,7 +239,7 @@ export function ApprovalCard({
           <Icon name="inbox" color={colors.approvalText} />
           <Text style={[styles.heading, { color: colors.approvalText }]}>{heading}</Text>
         </View>
-        {collapsed && <Button title="Hide" variant="subtle" onPress={() => setOpen(false)} />}
+        <Button title="Hide" variant="subtle" onPress={() => setOpen(false)} />
       </View>
       {visible.map((a, i) => (
         <View key={a.id} style={i > 0 ? s.divider : undefined}>

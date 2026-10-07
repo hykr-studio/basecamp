@@ -11,8 +11,9 @@ type Props = {
   /**
    * primary: the one main action in an area. secondary: outlined. subtle: text-weight.
    * danger: a quiet destructive action. destructive: the confirming, irreversible one.
+   * ghost: a repeated row action (one per row): muted, so a list of them stays quiet.
    */
-  variant?: 'primary' | 'secondary' | 'subtle' | 'danger' | 'destructive';
+  variant?: 'primary' | 'secondary' | 'subtle' | 'danger' | 'destructive' | 'ghost';
   icon?: IconName;
   /** Visually icon-only; title is still the accessible name. */
   iconOnly?: boolean;
@@ -41,7 +42,9 @@ export function Button({
         ? colors.danger
         : variant === 'subtle'
           ? colors.primary
-          : colors.text;
+          : variant === 'ghost'
+            ? colors.muted
+            : colors.text;
   return (
     <Pressable
       accessibilityRole="button"
@@ -57,7 +60,7 @@ export function Button({
         variant === 'secondary' && s.secondary,
         variant === 'danger' && s.secondary,
         variant === 'destructive' && s.destructive,
-        variant === 'subtle' && s.subtle,
+        (variant === 'subtle' || variant === 'ghost') && s.subtle,
         isHovered(state) &&
           !inactive &&
           (variant === 'primary'

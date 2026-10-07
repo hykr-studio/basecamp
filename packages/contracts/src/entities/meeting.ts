@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { entitySpec } from '../framework/spec.js';
+import { CreatedBy, entitySpec } from '../framework/spec.js';
 import { NoteView } from './note.js';
 import { Todo } from './todo.js';
 
@@ -17,6 +17,7 @@ export const MeetingView = z.object({
   endsAt: z.iso.datetime(),
   attendees,
   status: MeetingStatus,
+  createdBy: CreatedBy,
   createdAt: z.iso.datetime(),
 });
 export type MeetingView = z.infer<typeof MeetingView>;

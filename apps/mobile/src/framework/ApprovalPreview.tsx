@@ -19,12 +19,19 @@ const humanize = (key: string) => {
     .toLowerCase();
   return words.charAt(0).toUpperCase() + words.slice(1);
 };
+/** A field that points at another entity ("meetingId") and the list it lives in. */
+const refOf = (key: string): EntityName | null => {
+  if (!key.endsWith('Id')) return null;
+  const plural = `${key.slice(0, -2)}s`;
+  return plural in specs ? (plural as EntityName) : null;
+};
 const hidden = (key: string) =>
-  key === 'id' || key.endsWith('Id') || key === 'createdAt' || key === 'updatedAt';
+  key === 'id' || (key.endsWith('Id') && !refOf(key)) || key === 'createdAt' || key === 'updatedAt';
 const isEmpty = (v: unknown) =>
   v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
 
 function show(key: string, value: unknown): string {
+  if (key === 'createdBy') return value === 'assistant' ? 'The assistant' : 'You';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if ((key === 'dueOn' || key.endsWith('On')) && typeof value === 'string') return dayLabel(value);
   if (key.endsWith('At') && typeof value === 'string')
@@ -69,14 +76,41 @@ function Value({ name, value }: { name: string; value: unknown }) {
   return <Text style={styles.text}>{show(name, value)}</Text>;
 }
 
-function Fields({ input }: { input: Record<string, unknown> }) {
-  const entries = Object.entries(input).filter(([k, v]) => !hidden(k) && !isEmpty(v));
+/** "Meeting: Supplier call 1" rather than an id. */
+function RefValue({ list, id }: { list: EntityName; id: string }) {
+  const q = useQuery({
+    queryKey: [list, 'get', id],
+    queryFn: () => entityApi(list).get(id),
+    retry: false,
+  });
+  const title = (q.data as { title?: string } | undefined)?.title;
+  return (
+    <Text style={styles.text}>
+      {title ?? (q.isError ? `A ${labelOf(specs[list].name)} that no longer exists` : '…')}
+    </Text>
+  );
+}
+
+/**
+ * A record (for a delete) hides "no" flags, which say nothing about what goes; parked input
+ * keeps them, since there a false is the change being asked for.
+ */
+function Fields({ input, record }: { input: Record<string, unknown>; record?: boolean }) {
+  const entries = Object.entries(input).filter(
+    ([k, v]) => !hidden(k) && !isEmpty(v) && !(record && v === false),
+  );
   return (
     <View style={{ gap: space.md }}>
       {entries.map(([key, value]) => (
         <View key={key} style={{ gap: 2 }}>
-          <Text style={[styles.label, { color: colors.approvalText }]}>{humanize(key)}</Text>
-          <Value name={key} value={value} />
+          <Text style={[styles.label, { color: colors.approvalText }]}>
+            {refOf(key) ? humanize(key.slice(0, -2)) : humanize(key)}
+          </Text>
+          {refOf(key) && typeof value === 'string' ? (
+            <RefValue list={refOf(key) as EntityName} id={value} />
+          ) : (
+            <Value name={key} value={value} />
+          )}
         </View>
       ))}
     </View>
@@ -100,7 +134,7 @@ function RecordPreview({ approval }: { approval: Approval }) {
         Approving deletes this {label} permanently.
       </Text>
       {q.data ? (
-        <Fields input={q.data as Record<string, unknown>} />
+        <Fields record input={q.data as Record<string, unknown>} />
       ) : q.isError ? (
         <Text style={styles.muted}>This {label} no longer exists.</Text>
       ) : (

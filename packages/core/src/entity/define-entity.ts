@@ -128,7 +128,8 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(input)) {
       const c = columns[key];
-      if (!c || value === undefined || key === ownerKey || key === 'id') continue;
+      if (!c || value === undefined || key === ownerKey || key === 'id' || key === 'createdBy')
+        continue;
       out[key] =
         typeof value === 'string' && c.columnType === 'PgTimestamp' ? new Date(value) : value;
     }
@@ -198,7 +199,14 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       checkRules(p, 'create', null, parsed, ctx);
       const [row] = await tx
         .insert(table as Table)
-        .values({ ...toValues(parsed), [ownerKey]: subjectOrThrow(p) } as never)
+        .values({
+          ...toValues(parsed),
+          [ownerKey]: subjectOrThrow(p),
+          // Provenance, when the table records it: the assistant's rows stay marked as its own.
+          ...(columns.createdBy
+            ? { createdBy: p.actor.kind === 'agent' ? 'assistant' : 'person' }
+            : {}),
+        } as never)
         .returning();
       return row as Row<T>;
     },

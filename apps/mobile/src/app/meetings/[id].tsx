@@ -71,8 +71,6 @@ function Reschedule({ meeting, onDone }: { meeting: MeetingView; onDone: () => v
 
 function statusLine(m: MeetingView): string | null {
   if (m.status === 'closed') return 'Closed: its summary note and to-dos are below.';
-  if (needsClosing(m))
-    return 'This meeting has started. Close it to record its summary and to-dos.';
   return null;
 }
 
@@ -148,12 +146,10 @@ export default function MeetingDetail() {
           {when(m.startsAt)}–{clock(m.endsAt)}
           {m.attendees.length ? ` · ${m.attendees.join(', ')}` : ''}
         </Text>
-        {line && (
-          <Text
-            style={[styles.text, needsClosing(m) && { color: colors.warnText, fontWeight: '600' }]}
-          >
-            {line}
-          </Text>
+        {line && <Text style={styles.text}>{line}</Text>}
+        {/* The "Needs closing" badge carries the alarm; this line only says what closing does. */}
+        {needsClosing(m) && (
+          <Text style={styles.muted}>Closing records its summary note and its to-dos.</Text>
         )}
         {!closed && !started && (
           <Text style={styles.muted}>
@@ -163,7 +159,7 @@ export default function MeetingDetail() {
         {!closed && !panel && (
           <View style={[styles.row, { flexWrap: 'wrap', marginTop: space.xs }]}>
             {started ? (
-              <Button title="Close meeting" icon="check-circle" onPress={() => setPanel('close')} />
+              <Button title="Write the close…" icon="edit-3" onPress={() => setPanel('close')} />
             ) : null}
             <Button
               title="Reschedule"
@@ -173,7 +169,8 @@ export default function MeetingDetail() {
             />
             {m.status === 'scheduled' && started && (
               <Button
-                title="Mark as held (it happened)"
+                title="Mark as held"
+                accessibilityLabel="Mark as held: it happened, notes to follow"
                 variant="subtle"
                 onPress={() =>
                   meetingMutation.update.mutate({ id: m.id, patch: { status: 'held' } })
@@ -238,7 +235,7 @@ export default function MeetingDetail() {
           <View>
             {todos.items.map((t, i) => (
               <View key={t.id} style={listRow(i, todos.items.length)}>
-                <TodoRow todo={t} canDelete={!closed} />
+                <TodoRow todo={t} canDelete={!closed} showMeeting={false} />
               </View>
             ))}
           </View>

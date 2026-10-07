@@ -1,4 +1,9 @@
 import { ApiError } from '@app/api-client';
+import {
+  SchibstedGrotesk_600SemiBold,
+  SchibstedGrotesk_700Bold,
+  useFonts,
+} from '@expo-google-fonts/schibsted-grotesk';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { router, Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -16,6 +21,7 @@ import { auth, type SessionUser } from '../api';
 import { Button } from '../components/Button';
 import { Chat } from '../components/Chat';
 import { ApprovalCard } from '../framework/ApprovalCard';
+import { ASSISTANT_ICON } from '../framework/AssistantMark';
 import { AssistantProvider } from '../framework/assistant-context';
 import { isHovered } from '../framework/hover';
 import { Icon, type IconName } from '../framework/Icon';
@@ -191,7 +197,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
           onPress={() => setChatOpen(!chatOpen)}
           style={s.tabItem}
         >
-          <Icon name="message-circle" color={chatOpen ? colors.primary : colors.muted} size={20} />
+          <Icon name={ASSISTANT_ICON} color={chatOpen ? colors.primary : colors.muted} size={20} />
           <Text style={[s.tabLabel, { color: chatOpen ? colors.primary : colors.muted }]}>
             Assistant
           </Text>
@@ -203,6 +209,11 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
 
 export default function RootLayout() {
   useBrowserSurfaces();
+  // Headings' face. If it fails to load, the platform font stands in; nothing waits on it twice.
+  const [fontsLoaded, fontError] = useFonts({
+    SchibstedGrotesk_600SemiBold,
+    SchibstedGrotesk_700Bold,
+  });
   // undefined while the session loads, null when signed out.
   const [user, setUser] = useState<SessionUser | null | undefined>(undefined);
   useEffect(() => {
@@ -217,12 +228,14 @@ export default function RootLayout() {
       <ToastProvider>
         <AssistantProvider>
           <StatusBar style="dark" />
-          {user === undefined ? (
-            <ActivityIndicator
-              style={{ marginTop: 96 }}
-              color={colors.primary}
-              accessibilityLabel="Loading your session"
-            />
+          {user === undefined || !(fontsLoaded || fontError) ? (
+            <View style={styles.screen}>
+              <ActivityIndicator
+                style={{ marginTop: 96 }}
+                color={colors.primary}
+                accessibilityLabel="Loading your session"
+              />
+            </View>
           ) : user === null ? (
             <View style={styles.screen}>
               <SignIn onSignedIn={setUser} />

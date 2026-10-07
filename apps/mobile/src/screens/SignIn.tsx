@@ -14,10 +14,18 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const signingUp = mode === 'signUp';
-  const short = password.length > 0 && password.length < 8;
+  // The length rule is a sign-up rule; signing in only needs something in both fields.
+  const short = signingUp && password.length > 0 && password.length < 8;
 
   async function submit() {
-    if (!email || password.length < 8) return;
+    if (!email.trim() || !password) {
+      setError('Enter your email and password.');
+      return;
+    }
+    if (signingUp && password.length < 8) {
+      setError(`Choose a password of at least 8 characters: ${8 - password.length} more.`);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -61,7 +69,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void
           onChangeText={setPassword}
           secureTextEntry
           autoComplete={signingUp ? 'new-password' : 'current-password'}
-          hint="At least 8 characters."
+          hint={signingUp ? 'At least 8 characters.' : undefined}
           error={short ? `At least 8 characters: ${8 - password.length} more.` : null}
           onSubmitEditing={submit}
         />
@@ -70,12 +78,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void
             {error}
           </Text>
         )}
-        <Button
-          title={signingUp ? 'Create account' : 'Sign in'}
-          onPress={submit}
-          busy={busy}
-          disabled={!email || password.length < 8}
-        />
+        <Button title={signingUp ? 'Create account' : 'Sign in'} onPress={submit} busy={busy} />
         <Button
           variant="subtle"
           title={signingUp ? 'I already have an account' : 'Create an account instead'}

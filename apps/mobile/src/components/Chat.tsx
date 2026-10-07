@@ -2,6 +2,7 @@ import type { ChatMessage, ToolCallSummary } from '@app/contracts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Linking,
   Platform,
   Pressable,
@@ -13,9 +14,11 @@ import {
 } from 'react-native';
 import { api } from '../api';
 import { STUDIO_URL } from '../config';
+import { AssistantMark } from '../framework/AssistantMark';
 import { useAssistant } from '../framework/assistant-context';
 import { timeZone } from '../framework/dates';
 import { errorMessage, useApprovals } from '../framework/hooks';
+import { isHovered } from '../framework/hover';
 import { Icon, type IconName } from '../framework/Icon';
 import { storage } from '../framework/storage';
 import { colors, space, styles } from '../theme';
@@ -224,7 +227,10 @@ export function Chat({
   return (
     <View style={[s.panel, compact && s.compact]}>
       <View style={[styles.row, { justifyContent: 'space-between' }]}>
-        <Text style={styles.heading}>Assistant</Text>
+        <View style={styles.row}>
+          <AssistantMark size={24} />
+          <Text style={styles.heading}>Assistant</Text>
+        </View>
         <View style={styles.row}>
           <Button
             title={help ? 'Hide commands' : 'What can it do?'}
@@ -265,10 +271,15 @@ export function Chat({
                 setDraft(c.text.includes('<') ? c.text.replace(/<[^>]+>/, '') : c.text);
                 input.current?.focus();
               }}
-              style={s.command}
+              style={(state) => [s.command, isHovered(state) && { backgroundColor: colors.bg }]}
             >
-              <Text style={[styles.text, { fontWeight: '600' }]}>{c.text}</Text>
-              <Text style={[styles.muted, { flexShrink: 1 }]}>{c.what}</Text>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={[styles.text, { fontWeight: '600', color: colors.primary }]}>
+                  {c.text}
+                </Text>
+                <Text style={styles.muted}>{c.what}</Text>
+              </View>
+              <Icon name="corner-down-left" color={colors.muted} size={16} />
             </Pressable>
           ))}
         </View>
@@ -279,25 +290,37 @@ export function Chat({
         contentContainerStyle={{ gap: space.sm, paddingBottom: space.sm }}
         onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: true })}
       >
-        {turns.map((t, i) => (
-          <View
+        {turns.map((t, i) =>
+          t.role === 'user' ? (
             // biome-ignore lint/suspicious/noArrayIndexKey: turns are append-only
-            key={i}
-            style={[s.bubble, t.role === 'user' ? s.user : s.agent]}
-            accessibilityLiveRegion={
-              i === turns.length - 1 && t.role === 'assistant' ? 'polite' : 'none'
-            }
-          >
-            <Text style={[styles.text, t.role === 'user' && { color: colors.primaryText }]}>
-              {t.content}
-            </Text>
-            {t.toolCalls && t.toolCalls.length > 0 && <Trace calls={t.toolCalls} runId={t.runId} />}
-          </View>
-        ))}
+            <View key={i} style={[s.bubble, s.user]}>
+              <Text style={[styles.text, { color: colors.primaryText }]}>{t.content}</Text>
+            </View>
+          ) : (
+            <View
+              // biome-ignore lint/suspicious/noArrayIndexKey: turns are append-only
+              key={i}
+              style={s.agentTurn}
+              accessibilityLiveRegion={i === turns.length - 1 ? 'polite' : 'none'}
+            >
+              <AssistantMark size={24} />
+              <View style={[s.bubble, s.agent]}>
+                <Text style={styles.text}>{t.content}</Text>
+                {t.toolCalls && t.toolCalls.length > 0 && (
+                  <Trace calls={t.toolCalls} runId={t.runId} />
+                )}
+              </View>
+            </View>
+          ),
+        )}
         {busy && (
-          <Text style={styles.muted} accessibilityLiveRegion="polite">
-            Working…
-          </Text>
+          <View style={s.agentTurn} accessibilityLiveRegion="polite">
+            <AssistantMark size={24} />
+            <View style={[s.bubble, s.agent, styles.row]}>
+              <ActivityIndicator size="small" color={colors.assistant} />
+              <Text style={[styles.text, { color: colors.assistant }]}>Working on it…</Text>
+            </View>
+          </View>
         )}
       </ScrollView>
       {error && (
@@ -334,8 +357,23 @@ const s = StyleSheet.create({
   },
   compact: { borderRadius: 0, borderWidth: 0, borderTopWidth: 1 },
   help: { gap: space.xs },
-  command: { gap: 2, paddingVertical: space.xs, minHeight: 44, justifyContent: 'center' },
+  command: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingVertical: space.xs,
+    paddingHorizontal: space.sm,
+    marginHorizontal: -space.sm,
+    borderRadius: 8,
+    minHeight: 44,
+  },
   bubble: { borderRadius: 10, padding: space.md, maxWidth: '92%' },
   user: { alignSelf: 'flex-end', backgroundColor: colors.userBubble },
-  agent: { alignSelf: 'flex-start', backgroundColor: colors.agentBubble },
+  agentTurn: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm, maxWidth: '100%' },
+  agent: {
+    flexShrink: 1,
+    backgroundColor: colors.assistantTint,
+    borderWidth: 1,
+    borderColor: colors.assistantBorder,
+  },
 });

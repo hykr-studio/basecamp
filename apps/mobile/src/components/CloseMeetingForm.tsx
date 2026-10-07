@@ -2,6 +2,7 @@ import { CloseMeetingSpec, type MeetingView } from '@app/contracts';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { ApprovalItem, useShownInline } from '../framework/ApprovalCard';
+import { ASSISTANT_ICON } from '../framework/AssistantMark';
 import { useAssistant } from '../framework/assistant-context';
 import { DateField } from '../framework/DateField';
 import { Field } from '../framework/Field';
@@ -61,8 +62,8 @@ export function CloseMeetingForm({
           </Text>
         </View>
         <Text style={[styles.muted, { color: colors.approvalText }]}>
-          Read exactly what it will write, then approve it or reject it. Nothing is written until
-          you approve.
+          Read exactly what it will write, then approve or reject it. Nothing is written until you
+          approve, and a closed meeting can't be reopened.
         </Text>
         <ApprovalItem approval={parked} defaultOpen />
       </View>
@@ -72,7 +73,7 @@ export function CloseMeetingForm({
   return (
     <View style={styles.card}>
       <View style={[styles.row, { justifyContent: 'space-between' }]}>
-        <Text style={styles.heading}>Close meeting</Text>
+        <Text style={styles.heading}>Close this meeting</Text>
         <Button title="Cancel" variant="subtle" onPress={onDone} />
       </View>
       <View style={s.segment} accessibilityRole="tablist">
@@ -114,7 +115,7 @@ export function CloseMeetingForm({
             <View style={styles.row}>
               <Button
                 title="Draft with the assistant"
-                icon="message-circle"
+                icon={ASSISTANT_ICON}
                 busy={drafting}
                 disabled={!pasted.trim()}
                 onPress={async () => {

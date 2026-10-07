@@ -28,8 +28,26 @@ export const colors = {
   approvalBorder: '#cdd7f6',
   approvalText: '#2f4a9e', // 7.5:1 on approvalBg
   dangerHover: '#962722',
-  userBubble: '#2f5bea',
+  /** Your own words: ink, so they never read as a button. */
+  userBubble: '#243042', // white text 13.3:1
   agentBubble: '#eef1f5',
+  /**
+   * The assistant's mark: one hue, used only where the assistant acted (its chat turns, what it
+   * asked for, what it created). Never for actions, so it cannot be mistaken for a button.
+   */
+  assistant: '#6a3fc8', // 6.7:1 on white, 5.9:1 on assistantTint
+  assistantTint: '#f4effd',
+  assistantBorder: '#ddd0f7',
+};
+
+/**
+ * Headings use Schibsted Grotesk (loaded in the root layout), a sturdy news grotesque that
+ * reads as a record of decisions; body text stays the platform face. Each weight is its own
+ * family, so native platforms never synthesise a bold.
+ */
+export const fonts = {
+  heading: 'SchibstedGrotesk_600SemiBold',
+  title: 'SchibstedGrotesk_700Bold',
 };
 
 /** A 4-based spacing scale. */
@@ -47,8 +65,8 @@ export const styles = StyleSheet.create({
     gap: space.md,
   },
   section: { gap: space.sm },
-  title: { fontSize: 22, fontWeight: '700', color: colors.text },
-  heading: { fontSize: 16, fontWeight: '600', color: colors.text },
+  title: { fontSize: 24, fontFamily: fonts.title, letterSpacing: -0.3, color: colors.text },
+  heading: { fontSize: 17, fontFamily: fonts.heading, letterSpacing: -0.1, color: colors.text },
   label: { fontSize: 13, fontWeight: '600', color: colors.text },
   text: { fontSize: 15, color: colors.text, lineHeight: 21 },
   muted: { fontSize: 13, color: colors.muted, lineHeight: 18 },

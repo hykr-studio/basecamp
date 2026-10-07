@@ -29,6 +29,10 @@ export const meetings = app.table(
     status: text('status', { enum: ['scheduled', 'held', 'closed'] })
       .notNull()
       .default('scheduled'),
+    /** Who made the row: the person, or the assistant acting for them. Set by the framework. */
+    createdBy: text('created_by', { enum: ['person', 'assistant'] })
+      .notNull()
+      .default('person'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()
@@ -48,6 +52,10 @@ export const notes = app.table(
     title: text('title').notNull(),
     body: text('body').notNull().default(''),
     meetingId: text('meeting_id').references(() => meetings.id, { onDelete: 'set null' }),
+    /** Who made the row: the person, or the assistant acting for them. Set by the framework. */
+    createdBy: text('created_by', { enum: ['person', 'assistant'] })
+      .notNull()
+      .default('person'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()
@@ -71,6 +79,10 @@ export const todos = app.table(
     done: boolean('done').default(false).notNull(),
     dueOn: date('due_on'),
     meetingId: text('meeting_id').references(() => meetings.id, { onDelete: 'set null' }),
+    /** Who made the row: the person, or the assistant acting for them. Set by the framework. */
+    createdBy: text('created_by', { enum: ['person', 'assistant'] })
+      .notNull()
+      .default('person'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()

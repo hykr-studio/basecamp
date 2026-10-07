@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { entitySpec } from '../framework/spec.js';
+import { CreatedBy, entitySpec } from '../framework/spec.js';
 
 const title = z.string().min(1).max(200);
 const dueOn = z.iso.date();
@@ -10,6 +10,7 @@ export const Todo = z.object({
   done: z.boolean(),
   dueOn: dueOn.nullable(),
   meetingId: z.string().nullable(),
+  createdBy: CreatedBy,
   createdAt: z.iso.datetime(),
 });
 export type Todo = z.infer<typeof Todo>;

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { entitySpec } from '../framework/spec.js';
+import { CreatedBy, entitySpec } from '../framework/spec.js';
 
 const title = z.string().min(1).max(200);
 const body = z.string().max(20_000);
@@ -9,6 +9,7 @@ export const NoteView = z.object({
   title,
   body,
   meetingId: z.string().nullable(),
+  createdBy: CreatedBy,
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });

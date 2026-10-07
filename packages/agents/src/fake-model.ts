@@ -99,7 +99,7 @@ const sameTitle = (a: string, b: string) => a.trim().toLowerCase() === b.trim().
 function written(o: Outcome, done: (value: Row) => string): string {
   const r = o.result as { status: string; value?: Row; approval?: { summary: string | null } };
   if (r.status === 'needs_approval') {
-    return `I've asked for your approval: ${r.approval?.summary ?? 'see Approvals'}. Approve it in the app.`;
+    return `I've asked for your approval: ${r.approval?.summary ?? 'see Approvals'}. Nothing changes until you approve it.`;
   }
   return done(r.value as Row);
 }

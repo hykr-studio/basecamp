@@ -91,6 +91,8 @@ describe('meetings, end to end', () => {
 
     const [note] = (await ana.call('GET', `/api/notes?meetingId=${siteReview.id}`)).body.items;
     expect(note.title).toBe('Summary: Site review');
+    // Provenance: rows the assistant wrote stay marked as its own, even after Ana approved them.
+    expect(note.createdBy).toBe('assistant');
     const todos = (await ana.call('GET', `/api/todos?meetingId=${siteReview.id}&sort=title`)).body
       .items;
     expect(todos.map((t: { title: string }) => t.title)).toEqual([
@@ -99,6 +101,11 @@ describe('meetings, end to end', () => {
       'Order tiles',
     ]);
     expect((await ana.call('GET', `/api/meetings/${siteReview.id}`)).body.status).toBe('closed');
+    expect(new Set(todos.map((t: { createdBy: string }) => t.createdBy))).toEqual(
+      new Set(['assistant']),
+    );
+    // The meeting itself was made by Ana.
+    expect((await ana.call('GET', `/api/meetings/${siteReview.id}`)).body.createdBy).toBe('person');
 
     // One request: the command row and its five entity rows, acted by the agent, approved by Ana.
     const { rows } = await pool.query(

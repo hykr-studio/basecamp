@@ -3,8 +3,15 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ByAssistant } from '../framework/AssistantMark';
 import { clock, relativeDay, when } from '../framework/dates';
-import { entityApi, needsClosing, useEntityMutation, useUndoableDelete } from '../framework/hooks';
+import {
+  entityApi,
+  needsClosing,
+  useEntity,
+  useEntityMutation,
+  useUndoableDelete,
+} from '../framework/hooks';
 import { Icon } from '../framework/Icon';
 import { Markdown } from '../framework/Markdown';
 import { useToast } from '../framework/Toast';
@@ -12,7 +19,34 @@ import { colors, space, styles } from '../theme';
 import { Button } from './Button';
 
 /** A to-do: tick it, tap the title to rename, delete with undo. */
-export function TodoRow({ todo, canDelete = true }: { todo: Todo; canDelete?: boolean }) {
+/** Where a to-do came from: a link to its meeting, by title. */
+function FromMeeting({ id }: { id: string }) {
+  const meeting = useEntity('meetings', id);
+  if (!meeting.data) return null;
+  return (
+    <Link href={`/meetings/${id}`} asChild>
+      <Pressable
+        accessibilityRole="link"
+        accessibilityLabel={`From the meeting ${meeting.data.title}`}
+        style={StyleSheet.flatten([styles.row, { gap: 4, alignSelf: 'flex-start' as const }])}
+      >
+        <Icon name="calendar" color={colors.primary} size={13} />
+        <Text style={[styles.muted, { color: colors.primary }]}>{meeting.data.title}</Text>
+      </Pressable>
+    </Link>
+  );
+}
+
+export function TodoRow({
+  todo,
+  canDelete = true,
+  showMeeting = true,
+}: {
+  todo: Todo;
+  canDelete?: boolean;
+  /** Off on the meeting's own page, where it would only repeat the title above. */
+  showMeeting?: boolean;
+}) {
   const { update } = useEntityMutation('todos');
   const toast = useToast();
   /** Ticking can move a to-do out of the current list, so it says so and offers Undo. */
@@ -80,10 +114,18 @@ export function TodoRow({ todo, canDelete = true }: { todo: Todo; canDelete?: bo
             <Text style={[styles.text, todo.done && s.done]}>{todo.title}</Text>
           </Pressable>
         )}
-        {due && (
-          <Text style={[styles.muted, due.overdue && { color: colors.danger, fontWeight: '600' }]}>
-            {due.text}
-          </Text>
+        {(due || (showMeeting && todo.meetingId) || todo.createdBy === 'assistant') && (
+          <View style={[styles.row, { flexWrap: 'wrap', columnGap: space.md, rowGap: 2 }]}>
+            {due && (
+              <Text
+                style={[styles.muted, due.overdue && { color: colors.danger, fontWeight: '600' }]}
+              >
+                {due.text}
+              </Text>
+            )}
+            {showMeeting && todo.meetingId && <FromMeeting id={todo.meetingId} />}
+            {todo.createdBy === 'assistant' && <ByAssistant />}
+          </View>
         )}
       </View>
       {canDelete && (
@@ -91,7 +133,7 @@ export function TodoRow({ todo, canDelete = true }: { todo: Todo; canDelete?: bo
           title="Delete"
           icon="trash-2"
           iconOnly
-          variant="subtle"
+          variant="ghost"
           accessibilityLabel={`Delete “${todo.title}”`}
           onPress={() => remove(todo)}
         />
@@ -142,6 +184,7 @@ export function NoteRow({
       ) : (
         <Text style={styles.muted}>No text yet.</Text>
       )}
+      {note.createdBy === 'assistant' && <ByAssistant />}
     </View>
   );
   return onPress ? (
