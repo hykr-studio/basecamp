@@ -1,0 +1,25 @@
+{
+  "name": "agentic-stack-template",
+  "private": true,
+  "packageManager": "pnpm@12.9.1+sha512.06b055fff5cd20dc12781de173ced3310ce0951bf2ec620211a16045d5444d5c93a663210764ef29a653a610459ba0368f0e74f84d80c54723cf95aae7bc0d6d",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "lint:deps": "depcruise apps packages --config .dependency-cruiser.cjs",
+    "infra:up": "docker compose up -d",
+    "db:generate": "pnpm --filter @app/db generate",
+    "db:migrate": "pnpm --filter @app/db migrate"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "^26.6.4",
+    "dependency-cruiser": "^18.5.0",
+    "turbo": "^2.11.7",
+    "typescript": "~5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

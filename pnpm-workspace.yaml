@@ -1,0 +1,23 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+allowBuilds:
+  esbuild: true
+
+tasks:
+  build:
+    dependsOn:
+      - "^build"
+    outputs:
+      - "dist/**"
+  typecheck:
+    dependsOn:
+      - "^build"
+  test:
+    dependsOn:
+      - build
+  dev:
+    dependsOn:
+      - "^build"
+    cache: false
