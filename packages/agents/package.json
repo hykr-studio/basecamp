@@ -13,5 +13,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@app/api-client": "workspace:*",
+    "@app/contracts": "workspace:*",
+    "@mastra/core": "^1.74.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "^2.0.3"
   }
 }
