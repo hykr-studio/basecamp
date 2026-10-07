@@ -1,0 +1,52 @@
+import type { ChatContext } from '@app/contracts';
+import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react';
+
+/**
+ * Where the person is, for the assistant ("close this one"), and a way for a screen to
+ * send the assistant a message (the close form's "Draft from notes").
+ */
+type Assistant = {
+  context: ChatContext | undefined;
+  setContext: (c: ChatContext | undefined) => void;
+  /** Set by the chat panel; screens call it to send a message as the person. */
+  send: (text: string) => Promise<void>;
+  registerSend: (fn: (text: string) => Promise<void>) => void;
+};
+
+const AssistantContext = createContext<Assistant | null>(null);
+
+export function AssistantProvider({ children }: { children: ReactNode }) {
+  const [context, setContext] = useState<ChatContext | undefined>();
+  const sendRef = useRef<(text: string) => Promise<void>>(async () => {});
+  return (
+    <AssistantContext.Provider
+      value={{
+        context,
+        setContext,
+        send: (text) => sendRef.current(text),
+        registerSend: (fn) => {
+          sendRef.current = fn;
+        },
+      }}
+    >
+      {children}
+    </AssistantContext.Provider>
+  );
+}
+
+export function useAssistant() {
+  const value = useContext(AssistantContext);
+  if (!value) throw new Error('useAssistant outside AssistantProvider');
+  return value;
+}
+
+/** Call from a screen: tells the assistant where the person is while it is shown. */
+export function useScreenContext(context: ChatContext) {
+  const { setContext } = useAssistant();
+  const key = JSON.stringify(context);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by the context's content
+  useEffect(() => {
+    setContext(context);
+    return () => setContext(undefined);
+  }, [key]);
+}

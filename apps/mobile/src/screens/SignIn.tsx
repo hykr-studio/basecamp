@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
-import { auth, errorMessage, type SessionUser } from '../api';
+import { auth, type SessionUser } from '../api';
 import { Button } from '../components/Button';
+import { errorMessage } from '../framework/hooks';
 import { colors, styles } from '../theme';
 
 export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void }) {

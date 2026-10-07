@@ -21,6 +21,9 @@ minimumReleaseAgeExclude:
   - expo-modules-autolinking@57.0.14
   - expo-modules-core@57.0.21
   - expo@57.0.27
+  - "@expo/ui@57.0.22"
+  - expo-linking@57.0.12
+  - expo-router@57.0.25
 
 tasks:
   build:

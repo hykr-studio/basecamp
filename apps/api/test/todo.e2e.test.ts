@@ -98,8 +98,9 @@ describe('to-dos, end to end', () => {
       'GET',
       `/api/todos?done=false&sort=-dueOn&limit=2&cursor=${first.body.nextCursor}`,
     );
-    // Undated to-dos sort last and are not skipped by the cursor.
-    expect(second.body.items.map((t: { title: string }) => t.title)).toEqual([
+    // Undated to-dos sort last and are not skipped by the cursor. They tie on dueOn, so
+    // their order is the id tie-breaker's: check membership, not order.
+    expect(second.body.items.map((t: { title: string }) => t.title).sort()).toEqual([
       'Buy cement',
       'Order tiles',
     ]);

@@ -13,6 +13,10 @@ export const Approval = z.object({
   status: ApprovalStatus,
   /** What the person is asked to approve, e.g. Close "Site review" with 1 note and 3 to-dos. */
   summary: z.string().nullable(),
+  resourceType: z.string(),
+  resourceId: z.string().nullable(),
+  /** The parked input, so the person can read exactly what will run (e.g. a drafted close). */
+  input: z.unknown(),
   /** Who asked: the person, or the assistant acting for them. */
   requestedBy: z.enum(['user', 'agent']),
   expiresAt: z.iso.datetime(),

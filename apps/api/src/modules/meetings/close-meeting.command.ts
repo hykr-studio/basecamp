@@ -33,9 +33,13 @@ export const CloseMeeting = defineCommand(CloseMeetingSpec, {
       principal,
       {
         title: `Summary: ${meeting.title}`,
-        body: [input.summary, '', '## Decisions', ...input.decisions.map((d) => `- ${d}`)].join(
-          '\n',
-        ),
+        // A Decisions section only when there are decisions.
+        body: [
+          input.summary,
+          ...(input.decisions.length
+            ? ['', '## Decisions', ...input.decisions.map((d) => `- ${d}`)]
+            : []),
+        ].join('\n'),
         meetingId: meeting.id,
       },
       via,

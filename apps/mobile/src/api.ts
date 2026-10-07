@@ -35,19 +35,3 @@ export const auth = {
   },
   signOut: () => authCall<unknown>('/sign-out', {}),
 };
-
-/** A sentence a person can read, from whatever the API sent back. */
-export function errorMessage(e: unknown): string {
-  if (e instanceof ApiError) {
-    const body = e.body as {
-      message?: unknown;
-      reason?: string;
-      errors?: { message?: string }[];
-    } | null;
-    const detail = body?.errors?.[0]?.message ?? body?.reason;
-    if (detail) return detail;
-    if (typeof body?.message === 'string') return body.message;
-    return e.status === 429 ? 'Too many requests. Wait a minute and try again.' : e.message;
-  }
-  return e instanceof Error ? e.message : String(e);
-}
