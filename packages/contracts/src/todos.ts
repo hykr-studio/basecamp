@@ -64,7 +64,13 @@ export const ChatRequest = z.object({
 });
 export type ChatRequest = z.infer<typeof ChatRequest>;
 
+export const ToolCallSummary = z.object({ tool: z.string(), ok: z.boolean() });
+export type ToolCallSummary = z.infer<typeof ToolCallSummary>;
+
+/** One agent turn: its reply, the run id that ties its audit rows together, and what it called. */
 export const ChatResponse = z.object({
-  message: ChatMessage,
+  reply: z.string(),
+  runId: z.string(),
+  toolCalls: z.array(ToolCallSummary),
 });
 export type ChatResponse = z.infer<typeof ChatResponse>;

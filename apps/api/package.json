@@ -8,9 +8,12 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@app/agents": "workspace:*",
+    "@app/api-client": "workspace:*",
     "@app/contracts": "workspace:*",
     "@app/db": "workspace:*",
     "@app/policy": "workspace:*",
+    "@mastra/core": "1.74.0",
     "@nest-lab/throttler-storage-redis": "^1.2.0",
     "@nestjs/common": "^11.2.7",
     "@nestjs/core": "^11.2.7",

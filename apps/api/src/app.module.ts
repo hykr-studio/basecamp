@@ -8,6 +8,7 @@ import { config } from './config.js';
 import { HealthController } from './health/health.controller.js';
 import { auth } from './infra/auth.js';
 import { DbModule } from './infra/db.module.js';
+import { ChatController } from './modules/chat/chat.controller.js';
 import { TodosModule } from './modules/todos/todos.module.js';
 
 @Module({
@@ -22,7 +23,7 @@ import { TodosModule } from './modules/todos/todos.module.js';
     }),
     TodosModule,
   ],
-  controllers: [HealthController],
+  controllers: [HealthController, ChatController],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_PIPE, useClass: ZodValidationPipe },
