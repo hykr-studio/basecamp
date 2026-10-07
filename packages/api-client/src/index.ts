@@ -24,9 +24,12 @@ export class ApiError extends Error {
 
 export type ApiClientOptions = {
   baseUrl: string;
-  /** Extra headers per request. The agent passes its key, the person it acts for, and the run. */
-  headers?: () => Record<string, string>;
-  /** The web app passes 'include' so the session cookie goes along. */
+  /**
+   * Extra headers per request. The agent passes its key, the person it acts for, and the run;
+   * the native app passes the session cookie it keeps in SecureStore (read asynchronously).
+   */
+  headers?: () => Record<string, string> | Promise<Record<string, string>>;
+  /** The web app passes 'include' so the browser sends the session cookie itself. */
   credentials?: 'include' | 'omit';
 };
 
@@ -57,7 +60,7 @@ export function createApiClient(opts: ApiClientOptions) {
       headers: {
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
         ...(key ? { 'idempotency-key': key } : {}),
-        ...opts.headers?.(),
+        ...(await opts.headers?.()),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -100,8 +103,20 @@ export function createApiClient(opts: ApiClientOptions) {
     /** People only: the agent gets 403. */
     listApprovals: () => call<Approval[]>('GET', '/api/approvals'),
     getApproval: (id: string) => call<Approval>('GET', `/api/approvals/${encodeURIComponent(id)}`),
+    /** The person's WhatsApp number, so the assistant answers it (people only). */
+    whatsapp: {
+      get: () =>
+        call<{ address: string; timeZone: string } | null>('GET', '/api/channels/whatsapp'),
+      link: (phone: string, timeZone: string) =>
+        call<{ address: string; timeZone: string }>('POST', '/api/channels/whatsapp', {
+          phone,
+          timeZone,
+        }),
+      unlink: () => call<void>('DELETE', '/api/channels/whatsapp'),
+    },
     /** A record's history from the audit trail (people only). */
-    history: (resourceType: 'todo' | 'note' | 'meeting', resourceId: string) =>
+    /** `resourceType`: any entity name in the catalog (see entityNames). */
+    history: (resourceType: string, resourceId: string) =>
       call<HistoryEntry[]>(
         'GET',
         `/api/history?resourceType=${resourceType}&resourceId=${encodeURIComponent(resourceId)}`,

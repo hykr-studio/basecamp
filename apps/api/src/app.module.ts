@@ -8,22 +8,27 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from '@thallesp/nestjs-better-auth';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { config } from './config.js';
+import { DomainModule } from './domain/index.js';
 import { HealthController } from './health/health.controller.js';
 import { auth } from './infra/auth.js';
 import { sharedDb } from './infra/db.js';
 import { DbModule } from './infra/db.module.js';
-import { ChatController } from './modules/chat/chat.controller.js';
+import { ChatModule } from './modules/chat/chat.module.js';
 import { HistoryController } from './modules/history/history.controller.js';
-import { MeetingsModule } from './modules/meetings/meetings.module.js';
-import { NotesModule } from './modules/notes/notes.module.js';
-import { TodosModule } from './modules/todos/todos.module.js';
+import { PagesModule } from './modules/pages/pages.module.js';
+import { WhatsappModule } from './modules/whatsapp/whatsapp.module.js';
 
 @Module({
   imports: [
     DbModule,
     // Registers a global guard: every route needs a session unless marked
     // @AllowAnonymous() or @OptionalAuth(). CORS is set once, in main.ts.
-    AuthModule.forRoot({ auth, disableTrustedOriginsCors: true }),
+    AuthModule.forRoot({
+      auth,
+      disableTrustedOriginsCors: true,
+      // Webhooks are verified by an HMAC over the exact bytes received.
+      bodyParser: { rawBody: true },
+    }),
     ThrottlerModule.forRoot({
       throttlers: [{ name: 'default', ttl: 60_000, limit: 120 }],
       // The e2e suite turns it off (THROTTLE=off) so back-to-back runs don't trip it.
@@ -34,11 +39,15 @@ import { TodosModule } from './modules/todos/todos.module.js';
     CqrsModule.forRoot(),
     CoreModule.forRoot({ db: sharedDb.db, agentApiKey: config.agentApiKey, agentId: AGENT_ID }),
     // Business modules: declarations only.
-    TodosModule,
-    NotesModule,
-    MeetingsModule,
+    // The domain (src/domain): its entities and commands.
+    DomainModule,
+    // The framework's own entities: saved canvas pages.
+    PagesModule,
+    // The assistant, in the app and on WhatsApp.
+    ChatModule,
+    WhatsappModule,
   ],
-  controllers: [HealthController, ChatController, HistoryController],
+  controllers: [HealthController, HistoryController],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_PIPE, useClass: ZodValidationPipe },

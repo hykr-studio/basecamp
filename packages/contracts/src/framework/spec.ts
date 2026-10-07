@@ -34,6 +34,11 @@ export interface EntitySpec<
   list: ListConfig;
   expose: Record<EntityAction, Expose>;
   approval: Partial<Record<WriteAction, ApprovalRule>>;
+  /**
+   * The registered views (packages/ui-registry) its results are shown with: list results as
+   * `list`, one record as `item`. Names only, so contracts stays free of the registry.
+   */
+  views?: { list?: string; item?: string };
 }
 
 export function entitySpec<R extends z.ZodObject, C extends z.ZodObject, U extends z.ZodObject>(
@@ -69,6 +74,15 @@ export interface CommandSpec<I extends z.ZodObject = z.ZodObject, O extends z.Zo
   expose: 'all' | 'human';
   /** For the tool description: when the agent's call is parked for approval. */
   approvalNote?: string;
+  /** The registered view its result is shown with, and the record it shows. */
+  view?: { name: string; id: (input: z.infer<I>) => string };
+  /**
+   * How people say it, for approval buttons and history: { do: 'close', did: 'closed' }
+   * gives "Approve close" and "closed it". Defaults to the last part of the name.
+   */
+  verb?: { do: string; did: string };
+  /** The entities (by name) it changes, so clients refresh exactly those after it runs. */
+  touches?: string[];
 }
 
 export function commandSpec<I extends z.ZodObject, O extends z.ZodType>(

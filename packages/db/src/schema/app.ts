@@ -1,99 +1,19 @@
 import { sql } from 'drizzle-orm';
 import {
-  boolean,
-  date,
   index,
   jsonb,
   pgSchema,
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 
 export const app = pgSchema('app');
 
-const id = () => text('id').primaryKey().default(sql`gen_random_uuid()::text`);
-
-export const meetings = app.table(
-  'meetings',
-  {
-    id: id(),
-    ownerId: text('owner_id')
-      .notNull()
-      .references(() => user.id),
-    title: text('title').notNull(),
-    startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
-    endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
-    attendees: text('attendees').array().notNull().default(sql`'{}'::text[]`),
-    status: text('status', { enum: ['scheduled', 'held', 'closed'] })
-      .notNull()
-      .default('scheduled'),
-    /** Who made the row: the person, or the assistant acting for them. Set by the framework. */
-    createdBy: text('created_by', { enum: ['person', 'assistant'] })
-      .notNull()
-      .default('person'),
-    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true })
-      .defaultNow()
-      .$onUpdate(() => new Date())
-      .notNull(),
-  },
-  (table) => [index('meetings_owner_starts_idx').on(table.ownerId, table.startsAt)],
-);
-
-export const notes = app.table(
-  'notes',
-  {
-    id: id(),
-    ownerId: text('owner_id')
-      .notNull()
-      .references(() => user.id),
-    title: text('title').notNull(),
-    body: text('body').notNull().default(''),
-    meetingId: text('meeting_id').references(() => meetings.id, { onDelete: 'set null' }),
-    /** Who made the row: the person, or the assistant acting for them. Set by the framework. */
-    createdBy: text('created_by', { enum: ['person', 'assistant'] })
-      .notNull()
-      .default('person'),
-    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true })
-      .defaultNow()
-      .$onUpdate(() => new Date())
-      .notNull(),
-  },
-  (table) => [
-    index('notes_owner_created_idx').on(table.ownerId, table.createdAt),
-    index('notes_meeting_idx').on(table.meetingId),
-  ],
-);
-
-export const todos = app.table(
-  'todos',
-  {
-    id: id(),
-    ownerId: text('owner_id')
-      .notNull()
-      .references(() => user.id),
-    title: text('title').notNull(),
-    done: boolean('done').default(false).notNull(),
-    dueOn: date('due_on'),
-    meetingId: text('meeting_id').references(() => meetings.id, { onDelete: 'set null' }),
-    /** Who made the row: the person, or the assistant acting for them. Set by the framework. */
-    createdBy: text('created_by', { enum: ['person', 'assistant'] })
-      .notNull()
-      .default('person'),
-    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true })
-      .defaultNow()
-      .$onUpdate(() => new Date())
-      .notNull(),
-  },
-  (table) => [
-    index('todos_owner_id_idx').on(table.ownerId),
-    index('todos_meeting_idx').on(table.meetingId),
-  ],
-);
+/** A text uuid primary key, as every table uses. */
+export const id = () => text('id').primaryKey().default(sql`gen_random_uuid()::text`);
 
 export const approvals = app.table(
   'approvals',
@@ -136,4 +56,50 @@ export const idempotencyKeys = app.table(
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [primaryKey({ columns: [table.key, table.principalId] })],
+);
+
+/** A canvas page the person saved: a PageSpec of queries, so it always shows today's data. */
+export const pages = app.table(
+  'pages',
+  {
+    id: id(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => user.id),
+    name: text('name').notNull(),
+    spec: jsonb('spec').notNull(),
+    createdBy: text('created_by', { enum: ['person', 'assistant'] })
+      .notNull()
+      .default('person'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [index('pages_owner_name_idx').on(table.ownerId, table.name)],
+);
+
+/**
+ * A person's address on a channel without a screen (WhatsApp now, voice later): who a
+ * message from that number acts for. One address belongs to one person.
+ */
+export const channelLinks = app.table(
+  'channel_links',
+  {
+    id: id(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    channel: text('channel', { enum: ['whatsapp'] }).notNull(),
+    /** The channel's own id for the person: a WhatsApp wa_id (digits only). */
+    address: text('address').notNull(),
+    /** The person's IANA zone, from the app when they linked: times in replies read as theirs. */
+    timeZone: text('time_zone').notNull().default('UTC'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('channel_links_address_idx').on(table.channel, table.address),
+    uniqueIndex('channel_links_owner_idx').on(table.channel, table.ownerId),
+  ],
 );

@@ -1,3 +1,4 @@
+import '../../global.css';
 import { ApiError } from '@app/api-client';
 import {
   SchibstedGrotesk_600SemiBold,
@@ -10,6 +11,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
   Platform,
   Pressable,
   StyleSheet,
@@ -17,17 +19,26 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, type SessionUser } from '../api';
+import { Canvas } from '../canvas/Canvas';
+import { bindPlatformScreens } from '../canvas/screens';
+import { useCanvas } from '../canvas/store';
+import { ChatRuntime, conversationKey } from '../chat/ChatRuntime';
+import { Thread } from '../chat/Thread';
 import { Button } from '../components/Button';
-import { Chat } from '../components/Chat';
+import { WhatsAppLink } from '../components/WhatsAppLink';
+import { appDomain } from '../domain';
 import { ApprovalCard } from '../framework/ApprovalCard';
 import { ASSISTANT_ICON } from '../framework/AssistantMark';
+import type { NavItem as Destination } from '../framework/app-domain';
 import { AssistantProvider } from '../framework/assistant-context';
 import { isHovered } from '../framework/hover';
-import { Icon, type IconName } from '../framework/Icon';
+import { Icon } from '../framework/Icon';
 import { ToastProvider } from '../framework/Toast';
 import { SignIn } from '../screens/SignIn';
 import { colors, space, styles } from '../theme';
+import { bindPlatformViews } from '../views';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,17 +50,16 @@ const queryClient = new QueryClient({
   },
 });
 
-const NAV: { href: string; label: string; icon: IconName; match: (path: string) => boolean }[] = [
-  { href: '/', label: 'Today', icon: 'sun', match: (p) => p === '/' },
-  {
-    href: '/meetings',
-    label: 'Meetings',
-    icon: 'calendar',
-    match: (p) => p.startsWith('/meetings'),
-  },
-  { href: '/notes', label: 'Notes', icon: 'file-text', match: (p) => p.startsWith('/notes') },
-  { href: '/todos', label: 'To-dos', icon: 'check-square', match: (p) => p.startsWith('/todos') },
+/** The domain's destinations, then the framework's own. */
+const NAV: Destination[] = [
+  ...appDomain.nav,
+  { href: '/pages', label: 'Pages', icon: 'layout', match: (p) => p.startsWith('/pages') },
 ];
+
+// Bind this app's components to every registered view and canvas screen, once.
+bindPlatformViews();
+bindPlatformScreens();
+appDomain.bind();
 
 /** The parts of the page the browser draws: focus ring, selection, caret, themed from the palette. */
 function useBrowserSurfaces() {
@@ -72,7 +82,7 @@ function NavItem({
   active,
   vertical,
 }: {
-  item: (typeof NAV)[number];
+  item: Destination;
   active: boolean;
   vertical: boolean;
 }) {
@@ -110,7 +120,9 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
   const path = usePathname();
   const [chatOpen, setChatOpen] = useState(false);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
-  const chatKey = `chat:${user.id}`;
+  const canvasOpen = useCanvas((c) => c.state.kind !== 'closed');
+  const closeCanvas = useCanvas((c) => c.close);
+  const chatKey = conversationKey(user.id);
   const stack = (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
   );
@@ -121,7 +133,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
         <View style={s.rail} role="navigation">
           <View style={{ gap: 2, paddingHorizontal: space.md, paddingBottom: space.lg }}>
             <Text style={styles.heading}>Agentic Stack</Text>
-            <Text style={styles.muted}>Template app · sample domain: meetings</Text>
+            <Text style={styles.muted}>{appDomain.tagline}</Text>
           </View>
           {NAV.map((n) => (
             <NavItem key={n.href} item={n} active={n.match(path)} vertical />
@@ -134,10 +146,17 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
             <Text style={styles.muted} numberOfLines={1}>
               {user.email}
             </Text>
+            <WhatsAppLink />
           </View>
           <Button title="Sign out" icon="log-out" variant="subtle" onPress={onSignOut} />
         </View>
-        <View style={{ flex: 1 }} role="main">
+        {/* The canvas takes the main column's place; the person's screen stays mounted under it. */}
+        {canvasOpen && (
+          <View style={{ flex: 1 }}>
+            <Canvas />
+          </View>
+        )}
+        <View style={[{ flex: 1 }, canvasOpen && { display: 'none' }]} role="main">
           <View
             style={{
               paddingHorizontal: space.lg,
@@ -152,58 +171,87 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
           {stack}
         </View>
         <View style={{ width: 380, padding: space.lg, paddingLeft: 0 }}>
-          <Chat storageKey={chatKey} />
+          <Thread storageKey={chatKey} />
         </View>
       </View>
     );
   }
 
   return (
-    <View style={styles.screen}>
-      <View style={s.topBar}>
-        <Text style={styles.heading}>Agentic Stack</Text>
-        {confirmSignOut ? (
-          <View style={styles.row}>
-            <Button title="Stay" variant="subtle" onPress={() => setConfirmSignOut(false)} />
-            <Button title="Sign out" variant="secondary" icon="log-out" onPress={onSignOut} />
+    // Phones: content stays clear of the notch and the home indicator (no-op on the web).
+    <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
+      {/* The whole layout rises with the keyboard, so the message box stays above it. */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <View style={s.topBar}>
+          <Text style={styles.heading}>Agentic Stack</Text>
+          {confirmSignOut ? (
+            <View style={styles.row}>
+              <Button title="Stay" variant="subtle" onPress={() => setConfirmSignOut(false)} />
+              <Button title="Sign out" variant="secondary" icon="log-out" onPress={onSignOut} />
+            </View>
+          ) : (
+            <Button
+              title={`Sign out ${user.name}`}
+              icon="log-out"
+              iconOnly
+              variant="subtle"
+              onPress={() => setConfirmSignOut(true)}
+            />
+          )}
+        </View>
+        <View style={{ flex: 1 }} role="main">
+          {stack}
+          {/* A canvas intent opens as a sheet over the screen, between the top bar and the
+            tabs (so clear of the notch); "Chat" goes back to the thread. */}
+          {canvasOpen && (
+            <View style={StyleSheet.absoluteFill}>
+              <Canvas
+                onChat={() => {
+                  closeCanvas();
+                  setChatOpen(true);
+                }}
+              />
+            </View>
+          )}
+        </View>
+        {/* One bottom surface at a time: the assistant sheet replaces the approvals dock. */}
+        <ApprovalCard variant="dock" hidden={chatOpen || canvasOpen} />
+        {/* The conversation lives in ChatRuntime, so the sheet can unmount when closed. */}
+        {chatOpen && !canvasOpen && (
+          <View style={{ height: '60%' }}>
+            <Thread storageKey={chatKey} compact onClose={() => setChatOpen(false)} />
           </View>
-        ) : (
-          <Button
-            title={`Sign out ${user.name}`}
-            icon="log-out"
-            iconOnly
-            variant="subtle"
-            onPress={() => setConfirmSignOut(true)}
-          />
         )}
-      </View>
-      <View style={{ flex: 1 }} role="main">
-        {stack}
-      </View>
-      {/* One bottom surface at a time: the assistant sheet replaces the approvals dock. */}
-      <ApprovalCard variant="dock" hidden={chatOpen} />
-      {/* Kept mounted so the conversation survives closing the sheet. */}
-      <View style={[{ height: '60%' }, !chatOpen && { display: 'none' }]}>
-        <Chat storageKey={chatKey} compact onClose={() => setChatOpen(false)} />
-      </View>
-      <View style={s.tabBar} role="navigation">
-        {NAV.map((n) => (
-          <NavItem key={n.href} item={n} active={n.match(path) && !chatOpen} vertical={false} />
-        ))}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ expanded: chatOpen }}
-          accessibilityLabel={chatOpen ? 'Hide the assistant' : 'Open the assistant'}
-          onPress={() => setChatOpen(!chatOpen)}
-          style={s.tabItem}
-        >
-          <Icon name={ASSISTANT_ICON} color={chatOpen ? colors.primary : colors.muted} size={20} />
-          <Text style={[s.tabLabel, { color: chatOpen ? colors.primary : colors.muted }]}>
-            Assistant
-          </Text>
-        </Pressable>
-      </View>
-    </View>
+        <View style={s.tabBar} role="navigation">
+          {NAV.map((n) => (
+            <NavItem key={n.href} item={n} active={n.match(path) && !chatOpen} vertical={false} />
+          ))}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: chatOpen }}
+            accessibilityLabel={chatOpen ? 'Hide the assistant' : 'Open the assistant'}
+            onPress={() => {
+              // From the canvas, the Assistant tab goes back to the thread.
+              if (canvasOpen) closeCanvas();
+              setChatOpen(canvasOpen || !chatOpen);
+            }}
+            style={s.tabItem}
+          >
+            <Icon
+              name={ASSISTANT_ICON}
+              color={chatOpen ? colors.primary : colors.muted}
+              size={20}
+            />
+            <Text style={[s.tabLabel, { color: chatOpen ? colors.primary : colors.muted }]}>
+              Assistant
+            </Text>
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
@@ -241,15 +289,17 @@ export default function RootLayout() {
               <SignIn onSignedIn={setUser} />
             </View>
           ) : (
-            <Shell
-              user={user}
-              onSignOut={() => {
-                auth.signOut().finally(() => {
-                  queryClient.clear();
-                  setUser(null);
-                });
-              }}
-            />
+            <ChatRuntime storageKey={conversationKey(user.id)}>
+              <Shell
+                user={user}
+                onSignOut={() => {
+                  auth.signOut().finally(() => {
+                    queryClient.clear();
+                    setUser(null);
+                  });
+                }}
+              />
+            </ChatRuntime>
           )}
         </AssistantProvider>
       </ToastProvider>

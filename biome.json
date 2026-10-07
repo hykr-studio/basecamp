@@ -6,7 +6,10 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!packages/db/drizzle"]
+    "includes": ["**", "!packages/db/drizzle", "!apps/mobile/src/uniwind-types.d.ts"]
+  },
+  "css": {
+    "parser": { "tailwindDirectives": true }
   },
   "formatter": {
     "indentStyle": "space",

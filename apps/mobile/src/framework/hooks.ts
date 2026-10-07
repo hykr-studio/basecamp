@@ -1,12 +1,5 @@
 import { ApiError } from '@app/api-client';
-import {
-  type CommandSpec,
-  type ListInput,
-  MeetingSpec,
-  NoteSpec,
-  TodoSpec,
-  type WriteResult,
-} from '@app/contracts';
+import { type CommandSpec, entities, type ListInput, type WriteResult } from '@app/contracts';
 import {
   type InfiniteData,
   useInfiniteQuery,
@@ -19,7 +12,11 @@ import { api } from '../api';
 import { useToast } from './Toast';
 
 /** The entities the app shows, by the name used in routes and query keys. */
-export const specs = { todos: TodoSpec, notes: NoteSpec, meetings: MeetingSpec } as const;
+/**
+ * Every entity the app can show, by the plural used in routes and query keys: the domain's
+ * and the framework's, straight from the catalog. A new entity needs nothing here.
+ */
+export const specs = entities;
 export type EntityName = keyof typeof specs;
 type Read<N extends EntityName> = z.infer<(typeof specs)[N]['schemas']['read']>;
 
@@ -164,7 +161,3 @@ export function useUndoableDelete<N extends EntityName>(name: N) {
     });
   };
 }
-
-/** A meeting that already started and is not closed: its real job now is to be closed. */
-export const needsClosing = (m: { status: string; startsAt: string }) =>
-  m.status !== 'closed' && new Date(m.startsAt).getTime() <= Date.now();

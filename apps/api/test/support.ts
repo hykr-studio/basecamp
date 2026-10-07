@@ -75,10 +75,31 @@ export class Person {
     return res;
   }
 
-  chat(content: string, context?: { screen: string; meetingId?: string }) {
-    return this.call('POST', '/api/chat', {
+  /** One turn as JSON (/api/chat/once). Surfaces default to text, as for any plain caller. */
+  chat(content: string, context?: object, surfaces?: string[]) {
+    return this.call('POST', '/api/chat/once', {
       messages: [{ role: 'user', content }],
       ...(context ? { context } : {}),
+      ...(surfaces ? { surfaces } : {}),
     });
+  }
+
+  /** One turn as the app sends it: the AI SDK stream, returned as its parsed SSE events. */
+  async stream(content: string, surfaces = ['inline', 'canvas'], context?: object) {
+    const res = await fetch(`${server.base}/api/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin, cookie: this.cookie },
+      body: JSON.stringify({
+        messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: content }] }],
+        surfaces,
+        ...(context ? { context } : {}),
+      }),
+    });
+    const text = await res.text();
+    const events = text
+      .split('\n')
+      .filter((line) => line.startsWith('data: ') && line !== 'data: [DONE]')
+      .map((line) => JSON.parse(line.slice(6)) as Record<string, unknown> & { type: string });
+    return { status: res.status, headers: res.headers, events };
   }
 }

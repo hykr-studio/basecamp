@@ -1,0 +1,21 @@
+# Type a message to the assistant and send it. The simulator sometimes drops a typed
+# character, so the text is checked (and typed once more) before sending.
+appId: dev.agenticstack.template
+---
+- tapOn: "Message to the assistant"
+- waitForAnimationToEnd
+- inputText: ${TEXT}
+- repeat:
+    times: 3
+    while:
+      notVisible: ${TEXT}
+    commands:
+      - eraseText: 60
+      - waitForAnimationToEnd
+      - inputText: ${TEXT}
+- assertVisible: ${TEXT}
+- tapOn: "Send"
+# The first tap can only dismiss the keyboard; on an empty composer Send is disabled.
+- tapOn:
+    text: "Send"
+    optional: true

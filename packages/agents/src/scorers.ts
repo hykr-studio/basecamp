@@ -1,3 +1,4 @@
+import { commands } from '@app/contracts';
 import { createScorer } from '@mastra/core/evals';
 import { extractAgentResponseMessages, mergeToolInvocations } from '@mastra/evals/scorers/utils';
 
@@ -20,17 +21,16 @@ export function callsIn(output: AgentOutput): Call[] {
   );
 }
 
-/** Writes that act on an existing row, so need its id from a lookup first. */
-const isWrite = (tool: string) =>
-  /^(update|delete)-/.test(tool) || tool === 'close-meeting' || tool === 'reschedule-meeting';
+/** Writes that act on an existing row (updates, deletes, any command), so need an id first. */
+const commandTools = new Set(commands.flatMap((c) => (c.tool ? [c.tool] : [])));
+const isWrite = (tool: string) => /^(update|delete)-/.test(tool) || commandTools.has(tool);
 const isLookup = (tool: string) => /^(list|get)-/.test(tool);
 
 /** "Look things up before changing them; never invent ids." */
 export const listBeforeWrite = createScorer({
   id: 'list-before-write',
   name: 'Looks up before changing',
-  description:
-    'Every update, delete, close or reschedule in a turn comes after a list or get call.',
+  description: 'Every update, delete or command in a turn comes after a list or get call.',
   type: 'agent',
 })
   .preprocess(({ run }) => {
@@ -81,7 +81,13 @@ export const noRetryAfterRefusal = createScorer({
  * The dataset's expectation for one case. `must` tools run in this order (others may come
  * between, such as a list-todos first); `mustNot` tools never run.
  */
-export type Expected = { must: string[]; mustNot?: string[]; replyIncludes?: string };
+export type Expected = {
+  must: string[];
+  mustNot?: string[];
+  replyIncludes?: string;
+  /** Words the reply must not contain (the text surface never mentions a canvas or screen). */
+  replyExcludes?: string[];
+};
 
 function inOrder(expected: string[], actual: string[]) {
   let i = 0;
@@ -104,8 +110,10 @@ export const expectedOutcome = createScorer({
     const reply = extractAgentResponseMessages(run.output).join('\n');
     const forbidden = (expected.mustNot ?? []).filter((t) => tools.includes(t));
     const toolsMatch = inOrder(expected.must, tools) && forbidden.length === 0;
+    const lower = reply.toLowerCase();
     const replyMatches =
-      !expected.replyIncludes || reply.toLowerCase().includes(expected.replyIncludes.toLowerCase());
+      (!expected.replyIncludes || lower.includes(expected.replyIncludes.toLowerCase())) &&
+      !(expected.replyExcludes ?? []).some((w) => lower.includes(w.toLowerCase()));
     return { tools, must: expected.must, forbidden, toolsMatch, replyMatches, reply };
   })
   .generateScore(({ results }) => {
@@ -122,6 +130,6 @@ export const expectedOutcome = createScorer({
         : `called ${called}, needed ${r.must.join(' → ')}`;
     const reply = r.replyMatches
       ? 'reply ok'
-      : `reply lacks expected words: "${r.reply.slice(0, 80)}"`;
+      : `reply missing or mentioning the wrong words: "${r.reply.slice(0, 80)}"`;
     return `${tools}; ${reply}`;
   });

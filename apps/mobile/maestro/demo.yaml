@@ -1,0 +1,109 @@
+# The step 14 demo moments on a native build (iOS simulator or Android emulator):
+#   maestro test maestro/demo.yaml -e EMAIL=you@example.com -e PASSWORD=...
+# Needs the API (MODEL_MODE=fake) and Metro running, and a user with the seed data.
+appId: dev.agenticstack.template
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Agentic Stack"
+    timeout: 90000
+# The session lives in the Keychain, which survives clearing the app's data: sign out first.
+- runFlow:
+    when:
+      notVisible: "e.g. you@example.com"
+    commands:
+      - tapOn: "Sign out .*"
+      - tapOn: "Sign out"
+- extendedWaitUntil:
+    visible: "e.g. you@example.com"
+    timeout: 30000
+- tapOn: "e.g. you@example.com"
+- inputText: ${EMAIL}
+- tapOn:
+    text: "Password"
+    index: 1
+- inputText: ${PASSWORD}
+- tapOn:
+    text: "Sign in"
+    index: 1
+- tapOn:
+    text: "Not Now"
+    optional: true
+- extendedWaitUntil:
+    visible: "Today"
+    timeout: 30000
+
+# 1. A live checklist inside the reply.
+- tapOn: "Open the assistant"
+- runFlow:
+    file: say.yaml
+    env:
+      TEXT: "what's due this week"
+- extendedWaitUntil:
+    visible: ".*due by.*"
+    timeout: 30000
+- takeScreenshot: ios-1-checklist
+
+# 2. A meeting opened in the canvas.
+- runFlow:
+    file: say.yaml
+    env:
+      TEXT: "open Site review"
+- extendedWaitUntil:
+    visible: "The meeting"
+    timeout: 30000
+- takeScreenshot: ios-2-canvas
+- tapOn: "Back to the chat"
+
+# 3. A composed page, then one block patched.
+- runFlow:
+    file: say.yaml
+    env:
+      TEXT: "plan my week"
+- extendedWaitUntil:
+    visible: "Meetings to prepare"
+    timeout: 30000
+- takeScreenshot: ios-3-week
+- tapOn: "Back to the chat"
+- runFlow:
+    file: say.yaml
+    env:
+      TEXT: "only overdue"
+- extendedWaitUntil:
+    visible: "Overdue"
+    timeout: 30000
+- takeScreenshot: ios-3-overdue
+- tapOn: "Back to the chat"
+
+# 4. Saved by the assistant, and still there after the app restarts (session in SecureStore).
+- runFlow:
+    file: say.yaml
+    env:
+      TEXT: "save this as Monday view"
+- extendedWaitUntil:
+    visible: ".*It is under Pages.*"
+    timeout: 30000
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible: "Pages"
+    timeout: 90000
+- tapOn: "Pages"
+- extendedWaitUntil:
+    visible: "Open Monday view"
+    timeout: 30000
+- takeScreenshot: ios-4-pages
+# It opens without the assistant, with today's data.
+- tapOn: "Open Monday view"
+- extendedWaitUntil:
+    visible: "Meetings to prepare"
+    timeout: 30000
+- takeScreenshot: ios-4-saved-page
+
+# The conversation is kept on the device (SQLite), so it is still there after the restart.
+- tapOn: "Open the assistant"
+- extendedWaitUntil:
+    visible: ".*It is under Pages.*"
+    timeout: 15000
+- takeScreenshot: ios-5-chat-after-restart

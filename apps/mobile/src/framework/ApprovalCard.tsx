@@ -9,6 +9,7 @@ import { expiresIn } from './dates';
 import { errorMessage, useApprovals } from './hooks';
 import { Icon } from './Icon';
 import { useToast } from './Toast';
+import { verbOf } from './verbs';
 
 /*
  * Approvals a screen shows inline (the close form shows its own draft) are left out of the
@@ -37,18 +38,18 @@ export function useShownInline(id: string | undefined) {
   }, [id]);
 }
 
-/** The decision named for what it does: "Delete to-do", "Approve close", "Approve move". */
+/**
+ * The decision named for what it does: "Delete to-do", "Apply change to note", or for a
+ * command its own verb ("Approve close"), from the command's spec.
+ */
 function actionLabel(a: Approval): string {
-  const verb = a.action.split('.').pop() ?? 'approve';
   const noun = labelOf(a.resourceType);
-  const labels: Record<string, string> = {
-    delete: `Delete ${noun}`,
-    close: 'Approve close',
-    reschedule: 'Approve move',
-    update: `Apply change to ${noun}`,
-    create: `Create ${noun}`,
-  };
-  return labels[verb] ?? 'Approve';
+  const verb = verbOf(a.action);
+  if (!verb.entityAction) return `Approve ${verb.do}`;
+  const last = a.action.split('.').pop();
+  if (last === 'delete') return `Delete ${noun}`;
+  if (last === 'create') return `Create ${noun}`;
+  return `Apply change to ${noun}`;
 }
 
 /** How long a newly shown decision ignores clicks, so a double-click can't land on it. */

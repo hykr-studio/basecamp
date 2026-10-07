@@ -40,12 +40,16 @@ export function useAssistant() {
   return value;
 }
 
-/** Call from a screen: tells the assistant where the person is while it is shown. */
-export function useScreenContext(context: ChatContext) {
+/**
+ * Call from a screen: tells the assistant where the person is while it is shown. Pass
+ * undefined for a screen shown inside the canvas, which is not where the person navigated.
+ */
+export function useScreenContext(context: ChatContext | undefined) {
   const { setContext } = useAssistant();
-  const key = JSON.stringify(context);
+  const key = JSON.stringify(context ?? null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by the context's content
   useEffect(() => {
+    if (!context) return;
     setContext(context);
     return () => setContext(undefined);
   }, [key]);

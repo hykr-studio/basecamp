@@ -14,6 +14,14 @@ export const config = {
   authUrl: env.BETTER_AUTH_URL ?? 'http://localhost:3000',
   webOrigins: list(env.WEB_ORIGINS),
   agentApiKey: env.AGENT_API_KEY ?? '',
+  /** WhatsApp Cloud API (whaloc in development): the assistant over text, no screen. */
+  whatsapp: {
+    apiBaseUrl: (env.WHATSAPP_API_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, ''),
+    graphVersion: env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
+    token: env.WHATSAPP_TOKEN ?? '',
+    appSecret: env.WHATSAPP_APP_SECRET ?? '',
+    verifyToken: env.WHATSAPP_VERIFY_TOKEN ?? '',
+  },
 };
 
 /** Refuse to start with a missing or guessable secret. */

@@ -2,8 +2,8 @@ import { Mastra } from '@mastra/core/mastra';
 import { PinoLogger } from '@mastra/loggers';
 import { MastraStorageExporter, Observability, SensitiveDataFilter } from '@mastra/observability';
 import { PostgresStoreVNext } from '@mastra/pg';
+import { createAssistant } from '../assistant.js';
 import { expectedOutcome, listBeforeWrite, noRetryAfterRefusal } from '../scorers.js';
-import { createTodoAgent } from '../todo-agent.js';
 
 /**
  * The one Mastra instance. Studio talks to it through scripts/studio-server.ts, and the
@@ -14,7 +14,12 @@ import { createTodoAgent } from '../todo-agent.js';
 const databaseUrl = process.env.DATABASE_URL ?? 'postgres://app:app@localhost:5432/app';
 
 export const mastra = new Mastra({
-  agents: { todoAgent: createTodoAgent() },
+  // One assistant, one tool set per surface profile (see agents.ts).
+  agents: {
+    assistant: createAssistant('app'),
+    assistantInline: createAssistant('inline'),
+    assistantText: createAssistant('text'),
+  },
   // Registered so their results are saved and shown in Studio.
   scorers: { listBeforeWrite, noRetryAfterRefusal, expectedOutcome },
   // Agent state in `mastra`; traces, logs, metrics and scores in `mastra_obs`, on their
@@ -31,7 +36,7 @@ export const mastra = new Mastra({
   observability: new Observability({
     configs: {
       default: {
-        serviceName: 'todo-agent',
+        serviceName: 'assistant',
         exporters: [new MastraStorageExporter()],
         spanOutputProcessors: [new SensitiveDataFilter()],
         // Who the agent acted for, and the run, become searchable trace metadata.
@@ -41,5 +46,5 @@ export const mastra = new Mastra({
       },
     },
   }),
-  logger: new PinoLogger({ name: 'todo-agent', level: 'info' }),
+  logger: new PinoLogger({ name: 'assistant', level: 'info' }),
 });

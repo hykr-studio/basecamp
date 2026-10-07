@@ -6,48 +6,35 @@ import { STUDIO_URL } from '../config';
 import { colors, space, styles } from '../theme';
 import { AssistantMark } from './AssistantMark';
 import { Icon, type IconName } from './Icon';
-
-const done: Record<string, string> = {
-  create: 'created it',
-  update: 'changed it',
-  delete: 'deleted it',
-  close: 'closed it',
-  reschedule: 'moved it',
-};
-const ask: Record<string, string> = {
-  create: 'create',
-  update: 'change',
-  delete: 'delete',
-  close: 'close',
-  reschedule: 'move',
-};
+import { verbOf } from './verbs';
 
 function describe(e: HistoryEntry): { text: string; icon: IconName; tone: string } {
-  const verb = e.action.split('.').pop() ?? '';
+  const verb = verbOf(e.action);
   const who = e.actor === 'assistant' ? 'The assistant' : 'You';
   if (e.outcome === 'needs_approval') {
     return {
-      text: `${who} asked to ${ask[verb] ?? verb} this`,
+      text: `${who} asked to ${verb.do} this`,
       icon: 'clock',
       tone: colors.approvalText,
     };
   }
   if (e.outcome === 'denied') {
     return {
-      text: `${who} tried to ${ask[verb] ?? verb} this; refused: ${e.reason ?? 'not allowed'}`,
+      text: `${who} tried to ${verb.do} this; refused: ${e.reason ?? 'not allowed'}`,
       icon: 'x-circle',
       tone: colors.danger,
     };
   }
   return {
-    text: `${who} ${done[verb] ?? e.action}${e.approvedByYou ? ', approved by you' : ''}`,
+    text: `${who} ${verb.did} it${e.approvedByYou ? ', approved by you' : ''}`,
     icon: e.approvedByYou ? 'check-circle' : 'edit-3',
     tone: colors.text,
   };
 }
 
 /** What happened to this record, from the audit trail: who asked, who approved, when. */
-export function History({ type, id }: { type: 'todo' | 'note' | 'meeting'; id: string }) {
+/** `type` is an entity name from the catalog (the domain's or the framework's). */
+export function History({ type, id }: { type: string; id: string }) {
   const q = useQuery({ queryKey: ['history', type, id], queryFn: () => api.history(type, id) });
   // A command (close, move) also records the entity change it made: show the decision once.
   const commandRuns = new Set(

@@ -1,4 +1,4 @@
-import { HistoryEntry, type Principal } from '@app/contracts';
+import { entityNames, HistoryEntry, type Principal } from '@app/contracts';
 import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@app/core';
 import { type Database, events } from '@app/db';
 import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
@@ -9,7 +9,8 @@ import { z } from 'zod';
 import { DB } from '../../infra/db.module.js';
 
 class HistoryQuery extends createZodDto(
-  z.object({ resourceType: z.enum(['todo', 'note', 'meeting']), resourceId: z.uuid() }),
+  // Any entity in the catalog (the domain's and the framework's).
+  z.object({ resourceType: z.enum(entityNames), resourceId: z.uuid() }),
 ) {}
 
 /**

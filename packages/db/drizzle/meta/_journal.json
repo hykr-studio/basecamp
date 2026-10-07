@@ -22,6 +22,20 @@
       "when": 1791378431761,
       "tag": "0002_created_by",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791381960047,
+      "tag": "0003_pages_and_channels",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791381974560,
+      "tag": "0004_channel_time_zone",
+      "breakpoints": true
     }
   ]
 }

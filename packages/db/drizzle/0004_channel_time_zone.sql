@@ -1,0 +1,1 @@
+ALTER TABLE "app"."channel_links" ADD COLUMN "time_zone" text DEFAULT 'UTC' NOT NULL;
