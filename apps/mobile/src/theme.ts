@@ -17,10 +17,17 @@ export const colors = {
   warnBg: '#fff8db',
   warnBorder: '#efd36a',
   warnText: '#7a5600', // on warnBg: 6.1:1
-  success: '#1b7f4b',
+  success: '#146b3d', // on successTint: 5.8:1
   successTint: '#e6f4ec',
   disabledBg: '#e7e9ee',
-  disabledText: '#8a94a3',
+  disabledText: '#6b7480', // 3.9:1 on disabledBg
+  /** Placeholders: readable (4.6:1) but lighter than secondary text; examples start with "e.g.". */
+  placeholder: '#6b7684',
+  /** The approval surface: its own calm identity, not the warning style. */
+  approvalBg: '#f3f6ff',
+  approvalBorder: '#cdd7f6',
+  approvalText: '#2f4a9e', // 7.5:1 on approvalBg
+  dangerHover: '#962722',
   userBubble: '#2f5bea',
   agentBubble: '#eef1f5',
 };

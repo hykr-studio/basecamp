@@ -91,7 +91,7 @@ export class ChatController {
         toolName?: string;
         result?: {
           ok?: boolean;
-          result?: { status?: string; approval?: { summary?: string | null } };
+          result?: { status?: string; approval?: { id?: string; summary?: string | null } };
           error?: { reason?: string; message?: unknown } | null;
         };
       };
@@ -106,8 +106,14 @@ export class ChatController {
         };
       }
       if (x.result?.result?.status === 'needs_approval') {
-        const summary = x.result.result.approval?.summary;
-        return { tool, ok: true, outcome: 'parked', ...(summary ? { detail: summary } : {}) };
+        const { summary, id } = x.result.result.approval ?? {};
+        return {
+          tool,
+          ok: true,
+          outcome: 'parked',
+          ...(summary ? { detail: summary } : {}),
+          ...(id ? { approvalId: id } : {}),
+        };
       }
       return { tool, ok: true, outcome: 'done' };
     });

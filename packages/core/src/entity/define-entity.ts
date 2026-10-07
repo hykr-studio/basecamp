@@ -270,7 +270,11 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
         return {
           decision: 'needs_approval',
           rule: `${spec.name}_${action}_needs_approval`,
-          reason: `You need to approve this ${action}`,
+          // Says why it waits, in the person's words: "Deletes by the assistant need your approval".
+          reason:
+            approval === 'always'
+              ? `Every ${label} ${action} needs your approval`
+              : `${action[0].toUpperCase()}${action.slice(1)}s by the ${p.actor.kind === 'agent' ? 'assistant' : 'requester'} need your approval`,
         };
       }
       return {

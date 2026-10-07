@@ -94,10 +94,16 @@ export function useCommand<S extends CommandSpec>(spec: S) {
 
 export function useApprovals() {
   const invalidate = useInvalidate();
+  const client = useQueryClient();
   const list = useQuery({ queryKey: ['approvals'], queryFn: () => api.listApprovals() });
   const decide = useMutation({
     mutationFn: (a: { id: string; approve: boolean }) => api.decideApproval(a.id, a.approve),
-    onSuccess: () => invalidate(Object.keys(specs)),
+    onSuccess: (decided) => {
+      // Anything that showed this request (the chat's trace line) sees the decision at once,
+      // even if it cached the request while it was still pending.
+      client.setQueryData(['approval', decided.id], decided);
+      return invalidate([...Object.keys(specs), 'history']);
+    },
   });
   return { approvals: list.data ?? [], decide };
 }

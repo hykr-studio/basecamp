@@ -59,7 +59,7 @@ export default function Todos() {
             <View style={[styles.row, { flexWrap: 'wrap', alignItems: 'flex-end' }]}>
               <Field
                 label="New to-do"
-                placeholder="Call the plumber"
+                placeholder="e.g. Call the plumber"
                 value={title}
                 onChangeText={setTitle}
                 onSubmitEditing={add}

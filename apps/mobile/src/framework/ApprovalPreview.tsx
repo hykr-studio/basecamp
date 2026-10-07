@@ -1,10 +1,15 @@
 import type { Approval } from '@app/contracts';
+import { useQuery } from '@tanstack/react-query';
 import { Text, View } from 'react-native';
 import { colors, space, styles } from '../theme';
-import { specs } from './hooks';
+import { dayLabel } from './dates';
+import { type EntityName, entityApi, specs } from './hooks';
 
 /** The resource as people say it: "to-do", not "todo". */
-const labelOf = (type: string) => Object.values(specs).find((s) => s.name === type)?.label ?? type;
+export const labelOf = (type: string) =>
+  Object.values(specs).find((s) => s.name === type)?.label ?? type;
+const pluralOf = (type: string) =>
+  (Object.entries(specs).find(([, s]) => s.name === type)?.[0] as EntityName | undefined) ?? null;
 
 /** camelCase → "Action items" */
 const humanize = (key: string) => {
@@ -14,69 +19,106 @@ const humanize = (key: string) => {
     .toLowerCase();
   return words.charAt(0).toUpperCase() + words.slice(1);
 };
-const hidden = (key: string) => key === 'id' || key.endsWith('Id');
+const hidden = (key: string) =>
+  key === 'id' || key.endsWith('Id') || key === 'createdAt' || key === 'updatedAt';
 const isEmpty = (v: unknown) =>
   v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
 
-function Value({ value }: { value: unknown }) {
+function show(key: string, value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if ((key === 'dueOn' || key.endsWith('On')) && typeof value === 'string') return dayLabel(value);
+  if (key.endsWith('At') && typeof value === 'string')
+    return new Date(value).toLocaleString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  return String(value);
+}
+
+function Value({ name, value }: { name: string; value: unknown }) {
   if (Array.isArray(value)) {
     return (
       <View style={{ gap: 2 }}>
-        {value.map((item, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: a read-only preview in input order
-          <Text key={i} style={styles.text}>
-            {'•  '}
-            {typeof item === 'object' && item
+        {value.map((item, i) => {
+          const text =
+            typeof item === 'object' && item
               ? [
                   (item as { title?: string }).title,
                   (item as { dueOn?: string }).dueOn
-                    ? `due ${(item as { dueOn: string }).dueOn}`
+                    ? `due ${dayLabel((item as { dueOn: string }).dueOn)}`
                     : null,
                 ]
                   .filter(Boolean)
-                  .join(' — ') || JSON.stringify(item)
-              : String(item)}
-          </Text>
-        ))}
+                  .join(' · ') || JSON.stringify(item)
+              : String(item);
+          return (
+            // biome-ignore lint/suspicious/noArrayIndexKey: a read-only preview in input order; items may repeat
+            <Text key={`${i}:${text}`} style={styles.text}>
+              {'•  '}
+              {text}
+            </Text>
+          );
+        })}
       </View>
     );
   }
-  if (typeof value === 'boolean') return <Text style={styles.text}>{value ? 'Yes' : 'No'}</Text>;
   if (typeof value === 'object' && value)
-    return <Preview input={value as Record<string, unknown>} />;
-  return <Text style={styles.text}>{String(value)}</Text>;
+    return <Fields input={value as Record<string, unknown>} />;
+  return <Text style={styles.text}>{show(name, value)}</Text>;
 }
 
-function Preview({ input }: { input: Record<string, unknown> }) {
+function Fields({ input }: { input: Record<string, unknown> }) {
   const entries = Object.entries(input).filter(([k, v]) => !hidden(k) && !isEmpty(v));
   return (
     <View style={{ gap: space.md }}>
       {entries.map(([key, value]) => (
         <View key={key} style={{ gap: 2 }}>
-          <Text style={[styles.label, { color: colors.warnText }]}>{humanize(key)}</Text>
-          <Value value={value} />
+          <Text style={[styles.label, { color: colors.approvalText }]}>{humanize(key)}</Text>
+          <Value name={key} value={value} />
         </View>
       ))}
     </View>
   );
 }
 
+/** For a delete: the record itself, so the person sees exactly what goes. */
+function RecordPreview({ approval }: { approval: Approval }) {
+  const plural = pluralOf(approval.resourceType);
+  const id = approval.resourceId;
+  const q = useQuery({
+    queryKey: [plural, 'get', id],
+    queryFn: () => entityApi(plural as EntityName).get(id as string),
+    enabled: Boolean(plural && id),
+    retry: false,
+  });
+  const label = labelOf(approval.resourceType);
+  return (
+    <View style={{ gap: space.md }}>
+      <Text style={[styles.text, { fontWeight: '600', color: colors.danger }]}>
+        Approving deletes this {label} permanently.
+      </Text>
+      {q.data ? (
+        <Fields input={q.data as Record<string, unknown>} />
+      ) : q.isError ? (
+        <Text style={styles.muted}>This {label} no longer exists.</Text>
+      ) : (
+        <Text style={styles.muted}>Loading the {label}…</Text>
+      )}
+    </View>
+  );
+}
+
 /**
- * Exactly what approving will write, read from the parked input. Generic: it renders any
- * command's or entity action's input, so new commands need no new UI here.
+ * Exactly what approving will do, read from the parked input (or, for a delete, the record
+ * itself). Generic: any command's or entity action's input renders here with no new UI.
  */
 export function ApprovalPreview({ approval }: { approval: Approval }) {
-  const verb = approval.action.split('.').pop();
+  if (approval.action.endsWith('.delete')) return <RecordPreview approval={approval} />;
   const input = (approval.input ?? {}) as Record<string, unknown>;
   const visible = Object.entries(input).filter(([k, v]) => !hidden(k) && !isEmpty(v));
-  if (visible.length === 0) {
-    return (
-      <Text style={styles.text}>
-        {verb === 'delete'
-          ? `Approving removes this ${labelOf(approval.resourceType)} permanently.`
-          : `Approving runs ${approval.action} with no further changes.`}
-      </Text>
-    );
-  }
-  return <Preview input={input} />;
+  if (visible.length === 0)
+    return <Text style={styles.text}>Approving runs it with no further changes.</Text>;
+  return <Fields input={input} />;
 }

@@ -4,6 +4,7 @@ import {
   type ChatResponse,
   type CommandSpec,
   type EntitySpec,
+  type HistoryEntry,
   type ListInput,
   type Page,
   pathParams,
@@ -98,6 +99,13 @@ export function createApiClient(opts: ApiClientOptions) {
     command,
     /** People only: the agent gets 403. */
     listApprovals: () => call<Approval[]>('GET', '/api/approvals'),
+    getApproval: (id: string) => call<Approval>('GET', `/api/approvals/${encodeURIComponent(id)}`),
+    /** A record's history from the audit trail (people only). */
+    history: (resourceType: 'todo' | 'note' | 'meeting', resourceId: string) =>
+      call<HistoryEntry[]>(
+        'GET',
+        `/api/history?resourceType=${resourceType}&resourceId=${encodeURIComponent(resourceId)}`,
+      ),
     decideApproval: (id: string, approve: boolean) =>
       call<Approval>(
         'POST',

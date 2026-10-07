@@ -23,6 +23,8 @@ export function FilterChips({
             key={c.label}
             accessibilityRole="button"
             accessibilityState={{ selected: on }}
+            // Announced as a toggle that is pressed or not.
+            {...({ 'aria-pressed': on } as object)}
             onPress={() => onSelect(c)}
             style={[s.chip, on && s.on]}
           >
@@ -50,7 +52,7 @@ export function SearchBox({
     <TextInput
       style={[styles.input, { flexGrow: 1, minWidth: 160 }]}
       placeholder={placeholder}
-      placeholderTextColor={colors.muted}
+      placeholderTextColor={colors.placeholder}
       value={value}
       onChangeText={onChange}
       accessibilityLabel={placeholder}

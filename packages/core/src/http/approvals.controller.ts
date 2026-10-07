@@ -31,6 +31,11 @@ export class ApprovalsController {
     return this.approvals.pending(p);
   }
 
+  @Get(':id')
+  one(@CurrentPrincipal() p: Principal, @Param('id', ParseUUIDPipe) id: string) {
+    return this.approvals.get(p, id);
+  }
+
   @Post(':id/approve')
   @HttpCode(200)
   approve(

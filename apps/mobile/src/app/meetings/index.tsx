@@ -46,7 +46,7 @@ function NewMeeting({ onDone }: { onDone: () => void }) {
         label="Title"
         value={title}
         onChangeText={setTitle}
-        placeholder="Site review"
+        placeholder="e.g. Site review"
         autoFocus
       />
       <View style={[styles.row, { flexWrap: 'wrap', alignItems: 'flex-start' }]}>
@@ -65,7 +65,7 @@ function NewMeeting({ onDone }: { onDone: () => void }) {
         hint="Separate names with commas."
         value={attendees}
         onChangeText={setAttendees}
-        placeholder="Ravi, Asha"
+        placeholder="e.g. Ravi, Asha"
       />
       {create.error && <Text style={styles.error}>{errorMessage(create.error)}</Text>}
       <View style={styles.row}>
@@ -125,7 +125,7 @@ export default function Meetings() {
           />
           {adding && <NewMeeting onDone={() => setAdding(false)} />}
           <View style={{ gap: space.md }}>
-            <SearchBox value={q} onChange={setQ} placeholder="Search meetings" />
+            <SearchBox value={q} onChange={setQ} placeholder="e.g. Search meetings" />
             <FilterChips chips={options} selected={chip.label} onSelect={setChip} />
           </View>
         </View>

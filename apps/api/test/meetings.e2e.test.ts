@@ -72,6 +72,8 @@ describe('meetings, end to end', () => {
         ok: true,
         outcome: 'parked',
         detail: 'Close Site review with 1 note and 3 to-dos',
+        // The chat can follow what becomes of the request.
+        approvalId: expect.any(String),
       },
     ]);
     expect(chat.body.reply).toContain('approval');
@@ -115,6 +117,46 @@ describe('meetings, end to end', () => {
     expect(new Set(rows.map((r) => `${r.actor_kind}/${r.approved_by}/${r.outcome}`))).toEqual(
       new Set([`agent/${ana.id}/committed`]),
     );
+  });
+
+  it("the meeting's history shows who asked, who approved, and the approval's outcome", async () => {
+    const history = await ana.call(
+      'GET',
+      `/api/history?resourceType=meeting&resourceId=${siteReview.id}`,
+    );
+    expect(history.status).toBe(200);
+    const lines = history.body.map(
+      (e: { action: string; actor: string; outcome: string; approvedByYou: boolean }) =>
+        `${e.actor} ${e.action} ${e.outcome}${e.approvedByYou ? ' approved' : ''}`,
+    );
+    expect(lines).toContain('assistant meeting.close needs_approval');
+    expect(lines).toContain('assistant meeting.close committed approved');
+
+    const asked = history.body.find((e: { outcome: string }) => e.outcome === 'needs_approval');
+    expect(asked.runId).toEqual(expect.any(String));
+
+    // A decided approval can be read back, so the chat can say what became of it.
+    const approvals = await pool.query(
+      `select id from app.approvals where resource_id = $1 and action = 'meeting.close' and status = 'approved'`,
+      [siteReview.id],
+    );
+    const one = await ana.call('GET', `/api/approvals/${approvals.rows[0].id}`);
+    expect(one.body.status).toBe('approved');
+    expect((await bob.call('GET', `/api/approvals/${approvals.rows[0].id}`)).status).toBe(404);
+
+    // History is for people: the assistant's own key is refused.
+    const asAgent = await new Person('agent-history').call(
+      'GET',
+      `/api/history?resourceType=meeting&resourceId=${siteReview.id}`,
+      undefined,
+      {
+        'x-agent-key': process.env.AGENT_API_KEY ?? '',
+        'x-agent-id': 'todo-agent',
+        'x-acting-for': ana.id,
+        'x-run-id': 'run-history',
+      },
+    );
+    expect(asAgent.status).toBe(403);
   });
 
   it('a closed meeting refuses a second close', async () => {

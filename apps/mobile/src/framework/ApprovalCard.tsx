@@ -3,7 +3,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Button } from '../components/Button';
 import { colors, space, styles } from '../theme';
-import { ApprovalPreview } from './ApprovalPreview';
+import { ApprovalPreview, labelOf } from './ApprovalPreview';
 import { expiresIn } from './dates';
 import { errorMessage, useApprovals } from './hooks';
 import { Icon } from './Icon';
@@ -36,10 +36,24 @@ export function useShownInline(id: string | undefined) {
   }, [id]);
 }
 
-/** One parked operation: what it is, who asked, exactly what it will write, and the decision. */
+/** The decision named for what it does: "Delete to-do", "Close meeting", "Move meeting". */
+function actionLabel(a: Approval): string {
+  const verb = a.action.split('.').pop() ?? 'approve';
+  const noun = labelOf(a.resourceType);
+  const verbs: Record<string, string> = {
+    delete: 'Delete',
+    close: 'Close',
+    reschedule: 'Move',
+    update: 'Apply change to',
+    create: 'Create',
+  };
+  return `${verbs[verb] ?? 'Approve'} ${noun}`;
+}
+
+/** One parked operation: what it is, who asked and why it waits, exactly what it will do, and the decision. */
 export function ApprovalItem({
   approval,
-  defaultOpen = false,
+  defaultOpen,
 }: {
   approval: Approval;
   defaultOpen?: boolean;
@@ -47,9 +61,12 @@ export function ApprovalItem({
   const { decide } = useApprovals();
   const toast = useToast();
   const narrow = useWindowDimensions().width < 600;
-  const [open, setOpen] = useState(defaultOpen);
+  const destructive = approval.action.endsWith('.delete');
+  // A delete shows what goes, unasked: the riskier the decision, the less it hides.
+  const [open, setOpen] = useState(defaultOpen ?? destructive);
   const summary = approval.summary ?? approval.action;
   const deciding = decide.isPending && decide.variables?.id === approval.id;
+  const confirm = actionLabel(approval);
 
   async function run(approve: boolean) {
     try {
@@ -75,10 +92,16 @@ export function ApprovalItem({
     <View style={s.item}>
       <View style={{ gap: 2 }}>
         <Text style={[styles.text, { fontWeight: '600' }]}>{summary}</Text>
-        <Text style={[styles.muted, { color: colors.warnText }]}>
+        <Text style={[styles.muted, { color: colors.approvalText }]}>
           {approval.requestedBy === 'agent' ? 'Asked by the assistant' : 'Asked by you'} ·{' '}
           {expiresIn(approval.expiresAt)}
         </Text>
+        <Text style={styles.muted}>Why it waits: {approval.reason}.</Text>
+        {destructive && !open && (
+          <Text style={[styles.muted, { color: colors.danger, fontWeight: '600' }]}>
+            Approving deletes it permanently.
+          </Text>
+        )}
       </View>
       <Pressable
         accessibilityRole="button"
@@ -87,30 +110,35 @@ export function ApprovalItem({
         onPress={() => setOpen(!open)}
         style={s.toggle}
       >
-        <Icon name={open ? 'chevron-down' : 'chevron-right'} color={colors.warnText} size={16} />
-        <Text style={[styles.label, { color: colors.warnText }]}>
+        <Icon
+          name={open ? 'chevron-down' : 'chevron-right'}
+          color={colors.approvalText}
+          size={16}
+        />
+        <Text style={[styles.label, { color: colors.approvalText }]}>
           {open ? 'Hide details' : 'What will happen'}
         </Text>
       </Pressable>
       {open && (
-        <View style={s.preview}>
+        <View style={[s.preview, destructive && { borderColor: colors.dangerTint }]}>
           <ApprovalPreview approval={approval} />
         </View>
       )}
       <View style={[styles.row, narrow && { alignSelf: 'stretch' }]}>
         <Button
-          title="Approve"
-          icon="check"
-          accessibilityLabel={`Approve: ${summary}`}
+          title={confirm}
+          variant={destructive ? 'destructive' : 'primary'}
+          icon={destructive ? 'trash-2' : 'check'}
+          accessibilityLabel={`${confirm}: ${summary}`}
           onPress={() => run(true)}
           busy={deciding && decide.variables?.approve === true}
           disabled={deciding}
           fullWidth={narrow}
         />
         <Button
-          title="Reject"
+          title={destructive ? 'Keep it' : 'Reject'}
           variant="secondary"
-          accessibilityLabel={`Reject: ${summary}`}
+          accessibilityLabel={`${destructive ? 'Keep it, reject' : 'Reject'}: ${summary}`}
           onPress={() => run(false)}
           disabled={deciding}
           fullWidth={narrow}
@@ -120,64 +148,108 @@ export function ApprovalItem({
   );
 }
 
+const LIMIT = 2;
+
 /**
- * Everything waiting for this person, from any command or entity action. Wide screens show
- * it above the content; phones dock it at the bottom, collapsed, within thumb reach.
+ * Everything waiting for this person, on its own calm surface (yellow stays for warnings).
+ * Wide screens show it above the content; phones dock it at the bottom within thumb reach.
+ * When the screen already shows a request inline, the rest shrink to one line.
  */
-export function ApprovalCard({ variant = 'stack' }: { variant?: 'stack' | 'dock' }) {
+export function ApprovalCard({
+  variant = 'stack',
+  hidden = false,
+}: {
+  variant?: 'stack' | 'dock';
+  hidden?: boolean;
+}) {
   const { approvals: all } = useApprovals();
-  const shownInline = useSyncExternalStore(subscribe, snapshot, snapshot).split(',');
+  const shown = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const shownInline = shown ? shown.split(',') : [];
   const approvals = all.filter((a) => !shownInline.includes(a.id));
   const [open, setOpen] = useState(false);
-  if (approvals.length === 0) return null;
-  const heading =
-    approvals.length === 1
-      ? '1 request waiting for your approval'
-      : `${approvals.length} requests waiting for your approval`;
+  const [showAll, setShowAll] = useState(false);
+  if (approvals.length === 0 || hidden) return null;
+  const count = approvals.length;
+  const heading = shownInline.length
+    ? `${count} other request${count === 1 ? '' : 's'} waiting for your decision`
+    : `${count} request${count === 1 ? '' : 's'} waiting for your decision`;
+  const collapsed = variant === 'dock' || shownInline.length > 0;
+
+  if (collapsed && !open) {
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: false }}
+        accessibilityLabel={`${heading}. Review`}
+        onPress={() => setOpen(true)}
+        style={variant === 'dock' ? s.dockBar : [s.bar, styles.card]}
+      >
+        <Icon name="inbox" color={colors.approvalText} />
+        <Text style={[styles.label, { color: colors.approvalText, flex: 1 }]}>{heading}</Text>
+        <Text style={[styles.label, { color: colors.primary }]}>Review</Text>
+        <Icon name={variant === 'dock' ? 'chevron-up' : 'chevron-down'} color={colors.primary} />
+      </Pressable>
+    );
+  }
+
+  const visible = showAll ? approvals : approvals.slice(0, LIMIT);
+  const body = (
+    <>
+      <View style={[styles.row, { justifyContent: 'space-between' }]}>
+        <View style={styles.row}>
+          <Icon name="inbox" color={colors.approvalText} />
+          <Text style={[styles.heading, { color: colors.approvalText }]}>{heading}</Text>
+        </View>
+        {collapsed && <Button title="Hide" variant="subtle" onPress={() => setOpen(false)} />}
+      </View>
+      {visible.map((a, i) => (
+        <View key={a.id} style={i > 0 ? s.divider : undefined}>
+          {/* The dock keeps the decision within reach: details start folded there. */}
+          <ApprovalItem approval={a} defaultOpen={variant === 'dock' ? false : undefined} />
+        </View>
+      ))}
+      {count > LIMIT && (
+        <Button
+          title={showAll ? 'Show fewer' : `Show all ${count}`}
+          variant="subtle"
+          onPress={() => setShowAll(!showAll)}
+        />
+      )}
+    </>
+  );
 
   if (variant === 'dock') {
     return (
       <View style={s.dock}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ expanded: open }}
-          onPress={() => setOpen(!open)}
-          style={s.dockBar}
+        <ScrollView
+          style={{ maxHeight: 420 }}
+          contentContainerStyle={{ gap: space.lg, padding: space.lg }}
         >
-          <Icon name="alert-circle" color={colors.warnText} />
-          <Text style={[styles.heading, { color: colors.warnText, flex: 1 }]}>{heading}</Text>
-          <Icon name={open ? 'chevron-down' : 'chevron-up'} color={colors.warnText} />
-        </Pressable>
-        {open && (
-          <ScrollView
-            style={{ maxHeight: 420 }}
-            contentContainerStyle={{ gap: space.lg, padding: space.lg, paddingTop: 0 }}
-          >
-            {approvals.map((a) => (
-              <ApprovalItem key={a.id} approval={a} />
-            ))}
-          </ScrollView>
-        )}
+          {body}
+        </ScrollView>
       </View>
     );
   }
-
   return (
     <View style={[styles.card, s.card]} accessibilityRole="summary">
-      <View style={styles.row}>
-        <Icon name="alert-circle" color={colors.warnText} />
-        <Text style={[styles.heading, { color: colors.warnText }]}>{heading}</Text>
-      </View>
-      {approvals.map((a) => (
-        <ApprovalItem key={a.id} approval={a} />
-      ))}
+      {body}
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  card: { backgroundColor: colors.warnBg, borderColor: colors.warnBorder, gap: space.lg },
+  card: { backgroundColor: colors.approvalBg, borderColor: colors.approvalBorder, gap: space.lg },
+  bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    minHeight: 52,
+    paddingVertical: space.sm,
+    backgroundColor: colors.approvalBg,
+    borderColor: colors.approvalBorder,
+  },
   item: { gap: space.sm },
+  divider: { borderTopWidth: 1, borderColor: colors.approvalBorder, paddingTop: space.lg },
   toggle: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -189,15 +261,22 @@ const s = StyleSheet.create({
     backgroundColor: colors.card,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: colors.warnBorder,
+    borderColor: colors.approvalBorder,
     padding: space.md,
   },
-  dock: { backgroundColor: colors.warnBg, borderTopWidth: 1, borderColor: colors.warnBorder },
+  dock: {
+    backgroundColor: colors.approvalBg,
+    borderTopWidth: 1,
+    borderColor: colors.approvalBorder,
+  },
   dockBar: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,
     minHeight: 52,
     paddingHorizontal: space.lg,
+    backgroundColor: colors.approvalBg,
+    borderTopWidth: 1,
+    borderColor: colors.approvalBorder,
   },
 });

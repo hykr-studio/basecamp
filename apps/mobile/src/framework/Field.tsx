@@ -17,7 +17,7 @@ export function Field({ label, hint, error, width, multilineHeight, ...input }: 
       <Text style={styles.label}>{label}</Text>
       <TextInput
         accessibilityLabel={label}
-        placeholderTextColor={colors.muted}
+        placeholderTextColor={colors.placeholder}
         style={[
           styles.input,
           multilineHeight ? { minHeight: multilineHeight, textAlignVertical: 'top' } : null,

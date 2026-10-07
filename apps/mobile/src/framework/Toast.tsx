@@ -1,5 +1,5 @@
 import { createContext, type ReactNode, useCallback, useContext, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { space } from '../theme';
 import { Icon, type IconName } from './Icon';
 
@@ -16,6 +16,8 @@ const ToastContext = createContext<{ show: (t: ToastInput) => void } | null>(nul
 /** Outcomes of decisions and undoable actions, announced politely to screen readers. */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<Toast | null>(null);
+  // Phones keep the bottom for navigation and approvals; toasts drop in from the top.
+  const narrow = useWindowDimensions().width < 900;
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const show = useCallback((t: ToastInput) => {
     if (timer.current) clearTimeout(timer.current);
@@ -34,9 +36,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ show }}>
       {children}
-      <View pointerEvents="box-none" style={s.host} accessibilityLiveRegion="polite">
+      <View
+        pointerEvents="box-none"
+        style={[s.host, narrow ? { top: 60, bottom: undefined } : null]}
+      >
         {toast && (
-          <View style={s.toast} accessibilityRole="alert">
+          <View style={s.toast} accessibilityLiveRegion="polite" accessibilityRole="text">
             <Icon
               name={icon[toast.tone ?? 'neutral']}
               color={

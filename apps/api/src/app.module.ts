@@ -13,6 +13,7 @@ import { auth } from './infra/auth.js';
 import { sharedDb } from './infra/db.js';
 import { DbModule } from './infra/db.module.js';
 import { ChatController } from './modules/chat/chat.controller.js';
+import { HistoryController } from './modules/history/history.controller.js';
 import { MeetingsModule } from './modules/meetings/meetings.module.js';
 import { NotesModule } from './modules/notes/notes.module.js';
 import { TodosModule } from './modules/todos/todos.module.js';
@@ -37,7 +38,7 @@ import { TodosModule } from './modules/todos/todos.module.js';
     NotesModule,
     MeetingsModule,
   ],
-  controllers: [HealthController, ChatController],
+  controllers: [HealthController, ChatController, HistoryController],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_PIPE, useClass: ZodValidationPipe },

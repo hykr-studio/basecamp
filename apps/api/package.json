@@ -23,6 +23,7 @@
     "@nestjs/throttler": "^6.7.1",
     "@thallesp/nestjs-better-auth": "^2.8.0",
     "better-auth": "^1.7.7",
+    "drizzle-orm": "^0.45.3",
     "ioredis": "^6.0.0",
     "nestjs-zod": "^5.5.0",
     "reflect-metadata": "^0.2.2",

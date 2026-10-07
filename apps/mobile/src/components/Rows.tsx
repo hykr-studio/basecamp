@@ -1,16 +1,42 @@
 import type { MeetingView, NoteView, Todo } from '@app/contracts';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { clock, relativeDay, when } from '../framework/dates';
-import { needsClosing, useEntityMutation, useUndoableDelete } from '../framework/hooks';
+import { entityApi, needsClosing, useEntityMutation, useUndoableDelete } from '../framework/hooks';
 import { Icon } from '../framework/Icon';
+import { Markdown } from '../framework/Markdown';
+import { useToast } from '../framework/Toast';
 import { colors, space, styles } from '../theme';
 import { Button } from './Button';
 
 /** A to-do: tick it, tap the title to rename, delete with undo. */
-export function TodoRow({ todo }: { todo: Todo }) {
+export function TodoRow({ todo, canDelete = true }: { todo: Todo; canDelete?: boolean }) {
   const { update } = useEntityMutation('todos');
+  const toast = useToast();
+  /** Ticking can move a to-do out of the current list, so it says so and offers Undo. */
+  const client = useQueryClient();
+  const toggle = () => {
+    const done = !todo.done;
+    update.mutate({ id: todo.id, patch: { done } });
+    // Shown now, not on success: ticking can remove this row (and its callbacks) from the list.
+    // Undo talks to the API directly for the same reason.
+    toast.show({
+      message: done ? `Marked “${todo.title}” done` : `Reopened “${todo.title}”`,
+      durationMs: 5000,
+      action: {
+        label: 'Undo',
+        onPress: async () => {
+          await entityApi('todos').update(todo.id, { done: !done });
+          await Promise.all([
+            client.invalidateQueries({ queryKey: ['todos'] }),
+            client.invalidateQueries({ queryKey: ['history'] }),
+          ]);
+        },
+      },
+    });
+  };
   const remove = useUndoableDelete('todos');
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(todo.title);
@@ -26,7 +52,7 @@ export function TodoRow({ todo }: { todo: Todo }) {
         accessibilityRole="checkbox"
         accessibilityState={{ checked: todo.done }}
         accessibilityLabel={todo.title}
-        onPress={() => update.mutate({ id: todo.id, patch: { done: !todo.done } })}
+        onPress={toggle}
         style={s.hit}
       >
         <View style={[s.box, todo.done && s.boxDone]}>
@@ -60,14 +86,16 @@ export function TodoRow({ todo }: { todo: Todo }) {
           </Text>
         )}
       </View>
-      <Button
-        title="Delete"
-        icon="trash-2"
-        iconOnly
-        variant="subtle"
-        accessibilityLabel={`Delete “${todo.title}”`}
-        onPress={() => remove(todo)}
-      />
+      {canDelete && (
+        <Button
+          title="Delete"
+          icon="trash-2"
+          iconOnly
+          variant="subtle"
+          accessibilityLabel={`Delete “${todo.title}”`}
+          onPress={() => remove(todo)}
+        />
+      )}
     </View>
   );
 }
@@ -97,13 +125,23 @@ export function MeetingRow({ meeting }: { meeting: MeetingView }) {
   );
 }
 
-export function NoteRow({ note, onPress }: { note: NoteView; onPress?: () => void }) {
+export function NoteRow({
+  note,
+  onPress,
+  full,
+}: {
+  note: NoteView;
+  onPress?: () => void;
+  full?: boolean;
+}) {
   const body = (
     <View style={{ gap: 2, paddingVertical: space.xs }}>
       <Text style={[styles.text, { fontWeight: '600' }]}>{note.title}</Text>
-      <Text style={styles.muted} numberOfLines={2}>
-        {note.body.replace(/^#+\s*/gm, '') || 'No text yet.'}
-      </Text>
+      {note.body.trim() ? (
+        <Markdown text={note.body} lines={full ? undefined : 3} />
+      ) : (
+        <Text style={styles.muted}>No text yet.</Text>
+      )}
     </View>
   );
   return onPress ? (

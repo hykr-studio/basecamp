@@ -12,6 +12,7 @@ import { DateField, TimeField } from '../../framework/DateField';
 import { at, clock, isValidDate, isValidTime, when } from '../../framework/dates';
 import { EmptyState } from '../../framework/EmptyState';
 import { Field } from '../../framework/Field';
+import { History } from '../../framework/History';
 import {
   errorMessage,
   needsClosing,
@@ -148,20 +149,31 @@ export default function MeetingDetail() {
           {m.attendees.length ? ` · ${m.attendees.join(', ')}` : ''}
         </Text>
         {line && (
-          <Text style={[styles.text, needsClosing(m) && { color: colors.warnText }]}>{line}</Text>
+          <Text
+            style={[styles.text, needsClosing(m) && { color: colors.warnText, fontWeight: '600' }]}
+          >
+            {line}
+          </Text>
+        )}
+        {!closed && !started && (
+          <Text style={styles.muted}>
+            You can close it once it starts, to record its summary and to-dos.
+          </Text>
         )}
         {!closed && !panel && (
           <View style={[styles.row, { flexWrap: 'wrap', marginTop: space.xs }]}>
-            <Button title="Close meeting" icon="check-circle" onPress={() => setPanel('close')} />
+            {started ? (
+              <Button title="Close meeting" icon="check-circle" onPress={() => setPanel('close')} />
+            ) : null}
             <Button
               title="Reschedule"
-              variant="secondary"
+              variant={started ? 'secondary' : 'primary'}
               icon="calendar"
               onPress={() => setPanel('reschedule')}
             />
             {m.status === 'scheduled' && started && (
               <Button
-                title="Mark as held"
+                title="Mark as held (it happened)"
                 variant="subtle"
                 onPress={() =>
                   meetingMutation.update.mutate({ id: m.id, patch: { status: 'held' } })
@@ -187,7 +199,7 @@ export default function MeetingDetail() {
           <View>
             {notes.items.map((n, i) => (
               <View key={n.id} style={listRow(i, notes.items.length)}>
-                <NoteRow note={n.title === summaryTitle ? { ...n, title: 'Summary' } : n} />
+                <NoteRow full note={n.title === summaryTitle ? { ...n, title: 'Summary' } : n} />
               </View>
             ))}
           </View>
@@ -198,7 +210,7 @@ export default function MeetingDetail() {
               label="Add a note"
               value={newNote}
               onChangeText={setNewNote}
-              placeholder="Supplier quote received"
+              placeholder="e.g. Supplier quote received"
             />
             <Button
               title="Add note"
@@ -226,7 +238,7 @@ export default function MeetingDetail() {
           <View>
             {todos.items.map((t, i) => (
               <View key={t.id} style={listRow(i, todos.items.length)}>
-                <TodoRow todo={t} />
+                <TodoRow todo={t} canDelete={!closed} />
               </View>
             ))}
           </View>
@@ -237,7 +249,7 @@ export default function MeetingDetail() {
               label="Add a to-do"
               value={newTodo}
               onChangeText={setNewTodo}
-              placeholder="Print the drawings"
+              placeholder="e.g. Print the drawings"
             />
             <Button
               title="Add to-do"
@@ -251,6 +263,16 @@ export default function MeetingDetail() {
             />
           </View>
         )}
+      </View>
+
+      <View style={styles.section}>
+        <SectionHeading>History</SectionHeading>
+        <Text style={styles.muted}>
+          Who asked for what, who approved it, and when, from the audit trail.
+        </Text>
+        <View style={styles.card}>
+          <History type="meeting" id={m.id} />
+        </View>
       </View>
     </ScrollView>
   );

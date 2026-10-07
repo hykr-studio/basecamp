@@ -102,6 +102,15 @@ export class ApprovalService {
     this.db = options.db;
   }
 
+  async get(p: Principal, id: string): Promise<Approval> {
+    const [row] = await this.db
+      .select()
+      .from(approvals)
+      .where(and(eq(approvals.id, id), eq(approvals.ownerId, p.actor.id)));
+    if (!row) throw new NotFoundException({ error: 'not_found', message: 'No such approval' });
+    return toApproval(row);
+  }
+
   async pending(p: Principal): Promise<Approval[]> {
     const rows = await this.db
       .select()

@@ -1,17 +1,27 @@
 import type { ChatMessage, ToolCallSummary } from '@app/contracts';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { api } from '../api';
+import { STUDIO_URL } from '../config';
 import { useAssistant } from '../framework/assistant-context';
 import { timeZone } from '../framework/dates';
-import { errorMessage } from '../framework/hooks';
-import { Icon } from '../framework/Icon';
+import { errorMessage, useApprovals } from '../framework/hooks';
+import { Icon, type IconName } from '../framework/Icon';
 import { storage } from '../framework/storage';
 import { colors, space, styles } from '../theme';
 import { Button } from './Button';
 
-type Turn = ChatMessage & { toolCalls?: ToolCallSummary[] };
+type Turn = ChatMessage & { toolCalls?: ToolCallSummary[]; runId?: string };
 
 /** The server keeps no chat memory, so we send the recent turns with each message. */
 const HISTORY = 12;
@@ -25,45 +35,113 @@ function touchedBy(tool: string): string[] {
   return ['todo', 'note', 'meeting'].filter((n) => tool.endsWith(`-${n}`)).map((n) => `${n}s`);
 }
 
-/** What each tool call amounted to: done, waiting for the person, or refused. */
-function Trace({ calls }: { calls: ToolCallSummary[] }) {
+const COMMANDS: { text: string; what: string }[] = [
+  { text: 'today', what: "today's meetings and what is due" },
+  { text: 'add Book the site visit', what: 'adds a to-do' },
+  { text: 'done Book the site visit', what: 'ticks it off' },
+  { text: 'delete Book the site visit', what: 'asks you to approve the delete' },
+  { text: 'close <meeting>', what: 'then paste notes on the next lines; waits for your approval' },
+  { text: 'move <meeting> to 2026-10-31', what: 'moves it and its to-dos' },
+];
+
+/** A parked call, followed: once the person decides, the line says what became of it. */
+function ParkedLine({ call }: { call: ToolCallSummary }) {
+  const { approvals } = useApprovals();
+  const pending = call.approvalId ? approvals.some((a) => a.id === call.approvalId) : true;
+  const decided = useQuery({
+    queryKey: ['approval', call.approvalId],
+    queryFn: () => api.getApproval(call.approvalId as string),
+    enabled: Boolean(call.approvalId) && !pending,
+    // A pending answer is never final: fetch again once it has left the waiting list.
+    staleTime: 0,
+  });
+  const status = pending ? 'pending' : decided.data?.status;
+  const [icon, tone, label]: [IconName, string, string] =
+    status === 'approved'
+      ? ['check-circle', colors.success, 'approved by you']
+      : status === 'rejected'
+        ? ['slash', colors.muted, 'rejected by you; nothing changed']
+        : status === 'failed'
+          ? [
+              'x-circle',
+              colors.danger,
+              `approved, but couldn't be done: ${decided.data?.failureReason ?? ''}`,
+            ]
+          : status === 'expired'
+            ? ['clock', colors.muted, 'expired; nothing changed']
+            : [
+                'clock',
+                colors.approvalText,
+                `waiting for your approval${call.detail ? `: ${call.detail}` : ''}`,
+              ];
+  return <Line icon={icon} tone={tone} tool={call.tool} label={label} />;
+}
+
+function Line({
+  icon,
+  tone,
+  tool,
+  label,
+}: {
+  icon: IconName;
+  tone: string;
+  tool: string;
+  label: string;
+}) {
   return (
-    <View style={{ gap: 2, marginTop: space.xs }}>
-      {calls.map((c, i) => {
-        const outcome = c.outcome ?? (c.ok ? 'done' : 'refused');
-        const tone =
-          outcome === 'done'
-            ? colors.muted
-            : outcome === 'parked'
-              ? colors.warnText
-              : colors.danger;
-        const label =
-          outcome === 'done'
-            ? 'done'
-            : outcome === 'parked'
-              ? `waiting for your approval${c.detail ? `: ${c.detail}` : ''}`
-              : `refused${c.detail ? `: ${c.detail}` : ''}`;
-        return (
-          // biome-ignore lint/suspicious/noArrayIndexKey: calls in order within one turn
-          <View key={i} style={[styles.row, { gap: space.xs, alignItems: 'flex-start' }]}>
-            <Icon
-              name={outcome === 'done' ? 'check' : outcome === 'parked' ? 'clock' : 'x-circle'}
-              color={tone}
-              size={14}
-            />
-            <Text style={[styles.muted, { color: tone, flexShrink: 1 }]}>
-              <Text style={{ fontWeight: '600' }}>{c.tool}</Text> {label}
-            </Text>
-          </View>
-        );
-      })}
+    <View style={[styles.row, { gap: space.xs, alignItems: 'flex-start' }]}>
+      <Icon name={icon} color={tone} size={14} />
+      <Text style={[styles.muted, { color: tone, flexShrink: 1 }]}>
+        <Text style={{ fontWeight: '600' }}>{tool}</Text> {label}
+      </Text>
     </View>
   );
 }
 
-const SUGGESTIONS = ['today', 'add Book the site visit', 'list'];
+/** What each tool call amounted to: done, waiting (then decided), or refused. */
+function Trace({ calls, runId }: { calls: ToolCallSummary[]; runId?: string }) {
+  return (
+    <View style={{ gap: 2, marginTop: space.xs }}>
+      {calls.map((c, i) => {
+        const outcome = c.outcome ?? (c.ok ? 'done' : 'refused');
+        const key = `${i}:${c.tool}`;
+        if (outcome === 'parked') return <ParkedLine key={key} call={c} />;
+        return outcome === 'done' ? (
+          <Line key={key} icon="check" tone={colors.muted} tool={c.tool} label="done" />
+        ) : (
+          <Line
+            key={key}
+            icon="x-circle"
+            tone={colors.danger}
+            tool={c.tool}
+            label={`refused${c.detail ? `: ${c.detail}` : ''}`}
+          />
+        );
+      })}
+      {__DEV__ && runId && (
+        <Pressable
+          accessibilityRole="link"
+          onPress={() => Linking.openURL(`${STUDIO_URL}/traces/${runId}`)}
+          style={{ alignSelf: 'flex-start' }}
+        >
+          <Text style={[styles.muted, { color: colors.primary, textDecorationLine: 'underline' }]}>
+            Run {runId.slice(0, 8)}: open the trace in Studio
+          </Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
 
-export function Chat({ storageKey, compact = false }: { storageKey: string; compact?: boolean }) {
+export function Chat({
+  storageKey,
+  compact = false,
+  onClose,
+}: {
+  storageKey: string;
+  compact?: boolean;
+  onClose?: () => void;
+}) {
   const [turns, setTurns] = useState<Turn[]>(() => {
     try {
       return JSON.parse(storage.get(storageKey) ?? '[]') as Turn[];
@@ -74,7 +152,9 @@ export function Chat({ storageKey, compact = false }: { storageKey: string; comp
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [help, setHelp] = useState(false);
   const scroll = useRef<ScrollView>(null);
+  const input = useRef<TextInput>(null);
   const queryClient = useQueryClient();
   const assistant = useAssistant();
   const turnsRef = useRef(turns);
@@ -84,6 +164,19 @@ export function Chat({ storageKey, compact = false }: { storageKey: string; comp
 
   // Reloading keeps the recent conversation on this device.
   useEffect(() => storage.set(storageKey, JSON.stringify(turns.slice(-KEEP))), [storageKey, turns]);
+
+  // "/" jumps to the message box from anywhere, unless you are already typing.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || compact) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key !== '/' || t?.closest('input, textarea, [contenteditable="true"]')) return;
+      e.preventDefault();
+      input.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [compact]);
 
   async function send(text: string) {
     const content = text.trim();
@@ -101,7 +194,12 @@ export function Chat({ storageKey, compact = false }: { storageKey: string; comp
       });
       setTurns([
         ...next,
-        { role: 'assistant', content: res.reply || '(no reply)', toolCalls: res.toolCalls },
+        {
+          role: 'assistant',
+          content: res.reply || '(no reply)',
+          toolCalls: res.toolCalls,
+          runId: res.runId,
+        },
       ]);
       const names = new Set(res.toolCalls.flatMap((c) => touchedBy(c.tool)));
       if (names.size > 0) names.add('approvals');
@@ -127,34 +225,60 @@ export function Chat({ storageKey, compact = false }: { storageKey: string; comp
     <View style={[s.panel, compact && s.compact]}>
       <View style={[styles.row, { justifyContent: 'space-between' }]}>
         <Text style={styles.heading}>Assistant</Text>
-        {turns.length > 0 && (
+        <View style={styles.row}>
           <Button
-            title="Clear"
+            title={help ? 'Hide commands' : 'What can it do?'}
             variant="subtle"
-            onPress={() => setTurns([])}
-            accessibilityLabel="Clear the conversation"
+            onPress={() => setHelp(!help)}
           />
-        )}
+          {turns.length > 0 && (
+            <Button
+              title="Clear"
+              variant="subtle"
+              onPress={() => setTurns([])}
+              accessibilityLabel="Clear the conversation"
+            />
+          )}
+          {onClose && (
+            <Button
+              title="Close the assistant"
+              icon="x"
+              iconOnly
+              variant="subtle"
+              onPress={onClose}
+            />
+          )}
+        </View>
       </View>
+      {(help || turns.length === 0) && (
+        <View style={s.help}>
+          <Text style={styles.muted}>
+            It acts for you through the same API as this app. Deletes and meeting closes wait for
+            your approval.
+          </Text>
+          {COMMANDS.map((c) => (
+            <Pressable
+              key={c.text}
+              accessibilityRole="button"
+              accessibilityLabel={`Use: ${c.text}`}
+              onPress={() => {
+                setDraft(c.text.includes('<') ? c.text.replace(/<[^>]+>/, '') : c.text);
+                input.current?.focus();
+              }}
+              style={s.command}
+            >
+              <Text style={[styles.text, { fontWeight: '600' }]}>{c.text}</Text>
+              <Text style={[styles.muted, { flexShrink: 1 }]}>{c.what}</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
       <ScrollView
         ref={scroll}
         style={{ flex: 1 }}
         contentContainerStyle={{ gap: space.sm, paddingBottom: space.sm }}
         onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: true })}
       >
-        {turns.length === 0 && (
-          <View style={{ gap: space.sm }}>
-            <Text style={styles.muted}>
-              It acts for you through the same API as this app. Anything risky waits for your
-              approval.
-            </Text>
-            <View style={[styles.row, { flexWrap: 'wrap' }]}>
-              {SUGGESTIONS.map((t) => (
-                <Button key={t} title={t} variant="secondary" onPress={() => send(t)} />
-              ))}
-            </View>
-          </View>
-        )}
         {turns.map((t, i) => (
           <View
             // biome-ignore lint/suspicious/noArrayIndexKey: turns are append-only
@@ -167,7 +291,7 @@ export function Chat({ storageKey, compact = false }: { storageKey: string; comp
             <Text style={[styles.text, t.role === 'user' && { color: colors.primaryText }]}>
               {t.content}
             </Text>
-            {t.toolCalls && t.toolCalls.length > 0 && <Trace calls={t.toolCalls} />}
+            {t.toolCalls && t.toolCalls.length > 0 && <Trace calls={t.toolCalls} runId={t.runId} />}
           </View>
         ))}
         {busy && (
@@ -183,9 +307,10 @@ export function Chat({ storageKey, compact = false }: { storageKey: string; comp
       )}
       <View style={styles.row}>
         <TextInput
+          ref={input}
           style={[styles.input, { flex: 1 }]}
-          placeholder="Ask the assistant"
-          placeholderTextColor={colors.muted}
+          placeholder={compact ? 'e.g. today' : 'e.g. today   (press / to focus)'}
+          placeholderTextColor={colors.placeholder}
           accessibilityLabel="Message to the assistant"
           value={draft}
           onChangeText={setDraft}
@@ -208,6 +333,8 @@ const s = StyleSheet.create({
     padding: space.lg,
   },
   compact: { borderRadius: 0, borderWidth: 0, borderTopWidth: 1 },
+  help: { gap: space.xs },
+  command: { gap: 2, paddingVertical: space.xs, minHeight: 44, justifyContent: 'center' },
   bubble: { borderRadius: 10, padding: space.md, maxWidth: '92%' },
   user: { alignSelf: 'flex-end', backgroundColor: colors.userBubble },
   agent: { alignSelf: 'flex-start', backgroundColor: colors.agentBubble },

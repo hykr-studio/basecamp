@@ -35,7 +35,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void
   return (
     <View style={[styles.content, { maxWidth: 440, marginTop: 56 }]}>
       <View style={{ gap: space.xs }}>
-        <Text style={styles.title}>Meetings</Text>
+        <Text style={styles.title}>Agentic Stack</Text>
         <Text style={styles.muted}>
           The agentic stack template: an assistant acts for you through the same API, and anything
           risky waits for your approval.
@@ -53,7 +53,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void
           autoCapitalize="none"
           autoComplete="email"
           keyboardType="email-address"
-          placeholder="you@example.com"
+          placeholder="e.g. you@example.com"
         />
         <Field
           label="Password"

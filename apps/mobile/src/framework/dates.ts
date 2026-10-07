@@ -37,7 +37,7 @@ export function relativeDay(ymd: string): { text: string; overdue: boolean } {
   if (diff < 0) return { text: `${-diff} days overdue`, overdue: true };
   if (diff < 7) return { text: `due in ${diff} days`, overdue: false };
   return {
-    text: `due ${new Date(`${ymd}T00:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`,
+    text: `due ${dayLabel(ymd)}`,
     overdue: false,
   };
 }
@@ -54,3 +54,11 @@ export function expiresIn(iso: string): string {
 export const isValidDate = (s: string) =>
   /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`));
 export const isValidTime = (s: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
+
+/** One date style everywhere in the app: "Mon 5 Oct". */
+export const dayLabel = (ymd: string) =>
+  new Date(`${ymd}T00:00:00`).toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });

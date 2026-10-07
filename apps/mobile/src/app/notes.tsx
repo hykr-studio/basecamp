@@ -8,11 +8,17 @@ import { useScreenContext } from '../framework/assistant-context';
 import { EmptyState, LoadError } from '../framework/EmptyState';
 import { Field } from '../framework/Field';
 import { SearchBox } from '../framework/FilterChips';
-import { errorMessage, useEntityList, useEntityMutation } from '../framework/hooks';
+import {
+  errorMessage,
+  useEntityList,
+  useEntityMutation,
+  useUndoableDelete,
+} from '../framework/hooks';
 import { listRow, space, styles } from '../theme';
 
 function NoteEditor({ note, onDone }: { note?: NoteView; onDone: () => void }) {
   const { create, update } = useEntityMutation('notes');
+  const remove = useUndoableDelete('notes');
   const [title, setTitle] = useState(note?.title ?? '');
   const [body, setBody] = useState(note?.body ?? '');
   const mutation = note ? update : create;
@@ -41,6 +47,19 @@ function NoteEditor({ note, onDone }: { note?: NoteView; onDone: () => void }) {
           }}
         />
         <Button title="Cancel" variant="subtle" onPress={onDone} />
+        {note && (
+          <View style={{ marginLeft: 'auto' }}>
+            <Button
+              title="Delete note"
+              icon="trash-2"
+              variant="danger"
+              onPress={() => {
+                remove(note);
+                onDone();
+              }}
+            />
+          </View>
+        )}
       </View>
     </View>
   );
@@ -69,7 +88,7 @@ export default function Notes() {
             }
           />
           {editing === 'new' && <NoteEditor onDone={() => setEditing(null)} />}
-          <SearchBox value={q} onChange={setQ} placeholder="Search notes" />
+          <SearchBox value={q} onChange={setQ} placeholder="e.g. Search notes" />
         </View>
       }
       renderItem={({ item, index }) =>

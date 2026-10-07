@@ -45,6 +45,12 @@ function startOfDay(day: string, zone: string): Date {
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/** A due date as people write it: "5 Oct", not "2026-10-05". */
+const dueText = (ymd: unknown) =>
+  ymd
+    ? ` (due ${new Date(`${String(ymd)}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })})`
+    : '';
+
 function lastUserText(prompt: LanguageModelV2Prompt): string {
   for (let i = prompt.length - 1; i >= 0; i--) {
     const message = prompt[i];
@@ -196,7 +202,7 @@ export function script(prompt: LanguageModelV2Prompt): LanguageModelV2Content[] 
           minute: '2-digit',
         });
       const m = items(meetings).map((x) => `- ${x.title} at ${at(x.startsAt)}`);
-      const t = items(todos).map((x) => `- ${x.title}${x.dueOn ? ` (due ${x.dueOn})` : ''}`);
+      const t = items(todos).map((x) => `- ${x.title}${dueText(x.dueOn)}`);
       return [
         text(
           [

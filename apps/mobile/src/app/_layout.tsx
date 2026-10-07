@@ -103,6 +103,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
   const wide = useWindowDimensions().width >= 900;
   const path = usePathname();
   const [chatOpen, setChatOpen] = useState(false);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
   const chatKey = `chat:${user.id}`;
   const stack = (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
@@ -113,8 +114,8 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
       <View style={[styles.screen, { flexDirection: 'row' }]}>
         <View style={s.rail} role="navigation">
           <View style={{ gap: 2, paddingHorizontal: space.md, paddingBottom: space.lg }}>
-            <Text style={styles.heading}>Meetings</Text>
-            <Text style={styles.muted}>Agentic stack template</Text>
+            <Text style={styles.heading}>Agentic Stack</Text>
+            <Text style={styles.muted}>Template app · sample domain: meetings</Text>
           </View>
           {NAV.map((n) => (
             <NavItem key={n.href} item={n} active={n.match(path)} vertical />
@@ -130,7 +131,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
           </View>
           <Button title="Sign out" icon="log-out" variant="subtle" onPress={onSignOut} />
         </View>
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1 }} role="main">
           <View
             style={{
               paddingHorizontal: space.lg,
@@ -154,20 +155,30 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
   return (
     <View style={styles.screen}>
       <View style={s.topBar}>
-        <Text style={styles.heading}>Meetings</Text>
-        <Button
-          title={`Sign out ${user.name}`}
-          icon="log-out"
-          iconOnly
-          variant="subtle"
-          onPress={onSignOut}
-        />
+        <Text style={styles.heading}>Agentic Stack</Text>
+        {confirmSignOut ? (
+          <View style={styles.row}>
+            <Button title="Stay" variant="subtle" onPress={() => setConfirmSignOut(false)} />
+            <Button title="Sign out" variant="secondary" icon="log-out" onPress={onSignOut} />
+          </View>
+        ) : (
+          <Button
+            title={`Sign out ${user.name}`}
+            icon="log-out"
+            iconOnly
+            variant="subtle"
+            onPress={() => setConfirmSignOut(true)}
+          />
+        )}
       </View>
-      <View style={{ flex: 1 }}>{stack}</View>
-      <ApprovalCard variant="dock" />
-      {/* Kept mounted so the conversation survives closing the panel. */}
-      <View style={[{ height: '55%' }, !chatOpen && { display: 'none' }]}>
-        <Chat storageKey={chatKey} compact />
+      <View style={{ flex: 1 }} role="main">
+        {stack}
+      </View>
+      {/* One bottom surface at a time: the assistant sheet replaces the approvals dock. */}
+      <ApprovalCard variant="dock" hidden={chatOpen} />
+      {/* Kept mounted so the conversation survives closing the sheet. */}
+      <View style={[{ height: '60%' }, !chatOpen && { display: 'none' }]}>
+        <Chat storageKey={chatKey} compact onClose={() => setChatOpen(false)} />
       </View>
       <View style={s.tabBar} role="navigation">
         {NAV.map((n) => (

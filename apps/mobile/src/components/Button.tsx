@@ -8,8 +8,11 @@ type Props = {
   onPress: () => void;
   busy?: boolean;
   disabled?: boolean;
-  /** primary: the one main action in an area. secondary: outlined. subtle: text-weight. danger: destructive. */
-  variant?: 'primary' | 'secondary' | 'subtle' | 'danger';
+  /**
+   * primary: the one main action in an area. secondary: outlined. subtle: text-weight.
+   * danger: a quiet destructive action. destructive: the confirming, irreversible one.
+   */
+  variant?: 'primary' | 'secondary' | 'subtle' | 'danger' | 'destructive';
   icon?: IconName;
   /** Visually icon-only; title is still the accessible name. */
   iconOnly?: boolean;
@@ -32,7 +35,7 @@ export function Button({
   const inactive = busy || disabled;
   const tint = inactive
     ? colors.disabledText
-    : variant === 'primary'
+    : variant === 'primary' || variant === 'destructive'
       ? colors.primaryText
       : variant === 'danger'
         ? colors.danger
@@ -53,10 +56,18 @@ export function Button({
         variant === 'primary' && s.primary,
         variant === 'secondary' && s.secondary,
         variant === 'danger' && s.secondary,
+        variant === 'destructive' && s.destructive,
         variant === 'subtle' && s.subtle,
-        isHovered(state) && !inactive && (variant === 'primary' ? s.primaryHover : s.quietHover),
+        isHovered(state) &&
+          !inactive &&
+          (variant === 'primary'
+            ? s.primaryHover
+            : variant === 'destructive'
+              ? s.destructiveHover
+              : s.quietHover),
         state.pressed && !inactive && { opacity: 0.85 },
-        inactive && (variant === 'primary' ? s.disabledFill : s.disabledLine),
+        inactive &&
+          (variant === 'primary' || variant === 'destructive' ? s.disabledFill : s.disabledLine),
       ]}
     >
       {busy ? (
@@ -85,6 +96,8 @@ const s = StyleSheet.create({
   iconOnly: { paddingHorizontal: 0, width: 44 },
   primary: { backgroundColor: colors.primary },
   primaryHover: { backgroundColor: '#264cc8' },
+  destructive: { backgroundColor: colors.danger },
+  destructiveHover: { backgroundColor: colors.dangerHover },
   secondary: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border },
   subtle: { backgroundColor: 'transparent', paddingHorizontal: space.sm },
   quietHover: { backgroundColor: colors.primaryTint },

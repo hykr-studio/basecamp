@@ -34,6 +34,8 @@ export const ToolCallSummary = z.object({
   outcome: z.enum(['done', 'parked', 'refused']),
   /** The approval summary when parked; the reason when refused. */
   detail: z.string().optional(),
+  /** When parked: the approval, so the chat can show what became of it. */
+  approvalId: z.string().optional(),
 });
 export type ToolCallSummary = z.infer<typeof ToolCallSummary>;
 
@@ -44,3 +46,16 @@ export const ChatResponse = z.object({
   toolCalls: z.array(ToolCallSummary),
 });
 export type ChatResponse = z.infer<typeof ChatResponse>;
+
+/** One line of a record's history, from the audit trail. */
+export const HistoryEntry = z.object({
+  at: z.iso.datetime(),
+  action: z.string(),
+  actor: z.enum(['you', 'assistant']),
+  /** The person approved what the assistant asked for. */
+  approvedByYou: z.boolean(),
+  outcome: z.enum(['committed', 'denied', 'needs_approval']),
+  reason: z.string().nullable(),
+  runId: z.string().nullable(),
+});
+export type HistoryEntry = z.infer<typeof HistoryEntry>;
