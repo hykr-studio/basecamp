@@ -25,6 +25,8 @@ import { TodosModule } from './modules/todos/todos.module.js';
     AuthModule.forRoot({ auth, disableTrustedOriginsCors: true }),
     ThrottlerModule.forRoot({
       throttlers: [{ name: 'default', ttl: 60_000, limit: 120 }],
+      // The e2e suite turns it off (THROTTLE=off) so back-to-back runs don't trip it.
+      skipIf: () => process.env.THROTTLE === 'off',
       storage: new ThrottlerStorageRedisService(config.redisUrl), // shared across processes
     }),
     // The framework: CQRS buses, principal guards, approvals (park and replay).

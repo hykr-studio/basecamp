@@ -1,91 +1,18 @@
 // Boots the real, compiled API against real Postgres and Redis, with the scripted
 // model, and checks the rules from Steps 6–10 hold end to end.
-//
-// It imports dist/, not src/: Vitest compiles TypeScript with esbuild, which emits no
-// decorator metadata, and Nest's dependency injection needs it. That is why `test`
-// depends on `build` in turbo.json.
-import 'reflect-metadata';
-import type { INestApplication } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-
-let app: INestApplication;
-let base: string;
-
-/** A trusted origin: Better Auth rejects browser-like requests (Node's fetch) without one. */
-const origin = (process.env.WEB_ORIGINS ?? 'http://localhost:8081').split(',')[0].trim();
-const stamp = Date.now();
-
-// biome-ignore lint/suspicious/noExplicitAny: JSON bodies; the assertions check their shape
-type Json = any;
-type Res<T = Json> = { status: number; body: T };
-
-/** One signed-in person: keeps the session cookie from set-cookie, like a browser. */
-class Person {
-  cookie = '';
-  id = '';
-  constructor(
-    readonly name: string,
-    readonly email = `${name.toLowerCase()}-${stamp}@test.local`,
-  ) {}
-
-  async call<T = Json>(
-    method: string,
-    path: string,
-    body?: unknown,
-    headers: Record<string, string> = {},
-  ): Promise<Res<T>> {
-    const res = await fetch(`${base}${path}`, {
-      method,
-      headers: {
-        origin,
-        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        ...(this.cookie ? { cookie: this.cookie } : {}),
-        ...headers,
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    const cookies = res.headers.getSetCookie();
-    if (cookies.length > 0) this.cookie = cookies.map((c) => c.split(';')[0]).join('; ');
-    const text = await res.text();
-    return { status: res.status, body: text ? JSON.parse(text) : null };
-  }
-
-  async signUp() {
-    const res = await this.call('POST', '/api/auth/sign-up/email', {
-      name: this.name,
-      email: this.email,
-      password: 'password123',
-    });
-    this.id = res.body?.user?.id ?? '';
-    return res;
-  }
-
-  chat(content: string) {
-    return this.call('POST', '/api/chat', { messages: [{ role: 'user', content }] });
-  }
-}
+import { boot, Person, shutdown, stamp } from './support.js';
 
 const alice = new Person('Alice');
 const bob = new Person('Bob');
 
-beforeAll(async () => {
-  process.env.MODEL_MODE = 'fake';
-  const { AppModule } = await import('../dist/app.module.js');
-  app = await NestFactory.create(AppModule, { bodyParser: false, logger: false });
-  app.enableCors({ origin, credentials: true });
-  await app.listen(0); // a random free port
-  base = (await app.getUrl()).replace('[::1]', 'localhost');
-  process.env.API_INTERNAL_URL = base; // the agent's tools call this same app
-});
+beforeAll(boot);
+afterAll(shutdown);
 
-afterAll(async () => {
-  await app?.close();
-});
+const titles = async (who: Person, query = '') =>
+  (await who.call('GET', `/api/todos${query}`)).body.items.map((t: { title: string }) => t.title);
 
 describe('to-dos, end to end', () => {
-  let plumberId = '';
-
   it('1. Alice and Bob sign up', async () => {
     for (const person of [alice, bob]) {
       const res = await person.signUp();
@@ -106,9 +33,7 @@ describe('to-dos, end to end', () => {
     const second = await alice.call('POST', '/api/todos', { title: 'Buy cement' }, key);
     expect(first.status).toBe(201);
     expect(second.body.value.id).toBe(first.body.value.id);
-
-    const list = await alice.call('GET', '/api/todos');
-    expect(list.body.items.map((t: { title: string }) => t.title)).toEqual(['Buy cement']);
+    expect(await titles(alice)).toEqual(['Buy cement']);
   });
 
   it("4. Bob gets 404 patching Alice's to-do, and sees an empty list", async () => {
@@ -122,12 +47,8 @@ describe('to-dos, end to end', () => {
     const add = await alice.chat('add Call the plumber');
     expect(add.status).toBe(200);
     expect(add.body.toolCalls).toEqual([{ tool: 'create-todo', ok: true }]);
-
     const list = await alice.chat('list');
     expect(list.body.reply).toContain('Call the plumber');
-    plumberId = (await alice.call('GET', '/api/todos')).body.items.find(
-      (t: { title: string }) => t.title === 'Call the plumber',
-    ).id;
   });
 
   it("6. the agent's delete is parked; Bob gets 404 approving; Alice approves; it is gone", async () => {
@@ -136,21 +57,67 @@ describe('to-dos, end to end', () => {
       'list-todos',
       'delete-todo',
     ]);
-    // Parked, not deleted.
-    const titles = async () =>
-      (await alice.call('GET', '/api/todos')).body.items.map((t: { title: string }) => t.title);
-    expect(await titles()).toContain('Call the plumber');
+    expect(await titles(alice)).toContain('Call the plumber'); // parked, not deleted
 
     const [approval] = (await alice.call('GET', '/api/approvals')).body;
     expect(approval.summary).toBe('Delete "Call the plumber"');
+    expect(approval.requestedBy).toBe('agent');
 
-    const bobTry = await bob.call('POST', `/api/approvals/${approval.id}/approve`);
-    expect(bobTry.status).toBe(404);
-
+    expect((await bob.call('POST', `/api/approvals/${approval.id}/approve`)).status).toBe(404);
     const ok = await alice.call('POST', `/api/approvals/${approval.id}/approve`);
     expect(ok.status).toBe(200);
     expect(ok.body.status).toBe('approved');
-    expect(await titles()).not.toContain('Call the plumber');
-    expect(plumberId).not.toBe('');
+    expect(await titles(alice)).not.toContain('Call the plumber');
+  });
+
+  it('7. list grammar: filter, sort and a second page by cursor', async () => {
+    for (const [title, dueOn] of [
+      ['Pour slab', '2026-11-03'],
+      ['Fix gate', '2026-11-01'],
+      ['Paint wall', '2026-11-02'],
+      ['Order tiles', undefined],
+    ] as const) {
+      await alice.call('POST', '/api/todos', { title, ...(dueOn ? { dueOn } : {}) });
+    }
+    await alice.call(
+      'PATCH',
+      `/api/todos/${(await alice.call('GET', '/api/todos?q=gate')).body.items[0].id}`,
+      { done: true },
+    );
+
+    const first = await alice.call('GET', '/api/todos?done=false&sort=-dueOn&limit=2&count=true');
+    expect(first.status).toBe(200);
+    expect(first.body.items.map((t: { title: string }) => t.title)).toEqual([
+      'Pour slab',
+      'Paint wall',
+    ]);
+    expect(first.body.total).toBe(3 + 1); // Buy cement, Pour slab, Paint wall, Order tiles
+    expect(first.body.nextCursor).toEqual(expect.any(String));
+
+    const second = await alice.call(
+      'GET',
+      `/api/todos?done=false&sort=-dueOn&limit=2&cursor=${first.body.nextCursor}`,
+    );
+    // Undated to-dos sort last and are not skipped by the cursor.
+    expect(second.body.items.map((t: { title: string }) => t.title)).toEqual([
+      'Buy cement',
+      'Order tiles',
+    ]);
+    expect(second.body.nextCursor).toBeNull();
+
+    // Operators, search, and refusals of what was not declared.
+    expect(await titles(alice, '?dueOn[lte]=2026-11-02&sort=dueOn')).toEqual([
+      'Fix gate',
+      'Paint wall',
+    ]);
+    expect(await titles(alice, '?q=TILE')).toEqual(['Order tiles']);
+    expect((await alice.call('GET', '/api/todos?colour=red')).status).toBe(400);
+    expect((await alice.call('GET', '/api/todos?sort=ownerId')).status).toBe(400);
+    const otherSort = await alice.call(
+      'GET',
+      `/api/todos?sort=title&cursor=${first.body.nextCursor}`,
+    );
+    expect(otherSort.status).toBe(400);
+    expect(otherSort.body.error).toBe('cursor_sort_mismatch');
   });
 });

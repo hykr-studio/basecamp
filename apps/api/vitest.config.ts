@@ -15,6 +15,7 @@ export default defineConfig({
       // Always the scripted model: tests need no key and cost nothing.
       MODEL_MODE: 'fake',
       GUARDRAILS: 'off',
+      THROTTLE: 'off',
     },
   },
 });
