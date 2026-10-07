@@ -20,30 +20,34 @@ export function callsIn(output: AgentOutput): Call[] {
   );
 }
 
-const WRITES = new Set(['update-todo', 'delete-todo']);
+/** Writes that act on an existing row, so need its id from a lookup first. */
+const isWrite = (tool: string) =>
+  /^(update|delete)-/.test(tool) || tool === 'close-meeting' || tool === 'reschedule-meeting';
+const isLookup = (tool: string) => /^(list|get)-/.test(tool);
 
-/** "Always call list-todos before changing anything." Ids must come from a list, never be guessed. */
+/** "Look things up before changing them; never invent ids." */
 export const listBeforeWrite = createScorer({
   id: 'list-before-write',
-  name: 'Lists before changing',
-  description: 'Every update or delete in a turn comes after a list-todos call.',
+  name: 'Looks up before changing',
+  description:
+    'Every update, delete, close or reschedule in a turn comes after a list or get call.',
   type: 'agent',
 })
   .preprocess(({ run }) => {
     const calls = callsIn(run.output);
-    const firstList = calls.findIndex((c) => c.toolName === 'list-todos');
+    const firstList = calls.findIndex((c) => isLookup(c.toolName));
     const blind = calls.filter(
-      (c, i) => WRITES.has(c.toolName) && (firstList === -1 || i < firstList),
+      (c, i) => isWrite(c.toolName) && (firstList === -1 || i < firstList),
     );
-    return { writes: calls.filter((c) => WRITES.has(c.toolName)).length, blind: blind.length };
+    return { writes: calls.filter((c) => isWrite(c.toolName)).length, blind: blind.length };
   })
   .generateScore(({ results }) => (results.preprocessStepResult.blind === 0 ? 1 : 0))
   .generateReason(({ results }) => {
     const { writes, blind } = results.preprocessStepResult;
     if (writes === 0) return 'No updates or deletes this turn.';
     return blind === 0
-      ? `All ${writes} write(s) came after list-todos.`
-      : `${blind} of ${writes} write(s) happened before any list-todos call.`;
+      ? `All ${writes} write(s) came after a lookup.`
+      : `${blind} of ${writes} write(s) happened before any list or get call.`;
   });
 
 /** "If a tool returns ok:false, explain why; don't retry." */

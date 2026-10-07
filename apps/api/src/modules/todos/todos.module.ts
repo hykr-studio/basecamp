@@ -1,10 +1,6 @@
+import { entityController, entityHandlers } from '@app/core';
 import { Module } from '@nestjs/common';
-import { ApprovalsController } from './approvals.controller.js';
-import { TodosController } from './todos.controller.js';
-import { TodosService } from './todos.service.js';
+import { Todo } from './todo.entity.js';
 
-@Module({
-  controllers: [TodosController, ApprovalsController],
-  providers: [TodosService],
-})
+@Module({ controllers: [entityController(Todo)], providers: [...entityHandlers(Todo)] })
 export class TodosModule {}

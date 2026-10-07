@@ -1,7 +1,7 @@
 import type { Principal } from '@app/contracts';
+import { CurrentPrincipal, PrincipalGuard } from '@app/core';
 import { Controller, Get, UseGuards } from '@nestjs/common';
 import { AllowAnonymous, OptionalAuth } from '@thallesp/nestjs-better-auth';
-import { CurrentPrincipal, PrincipalGuard } from '../common/principal.js';
 
 @Controller()
 export class HealthController {

@@ -9,18 +9,21 @@ import type {
 /**
  * A scripted model for tests and CI: the real agent loop, no network, no cost.
  *
- *   add <title>     -> add-todo
- *   list            -> list-todos
- *   delete <title>  -> list-todos, then delete-todo with the matching id
- *   done <title>    -> list-todos, then update-todo { done: true }
+ *   add <title>                     create-todo
+ *   list                            list-todos
+ *   done <title>                    list-todos → update-todo { done: true }
+ *   delete <title>                  list-todos → delete-todo (parked for approval)
+ *   today                           list-meetings + list-todos for today → summary
+ *   close <meeting>\n<summary>\n- item …   list-meetings → close-meeting (parked for approval)
+ *   move <meeting> to <YYYY-MM-DD>  list-meetings → reschedule-meeting
  *
- * After a tool result it either chains the next call or answers in text.
+ * It plans each step from the tool results so far in this turn, like a real model would.
  */
-type TodoLite = { id: string; title: string; done: boolean };
-type ToolOutcome = { ok: boolean; result?: unknown; status?: number; error?: unknown };
+type Row = Record<string, unknown> & { id: string; title: string };
+type Outcome = { ok: boolean; result?: unknown; status?: number; error?: unknown };
+type Step = { toolName: string; outcome: Outcome };
 
 let callCounter = 0;
-const toolCallId = () => `call_${++callCounter}`;
 
 function lastUserText(prompt: LanguageModelV2Prompt): string {
   for (let i = prompt.length - 1; i >= 0; i--) {
@@ -28,76 +31,193 @@ function lastUserText(prompt: LanguageModelV2Prompt): string {
     if (message.role !== 'user') continue;
     return message.content
       .map((part) => (part.type === 'text' ? part.text : ''))
-      .join(' ')
+      .join('\n')
       .trim();
   }
   return '';
 }
 
-/** The tool results since the last user message, newest last. */
-function latestToolResult(prompt: LanguageModelV2Prompt) {
-  const last = prompt.at(-1);
-  if (last?.role !== 'tool') return undefined;
-  const part = last.content.at(-1);
-  if (!part) return undefined;
-  const output = part.output as { type: string; value: unknown };
-  return { toolName: part.toolName, outcome: output.value as ToolOutcome };
+/** Tool results since the last user message, oldest first. */
+function stepsThisTurn(prompt: LanguageModelV2Prompt): Step[] {
+  const steps: Step[] = [];
+  for (let i = prompt.length - 1; i >= 0 && prompt[i].role !== 'user'; i--) {
+    const message = prompt[i];
+    if (message.role !== 'tool') continue;
+    for (const part of [...message.content].reverse()) {
+      const output = part.output as { value: unknown };
+      steps.unshift({ toolName: part.toolName, outcome: output.value as Outcome });
+    }
+  }
+  return steps;
 }
 
-function call(toolName: string, args: unknown): LanguageModelV2Content {
-  return { type: 'tool-call', toolCallId: toolCallId(), toolName, input: JSON.stringify(args) };
-}
+const call = (toolName: string, args: unknown): LanguageModelV2Content => ({
+  type: 'tool-call',
+  toolCallId: `call_${++callCounter}`,
+  toolName,
+  input: JSON.stringify(args),
+});
+const text = (value: string): LanguageModelV2Content => ({ type: 'text', text: value });
 
-function text(value: string): LanguageModelV2Content {
-  return { type: 'text', text: value };
-}
-
-function errorText(outcome: ToolOutcome) {
-  const body = outcome.error as { reason?: string; message?: string } | null;
-  return body?.reason ?? body?.message ?? `the API answered ${outcome.status}`;
-}
-
-const parse = (input: string) => {
-  const match = /^(add|delete|done|list)\b\s*(.*)$/i.exec(input);
-  return match ? { verb: match[1].toLowerCase(), rest: match[2].trim() } : undefined;
+const items = (o?: Outcome) => ((o?.result as { items?: Row[] } | undefined)?.items ?? []) as Row[];
+const why = (o: Outcome) => {
+  const body = o.error as { reason?: string; message?: unknown } | null;
+  return (
+    body?.reason ??
+    (typeof body?.message === 'string' ? body.message : `the API answered ${o.status}`)
+  );
 };
+const sameTitle = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** What a finished write says: done, or what is waiting for approval. */
+function written(o: Outcome, done: (value: Row) => string): string {
+  const r = o.result as { status: string; value?: Row; approval?: { summary: string | null } };
+  if (r.status === 'needs_approval') {
+    return `I've asked for your approval: ${r.approval?.summary ?? 'see Approvals'}. Approve it in the app.`;
+  }
+  return done(r.value as Row);
+}
+
+type Intent =
+  | { verb: 'add' | 'done' | 'delete'; title: string }
+  | { verb: 'list' | 'today' }
+  | { verb: 'close'; title: string; summary: string; items: string[] }
+  | { verb: 'move'; title: string; date: string };
+
+function parse(input: string): Intent | undefined {
+  const [first = '', ...rest] = input.split('\n');
+  const move = /^move (.+) to (\d{4}-\d{2}-\d{2})$/i.exec(first.trim());
+  if (move) return { verb: 'move', title: move[1], date: move[2] };
+  const m = /^(add|done|delete|close|list|today)\b\s*(.*)$/i.exec(first.trim());
+  if (!m) return undefined;
+  const verb = m[1].toLowerCase();
+  if (verb === 'list' || verb === 'today') return { verb };
+  if (verb === 'close') {
+    const lines = rest.map((l) => l.trim()).filter(Boolean);
+    return {
+      verb,
+      title: m[2],
+      summary: lines.find((l) => !l.startsWith('- ')) ?? `Closed ${m[2]}.`,
+      items: lines.filter((l) => l.startsWith('- ')).map((l) => l.slice(2).trim()),
+    };
+  }
+  return { verb: verb as 'add' | 'done' | 'delete', title: m[2] };
+}
 
 /** Decide the next step from the conversation so far. */
 export function script(prompt: LanguageModelV2Prompt): LanguageModelV2Content[] {
   const intent = parse(lastUserText(prompt));
-  const tool = latestToolResult(prompt);
+  const steps = stepsThisTurn(prompt);
+  const last = steps.at(-1);
+  if (last && !last.outcome.ok) return [text(`I couldn't do that: ${why(last.outcome)}.`)];
+  const result = (tool: string) => steps.find((s) => s.toolName === tool)?.outcome;
 
-  if (!tool) {
-    if (!intent) return [text('I can add, list, delete, or complete to-dos.')];
-    if (intent.verb === 'add') return [call('add-todo', { title: intent.rest })];
-    return [call('list-todos', {})];
-  }
+  if (!intent)
+    return [
+      text('I can add, list, complete or delete to-dos, show today, and close or move meetings.'),
+    ];
 
-  const { toolName, outcome } = tool;
-  if (!outcome.ok) return [text(`I couldn't do that: ${errorText(outcome)}.`)];
-
-  if (toolName === 'list-todos') {
-    const todos = (outcome.result ?? []) as TodoLite[];
-    if (intent?.verb === 'delete' || intent?.verb === 'done') {
-      const target = todos.find((t) => t.title.toLowerCase() === intent.rest.toLowerCase());
-      if (!target) return [text(`I couldn't find a to-do called "${intent.rest}".`)];
-      return intent.verb === 'delete'
-        ? [call('delete-todo', { id: target.id })]
-        : [call('update-todo', { id: target.id, done: true })];
+  switch (intent.verb) {
+    case 'add': {
+      const r = result('create-todo');
+      if (!r) return [call('create-todo', { title: intent.title })];
+      return [text(written(r, (t) => `Added "${t.title}".`))];
     }
-    if (todos.length === 0) return [text('You have no to-dos.')];
-    return [text(todos.map((t) => `[${t.done ? 'x' : ' '}] ${t.title}`).join('\n'))];
+    case 'list': {
+      const r = result('list-todos');
+      if (!r) return [call('list-todos', {})];
+      const todos = items(r);
+      return [
+        text(
+          todos.length
+            ? todos.map((t) => `[${t.done ? 'x' : ' '}] ${t.title}`).join('\n')
+            : 'You have no to-dos.',
+        ),
+      ];
+    }
+    case 'done':
+    case 'delete': {
+      const tool = intent.verb === 'done' ? 'update-todo' : 'delete-todo';
+      const r = result(tool);
+      if (r)
+        return [
+          text(written(r, (t) => (intent.verb === 'done' ? `Updated "${t.title}".` : 'Deleted.'))),
+        ];
+      const list = result('list-todos');
+      if (!list) return [call('list-todos', {})];
+      const target = items(list).find((t) => sameTitle(t.title, intent.title));
+      if (!target) return [text(`I couldn't find a to-do called "${intent.title}".`)];
+      return [
+        call(tool, intent.verb === 'done' ? { id: target.id, done: true } : { id: target.id }),
+      ];
+    }
+    case 'today': {
+      const day = new Date().toISOString().slice(0, 10);
+      const meetings = result('list-meetings');
+      if (!meetings) {
+        return [
+          call('list-meetings', {
+            startsAt: { gte: `${day}T00:00:00Z`, lte: `${day}T23:59:59Z` },
+            sort: 'startsAt',
+          }),
+        ];
+      }
+      const todos = result('list-todos');
+      if (!todos) return [call('list-todos', { done: false, dueOn: { lte: day }, sort: 'dueOn' })];
+      const m = items(meetings).map((x) => `- ${x.title} at ${String(x.startsAt).slice(11, 16)}`);
+      const t = items(todos).map((x) => `- ${x.title}${x.dueOn ? ` (due ${x.dueOn})` : ''}`);
+      return [
+        text(
+          [
+            `Today: ${m.length} meeting(s), ${t.length} to-do(s) due.`,
+            ...m,
+            ...(t.length ? ['To-dos:', ...t] : []),
+          ].join('\n'),
+        ),
+      ];
+    }
+    case 'close':
+    case 'move': {
+      const tool = intent.verb === 'close' ? 'close-meeting' : 'reschedule-meeting';
+      const r = result(tool);
+      if (r) {
+        return [
+          text(
+            written(r, () =>
+              intent.verb === 'close'
+                ? `Closed ${intent.title}.`
+                : `Moved ${intent.title} to ${(intent as { date: string }).date}.`,
+            ),
+          ),
+        ];
+      }
+      const list = result('list-meetings');
+      if (!list) return [call('list-meetings', { q: intent.title })];
+      const meeting = items(list).find((x) => sameTitle(x.title, intent.title)) ?? items(list)[0];
+      if (!meeting) return [text(`I couldn't find a meeting called "${intent.title}".`)];
+      if (intent.verb === 'close') {
+        return [
+          call('close-meeting', {
+            meetingId: meeting.id,
+            summary: intent.summary,
+            decisions: [],
+            actionItems: intent.items.map((title) => ({ title })),
+          }),
+        ];
+      }
+      // Keep the time of day and the length; change the date.
+      const start = new Date(String(meeting.startsAt));
+      const length = new Date(String(meeting.endsAt)).getTime() - start.getTime();
+      const startsAt = new Date(`${intent.date}T${start.toISOString().slice(11)}`);
+      return [
+        call('reschedule-meeting', {
+          meetingId: meeting.id,
+          startsAt: startsAt.toISOString(),
+          endsAt: new Date(startsAt.getTime() + length).toISOString(),
+        }),
+      ];
+    }
   }
-
-  const result = outcome.result as
-    | { status: 'done'; todo: TodoLite | null }
-    | { status: 'needs_approval'; approval: { summary: string | null } };
-  if (result.status === 'needs_approval') {
-    return [text(`I've asked for your approval: ${result.approval.summary ?? 'see Approvals'}.`)];
-  }
-  if (toolName === 'add-todo') return [text(`Added "${result.todo?.title}".`)];
-  if (toolName === 'update-todo') return [text(`Updated "${result.todo?.title}".`)];
-  return [text('Done.')];
 }
 
 const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -113,12 +233,7 @@ export function fakeModel(): LanguageModelV2 {
     async doGenerate(options: LanguageModelV2CallOptions) {
       const content = script(options.prompt);
       const calledTool = content.some((part) => part.type === 'tool-call');
-      return {
-        content,
-        finishReason: calledTool ? 'tool-calls' : 'stop',
-        usage,
-        warnings: [],
-      };
+      return { content, finishReason: calledTool ? 'tool-calls' : 'stop', usage, warnings: [] };
     },
 
     async doStream(options: LanguageModelV2CallOptions) {

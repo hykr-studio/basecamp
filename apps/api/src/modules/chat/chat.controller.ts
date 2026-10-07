@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mastra } from '@app/agents';
 import { ChatRequest, type ChatResponse, type Principal } from '@app/contracts';
+import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@app/core';
 import { RequestContext } from '@mastra/core/request-context';
 import {
   Body,
@@ -14,7 +15,6 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 import { createZodDto } from 'nestjs-zod';
-import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '../../common/principal.js';
 
 class ChatDto extends createZodDto(ChatRequest) {}
 
@@ -46,6 +46,13 @@ export class ChatController {
     const requestContext = new RequestContext();
     requestContext.set('userId', p.actor.id);
     requestContext.set('runId', runId);
+    requestContext.set('today', new Date().toISOString().slice(0, 10));
+    // Where the person is: a hint only. Tools still load the meeting through the owner scope,
+    // so a forged id finds nothing.
+    if (body.context) {
+      requestContext.set('screen', body.context.screen);
+      if (body.context.meetingId) requestContext.set('meetingId', body.context.meetingId);
+    }
 
     // Literal roles: Mastra's generate() type rejects a plain 'user' | 'assistant' union.
     const messages = body.messages.map((m) =>

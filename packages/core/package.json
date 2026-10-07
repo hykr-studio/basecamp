@@ -1,0 +1,43 @@
+{
+  "name": "@app/core",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "default": "./dist/tools/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@app/api-client": "workspace:*",
+    "@app/contracts": "workspace:*",
+    "@app/db": "workspace:*",
+    "@app/policy": "workspace:*",
+    "@mastra/core": "1.74.0",
+    "@nestjs/common": "^11.2.7",
+    "@nestjs/core": "^11.2.7",
+    "@nestjs/cqrs": "^11.0.3",
+    "@thallesp/nestjs-better-auth": "^2.8.0",
+    "drizzle-orm": "^0.45.3",
+    "nestjs-zod": "^5.5.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.4",
+    "vitest": "^5.0.3"
+  }
+}

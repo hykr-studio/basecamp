@@ -178,7 +178,7 @@ export function todoRepo(db: Database) {
           .where(eq(approvals.id, current.id))
           .returning();
 
-        if (status === 'approved' && current.action === 'todo.delete') {
+        if (status === 'approved' && current.action === 'todo.delete' && current.resourceId) {
           const [before] = await tx
             .delete(todos)
             .where(and(eq(todos.id, current.resourceId), eq(todos.ownerId, current.ownerId)))

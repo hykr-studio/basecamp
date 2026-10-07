@@ -105,27 +105,27 @@ describe('to-dos, end to end', () => {
     const first = await alice.call('POST', '/api/todos', { title: 'Buy cement' }, key);
     const second = await alice.call('POST', '/api/todos', { title: 'Buy cement' }, key);
     expect(first.status).toBe(201);
-    expect(second.body.todo.id).toBe(first.body.todo.id);
+    expect(second.body.value.id).toBe(first.body.value.id);
 
     const list = await alice.call('GET', '/api/todos');
-    expect(list.body.map((t: { title: string }) => t.title)).toEqual(['Buy cement']);
+    expect(list.body.items.map((t: { title: string }) => t.title)).toEqual(['Buy cement']);
   });
 
   it("4. Bob gets 404 patching Alice's to-do, and sees an empty list", async () => {
-    const [aliceTodo] = (await alice.call('GET', '/api/todos')).body;
+    const [aliceTodo] = (await alice.call('GET', '/api/todos')).body.items;
     const patch = await bob.call('PATCH', `/api/todos/${aliceTodo.id}`, { done: true });
     expect(patch.status).toBe(404);
-    expect((await bob.call('GET', '/api/todos')).body).toEqual([]);
+    expect((await bob.call('GET', '/api/todos')).body.items).toEqual([]);
   });
 
   it('5. "add Call the plumber" through chat; "list" shows it', async () => {
     const add = await alice.chat('add Call the plumber');
     expect(add.status).toBe(200);
-    expect(add.body.toolCalls).toEqual([{ tool: 'add-todo', ok: true }]);
+    expect(add.body.toolCalls).toEqual([{ tool: 'create-todo', ok: true }]);
 
     const list = await alice.chat('list');
     expect(list.body.reply).toContain('Call the plumber');
-    plumberId = (await alice.call('GET', '/api/todos')).body.find(
+    plumberId = (await alice.call('GET', '/api/todos')).body.items.find(
       (t: { title: string }) => t.title === 'Call the plumber',
     ).id;
   });
@@ -138,7 +138,7 @@ describe('to-dos, end to end', () => {
     ]);
     // Parked, not deleted.
     const titles = async () =>
-      (await alice.call('GET', '/api/todos')).body.map((t: { title: string }) => t.title);
+      (await alice.call('GET', '/api/todos')).body.items.map((t: { title: string }) => t.title);
     expect(await titles()).toContain('Call the plumber');
 
     const [approval] = (await alice.call('GET', '/api/approvals')).body;

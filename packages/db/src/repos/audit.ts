@@ -7,6 +7,8 @@ export type WriteCtx = {
   actorId: string;
   actingFor?: string | null;
   runId?: string | null;
+  requestId?: string | null;
+  approvedBy?: string | null;
   agentVersion?: string | null;
   rule?: string | null;
   reason?: string | null;
@@ -34,6 +36,8 @@ export async function writeAudit(tx: DbOrTx, input: AuditInput) {
       actorId: input.actorId,
       actingFor: input.actingFor ?? null,
       runId: input.runId ?? null,
+      requestId: input.requestId ?? null,
+      approvedBy: input.approvedBy ?? null,
       agentVersion: input.agentVersion ?? null,
       rule: input.rule ?? null,
       reason: input.reason ?? null,

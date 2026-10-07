@@ -6,5 +6,7 @@ export const Principal = z.object({
   runId: z.string().optional(),
   agentVersion: z.string().optional(),
   scopes: z.array(z.string()),
+  /** Set when a person approved this parked operation; it is being replayed for them. */
+  approvedBy: z.string().optional(),
 });
 export type Principal = z.infer<typeof Principal>;

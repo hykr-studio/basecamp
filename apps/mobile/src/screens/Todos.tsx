@@ -1,4 +1,4 @@
-import type { Approval, Todo } from '@app/contracts';
+import { type Approval, type Todo, TodoSpec } from '@app/contracts';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Pressable,
@@ -15,6 +15,8 @@ import { Button } from '../components/Button';
 import { Chat } from '../components/Chat';
 import { colors, styles } from '../theme';
 
+const todosApi = api.entity(TodoSpec);
+
 type Props = { user: SessionUser; onSignOut: () => void };
 
 export function Todos({ user, onSignOut }: Props) {
@@ -28,7 +30,10 @@ export function Todos({ user, onSignOut }: Props) {
 
   const refresh = useCallback(async () => {
     try {
-      const [t, a] = await Promise.all([api.listTodos(), api.listApprovals()]);
+      const [t, a] = await Promise.all([
+        todosApi.list().then((page) => page.items),
+        api.listApprovals(),
+      ]);
       setTodos(t);
       setApprovals(a);
     } catch (e) {
@@ -58,7 +63,7 @@ export function Todos({ user, onSignOut }: Props) {
     const value = title.trim();
     if (!value) return;
     setAdding(true);
-    await act(null, () => api.createTodo({ title: value }));
+    await act(null, () => todosApi.create({ title: value }));
     setTitle('');
     setAdding(false);
   }
@@ -87,7 +92,7 @@ export function Todos({ user, onSignOut }: Props) {
               accessibilityRole="checkbox"
               accessibilityState={{ checked: t.done, busy: busyId === t.id }}
               accessibilityLabel={t.title}
-              onPress={() => act(t.id, () => api.updateTodo(t.id, { done: !t.done }))}
+              onPress={() => act(t.id, () => todosApi.update(t.id, { done: !t.done }))}
               style={s.toggle}
             >
               <View style={[s.box, t.done && s.boxDone]}>
@@ -99,7 +104,7 @@ export function Todos({ user, onSignOut }: Props) {
             <Button
               title="Delete"
               variant="danger"
-              onPress={() => act(t.id, () => api.deleteTodo(t.id))}
+              onPress={() => act(t.id, () => todosApi.remove(t.id))}
               busy={busyId === t.id}
             />
           </View>

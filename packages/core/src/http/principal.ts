@@ -1,6 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Principal } from '@app/contracts';
-import { type Database, userExists } from '@app/db';
+import { userExists } from '@app/db';
 import {
   type CanActivate,
   createParamDecorator,
@@ -11,11 +11,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { config } from '../config.js';
-import { DB } from '../infra/db.module.js';
-
-/** The only agent this API knows. Its key is AGENT_API_KEY. */
-export const AGENT_ID = 'todo-agent';
+import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
 
 export type ApiRequest = Request & {
   /** Set by Better Auth's guard when the request carries a valid session. */
@@ -24,7 +20,7 @@ export type ApiRequest = Request & {
   requestId?: string;
 };
 
-export type RequestMeta = { requestId: string; idempotencyKey?: string };
+export type RequestMetaValue = { requestId: string; idempotencyKey?: string };
 
 export const header = (req: Request, name: string) => {
   const value = req.headers[name];
@@ -33,20 +29,14 @@ export const header = (req: Request, name: string) => {
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest();
 
-/** Hash both sides first: equal lengths for timingSafeEqual, and nothing leaks the key's length. */
-function agentKeyMatches(presented: string) {
-  return timingSafeEqual(sha256(presented), sha256(config.agentApiKey));
-}
-
 /**
- * Turns every request into exactly one principal before the handler runs:
- * a signed-in person, or the agent acting for one. Anything else is a 401.
- *
+ * Turns every request into exactly one principal before the handler runs: a signed-in
+ * person, or the agent acting for one. Anything else is a 401.
  * Pair it with @OptionalAuth() so Better Auth attaches a session when there is one.
  */
 @Injectable()
 export class PrincipalGuard implements CanActivate {
-  constructor(@Inject(DB) private readonly db: Database) {}
+  constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {}
 
   async canActivate(context: ExecutionContext) {
     const http = context.switchToHttp();
@@ -62,21 +52,24 @@ export class PrincipalGuard implements CanActivate {
   }
 
   private async agentPrincipal(req: ApiRequest, agentKey: string): Promise<Principal> {
+    // Hash both sides: equal lengths for timingSafeEqual, and nothing leaks the key's length.
     // A presented key that is wrong never falls back to the session.
-    if (!agentKeyMatches(agentKey)) throw new UnauthorizedException('invalid agent key');
-    if (header(req, 'x-agent-id') !== AGENT_ID) throw new UnauthorizedException('unknown agent');
-
+    if (!timingSafeEqual(sha256(agentKey), sha256(this.options.agentApiKey))) {
+      throw new UnauthorizedException('invalid agent key');
+    }
+    if (header(req, 'x-agent-id') !== this.options.agentId) {
+      throw new UnauthorizedException('unknown agent');
+    }
     const userId = header(req, 'x-acting-for');
     const runId = header(req, 'x-run-id');
     if (!userId || !runId) {
       throw new UnauthorizedException('agent requests need x-acting-for and x-run-id');
     }
-    if (!(await userExists(this.db, userId))) {
+    if (!(await userExists(this.options.db, userId))) {
       throw new UnauthorizedException('x-acting-for is not a known user');
     }
-
     return {
-      actor: { kind: 'agent', id: AGENT_ID, role: 'agent' },
+      actor: { kind: 'agent', id: this.options.agentId, role: 'agent' },
       actingFor: { userId },
       runId,
       agentVersion: header(req, 'x-agent-version'),
@@ -91,12 +84,12 @@ export class PrincipalGuard implements CanActivate {
   }
 }
 
-/** For actions only a person may take, such as approving what the agent asked for. */
+/** For actions only a person may take, such as deciding what the agent asked for. */
 @Injectable()
 export class HumanOnlyGuard implements CanActivate {
   canActivate(context: ExecutionContext) {
     const principal = context.switchToHttp().getRequest<ApiRequest>().principal;
-    if (principal?.actor.kind !== 'user') throw new ForbiddenException('people only');
+    if (principal?.actor.kind !== 'user') throw new ForbiddenException('Only people can do this');
     return true;
   }
 }
@@ -108,7 +101,7 @@ export const CurrentPrincipal = createParamDecorator((_: unknown, ctx: Execution
 });
 
 export const RequestMeta = createParamDecorator(
-  (_: unknown, ctx: ExecutionContext): RequestMeta => {
+  (_: unknown, ctx: ExecutionContext): RequestMetaValue => {
     const req = ctx.switchToHttp().getRequest<ApiRequest>();
     return {
       requestId: req.requestId ?? randomUUID(),

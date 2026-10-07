@@ -15,6 +15,10 @@ export const events = audit.table(
     actorId: text('actor_id').notNull(),
     actingFor: text('acting_for'),
     runId: text('run_id'),
+    /** The HTTP request that caused this row; an approval's replay shares the approve request's. */
+    requestId: text('request_id'),
+    /** For a replayed approval: the person who approved what the actor asked for. */
+    approvedBy: text('approved_by'),
     agentVersion: text('agent_version'),
     rule: text('rule'),
     reason: text('reason'),
@@ -25,5 +29,7 @@ export const events = audit.table(
   (table) => [
     index('events_resource_idx').on(table.resourceType, table.resourceId),
     index('events_at_idx').on(table.at),
+    index('events_run_idx').on(table.runId),
+    index('events_request_idx').on(table.requestId),
   ],
 );
