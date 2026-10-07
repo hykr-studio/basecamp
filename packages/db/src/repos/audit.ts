@@ -1,5 +1,5 @@
-import { events } from '../schema/audit.js';
 import type { DbOrTx } from '../database.js';
+import { events } from '../schema/audit.js';
 
 /** Who is writing, carried into every audit row. */
 export type WriteCtx = {

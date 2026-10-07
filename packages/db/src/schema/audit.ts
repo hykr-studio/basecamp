@@ -6,9 +6,7 @@ export const audit = pgSchema('audit');
 export const events = audit.table(
   'events',
   {
-    id: text('id')
-      .primaryKey()
-      .default(sql`gen_random_uuid()::text`),
+    id: text('id').primaryKey().default(sql`gen_random_uuid()::text`),
     at: timestamp('at', { withTimezone: true }).defaultNow().notNull(),
     action: text('action').notNull(),
     resourceType: text('resource_type').notNull(),

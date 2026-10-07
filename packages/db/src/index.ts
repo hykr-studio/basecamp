@@ -16,10 +16,10 @@ export function createDb(url: string) {
   };
 }
 
-export * as schema from './schema/index.js';
-export * from './schema/index.js';
-export { writeAudit, type AuditInput, type WriteCtx } from './repos/audit.js';
+export type { Database, DbOrTx } from './database.js';
+export { type AuditInput, type WriteCtx, writeAudit } from './repos/audit.js';
 export { idempotencyRepo } from './repos/idempotency.js';
 export { todoRepo } from './repos/todos.js';
 export { userExists } from './repos/users.js';
-export type { Database, DbOrTx } from './database.js';
+export * as schema from './schema/index.js';
+export * from './schema/index.js';

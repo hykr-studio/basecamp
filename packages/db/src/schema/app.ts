@@ -13,10 +13,7 @@ import { user } from './auth.js';
 
 export const app = pgSchema('app');
 
-const id = () =>
-  text('id')
-    .primaryKey()
-    .default(sql`gen_random_uuid()::text`);
+const id = () => text('id').primaryKey().default(sql`gen_random_uuid()::text`);
 
 export const todos = app.table(
   'todos',

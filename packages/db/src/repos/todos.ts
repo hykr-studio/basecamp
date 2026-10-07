@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { Database } from '../database.js';
 import { approvals, todos } from '../schema/app.js';
-import { writeAudit, type WriteCtx } from './audit.js';
+import { type WriteCtx, writeAudit } from './audit.js';
 
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
