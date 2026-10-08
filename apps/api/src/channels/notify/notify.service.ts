@@ -135,7 +135,7 @@ export class NotifyService implements OnModuleInit {
     await (tx ?? this.db).insert(schema.outbox).values({
       tenantId: r.tenantId,
       key: def.key,
-      payload: { row: r, dedupe: def.dedupe(r) },
+      payload: { row: r, dedupe: def.dedupe(r), queues: config.queuePrefix },
     });
   }
 

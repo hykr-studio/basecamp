@@ -50,7 +50,7 @@ export const config = {
   smtp: {
     host: env.SMTP_HOST ?? 'localhost',
     port: Number(env.SMTP_PORT ?? 1025),
-    from: env.SMTP_FROM ?? 'Agentic Stack <assistant@agentic-stack.local>',
+    from: env.SMTP_FROM ?? 'Basecamp <assistant@basecamp.local>',
   },
   /** Queue keys in Redis: tests run under their own prefix, alongside the dev server. */
   queuePrefix: env.BULL_PREFIX ?? 'bull',

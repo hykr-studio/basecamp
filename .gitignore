@@ -85,3 +85,6 @@ docker-compose.override.yml
 # Mastra dev server build and Studio presets
 .mastra/
 .studio/
+
+# Agent worktrees (Claude Code)
+.claude/worktrees/

@@ -43,10 +43,10 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void
   return (
     <View style={[styles.content, { maxWidth: 440, marginTop: 56 }]}>
       <View style={{ gap: space.xs }}>
-        <Text style={styles.title}>Agentic Stack</Text>
+        <Text style={styles.title}>Basecamp</Text>
         <Text style={styles.muted}>
-          The agentic stack template: an assistant acts for you through the same API, and anything
-          risky waits for your approval.
+          The agentic development stack: an assistant acts for you through the same API, and
+          anything risky waits for your approval.
         </Text>
       </View>
       <View style={styles.card}>

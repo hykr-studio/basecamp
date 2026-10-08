@@ -44,7 +44,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (u: SessionUser) => void }) {
     <View className="flex-1 items-center justify-center bg-bg px-4">
       <View className="w-full max-w-sm gap-4 rounded-card border border-border bg-card p-6">
         <View className="gap-1">
-          <Text className="text-title font-title text-text">Back office</Text>
+          <Text className="text-title font-title text-text">Basecamp back office</Text>
           <Text className="text-body text-muted">
             Conversations the assistant handed to your team. Sign in with your app account.
           </Text>
@@ -96,7 +96,8 @@ function Shell({ user, me, onSignOut }: { user: SessionUser; me: Me; onSignOut: 
   return (
     <View className="flex-1 bg-bg">
       <View className="flex-row items-center gap-2 border-b border-divider bg-card px-4 py-2">
-        <Text className="mr-4 text-heading font-title text-text">Back office</Text>
+        <Text className="text-heading font-title text-text">Basecamp</Text>
+        <Text className="mr-4 text-small text-muted">Back office</Text>
         <NavLink href="/" label="Conversations" />
         <NavLink href="/templates" label="Templates" />
         <View className="flex-1" />

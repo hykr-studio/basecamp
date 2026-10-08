@@ -8,7 +8,8 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import type { Queue } from 'bullmq';
-import { asc, inArray, isNull } from 'drizzle-orm';
+import { and, asc, inArray, isNull, sql } from 'drizzle-orm';
+import { config } from '../../config.js';
 import { DB } from '../../infra/db.module.js';
 import { QUEUES } from '../queues.js';
 import type { DispatchJob } from './notify.service.js';
@@ -46,7 +47,13 @@ export class OutboxRelay implements OnModuleInit, OnApplicationShutdown {
       const rows = await this.db
         .select()
         .from(schema.outbox)
-        .where(isNull(schema.outbox.relayedAt))
+        // Only this process's queues' rows: a dev worker and a test run can share a database.
+        .where(
+          and(
+            isNull(schema.outbox.relayedAt),
+            sql`coalesce(${schema.outbox.payload}->>'queues', 'bull') = ${config.queuePrefix}`,
+          ),
+        )
         .orderBy(asc(schema.outbox.id))
         .limit(100);
       if (!rows.length) return;

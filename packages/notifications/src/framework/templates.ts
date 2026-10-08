@@ -58,7 +58,7 @@ export const HandoffReply = defineTemplate({
     hi: '{{business}} की ओर से जवाब: {{message}}',
     te: '{{business}} నుండి సమాధానం: {{message}}',
   },
-  example: { business: 'Agentic Stack Demo', message: 'Your visit is moved to Friday at 4 pm.' },
+  example: { business: 'Basecamp Demo', message: 'Your visit is moved to Friday at 4 pm.' },
 });
 
 /** Example only: marketing needs explicit consent, an opt-out, and costs money per send. */

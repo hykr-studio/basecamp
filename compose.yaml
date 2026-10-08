@@ -43,7 +43,7 @@ services:
       WHALOC_WEBHOOK_URL: http://host.docker.internal:3000/webhooks/whatsapp
       WHALOC_APP_SECRET: dev-app-secret
       WHALOC_WEBHOOK_VERIFY_TOKEN: dev-verify-token
-      WHALOC_SEED: '[{"id":"666635535888644","name":"Agentic Stack Demo","phoneNumbers":[{"id":"573542517421694","displayPhoneNumber":"+91 80 4000 0100","verifiedName":"Agentic Stack Demo"}]}]'
+      WHALOC_SEED: '[{"id":"666635535888644","name":"Basecamp Demo","phoneNumbers":[{"id":"573542517421694","displayPhoneNumber":"+91 80 4000 0100","verifiedName":"Basecamp Demo"}]}]'
       WHALOC_TEMPLATE_AUTO_APPROVE: "2000"
     ports: ["8080:8080"]
     extra_hosts: ["host.docker.internal:host-gateway"] # lets it reach the API on your Mac (and on Linux CI)
@@ -55,7 +55,7 @@ services:
       WHALOC_WEBHOOK_URL: http://host.docker.internal:3099/webhooks/whatsapp
       WHALOC_APP_SECRET: test-app-secret
       WHALOC_WEBHOOK_VERIFY_TOKEN: test-verify-token
-      WHALOC_SEED: '[{"id":"666635535888699","name":"Agentic Stack Test","phoneNumbers":[{"id":"573542517421699","displayPhoneNumber":"+91 80 4000 0199","verifiedName":"Agentic Stack Test"}]}]'
+      WHALOC_SEED: '[{"id":"666635535888699","name":"Basecamp Test","phoneNumbers":[{"id":"573542517421699","displayPhoneNumber":"+91 80 4000 0199","verifiedName":"Basecamp Test"}]}]'
       WHALOC_TEMPLATE_AUTO_APPROVE: "200"
       WHALOC_STATUS_DELAYS: "sent:0,delivered:100"
       WHALOC_PUBLIC_URL: http://localhost:8090 # media links point here, not at the dev whaloc's 8080

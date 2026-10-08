@@ -4,6 +4,7 @@ import { schema } from '@app/db';
 import { templates } from '@app/notifications';
 import { NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
+import { config } from '../../config.js';
 
 /** The outbox key for a template sent by hand, not by a notification. */
 export const TEMPLATE_KEY = 'template:';
@@ -50,6 +51,7 @@ export const SendTemplate = defineCommand(SendTemplateSpec, {
       payload: {
         row: { id: input.customerId, tenantId: principal.tenantId, params: input.params },
         dedupe: `send:${crypto.randomUUID()}`,
+        queues: config.queuePrefix,
       },
     });
     return { value: { queued: true }, touched: [] };

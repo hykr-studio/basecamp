@@ -1,11 +1,14 @@
 # The domain is replaceable
 
-This template ships with a sample domain: meetings, notes and to-dos. Everything else is the
+Basecamp, the agentic development stack for full-stack applications, ships with a sample domain: meetings, notes and to-dos. Everything else is the
 framework: the API pipeline (rules, approvals, audit), the assistant (tools, surfaces, the
 canvas, WhatsApp), saved pages, and the app shell. The domain lives in one folder per layer,
 and the framework reads each folder only through its `index`. A dependency-cruiser rule
 (`framework-reads-the-domain-through-its-index`, run by `pnpm lint:deps`) enforces the
 boundary.
+
+New here? Read the [developer guide](docs/developer-guide.md), then build a feature with the
+[tutorial](docs/tutorial.md).
 
 To bring another domain, replace these folders. Nothing outside them changes.
 

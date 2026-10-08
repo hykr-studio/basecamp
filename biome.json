@@ -6,7 +6,13 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!packages/db/drizzle", "!apps/mobile/src/uniwind-types.d.ts"]
+    "includes": [
+      "**",
+      "!packages/db/drizzle",
+      "!apps/mobile/src/uniwind-types.d.ts",
+      "!apps/back-office/src/uniwind-types.d.ts",
+      "!.claude"
+    ]
   },
   "css": {
     "parser": { "tailwindDirectives": true }

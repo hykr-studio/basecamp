@@ -133,7 +133,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
       <View style={[styles.screen, { flexDirection: 'row' }]}>
         <View style={s.rail} role="navigation">
           <View style={{ gap: 2, paddingHorizontal: space.md, paddingBottom: space.lg }}>
-            <Text style={styles.heading}>Agentic Stack</Text>
+            <Text style={styles.heading}>Basecamp</Text>
             <Text style={styles.muted}>{appDomain.tagline}</Text>
           </View>
           {NAV.map((n) => (
@@ -187,7 +187,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={s.topBar}>
-          <Text style={styles.heading}>Agentic Stack</Text>
+          <Text style={styles.heading}>Basecamp</Text>
           {confirmSignOut ? (
             <View style={styles.row}>
               <Button title="Stay" variant="subtle" onPress={() => setConfirmSignOut(false)} />
