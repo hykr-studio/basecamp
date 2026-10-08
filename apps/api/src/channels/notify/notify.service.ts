@@ -145,7 +145,10 @@ export class NotifyService implements OnModuleInit {
    * or the latest one of that notification to this contact. Returns what to say back.
    */
   async tapped(contactId: string, payload: string, replyTo?: string): Promise<Labels | undefined> {
-    const [, key, button] = payload.split(':');
+    // ntf:<key>:<button>, where the key may itself hold a colon (template:<name>).
+    const rest = payload.slice('ntf:'.length);
+    const key = rest.slice(0, rest.lastIndexOf(':'));
+    const button = rest.slice(rest.lastIndexOf(':') + 1);
     const def = notifications.find((n) => n.key === key);
     const handler = button ? def?.onButton?.[button] : undefined;
     if (!def || !handler) return undefined;

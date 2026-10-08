@@ -1,4 +1,4 @@
-import { createHash, randomInt } from 'node:crypto';
+import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 import type { Principal } from '@app/contracts';
 import { type Database, schema, writeAudit } from '@app/db';
 import type { Lang } from '@app/i18n';
@@ -11,7 +11,7 @@ import {
   Inject,
   Injectable,
 } from '@nestjs/common';
-import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 import { config } from '../../config.js';
 import { DB } from '../../infra/db.module.js';
 import { ContactsService } from '../contacts.service.js';
@@ -21,6 +21,7 @@ const { linkCodes, contacts, customers, memberships } = schema;
 
 const CODE_TTL_MS = 10 * 60_000;
 const MAX_ATTEMPTS = 5;
+const MAX_CODES_PER_HOUR = 5;
 const hash = (id: string, code: string) =>
   createHash('sha256').update(`${id}:${code}`).digest('hex');
 
@@ -42,16 +43,16 @@ export class LinkingService {
     const taken = await this.contacts.byAddress(tenantId, address);
     if (taken?.userId && taken.userId !== p.actor.id)
       throw new ConflictException('That number is linked to another account');
+    // At most 5 codes an hour per account, and per number whoever asks: codes cost money and
+    // land on someone's phone.
     const [recent] = await this.db
-      .select({ n: sql<number>`count(*)::int` })
+      .select({
+        mine: sql<number>`count(*) filter (where ${linkCodes.userId} = ${p.actor.id})::int`,
+        toNumber: sql<number>`count(*) filter (where ${linkCodes.address} = ${address})::int`,
+      })
       .from(linkCodes)
-      .where(
-        and(
-          eq(linkCodes.userId, p.actor.id),
-          gt(linkCodes.createdAt, sql`now() - interval '1 hour'`),
-        ),
-      );
-    if ((recent?.n ?? 0) >= 5)
+      .where(gt(linkCodes.createdAt, sql`now() - interval '1 hour'`));
+    if ((recent?.mine ?? 0) >= MAX_CODES_PER_HOUR || (recent?.toNumber ?? 0) >= MAX_CODES_PER_HOUR)
       throw new HttpException('Too many codes: try again later', HttpStatus.TOO_MANY_REQUESTS);
 
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
@@ -95,19 +96,33 @@ export class LinkingService {
       )
       .orderBy(desc(linkCodes.createdAt))
       .limit(1);
-    if (!pending || pending.attempts >= MAX_ATTEMPTS)
-      throw new BadRequestException('No code waiting for that number: send a new one');
-    if (hash(pending.id, code) !== pending.codeHash) {
-      await this.db
-        .update(linkCodes)
-        .set({ attempts: pending.attempts + 1 })
-        .where(eq(linkCodes.id, pending.id));
+    const noCode = () => new BadRequestException('No code waiting for that number: send a new one');
+    if (!pending) throw noCode();
+    // Every guess spends an attempt first, in one statement: parallel guesses can't all slip
+    // under the limit.
+    const [spent] = await this.db
+      .update(linkCodes)
+      .set({ attempts: sql`${linkCodes.attempts} + 1` })
+      .where(
+        and(
+          eq(linkCodes.id, pending.id),
+          isNull(linkCodes.consumedAt),
+          lt(linkCodes.attempts, MAX_ATTEMPTS),
+        ),
+      )
+      .returning({ id: linkCodes.id });
+    if (!spent) throw noCode();
+    const expected = Buffer.from(pending.codeHash);
+    const given = Buffer.from(hash(pending.id, code));
+    if (expected.length !== given.length || !timingSafeEqual(expected, given))
       throw new BadRequestException("That code isn't right");
-    }
-    await this.db
+    // Used once: a second correct guess racing this one finds it consumed.
+    const [consumed] = await this.db
       .update(linkCodes)
       .set({ consumedAt: new Date() })
-      .where(eq(linkCodes.id, pending.id));
+      .where(and(eq(linkCodes.id, pending.id), isNull(linkCodes.consumedAt)))
+      .returning({ id: linkCodes.id });
+    if (!consumed) throw noCode();
     return this.link(p.actor.id, tenantId, address, pending.timeZone);
   }
 

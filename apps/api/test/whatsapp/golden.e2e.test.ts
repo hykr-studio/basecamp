@@ -118,6 +118,8 @@ beforeAll(async () => {
   await boot();
   await owner.signUp();
   tenantId = (await me(owner)).tenantId;
+  // A number stays with the business that claimed it; the operator frees it for this run.
+  await pool.query('delete from channel.numbers where phone_number_id = $1', [NUMBER]);
   expect(
     (await owner.call('POST', '/api/channels/whatsapp/number', { phoneNumberId: NUMBER })).status,
   ).toBe(201);

@@ -37,6 +37,9 @@ import type { InboundJob } from './webhook.controller.js';
 const { inboundEvents, contacts, messages, approvals } = schema;
 const log = new Logger('WhatsAppInbound');
 
+/** The quick reply a marketing template offers to stop offers (see monthly_update_v1). */
+const OPT_OUT_BUTTON = 'stop_offers';
+
 /** One turn per sender at a time: held for the length of a turn, never forever. */
 const LOCK_MS = 120_000;
 
@@ -198,6 +201,11 @@ export class InboundProcessor extends WorkerHost {
       if (isApprovalPayload(payload)) {
         await say(await this.decideByButton(contact, payload, lang, m.providerMessageId));
         handled++;
+      } else if (payload.startsWith('ntf:') && payload.endsWith(`:${OPT_OUT_BUTTON}`)) {
+        // A marketing template's opt-out: no more offers, whichever template carried it.
+        await this.setConsent(contact, 'marketing', false, 'button');
+        await say(t(lang, 'channel.stoppedOffers'));
+        handled++;
       } else if (payload.startsWith('ntf:')) {
         const reply = await this.notify.tapped(contact.id, payload, m.replyTo);
         await say(reply ? reply[lang] : t(lang, 'said.failed'));
@@ -209,10 +217,25 @@ export class InboundProcessor extends WorkerHost {
       return;
     }
 
-    // Keywords are handled by code, never by the agent: one message that is exactly one.
-    const keyword = burst.length === 1 ? keywordOf(text) : undefined;
-    if (keyword) {
-      await this.keyword(keyword, contact, lang, say, business.settings, text);
+    // Keywords are handled by code, never by the agent: any message in the burst that is
+    // exactly one (STOP sent right after "ok" still stops). The rest of the burst goes on.
+    const keywordOfMessage = (m: InboundMessage) => {
+      const words = wordsOf(m);
+      return words ? keywordOf(words) : undefined;
+    };
+    const keywords = burst.flatMap((m) => {
+      const keyword = keywordOfMessage(m);
+      return keyword ? [{ keyword, words: wordsOf(m) ?? '' }] : [];
+    });
+    for (const { keyword, words } of keywords)
+      await this.keyword(keyword, contact, lang, say, business.settings, words);
+    const rest = burst
+      .filter((m) => !keywordOfMessage(m))
+      .flatMap((m) => wordsOf(m) ?? [])
+      .join('\n')
+      .trim();
+    // Nothing else said, or they asked for their data to go: no turn for the assistant.
+    if (keywords.length && (!rest || keywords.some((k) => k.keyword === 'delete_my_data'))) {
       await this.done(pending.map((e) => e.id));
       return;
     }
@@ -220,11 +243,11 @@ export class InboundProcessor extends WorkerHost {
     // Staff have this conversation: save the message for them; the assistant stays silent.
     const handoff = await this.handoffs.activeFor(contact.id);
     if (handoff) {
-      if (text)
+      if (rest)
         await this.threads.append({
           threadId: handoff.threadId,
           role: 'user',
-          text,
+          text: rest,
           channel: 'whatsapp',
           lang,
         });
@@ -232,7 +255,7 @@ export class InboundProcessor extends WorkerHost {
       return;
     }
 
-    if (text) await this.converse(contact, text, lang, target);
+    if (rest) await this.converse(contact, rest, lang, target);
     await this.done(pending.map((e) => e.id));
   }
 
@@ -245,19 +268,8 @@ export class InboundProcessor extends WorkerHost {
     settings: { grievanceContact: string; replyTime: string },
     text: string,
   ) {
-    const consent = async (topic: 'reminders' | 'marketing', granted: boolean) => {
-      await this.contacts.setConsent(contact.id, topic, granted, 'keyword');
-      await writeAudit(this.db, {
-        action: 'channel.consent.changed',
-        resourceType: 'contact',
-        resourceId: contact.id,
-        actorKind: 'contact',
-        actorId: contact.id,
-        tenantId: contact.tenantId,
-        channel: 'whatsapp',
-        after: { topic, granted, source: 'keyword' },
-      });
-    };
+    const consent = (topic: 'reminders' | 'marketing', granted: boolean) =>
+      this.setConsent(contact, topic, granted, 'keyword');
     switch (keyword) {
       case 'stop':
         await consent('reminders', false);
@@ -291,7 +303,11 @@ export class InboundProcessor extends WorkerHost {
       }
       case 'delete_my_data':
         // The worker confirms by message, then erases; nothing waits for it here.
-        await this.maintenance.add('erase', { kind: 'erase', contactId: contact.id });
+        await this.maintenance.add(
+          'erase',
+          { kind: 'erase', contactId: contact.id },
+          { attempts: 5, backoff: { type: 'exponential', delay: 5000 } },
+        );
         return;
       case 'link_account':
         return say(t(lang, 'channel.linkAccount', { url: `${config.appUrl}/?connect=whatsapp` }));
@@ -413,6 +429,26 @@ export class InboundProcessor extends WorkerHost {
       return written;
     }
     return langOf(contact.locale);
+  }
+
+  /** A consent change, recorded and audited (the table is append-only). */
+  private async setConsent(
+    contact: Contact,
+    topic: 'reminders' | 'marketing',
+    granted: boolean,
+    source: 'keyword' | 'button',
+  ) {
+    await this.contacts.setConsent(contact.id, topic, granted, source);
+    await writeAudit(this.db, {
+      action: 'channel.consent.changed',
+      resourceType: 'contact',
+      resourceId: contact.id,
+      actorKind: 'contact',
+      actorId: contact.id,
+      tenantId: contact.tenantId,
+      channel: 'whatsapp',
+      after: { topic, granted, source },
+    });
   }
 
   /** A voice note's words, or undefined when it can't be heard (said so, not retried). */

@@ -2,7 +2,9 @@ import type { Principal } from '@app/contracts';
 import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@app/core';
 import { type Database, schema } from '@app/db';
 import {
+  BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   ForbiddenException,
@@ -108,8 +110,13 @@ export class WhatsAppLinkController {
   async claim(@CurrentPrincipal() p: Principal, @Body() body: NumberDto) {
     if (!(p.roles ?? []).some((r) => r === 'owner' || r === 'admin'))
       throw new ForbiddenException('Only an owner or admin can set the business number');
-    const phoneNumberId = body.phoneNumberId ?? config.whatsapp.phoneNumberId;
-    await this.contacts.claimNumber(phoneNumberId, p.tenantId ?? '', body.displayName);
+    // The configured number is a development convenience; production names the number.
+    const phoneNumberId =
+      body.phoneNumberId ??
+      (process.env.NODE_ENV === 'production' ? undefined : config.whatsapp.phoneNumberId);
+    if (!phoneNumberId) throw new BadRequestException('Name the phoneNumberId to claim');
+    if (!(await this.contacts.claimNumber(phoneNumberId, p.tenantId ?? '', body.displayName)))
+      throw new ConflictException('That number belongs to another business');
     return { phoneNumberId };
   }
 }

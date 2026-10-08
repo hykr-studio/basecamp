@@ -1178,6 +1178,7 @@ Run everything with `pnpm dev`. It starts the API with the queue worker, the app
    ```bash
    api $API/api/channels/whatsapp/number -d '{}'   # uses WA_PHONE_NUMBER_ID from .env
    ```
+   A number belongs to the first business that claims it, and is never moved to another: a second business gets 409. In development, `{}` claims `WA_PHONE_NUMBER_ID`; in production you must name the `phoneNumberId`. If another local account already holds the dev number, free it with `delete from channel.numbers where phone_number_id = '<id>';`.
 3. **Write as a customer.** Open whaloc at http://localhost:8080, pick any customer number and send `book a site visit for Kitchen tiles at 12 Road No. 3, Banjara Hills`. You can also post the same inbound message the golden runner sends:
    ```bash
    curl -s http://localhost:8080/api/inbound -H content-type:application/json -d '{

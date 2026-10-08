@@ -263,6 +263,21 @@ describe('handoff', () => {
     ]);
   });
 
+  it("staff see a linked person's WhatsApp conversation, never their app chats", async () => {
+    const { address, contactId } = await customer('Ana herself');
+    await pool.query('update channel.contacts set user_id = $1, linked_at = now() where id = $2', [
+      ana.id,
+      contactId,
+    ]);
+    await ana.call('POST', '/api/chat/once', { message: 'my private app question' });
+    await say(address, 'talk to a person');
+    const handoff = await openHandoff(contactId);
+    const thread = (await ana.call('GET', `/api/backoffice/handoffs/${handoff.id}`)).body;
+    const texts = thread.messages.map((m: { text: string }) => m.text);
+    expect(texts).toContain('talk to a person');
+    expect(texts).not.toContain('my private app question');
+  });
+
   it('a handoff nobody takes for a day is flagged first in the inbox', async () => {
     const { address, contactId } = await customer('Neha');
     await say(address, 'talk to a person');

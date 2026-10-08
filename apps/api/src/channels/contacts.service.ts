@@ -37,12 +37,27 @@ export class ContactsService {
     return row?.id;
   }
 
-  /** Make this number the business's (moving it from any other). */
+  /**
+   * Make this number the business's. A number another business holds is never moved: whoever
+   * holds a number receives its customers' messages, so taking one over would hand them a
+   * stranger's conversations. Returns false when it belongs to another business.
+   */
   async claimNumber(phoneNumberId: string, tenantId: string, displayName?: string) {
-    await this.db
+    const [claimed] = await this.db
       .insert(numbers)
       .values({ phoneNumberId, tenantId, displayName })
-      .onConflictDoUpdate({ target: numbers.phoneNumberId, set: { tenantId, displayName } });
+      .onConflictDoNothing({ target: numbers.phoneNumberId })
+      .returning({ id: numbers.phoneNumberId });
+    if (claimed) return true;
+    const mine = and(eq(numbers.phoneNumberId, phoneNumberId), eq(numbers.tenantId, tenantId));
+    const [held] = displayName
+      ? await this.db
+          .update(numbers)
+          .set({ displayName })
+          .where(mine)
+          .returning({ id: numbers.phoneNumberId })
+      : await this.db.select({ id: numbers.phoneNumberId }).from(numbers).where(mine);
+    return !!held;
   }
 
   async byId(id: string): Promise<Contact | undefined> {

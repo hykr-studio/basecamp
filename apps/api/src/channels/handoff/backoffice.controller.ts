@@ -105,14 +105,7 @@ export class BackOfficeController {
     const { handoff, contact } = await this.load(p, id);
     return {
       ...(await this.item(handoff, contact)),
-      messages: (await this.threads.messages(handoff.threadId)).map((m) => ({
-        id: m.id,
-        role: m.role,
-        text: m.parts
-          .flatMap((part) => (part.type === 'text' ? [String(part.text ?? '')] : []))
-          .join('\n'),
-        at: m.metadata.createdAt,
-      })),
+      messages: await this.conversation(handoff.threadId),
     };
   }
 
@@ -188,7 +181,7 @@ export class BackOfficeController {
   async draft(@CurrentPrincipal() p: Principal, @Param('id') id: string) {
     staffOnly(p);
     const { handoff, contact } = await this.load(p, id);
-    const history = await this.threads.history(handoff.threadId, 20);
+    const history = (await this.conversation(handoff.threadId)).slice(-20);
     return { text: await this.chat.draft(p, history, langOf(contact.locale)) };
   }
 
@@ -255,6 +248,23 @@ export class BackOfficeController {
       after: { topic: input.topic, granted: input.granted, note: input.note ?? null },
     });
     return { topic: input.topic, granted: input.granted };
+  }
+
+  /**
+   * The WhatsApp side of the thread only. A linked person's thread is shared with their app
+   * and voice chats, which are theirs, not the business's to read.
+   */
+  private async conversation(threadId: string) {
+    return (await this.threads.messages(threadId))
+      .filter((m) => m.metadata.channel === 'whatsapp')
+      .map((m) => ({
+        id: m.id,
+        role: m.role,
+        text: m.parts
+          .flatMap((part) => (part.type === 'text' ? [String(part.text ?? '')] : []))
+          .join('\n'),
+        at: m.metadata.createdAt,
+      }));
   }
 
   private async load(p: Principal, id: string) {

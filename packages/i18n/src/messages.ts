@@ -50,6 +50,8 @@ const en = {
   'channel.stopped':
     "You won't get reminders or offers here any more. Send START to turn reminders back on.",
   'channel.stoppedReminders': 'Reminders are off. Send START to turn them back on.',
+  'channel.stoppedOffers':
+    "You won't get offers here any more. Reminders about your bookings still come.",
   'channel.started': 'Reminders are on again. Send STOP to turn them off.',
   'channel.handoff': 'Someone from the team will reply here, usually within {replyTime}.',
   'channel.notHeard':
@@ -112,6 +114,7 @@ const hi: Catalog = {
     "मैं आपके काम और मीटिंग जोड़ सकता हूँ, दिखा सकता हूँ और पूरे कर सकता हूँ। संदेश रोकने के लिए STOP, रिमाइंडर फिर से शुरू करने के लिए START, टीम से बात करने के लिए 'किसी इंसान से बात', या अपना डेटा हटाने के लिए 'मेरा डेटा हटाओ' भेजें। आपके डेटा के बारे में सवाल: {grievance}।",
   'channel.stopped': 'अब आपको यहाँ रिमाइंडर या ऑफ़र नहीं मिलेंगे। रिमाइंडर फिर से शुरू करने के लिए START भेजें।',
   'channel.stoppedReminders': 'रिमाइंडर बंद हैं। फिर से शुरू करने के लिए START भेजें।',
+  'channel.stoppedOffers': 'अब आपको यहाँ ऑफ़र नहीं मिलेंगे। आपकी बुकिंग के रिमाइंडर आते रहेंगे।',
   'channel.started': 'रिमाइंडर फिर से चालू हैं। बंद करने के लिए STOP भेजें।',
   'channel.handoff': 'टीम का कोई सदस्य यहाँ जवाब देगा, आम तौर पर {replyTime} के अंदर।',
   'channel.notHeard': 'माफ़ कीजिए, वह वॉइस नोट समझ नहीं आया। क्या आप लिखकर या फिर से भेज सकते हैं?',
@@ -170,6 +173,7 @@ const te: Catalog = {
     "నేను మీ పనులు, మీటింగ్‌లను జోడించగలను, చూపించగలను, పూర్తి చేయగలను. సందేశాలు ఆపడానికి STOP, రిమైండర్లు మళ్లీ ప్రారంభించడానికి START, టీమ్‌తో మాట్లాడటానికి 'మనిషితో మాట్లాడాలి', మీ డేటా తొలగించడానికి 'నా డేటా తొలగించు' పంపండి. మీ డేటా గురించి ప్రశ్నలు: {grievance}.",
   'channel.stopped': 'ఇకపై ఇక్కడ మీకు రిమైండర్లు లేదా ఆఫర్లు రావు. రిమైండర్లు మళ్లీ ప్రారంభించడానికి START పంపండి.',
   'channel.stoppedReminders': 'రిమైండర్లు ఆపివేయబడ్డాయి. మళ్లీ ప్రారంభించడానికి START పంపండి.',
+  'channel.stoppedOffers': 'ఇకపై మీకు ఇక్కడ ఆఫర్లు రావు. మీ బుకింగ్‌ల రిమైండర్లు వస్తూనే ఉంటాయి.',
   'channel.started': 'రిమైండర్లు మళ్లీ ప్రారంభమయ్యాయి. ఆపడానికి STOP పంపండి.',
   'channel.handoff': 'టీమ్‌లో ఎవరైనా ఇక్కడ సమాధానం ఇస్తారు, సాధారణంగా {replyTime} లోపు.',
   'channel.notHeard': 'క్షమించండి, ఆ వాయిస్ నోట్ అర్థం కాలేదు. టైప్ చేసి లేదా మళ్లీ పంపగలరా?',

@@ -3,7 +3,17 @@
 import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { addMember, boot, eventually, me, Person, pool, server, shutdown } from '../support.js';
+import {
+  addMember,
+  asAssistant,
+  boot,
+  eventually,
+  me,
+  Person,
+  pool,
+  server,
+  shutdown,
+} from '../support.js';
 
 /** A stand-in for the Cloud API: records what the adapter sends. */
 type Sent = {
@@ -201,6 +211,49 @@ describe('whatsapp', () => {
     expect(taken.status).toBe(409);
   });
 
+  it("a number another business holds can't be taken over", async () => {
+    const mallory = new Person('Mallory WhatsApp');
+    await mallory.signUp();
+    const grab = await mallory.call('POST', '/api/channels/whatsapp/number', {
+      phoneNumberId: NUMBER,
+    });
+    expect(grab.status).toBe(409);
+    // The business that holds it may claim it again (a new display name).
+    expect(
+      (await ana.call('POST', '/api/channels/whatsapp/number', { phoneNumberId: NUMBER })).status,
+    ).toBe(201);
+  });
+
+  it('guesses at a code spend its attempts, even all at once', async () => {
+    const other = `9197${String(Date.now()).slice(-8)}`;
+    await ana.call('POST', '/api/channels/whatsapp/code', { phone: `+${other}` });
+    const sent = await eventually(() =>
+      to(other).find((s) => s.body.template?.name === 'login_code_v1'),
+    );
+    const code = sent.body.template?.components[0].parameters[0].text ?? '';
+    const wrong = code === '000000' ? '111111' : '000000';
+    const guesses = await Promise.all(
+      Array.from({ length: 12 }, () =>
+        ana.call('POST', '/api/channels/whatsapp/verify', { phone: other, code: wrong }),
+      ),
+    );
+    expect(guesses.every((g) => g.status === 400)).toBe(true);
+    // Five guesses were allowed; the right code now comes too late.
+    const late = await ana.call('POST', '/api/channels/whatsapp/verify', { phone: other, code });
+    expect(late.status).toBe(400);
+
+    // Codes to one number are limited whoever asks: four more from another account, then no.
+    const eve = new Person('Eve WhatsApp');
+    await eve.signUp();
+    for (let i = 0; i < 4; i++)
+      expect(
+        (await eve.call('POST', '/api/channels/whatsapp/code', { phone: `+${other}` })).status,
+      ).toBe(201);
+    expect(
+      (await eve.call('POST', '/api/channels/whatsapp/code', { phone: `+${other}` })).status,
+    ).toBe(429);
+  });
+
   describe('keywords, handled by code before the agent', () => {
     const customer = `1556${String(Date.now()).slice(-7)}`;
     const say = async (text: string) => {
@@ -269,8 +322,85 @@ describe('whatsapp', () => {
       expect(rows).toEqual([{ state: 'open', text: 'are you there?' }]);
     });
 
+    it('STOP still stops when it arrives right after another message', async () => {
+      const { id } = (await contactRow()) as { id: string };
+      await pool.query(
+        `insert into channel.consents (contact_id, topic, granted, source) values ($1, 'reminders', true, 'test')`,
+        [id],
+      );
+      // Two messages inside one burst: "ok", then STOP.
+      for (const text of ['ok', 'STOP']) {
+        const raw = delivery(customer, text);
+        await post(raw, sign(raw));
+      }
+      await eventually(async () => {
+        const { rows } = await pool.query(
+          `select granted from channel.consents where contact_id = $1 and topic = 'reminders'
+           order by at desc, id desc limit 1`,
+          [id],
+        );
+        return rows[0]?.granted === false ? true : undefined;
+      });
+    });
+
+    it('"Stop offers" on a marketing template turns offers off', async () => {
+      const { id } = (await contactRow()) as { id: string };
+      await pool.query(
+        `insert into channel.consents (contact_id, topic, granted, source) values ($1, 'marketing', true, 'test')`,
+        [id],
+      );
+      const before = to(customer).length;
+      const raw = JSON.stringify({
+        object: 'whatsapp_business_account',
+        entry: [
+          {
+            changes: [
+              {
+                field: 'messages',
+                value: {
+                  metadata: { phone_number_id: NUMBER },
+                  messages: [
+                    {
+                      from: customer,
+                      id: `m-optout-${Date.now()}`,
+                      timestamp: String(Math.floor(Date.now() / 1000)),
+                      type: 'button',
+                      button: {
+                        payload: 'ntf:template:monthly_update_v1:stop_offers',
+                        text: 'Stop offers',
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      });
+      await post(raw, sign(raw));
+      const [reply] = await eventually(() =>
+        to(customer).length > before ? to(customer).slice(before) : undefined,
+      );
+      expect(reply.body.text.body).toContain("won't get offers");
+      const { rows } = await pool.query(
+        `select granted, source from channel.consents where contact_id = $1 and topic = 'marketing'
+         order by at desc, id desc limit 1`,
+        [id],
+      );
+      expect(rows).toEqual([{ granted: false, source: 'button' }]);
+    });
+
     it('"delete my data": confirmed by message, then gone', async () => {
       const { id } = (await contactRow()) as { id: string };
+      // What erasure must also reach: a request it left waiting, and a code sent to the number.
+      const as = asAssistant(`contact:${id}`);
+      const todo = (await as('POST', '/api/todos', { title: 'Erase me too' })).body.value;
+      expect((await as('DELETE', `/api/todos/${todo.id}`)).body.status).toBe('needs_approval');
+      await pool.query(
+        `insert into channel.messages (tenant_id, channel, direction, kind, body, status)
+         values ($1, 'whatsapp', 'out', 'template', $2, 'sent')`,
+        [(await me(ana)).tenantId, { to: customer, name: 'login_code_v1' }],
+      );
       const before = to(customer).length;
       const raw = delivery(customer, 'delete my data');
       await post(raw, sign(raw));
@@ -284,10 +414,20 @@ describe('whatsapp', () => {
                 (select count(*)::int from channel.messages where contact_id = $1) as messages,
                 (select count(*)::int from app.threads where contact_id = $1) as threads,
                 (select count(*)::int from channel.inbound_events where "from" = $2) as events,
+                (select count(*)::int from app.approvals where requester_contact_id = $1) as approvals,
+                (select count(*)::int from channel.messages where contact_id is null and body->>'to' = $2) as sends,
                 (select count(*)::int from audit.events where action = 'channel.contact.erased' and resource_id = $1) as audited`,
         [id, customer],
       );
-      expect(left.rows[0]).toEqual({ consents: 0, messages: 0, threads: 0, events: 0, audited: 1 });
+      expect(left.rows[0]).toEqual({
+        consents: 0,
+        messages: 0,
+        threads: 0,
+        events: 0,
+        approvals: 0,
+        sends: 0,
+        audited: 1,
+      });
     });
   });
 });

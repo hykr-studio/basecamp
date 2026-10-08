@@ -88,3 +88,4 @@ docker-compose.override.yml
 
 # Agent worktrees (Claude Code)
 .claude/worktrees/
+.impeccable
