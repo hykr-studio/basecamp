@@ -208,7 +208,9 @@ curl http://localhost:3000/health     # {"ok":true}
 
 Things that will trip you up:
 
-- `pnpm dev` also starts the voice worker, which exits at startup if `VOICE_AGENT_KEY` is missing or short, or if `VOICE_MODE=live` has no `SARVAM_API_KEY` (`assertConfig()` in `apps/voice-worker/src/config.ts`). turbo then stops every dev task. `.env.example` ships `VOICE_AGENT_KEY=` empty and `VOICE_MODE=live`. Set `VOICE_AGENT_KEY` and `VOICE_MODE=fake`, or run `pnpm dev --continue`, or run `pnpm turbo run dev --filter=!@app/voice-worker`.
+- Everything in `pnpm dev` reloads on save. Each package runs `tsc -w` into its `dist/`; the API and queue worker restart under `node --watch`, the voice worker under `tsx watch`, and both Expo apps fast-refresh through Metro. An edit in `packages/*` reaches every app that imports it. `pnpm dev` passes `--concurrency=20` because it runs 14 persistent tasks and turbo's default is 10; pass it too when you run `pnpm turbo run dev` yourself.
+- `pnpm dev` also starts the voice worker, which exits at startup if `VOICE_AGENT_KEY` is missing or short, or if `VOICE_MODE=live` has no `SARVAM_API_KEY` (`assertConfig()` in `apps/voice-worker/src/config.ts`). `tsx watch` then waits for a file change before it starts the worker again. `.env.example` ships `VOICE_AGENT_KEY=` empty and `VOICE_MODE=live`. Set `VOICE_AGENT_KEY` and `VOICE_MODE=fake`, or run `pnpm dev --filter=!@app/voice-worker`.
+- Mobile web serves on 8081 and the back office on 8082. If something else holds either port, Expo cannot ask for another one under turbo, so that app exits.
 - With `MODEL_MODE=live` (the default in `.env.example`) and no `OPENROUTER_API_KEY`, chat answers 503 "Set OPENROUTER_API_KEY in .env to use the assistant".
 - There is no `infra:down` script. Use `docker compose down`.
 - `templates:sync` and `templates:check` run `apps/api/dist/channels/templates/cli.js`. Build first.
@@ -269,6 +271,8 @@ curl -b jar 'http://localhost:3000/api/todos?done=false&sort=-createdAt'
 curl -b jar -H 'content-type: application/json' -d '{}' \
   http://localhost:3000/api/channels/whatsapp/number
 ```
+
+A number belongs to the first business that claims it, and is never moved to another: a second business gets 409. In development, `{}` claims `WA_PHONE_NUMBER_ID`; in production you must name the `phoneNumberId`. If another local account already holds the dev number, free it with `delete from channel.numbers where phone_number_id = '<id>';`.
 
 Then open whaloc at http://localhost:8080 and write to the seeded number (+91 80 4000 0100) from a new phone number. You are a customer of the business now. Write `list`. The reply is the `todo.list` view's `text`, sent as WhatsApp words. You see only your customer's rows, which is none yet. To act as yourself on WhatsApp, link your number in the app (the app calls `POST /api/channels/whatsapp/code`, then `POST /api/channels/whatsapp/verify`).
 

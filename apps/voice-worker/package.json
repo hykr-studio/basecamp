@@ -16,7 +16,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "dev": "tsx --env-file=../../.env src/main.ts dev",
+    "dev": "tsx watch --clear-screen=false --env-file=../../.env src/main.ts dev",
     "start": "node --env-file=../../.env dist/main.js start"
   },
   "dependencies": {
