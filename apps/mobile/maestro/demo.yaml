@@ -3,11 +3,7 @@
 # Needs the API (MODEL_MODE=fake) and Metro running, and a user with the seed data.
 appId: dev.agenticstack.template
 ---
-- launchApp:
-    clearState: true
-- extendedWaitUntil:
-    visible: "Agentic Stack"
-    timeout: 90000
+- runFlow: open.yaml
 # The session lives in the Keychain, which survives clearing the app's data: sign out first.
 - runFlow:
     when:

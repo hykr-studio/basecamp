@@ -22,6 +22,7 @@
   "dependencies": {
     "@app/api-client": "workspace:*",
     "@app/contracts": "workspace:*",
+    "@app/i18n": "workspace:*",
     "@app/db": "workspace:*",
     "@app/policy": "workspace:*",
     "@app/ui-registry": "workspace:*",

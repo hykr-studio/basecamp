@@ -15,11 +15,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "studio": "node scripts/studio.mjs",
     "eval": "MODEL_MODE=fake tsx --env-file=../../.env evals/assistant.eval.ts",
-    "eval:live": "MODEL_MODE=live tsx --env-file=../../.env evals/assistant.eval.ts"
+    "eval:live": "MODEL_MODE=live tsx --env-file=../../.env evals/assistant.eval.ts",
+    "eval:voice": "MODEL_MODE=fake tsx --env-file=../../.env evals/voice.eval.ts",
+    "eval:voice:live": "MODEL_MODE=live tsx --env-file=../../.env evals/voice.eval.ts"
   },
   "dependencies": {
     "@app/api-client": "workspace:*",
     "@app/contracts": "workspace:*",
+    "@app/i18n": "workspace:*",
     "@app/core": "workspace:*",
     "@app/ui-registry": "workspace:*",
     "@mastra/core": "^1.74.0",

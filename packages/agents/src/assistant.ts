@@ -1,3 +1,5 @@
+import { drawsComponents, type Surface } from '@app/contracts';
+import { isLang, LANG_ENGLISH_NAMES } from '@app/i18n';
 import { Agent } from '@mastra/core/agent';
 import { PromptInjectionDetector, UnicodeNormalizer } from '@mastra/core/processors';
 import { agentDomain } from './domain/index.js';
@@ -5,7 +7,7 @@ import { fakeModel } from './fake/engine.js';
 import { platformScripts } from './fake/platform-scripts.js';
 import { listBeforeWrite, noRetryAfterRefusal } from './scorers.js';
 import { type Profile, toolsFor } from './tools/index.js';
-import { AGENT_ID, INSTRUCTIONS, isFakeModel, modelId } from './version.js';
+import { AGENT_ID, INSTRUCTIONS, isFakeModel, modelId, VOICE_RULES } from './version.js';
 
 /** Today's date and where the person is, from the chat endpoint's request context. */
 function instructions({ requestContext }: { requestContext?: { get(key: string): unknown } }) {
@@ -23,7 +25,19 @@ function instructions({ requestContext }: { requestContext?: { get(key: string):
   const surfaces = (requestContext?.get('surfaces') as string[] | undefined) ?? ['inline'];
   // The page on the canvas, so "only overdue" can patch the right block (ids and queries).
   const page = (requestContext?.get('canvas') as { page?: unknown } | undefined)?.page;
+  const lang = requestContext?.get('lang');
+  const spoken = surfaces.includes('speech') || requestContext?.get('channel') === 'voice';
+  const voiceRule = drawsComponents(surfaces as Surface[])
+    ? VOICE_RULES.screen
+    : VOICE_RULES.noScreen;
   return INSTRUCTIONS.replace('{date}', today)
+    .replace(
+      '{language}',
+      isLang(lang)
+        ? `Reply in ${LANG_ENGLISH_NAMES[lang]}.`
+        : 'Reply in the language the user writes in.',
+    )
+    .replace('{voice}', spoken ? voiceRule : '')
     .replace('{timeZone}', timeZone)
     .replace('{screen}', where)
     .replace('{surfaces}', surfaces.join(', '))

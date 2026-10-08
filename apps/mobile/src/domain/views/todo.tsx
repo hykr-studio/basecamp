@@ -33,10 +33,10 @@ function TodoLine({ todo, onToggle }: { todo: Todo; onToggle: () => void }) {
   );
 }
 
-export function TodoListComponent({ title, items, act }: ViewProps<typeof TodoListView>) {
+export function TodoListComponent({ title, items, act, words }: ViewProps<typeof TodoListView>) {
   return (
-    <ViewCard title={title ?? 'To-dos'} count={items.length}>
-      <Rows items={items} empty="No to-dos here.">
+    <ViewCard title={title ?? words.title} count={items.length}>
+      <Rows items={items} empty={words.empty}>
         {(t) => <TodoLine todo={t} onToggle={() => act('toggle', t)} />}
       </Rows>
     </ViewCard>

@@ -37,10 +37,10 @@ export function Rows<T>({
   children,
 }: {
   items: T[];
-  empty: string;
+  empty?: string;
   children: (item: T) => ReactNode;
 }) {
-  if (items.length === 0) return <Text variant="muted">{empty}</Text>;
+  if (items.length === 0) return empty ? <Text variant="muted">{empty}</Text> : null;
   return (
     <View>
       {items.map((item, i) => (

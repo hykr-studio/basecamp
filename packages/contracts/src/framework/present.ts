@@ -1,11 +1,12 @@
 import { z } from 'zod';
 
 /**
- * Where a chat turn can show things. The app sends inline + canvas (inline only on a phone
- * with the canvas closed); WhatsApp sends text; voice sends voice. The server uses the list
- * twice: to choose the agent's tools, and to resolve what a tool result shows.
+ * Where a turn can show things. The app sends inline + canvas; a voice session in the app adds
+ * speech (it says the short version and shows the rest); WhatsApp sends text; a call with no
+ * screen at all sends speech alone. The server uses the list twice: to choose the agent's
+ * tools, and to resolve what a tool result shows.
  */
-export const Surface = z.enum(['inline', 'canvas', 'text', 'voice']);
+export const Surface = z.enum(['inline', 'canvas', 'text', 'speech']);
 export type Surface = z.infer<typeof Surface>;
 export const Surfaces = z.array(Surface).min(1).max(4);
 

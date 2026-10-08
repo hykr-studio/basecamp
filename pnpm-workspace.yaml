@@ -4,6 +4,10 @@ packages:
 
 allowBuilds:
   esbuild: true
+  # The voice worker's VAD runs on onnxruntime-node's prebuilt binaries; neither package
+  # needs its install script (one downloads GPU builds, the other a local model we don't use).
+  onnxruntime-node: false
+  "@livekit/local-inference": false
 
 # @mastra/evals declares vitest <5 for its optional test helpers, which we don't use; the
 # repo runs vitest 5. Allowed explicitly rather than downgrading every package's tests.

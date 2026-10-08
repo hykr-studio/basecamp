@@ -3,7 +3,7 @@
 import { entitySpec, type PageSpec } from '@app/contracts';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { defineScreen, defineView } from './define-view.js';
+import { defineScreen, defineView, spokenList, type ViewLabels } from './define-view.js';
 import { createRegistry } from './registry.js';
 
 const Item = z.object({
@@ -25,14 +25,24 @@ const ItemSpec = entitySpec({
   },
 });
 
+const itemLabels = {
+  empty: { en: 'No items.', hi: 'कोई आइटम नहीं।', te: 'ఐటమ్‌లు లేవు.' },
+  noun: { en: ['item', 'items'], hi: ['आइटम', 'आइटम'], te: ['ఐటమ్', 'ఐటమ్‌లు'] },
+} satisfies ViewLabels;
 const ItemList = defineView({
   name: 'item.list',
   description: 'Items.',
-  surfaces: ['inline', 'canvas', 'text', 'voice'],
+  surfaces: ['inline', 'canvas', 'text', 'speech'],
   props: z.object({ title: z.string().optional(), items: z.array(Item) }),
   source: { entity: ItemSpec, into: 'items' },
+  labels: itemLabels,
   text: (p) => p.items.map((i) => `• ${i.title}`).join('\n'),
-  speak: (p) => `${p.items.length} items.`,
+  speak: (p, ctx) =>
+    spokenList(
+      p.items.map((i) => i.title),
+      itemLabels,
+      ctx,
+    ),
 });
 const ItemWeek = defineView({
   name: 'item.week',
@@ -163,6 +173,29 @@ describe('createRegistry', () => {
       'error',
     );
     expect(registry.getViewDef('item.list')).toBe(ItemList);
+  });
+
+  it('speaks a list in the turn’s language, from its labels', () => {
+    const items = ['Tiles', 'Grout'].map((title) => ({
+      id: title,
+      title,
+      done: false,
+      dueOn: null,
+    }));
+    expect(ItemList.speak({ items }, { timeZone: 'UTC', lang: 'en' })).toBe(
+      '2 items: Tiles, Grout.',
+    );
+    expect(ItemList.speak({ items }, { timeZone: 'UTC', lang: 'te' })).toBe(
+      '2 ఐటమ్‌లు: Tiles, Grout.',
+    );
+    expect(ItemList.speak({ items: [] }, { timeZone: 'UTC', lang: 'hi' })).toBe('कोई आइटम नहीं।');
+  });
+
+  it('refuses a spoken list without the words to speak it', () => {
+    const mute = defineView({ ...ItemList, name: 'item.mute', labels: {} });
+    expect(() => createRegistry({ views: [mute] as never, screens: [] })).toThrow(
+      /spoken list: give it labels.noun and labels.empty/,
+    );
   });
 
   it('refuses a collapse to a view it does not have', () => {

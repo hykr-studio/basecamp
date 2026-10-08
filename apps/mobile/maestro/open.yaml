@@ -1,0 +1,36 @@
+# Launch the dev build fresh and load the app from Metro. A development build (expo-dev-client)
+# starts on its server picker; the deep link takes it straight to the bundle.
+appId: dev.agenticstack.template
+---
+- launchApp:
+    clearState: true
+    permissions:
+      microphone: unset
+- openLink: "exp+meetings://expo-development-client/?url=${METRO_URL || 'http%3A%2F%2Flocalhost%3A8081'}"
+- tapOn:
+    text: "Open"
+    optional: true
+# A fresh install explains the developer menu, then opens it: continue, then close it.
+- extendedWaitUntil:
+    visible: "Continue"
+    timeout: 120000
+    optional: true
+- tapOn:
+    text: "Continue"
+    optional: true
+# The menu can open again as the bundle finishes loading: close it until it stays closed.
+- repeat:
+    times: 5
+    commands:
+      - extendedWaitUntil:
+          visible: "Go home"
+          timeout: 4000
+          optional: true
+      - tapOn:
+          text: "Close"
+          optional: true
+      - waitForAnimationToEnd
+# The app itself (the sign-in screen, or Today when a session survived), not the picker.
+- extendedWaitUntil:
+    visible: "(e.g. you@example.com|Today)"
+    timeout: 120000

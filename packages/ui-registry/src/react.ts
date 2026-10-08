@@ -1,10 +1,27 @@
+import { type Lang, pick } from '@app/i18n';
 import type { ComponentType } from 'react';
 import type { z } from 'zod';
 import type { ScreenDef, ViewDef } from './define-view.js';
 
-/** What a view's component gets: its props, plus act(name, item) for its declared actions. */
+/** A view's own words in the person's language: its default title and its empty line. */
+export type ViewWords = { title?: string; empty?: string };
+
+/** The renderer passes these, so a component never chooses a language itself. */
+export function wordsOf(view: ViewDef, lang: Lang): ViewWords {
+  const { title, empty } = view.labels;
+  return {
+    title: title ? pick(title, lang) : undefined,
+    empty: empty ? pick(empty, lang) : undefined,
+  };
+}
+
+/**
+ * What a view's component gets: its props, act(name, item) for its declared actions, and
+ * its words in the person's language.
+ */
 export type ViewProps<V extends ViewDef> = z.infer<V['props']> & {
   act: (action: keyof V['actions'] & string, item: unknown) => void;
+  words: ViewWords;
 };
 export type ScreenProps<S extends ScreenDef> = z.infer<S['params']>;
 

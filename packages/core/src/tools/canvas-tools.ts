@@ -15,7 +15,7 @@ async function intent(present: Present, ctx: ToolContext | undefined, kit: ToolK
   if ('error' in resolved) return { ok: false as const, error: { reason: resolved.error } };
   if (!resolved.present)
     return { ok: false as const, error: { reason: 'There is no canvas on this screen' } };
-  return { ok: true as const, result: { shown: true }, present: resolved.present };
+  return { ok: true as const, result: { shown: true }, ...resolved };
 }
 
 export function canvasTools(kit: ToolKit) {

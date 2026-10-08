@@ -48,6 +48,15 @@ export const MeetingSpec = entitySpec({
   description:
     'Meetings: title, start and end (ISO date-times), attendees, and a status (scheduled → held → closed). Close one with close-meeting, move one with reschedule-meeting.',
   schemas: { read: MeetingView, create: CreateMeetingInput, update: UpdateMeetingInput },
+  // What people call each field, in every language (approval cards, history, voice).
+  fieldLabels: {
+    title: { en: 'Title', hi: 'शीर्षक', te: 'శీర్షిక' },
+    startsAt: { en: 'Starts', hi: 'शुरू', te: 'ప్రారంభం' },
+    endsAt: { en: 'Ends', hi: 'खत्म', te: 'ముగింపు' },
+    attendees: { en: 'Attendees', hi: 'शामिल लोग', te: 'హాజరయ్యేవారు' },
+    status: { en: 'Status', hi: 'स्थिति', te: 'స్థితి' },
+    createdBy: { en: 'Created by', hi: 'किसने बनाया', te: 'ఎవరు సృష్టించారు' },
+  },
   list: {
     filterable: { status: 'enum', startsAt: 'date', title: 'text' },
     sortable: ['startsAt', 'createdAt'],

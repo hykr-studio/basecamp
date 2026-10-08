@@ -1,0 +1,2 @@
+ALTER TABLE "app"."thread_messages" ADD COLUMN "seq" bigserial NOT NULL;--> statement-breakpoint
+CREATE INDEX "thread_messages_thread_seq_idx" ON "app"."thread_messages" USING btree ("thread_id","seq");

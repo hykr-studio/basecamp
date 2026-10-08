@@ -1,9 +1,10 @@
 import type { ViewQuery } from '@app/contracts';
 import { registry, type ViewDef } from '@app/ui-registry';
-import { getView } from '@app/ui-registry/react';
+import { getView, wordsOf } from '@app/ui-registry/react';
 import { ActivityIndicator, View } from 'react-native';
 import { Text } from '@/components/ui/text';
 import { type EntityName, errorMessage, useEntity, useEntityList } from '../framework/hooks';
+import { useLang } from '../framework/lang';
 import { colors } from '../theme';
 import { useAct } from './useAct';
 
@@ -26,8 +27,11 @@ function ByQuery({ def, query, props }: { def: ViewDef; query?: ViewQuery; props
   const list = useEntityList(source.entity.plural as EntityName, query ?? {});
   const Component = getView(def.name);
   const act = useAct(def.name);
+  const words = wordsOf(def, useLang().lang);
   if (list.loading || list.error) return <Status loading={list.loading} error={list.error} />;
-  return Component ? <Component {...props} {...{ [source.into]: list.items }} act={act} /> : null;
+  return Component ? (
+    <Component {...props} {...{ [source.into]: list.items }} act={act} words={words} />
+  ) : null;
 }
 
 /** One record by id. */
@@ -36,15 +40,19 @@ function ById({ def, props }: { def: ViewDef; props?: Record<string, unknown> })
   const one = useEntity(source.entity.plural as EntityName, props?.id as string | undefined);
   const Component = getView(def.name);
   const act = useAct(def.name);
+  const words = wordsOf(def, useLang().lang);
   if (!one.data) return <Status loading={one.isLoading} error={one.error} />;
-  return Component ? <Component {...props} {...{ [source.into]: one.data }} act={act} /> : null;
+  return Component ? (
+    <Component {...props} {...{ [source.into]: one.data }} act={act} words={words} />
+  ) : null;
 }
 
 /** Props only (kpi.row, approval.card): the intent carried everything. */
 function ByProps({ def, props }: { def: ViewDef; props?: object }) {
   const Component = getView(def.name);
   const act = useAct(def.name);
-  return Component ? <Component {...props} act={act} /> : null;
+  const words = wordsOf(def, useLang().lang);
+  return Component ? <Component {...props} act={act} words={words} /> : null;
 }
 
 /**

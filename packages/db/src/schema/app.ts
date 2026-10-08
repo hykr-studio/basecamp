@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigserial,
   index,
   jsonb,
   pgSchema,
@@ -91,7 +92,8 @@ export const channelLinks = app.table(
     ownerId: text('owner_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
-    channel: text('channel', { enum: ['whatsapp'] }).notNull(),
+    /** voice: reserved for phone voice (a number calling in); the app's voice needs no link. */
+    channel: text('channel', { enum: ['whatsapp', 'voice'] }).notNull(),
     /** The channel's own id for the person: a WhatsApp wa_id (digits only). */
     address: text('address').notNull(),
     /** The person's IANA zone, from the app when they linked: times in replies read as theirs. */
@@ -101,5 +103,53 @@ export const channelLinks = app.table(
   (table) => [
     uniqueIndex('channel_links_address_idx').on(table.channel, table.address),
     uniqueIndex('channel_links_owner_idx').on(table.channel, table.ownerId),
+  ],
+);
+
+/** A conversation the server keeps for one person: typed, spoken and WhatsApp turns. */
+export const threads = app.table(
+  'threads',
+  {
+    id: id(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    title: text('title'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [index('threads_owner_updated_idx').on(table.ownerId, table.updatedAt)],
+);
+
+/**
+ * One saved message: what the person said (or typed), or the assistant's reply with its tool
+ * calls and their present intents, so the app renders history exactly as it streamed.
+ */
+export const threadMessages = app.table(
+  'thread_messages',
+  {
+    id: id(),
+    threadId: text('thread_id')
+      .notNull()
+      .references(() => threads.id, { onDelete: 'cascade' }),
+    role: text('role', { enum: ['user', 'assistant'] }).notNull(),
+    text: text('text').notNull().default(''),
+    /** UI message parts after the text: tool calls with their inputs and outputs. */
+    parts: jsonb('parts').notNull().default([]),
+    channel: text('channel', { enum: ['app', 'voice', 'whatsapp'] })
+      .notNull()
+      .default('app'),
+    lang: text('lang', { enum: ['en', 'hi', 'te'] }),
+    runId: text('run_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    /** Insertion order: two messages in the same millisecond still read in the order saved. */
+    seq: bigserial('seq', { mode: 'number' }).notNull(),
+  },
+  (table) => [
+    index('thread_messages_thread_created_idx').on(table.threadId, table.createdAt),
+    index('thread_messages_thread_seq_idx').on(table.threadId, table.seq),
   ],
 );

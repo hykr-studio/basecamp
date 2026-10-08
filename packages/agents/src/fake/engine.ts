@@ -5,6 +5,7 @@ import type {
   LanguageModelV2Prompt,
   LanguageModelV2StreamPart,
 } from '@ai-sdk/provider';
+import { LANG_ENGLISH_NAMES, LANGS, type Labels, type Lang, pick, scriptOf, t } from '@app/i18n';
 
 /**
  * A scripted model for tests and CI: the real agent loop, no network, no cost. The engine
@@ -13,7 +14,14 @@ import type {
  * The domain brings its own scripts (src/domain); the framework's live in platform-scripts.
  */
 export type Row = Record<string, unknown> & { id: string; title: string };
-export type Outcome = { ok: boolean; result?: unknown; status?: number; error?: unknown };
+/** A tool's result as the model sees it; `speech` on a spoken turn (see core present.ts). */
+export type Outcome = {
+  ok: boolean;
+  result?: unknown;
+  status?: number;
+  error?: unknown;
+  speech?: string;
+};
 export type Step = { toolName: string; outcome: Outcome };
 export type CanvasPage = {
   title: string;
@@ -32,6 +40,10 @@ export type Turn = {
   today: string;
   surfaces: string[];
   canvas?: CanvasPage;
+  /** The language to answer in: as the instructions pin it, or the script the person wrote in. */
+  lang: Lang;
+  /** A voice turn: say the gist, the screen shows the rest. */
+  spoken: boolean;
 };
 
 /** One thing the scripted model knows how to do. The first script that matches runs. */
@@ -52,6 +64,14 @@ export const call = (toolName: string, args: unknown): LanguageModelV2Content =>
   input: JSON.stringify(args),
 });
 export const say = (value: string): LanguageModelV2Content => ({ type: 'text', text: value });
+/** A reply in the turn's language. */
+export const sayIn = (turn: Pick<Turn, 'lang'>, words: Labels): LanguageModelV2Content =>
+  say(pick(words, turn.lang));
+/**
+ * Verbs in any of the product's languages, as one alternation: `^(?:add|जोड़ो)`. Text is
+ * compared in NFC (the agent's input processor normalizes Unicode), so the verbs are too.
+ */
+export const verbs = (...words: string[]) => words.map((w) => w.normalize('NFC')).join('|');
 
 export const items = (o?: Outcome) =>
   ((o?.result as { items?: Row[] } | undefined)?.items ?? []) as Row[];
@@ -75,10 +95,26 @@ export function startOfDay(day: string, zone: string): Date {
   return new Date(utc.getTime() - (wall(utc, zone) - wall(utc, 'UTC')));
 }
 
-/** What a finished write says: done, or what is waiting for approval. */
-export function written(o: Outcome, done: (value: Row) => string): string {
+/**
+ * What a finished write says: done, or what is waiting for approval. Spoken, or in another
+ * language, the waiting line is the framework's short one: the card on screen has the detail.
+ */
+export function written(
+  o: Outcome,
+  done: (value: Row) => string,
+  turn?: Pick<Turn, 'lang' | 'spoken' | 'surfaces'>,
+): string {
   const r = o.result as { status: string; value?: Row; approval?: { summary: string | null } };
   if (r.status === 'needs_approval') {
+    if (turn && (turn.spoken || turn.lang !== 'en')) {
+      // "It's on screen" only where there is one; otherwise where to approve it.
+      const screen = turn.surfaces.some((s) => s === 'inline' || s === 'canvas');
+      return screen
+        ? t(turn.lang, 'said.needsApproval')
+        : t(turn.lang, 'said.waitingApproval', {
+            summary: r.approval?.summary ?? t(turn.lang, 'said.aChange'),
+          });
+    }
     return `I've asked for your approval: ${r.approval?.summary ?? 'see Approvals'}. Nothing changes until you approve it.`;
   }
   return done(r.value as Row);
@@ -121,12 +157,19 @@ function stepsThisTurn(prompt: LanguageModelV2Prompt): Step[] {
   return steps;
 }
 
+/** "Reply in Telugu." → 'te': the instruction line as assistant.ts writes it, from one list. */
+const PINNED = new Map<string, Lang>(LANGS.map((l) => [LANG_ENGLISH_NAMES[l], l]));
+const PIN_LINE = new RegExp(`^Reply in (${[...PINNED.keys()].join('|')})\\.`, 'm');
+
 function turnOf(prompt: LanguageModelV2Prompt): Turn {
   const steps = stepsThisTurn(prompt);
   // As the instructions state them (see INSTRUCTIONS in version.ts).
   const zone = fromSystem(prompt, /time zone is ([A-Za-z0-9_+\-/]+)/, (m) => m[1]) ?? 'UTC';
+  const text = lastUserText(prompt).normalize('NFC');
   return {
-    text: lastUserText(prompt),
+    text,
+    lang: fromSystem(prompt, PIN_LINE, (m) => PINNED.get(m[1])) ?? scriptOf(text) ?? 'en',
+    spoken: fromSystem(prompt, /This turn is spoken/, () => true) ?? false,
     steps,
     result: (tool) => steps.find((s) => s.toolName === tool)?.outcome,
     zone,
@@ -156,7 +199,8 @@ export function runScripts(
 ): LanguageModelV2Content[] {
   const turn = turnOf(prompt);
   const last = turn.steps.at(-1);
-  if (last && !last.outcome.ok) return [say(`I couldn't do that: ${why(last.outcome)}.`)];
+  if (last && !last.outcome.ok)
+    return [say(t(turn.lang, 'said.couldNot', { reason: why(last.outcome) }))];
   for (const script of scripts) {
     const intent = script.match(turn.text);
     if (intent !== undefined) return script.step(intent, turn);

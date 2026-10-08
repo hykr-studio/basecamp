@@ -4,10 +4,10 @@ import { Text } from '@/components/ui/text';
 import { Markdown } from '../../framework/Markdown';
 import { ByAssistant, OpenRow, Rows, ViewCard } from '../../views/parts';
 
-export function NoteListComponent({ title, items, act }: ViewProps<typeof NoteListView>) {
+export function NoteListComponent({ title, items, act, words }: ViewProps<typeof NoteListView>) {
   return (
-    <ViewCard title={title ?? 'Notes'} count={items.length}>
-      <Rows items={items} empty="No notes here.">
+    <ViewCard title={title ?? words.title} count={items.length}>
+      <Rows items={items} empty={words.empty}>
         {(n) => (
           <OpenRow label={`Open note ${n.title}`} onPress={() => act('open', n)}>
             <Text className="font-semibold">{n.title}</Text>

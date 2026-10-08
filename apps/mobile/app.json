@@ -8,7 +8,11 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "dev.agenticstack.template"
+      "bundleIdentifier": "dev.agenticstack.template",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Talk to the assistant hands-free.",
+        "UIBackgroundModes": ["audio"]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -18,14 +22,21 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "dev.agenticstack.template"
+      "package": "dev.agenticstack.template",
+      "permissions": ["android.permission.RECORD_AUDIO", "android.permission.MODIFY_AUDIO_SETTINGS"]
     },
     "web": {
       "favicon": "./assets/favicon.png",
       "output": "single",
       "bundler": "metro"
     },
-    "plugins": ["expo-router", "expo-secure-store", "expo-sqlite"],
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-sqlite",
+      "@livekit/react-native-expo-plugin",
+      "@config-plugins/react-native-webrtc"
+    ],
     "scheme": "agenticstack"
   }
 }

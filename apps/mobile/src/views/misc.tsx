@@ -79,10 +79,10 @@ export function KpiRowComponent({ items }: ViewProps<typeof KpiRowView>) {
 }
 
 /** The person's saved pages (page.list); each opens beside the chat. */
-export function PageListComponent({ title, items, act }: ViewProps<typeof PageListView>) {
+export function PageListComponent({ title, items, act, words }: ViewProps<typeof PageListView>) {
   return (
-    <ViewCard title={title ?? 'Pages'} count={items.length}>
-      <Rows items={items} empty="No saved pages yet.">
+    <ViewCard title={title ?? words.title} count={items.length}>
+      <Rows items={items} empty={words.empty}>
         {(p) => (
           <OpenRow label={`Open ${p.name}`} onPress={() => act('open', p)}>
             <Text className="font-semibold">{p.name}</Text>

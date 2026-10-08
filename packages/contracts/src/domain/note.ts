@@ -40,6 +40,13 @@ export const NoteSpec = entitySpec({
   description:
     'Markdown notes, optionally linked to a meeting (a closed meeting has a summary note).',
   schemas: { read: NoteView, create: CreateNoteInput, update: UpdateNoteInput },
+  // What people call each field, in every language (approval cards, history, voice).
+  fieldLabels: {
+    title: { en: 'Title', hi: 'शीर्षक', te: 'శీర్షిక' },
+    body: { en: 'Note', hi: 'नोट', te: 'నోట్' },
+    meetingId: { en: 'Meeting', hi: 'मीटिंग', te: 'మీటింగ్' },
+    createdBy: { en: 'Created by', hi: 'किसने बनाया', te: 'ఎవరు సృష్టించారు' },
+  },
   list: {
     filterable: { meetingId: 'id', createdAt: 'date', title: 'text' },
     sortable: ['createdAt', 'updatedAt', 'title'],

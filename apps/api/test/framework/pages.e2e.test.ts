@@ -81,7 +81,28 @@ describe('present intents by surface', () => {
   });
 
   it('voice: the short form', async () => {
-    const res = await ana.chat('open my Focus board page', undefined, ['voice']);
+    const res = await ana.chat('open my Focus board page', undefined, ['speech']);
     expect(res.body.toolCalls[0].present.text).toBe('1 saved page: Focus board.');
+  });
+});
+
+describe('spoken turns with a screen', () => {
+  const SPOKEN = ['inline', 'canvas', 'speech'];
+  it('the screen shows the view, and the model gets the short form in the turn’s language', async () => {
+    const res = await ana.call('POST', '/api/chat/once', {
+      message: 'open my Focus board page',
+      surfaces: SPOKEN,
+      lang: 'te',
+    });
+    const [list, open] = res.body.toolCalls;
+    expect(list.present).toMatchObject({ kind: 'inline', view: 'page.list' });
+    expect(list.speech).toBe('1 సేవ్ చేసిన పేజీ: Focus board.');
+    expect(open.present).toMatchObject({ kind: 'open', screen: 'page.view' });
+    expect(open.speech).toBe('నేను దీన్ని స్క్రీన్‌పై చూపించాను.');
+  });
+
+  it('without speech, nothing extra is said', async () => {
+    const res = await ana.chat('open my Focus board page', undefined, APP);
+    expect(res.body.toolCalls[0].speech).toBeUndefined();
   });
 });

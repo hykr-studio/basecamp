@@ -3,7 +3,13 @@ import { PinoLogger } from '@mastra/loggers';
 import { MastraStorageExporter, Observability, SensitiveDataFilter } from '@mastra/observability';
 import { PostgresStoreVNext } from '@mastra/pg';
 import { createAssistant } from '../assistant.js';
-import { expectedOutcome, listBeforeWrite, noRetryAfterRefusal } from '../scorers.js';
+import {
+  briefForVoice,
+  expectedOutcome,
+  listBeforeWrite,
+  noRetryAfterRefusal,
+  repliesInLanguage,
+} from '../scorers.js';
 
 /**
  * The one Mastra instance. Studio talks to it through scripts/studio-server.ts, and the
@@ -21,7 +27,13 @@ export const mastra = new Mastra({
     assistantText: createAssistant('text'),
   },
   // Registered so their results are saved and shown in Studio.
-  scorers: { listBeforeWrite, noRetryAfterRefusal, expectedOutcome },
+  scorers: {
+    listBeforeWrite,
+    noRetryAfterRefusal,
+    expectedOutcome,
+    repliesInLanguage,
+    briefForVoice,
+  },
   // Agent state in `mastra`; traces, logs, metrics and scores in `mastra_obs`, on their
   // own connection pool. Drizzle's schemaFilter leaves both schemas to Mastra.
   storage: new PostgresStoreVNext({

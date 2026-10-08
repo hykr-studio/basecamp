@@ -1,10 +1,11 @@
 import { AGENT_ID } from '@app/agents';
+import { VOICE_AGENT_ID } from '@app/contracts';
 import { CoreModule } from '@app/core';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { Module } from '@nestjs/common';
 import { APP_GUARD, APP_PIPE } from '@nestjs/core';
 import { CqrsModule } from '@nestjs/cqrs';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from '@thallesp/nestjs-better-auth';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { config } from './config.js';
@@ -13,9 +14,11 @@ import { HealthController } from './health/health.controller.js';
 import { auth } from './infra/auth.js';
 import { sharedDb } from './infra/db.js';
 import { DbModule } from './infra/db.module.js';
+import { CallerThrottlerGuard } from './infra/throttle.js';
 import { ChatModule } from './modules/chat/chat.module.js';
 import { HistoryController } from './modules/history/history.controller.js';
 import { PagesModule } from './modules/pages/pages.module.js';
+import { VoiceModule } from './modules/voice/voice.module.js';
 import { WhatsappModule } from './modules/whatsapp/whatsapp.module.js';
 
 @Module({
@@ -37,7 +40,15 @@ import { WhatsappModule } from './modules/whatsapp/whatsapp.module.js';
     }),
     // The framework: CQRS buses, principal guards, approvals (park and replay).
     CqrsModule.forRoot(),
-    CoreModule.forRoot({ db: sharedDb.db, agentApiKey: config.agentApiKey, agentId: AGENT_ID }),
+    CoreModule.forRoot({
+      db: sharedDb.db,
+      agents: [
+        // The assistant: acts through tools; forwards the turn's channel.
+        { id: AGENT_ID, key: config.agentApiKey },
+        // The voice worker: a relay that starts turns for the person it acts for.
+        { id: VOICE_AGENT_ID, key: config.voiceAgentKey, relay: true, channel: 'voice' },
+      ],
+    }),
     // Business modules: declarations only.
     // The domain (src/domain): its entities and commands.
     DomainModule,
@@ -46,10 +57,11 @@ import { WhatsappModule } from './modules/whatsapp/whatsapp.module.js';
     // The assistant, in the app and on WhatsApp.
     ChatModule,
     WhatsappModule,
+    VoiceModule,
   ],
   controllers: [HealthController, HistoryController],
   providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: CallerThrottlerGuard },
     { provide: APP_PIPE, useClass: ZodValidationPipe },
   ],
 })

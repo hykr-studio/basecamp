@@ -43,4 +43,12 @@ services:
       WHALOC_WEBHOOK_VERIFY_TOKEN: dev-verify-token
     ports: ["8080:8080"]
     extra_hosts: ["host.docker.internal:host-gateway"] # lets it reach the API on your Mac (and on Linux CI)
+  # Voice: the WebRTC media server the app and the voice worker meet in. Dev mode uses the
+  # devkey/secret pair; --bind 0.0.0.0 so the host can reach it, and the node IP the app is
+  # told to send media to (127.0.0.1 for a simulator; your LAN IP for a phone).
+  livekit:
+    image: livekit/livekit-server:v1.13.8
+    command: --dev --bind 0.0.0.0 --node-ip ${LIVEKIT_NODE_IP:-127.0.0.1}
+    ports: ["7880:7880", "7881:7881", "7882:7882/udp"]
+    healthcheck: { test: ["CMD-SHELL", "wget -q -O- http://localhost:7880 || exit 1"], interval: 5s, retries: 20 }
 volumes: { pgdata: {}, miniodata: {} }

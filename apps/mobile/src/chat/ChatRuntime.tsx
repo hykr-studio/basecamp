@@ -3,26 +3,54 @@ import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/ai-sdk';
 import { type AssistantRuntime, AssistantRuntimeProvider } from '@assistant-ui/react-native';
 import { useQueryClient } from '@tanstack/react-query';
 import type { UIMessage } from 'ai';
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef } from 'react';
-import { authHeaders, credentials } from '../api';
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { ActivityIndicator, View } from 'react-native';
+import { api, authHeaders, credentials } from '../api';
 import { currentPage, useCanvas } from '../canvas/store';
 import { API_URL } from '../config';
 import { useAssistant } from '../framework/assistant-context';
 import { timeZone } from '../framework/dates';
-import { storage } from '../framework/storage';
-import { touchedBy } from './touched';
+import { colors } from '../theme';
+import { VoiceProvider } from '../voice/VoiceProvider';
+import { refreshTouched } from './touched';
 
-const RuntimeContext = createContext<AssistantRuntime | null>(null);
+type Chat = {
+  runtime: AssistantRuntime;
+  clear: () => Promise<void>;
+  /** The thread turns go into (typed and spoken alike). */
+  threadId: () => string | undefined;
+};
+const ChatContext = createContext<Chat | null>(null);
 
-/** The assistant's runtime, for code outside assistant-ui's primitives (composer text, canvas). */
-export function useAssistantRuntime() {
-  const runtime = useContext(RuntimeContext);
-  if (!runtime) throw new Error('useAssistantRuntime outside ChatRuntime');
-  return runtime;
+function useChat() {
+  const chat = useContext(ChatContext);
+  if (!chat) throw new Error('useChat outside ChatRuntime');
+  return chat;
 }
 
-/** How many messages a reload keeps on this device. */
-const KEEP = 30;
+/** The assistant's runtime, for code outside assistant-ui's primitives (composer text, canvas). */
+export const useAssistantRuntime = () => useChat().runtime;
+
+/** Start a new conversation: the server keeps the old one, and the next turn goes to the new one. */
+export const useClearConversation = () => useChat().clear;
+
+export const useThreadId = () => useChat().threadId;
+
+/** Canvas intents already in the history were applied when they arrived: never again. */
+export function markApplied(messages: UIMessage[]) {
+  const { applied } = useCanvas.getState();
+  for (const m of messages)
+    for (const p of m.parts) if ('toolCallId' in p) applied.add(String(p.toolCallId));
+}
 
 /**
  * The app can always show things inline and on the canvas (beside the chat when wide, a
@@ -30,37 +58,62 @@ const KEEP = 30;
  */
 const SURFACES: Surface[] = ['inline', 'canvas'];
 
-/** Where a person's conversation is kept on this device (v2: AI SDK UI messages). */
-export const conversationKey = (userId: string) => `chat:v2:${userId}`;
+/** The text of a person's message: the server keeps the history, so a turn sends only this. */
+const textOf = (m: UIMessage | undefined) =>
+  (m?.parts ?? [])
+    .map((p) => (p.type === 'text' ? p.text : ''))
+    .join('')
+    .trim();
 
-/** A message the runtime can replay: anything else (an older format, a hand edit) is dropped. */
-const isUIMessage = (m: unknown): m is UIMessage =>
-  typeof m === 'object' &&
-  m !== null &&
-  typeof (m as UIMessage).id === 'string' &&
-  ((m as UIMessage).role === 'user' || (m as UIMessage).role === 'assistant') &&
-  Array.isArray((m as UIMessage).parts);
+type Loaded = { threadId?: string; messages: UIMessage[] };
 
-function load(key: string): UIMessage[] {
+/** The person's current conversation, from the server (empty if it cannot be reached). */
+async function loadCurrent(): Promise<Loaded> {
   try {
-    const saved: unknown = JSON.parse(storage.get(key) ?? '[]');
-    return Array.isArray(saved) ? saved.filter(isUIMessage) : [];
+    const thread = await api.threads.current();
+    const messages = (await api.threads.messages(thread.id)) as unknown as UIMessage[];
+    return { threadId: thread.id, messages };
   } catch {
-    return [];
+    // The next turn still lands in the current thread: the server finds it.
+    return { messages: [] };
   }
 }
 
 /**
  * The assistant's runtime: one per signed-in person, shared by the side panel, the phone
- * sheet and the canvas. It streams turns from /api/chat (the AI SDK UI message stream) and
- * keeps the recent conversation on this device.
+ * sheet and the canvas. The conversation lives on the server (typed, spoken and WhatsApp turns
+ * share it): this loads the current thread, then streams each turn from /api/chat (the AI SDK
+ * UI message stream), sending only the new message.
  */
-export function ChatRuntime({ storageKey, children }: { storageKey: string; children: ReactNode }) {
+export function ChatRuntime({ children }: { children: ReactNode }) {
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  useEffect(() => {
+    let live = true;
+    loadCurrent().then((l) => live && setLoaded(l));
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!loaded)
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.bg }}>
+        <ActivityIndicator
+          style={{ marginTop: 96 }}
+          color={colors.primary}
+          accessibilityLabel="Loading your conversation"
+        />
+      </View>
+    );
+  return <Runtime loaded={loaded}>{children}</Runtime>;
+}
+
+function Runtime({ loaded, children }: { loaded: Loaded; children: ReactNode }) {
   const assistant = useAssistant();
   const queryClient = useQueryClient();
   // Read per request, so each turn sends where the person is right now.
   const contextRef = useRef(assistant.context);
   contextRef.current = assistant.context;
+  const threadRef = useRef(loaded.threadId);
 
   const transport = useMemo(
     () =>
@@ -68,15 +121,12 @@ export function ChatRuntime({ storageKey, children }: { storageKey: string; chil
         api: `${API_URL}/api/chat`,
         credentials,
         headers: authHeaders,
-        // Our own body: the server reads text, surfaces and context, and nothing that could
-        // add tools or instructions (the transport would otherwise forward both).
+        // Our own body: the server reads the thread, the new text, surfaces and context, and
+        // nothing that could add tools or instructions (the transport would otherwise forward both).
         prepareSendMessagesRequest: ({ messages }) => {
           const body: ChatStreamRequest = {
-            messages: messages.slice(-12).map((m) => ({
-              id: m.id,
-              role: m.role,
-              parts: m.parts.filter((p) => p.type === 'text'),
-            })),
+            threadId: threadRef.current,
+            message: textOf(messages.findLast((m) => m.role === 'user')),
             surfaces: SURFACES,
             timeZone: timeZone(),
             // Where the person is, and the page on the canvas (for "only overdue" and "save this").
@@ -89,30 +139,28 @@ export function ChatRuntime({ storageKey, children }: { storageKey: string; chil
   );
 
   const initial = useMemo(() => {
-    const messages = load(storageKey);
-    // Canvas intents already in the history were applied when they arrived: never again.
-    const { applied } = useCanvas.getState();
-    for (const m of messages)
-      for (const p of m.parts) if ('toolCallId' in p) applied.add(String(p.toolCallId));
-    return messages;
-  }, [storageKey]);
+    markApplied(loaded.messages);
+    return loaded.messages;
+  }, [loaded]);
 
   const runtime = useChatRuntime({
     transport,
     messages: initial,
-    onFinish: ({ messages }) => {
-      storage.set(storageKey, JSON.stringify(messages.slice(-KEEP)));
-      // A write tool changed data: refresh the lists that might show it.
-      const names = new Set<string>();
-      const last = messages.at(-1);
-      for (const part of last?.parts ?? []) {
-        if (part.type.startsWith('tool-'))
-          for (const n of touchedBy(part.type.slice(5))) names.add(n);
-      }
-      if (names.size > 0) names.add('approvals');
-      for (const n of names) queryClient.invalidateQueries({ queryKey: [n] });
+    onFinish: ({ message }) => {
+      // A reply from a thread that was cleared meanwhile does not take the new one's place.
+      const meta = message.metadata as { threadId?: string } | undefined;
+      if (meta?.threadId && !threadRef.current) threadRef.current = meta.threadId;
+      refreshTouched(queryClient, message.parts);
     },
   });
+
+  // The new thread first: if it cannot be made, the conversation stays as it was.
+  const clear = useCallback(async () => {
+    const fresh = await api.threads.create().catch(() => undefined);
+    if (!fresh) return;
+    threadRef.current = fresh.id;
+    runtime.thread.reset();
+  }, [runtime]);
 
   // Screens send through the assistant too ("Draft with the assistant"): resolves when the
   // turn ends, so the button can show it is working.
@@ -131,14 +179,15 @@ export function ChatRuntime({ storageKey, children }: { storageKey: string; chil
     );
   }, [assistant, runtime]);
 
-  return (
-    <RuntimeContext.Provider value={runtime}>
-      <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
-    </RuntimeContext.Provider>
+  const chat = useMemo(
+    () => ({ runtime, clear, threadId: () => threadRef.current }),
+    [runtime, clear],
   );
-}
-
-/** Forget this device's copy of the conversation. */
-export function clearConversation(storageKey: string) {
-  storage.remove(storageKey);
+  return (
+    <ChatContext.Provider value={chat}>
+      <AssistantRuntimeProvider runtime={runtime}>
+        <VoiceProvider>{children}</VoiceProvider>
+      </AssistantRuntimeProvider>
+    </ChatContext.Provider>
+  );
 }

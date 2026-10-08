@@ -4,7 +4,7 @@
  * (and so its tools) come from @app/contracts.
  */
 import type { AgentDomain } from '../agent-domain.js';
-import { evalCases } from './evals.js';
+import { evalCases, voiceEvalCases } from './evals.js';
 import { domainScripts } from './scripts.js';
 
 export const agentDomain: AgentDomain = {
@@ -17,6 +17,7 @@ export const agentDomain: AgentDomain = {
   help: 'I can add, list, complete or delete to-dos, show today, and close or move meetings.',
   scripts: domainScripts,
   evalCases,
+  voiceEvalCases,
   // The close and open cases need a meeting to find.
   evalSetup: async (api) => {
     await api('POST', '/api/meetings', {

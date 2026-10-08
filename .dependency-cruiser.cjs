@@ -34,7 +34,7 @@ module.exports = {
     {
       name: 'ui-registry-no-runtime',
       comment:
-        'The view registry is read by the API (text for WhatsApp and voice) and the apps: it holds only zod and contracts. React lives in the /react subpath; components live in the apps.',
+        'The view registry is read by the API (text for WhatsApp and voice) and the apps: it holds only zod, contracts and i18n. React lives in the /react subpath; components live in the apps.',
       severity: 'error',
       from: {
         path: '^packages/ui-registry/(src|dist)/',
@@ -42,18 +42,42 @@ module.exports = {
       },
       to: {
         path: [
-          '^packages/(?!contracts/|ui-registry/)',
-          '(^|/)@app/(?!contracts|ui-registry)',
+          '^packages/(?!contracts/|i18n/|ui-registry/)',
+          '(^|/)@app/(?!contracts|i18n|ui-registry)',
           '(^|/)(react|react-native|expo|@mastra|@nestjs|drizzle-orm)(/|$)',
         ],
       },
     },
     {
       name: 'contracts-stays-a-leaf',
-      comment: 'Specs are shared by the API, the agent and the apps: they depend on zod only.',
+      comment:
+        'Specs are shared by the API, the agent and the apps: they depend on zod and the language list (@app/i18n) only.',
       severity: 'error',
       from: { path: '^packages/contracts/' },
-      to: { path: ['^packages/(?!contracts/)', '(^|/)@app/(?!contracts)', '^apps/'] },
+      to: { path: ['^packages/(?!contracts/|i18n/)', '(^|/)@app/(?!contracts|i18n)', '^apps/'] },
+    },
+    {
+      name: 'voice-worker-is-a-client',
+      comment:
+        'The voice worker is another way into the API, like the app: it calls /api/chat and holds no rules, data or model of its own.',
+      severity: 'error',
+      from: { path: '^apps/voice-worker/src/' },
+      to: {
+        path: [
+          '^packages/(db|policy|core|agents)/',
+          '(^|/)@app/(db|policy|core|agents)(/|$)',
+          '(^|/)@mastra/',
+          '^apps/(?!voice-worker/)',
+        ],
+      },
+    },
+    {
+      name: 'i18n-is-a-leaf',
+      comment:
+        "The product's words are read by every app and package, the voice worker included: they import nothing.",
+      severity: 'error',
+      from: { path: '^packages/i18n/', pathNot: '\\.test\\.ts$' },
+      to: { path: ['^packages/(?!i18n/)', '(^|/)@app/', '^apps/', '(^|/)node_modules/'] },
     },
     {
       name: 'framework-reads-the-domain-through-its-index',

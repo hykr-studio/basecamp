@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@app/contracts": "workspace:*",
+    "@app/i18n": "workspace:*",
     "zod": "^4.6.5"
   },
   "peerDependencies": {

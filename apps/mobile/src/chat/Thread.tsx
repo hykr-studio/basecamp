@@ -14,7 +14,9 @@ import { appDomain } from '../domain';
 import { AssistantMark } from '../framework/AssistantMark';
 import { Icon } from '../framework/Icon';
 import { colors } from '../theme';
-import { clearConversation, useAssistantRuntime } from './ChatRuntime';
+import { MicButton, VoiceBar } from '../voice/VoiceBar';
+import { useVoice } from '../voice/VoiceProvider';
+import { useAssistantRuntime, useClearConversation } from './ChatRuntime';
 import { ToolPart } from './ToolPart';
 
 const INPUT_ID = 'assistant-input';
@@ -85,41 +87,49 @@ function Composer({
   compact: boolean;
 }) {
   const runtime = useAssistantRuntime();
+  const voice = useVoice();
   const running = useAuiState((s) => s.thread.isRunning);
-  const idle = !draft.trim() || running;
+  // While voice connects there is nowhere to send a line yet: wait, rather than lose it.
+  const idle = !draft.trim() || running || voice.status === 'connecting';
   const tone = idle ? colors.disabledText : colors.primaryText;
   const send = () => {
     if (idle) return;
-    runtime.thread.append({ role: 'user', content: [{ type: 'text', text: draft.trim() }] });
+    // While voice is on, a typed line is answered as a spoken turn.
+    if (voice.status !== 'off') void voice.send(draft.trim());
+    else runtime.thread.append({ role: 'user', content: [{ type: 'text', text: draft.trim() }] });
     setDraft('');
   };
   return (
-    <View className="flex-row items-center gap-2">
-      <TextInput
-        nativeID={INPUT_ID}
-        value={draft}
-        onChangeText={setDraft}
-        onSubmitEditing={send}
-        submitBehavior="submit"
-        returnKeyType="send"
-        accessibilityLabel="Message to the assistant"
-        placeholder={compact ? 'e.g. today' : 'e.g. today   (press / to focus)'}
-        placeholderTextColor={colors.placeholder}
-        className="min-h-11 flex-1 rounded-control border border-border bg-card px-3 py-2.5 text-body text-text"
-      />
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Send"
-        accessibilityState={{ disabled: idle }}
-        disabled={idle}
-        onPress={send}
-        className={`min-h-11 flex-row items-center gap-2 rounded-control px-4 ${idle ? 'bg-disabled-bg' : 'bg-primary'}`}
-      >
-        <Icon name="send" color={tone} size={16} />
-        <Text className="font-semibold" style={{ color: tone }}>
-          Send
-        </Text>
-      </Pressable>
+    <View className="gap-2">
+      <VoiceBar compact={compact} />
+      <View className="flex-row items-center gap-2">
+        <TextInput
+          nativeID={INPUT_ID}
+          value={draft}
+          onChangeText={setDraft}
+          onSubmitEditing={send}
+          submitBehavior="submit"
+          returnKeyType="send"
+          accessibilityLabel="Message to the assistant"
+          placeholder={compact ? 'e.g. today' : 'e.g. today   (press / to focus)'}
+          placeholderTextColor={colors.placeholder}
+          className="min-h-11 flex-1 rounded-control border border-border bg-card px-3 py-2.5 text-body text-text"
+        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Send"
+          accessibilityState={{ disabled: idle }}
+          disabled={idle}
+          onPress={send}
+          className={`min-h-11 flex-row items-center gap-2 rounded-control px-4 ${idle ? 'bg-disabled-bg' : 'bg-primary'}`}
+        >
+          <Icon name="send" color={tone} size={16} />
+          <Text className="font-semibold" style={{ color: tone }}>
+            Send
+          </Text>
+        </Pressable>
+        <MicButton />
+      </View>
     </View>
   );
 }
@@ -153,16 +163,9 @@ function Help({ onPick }: { onPick: (text: string) => void }) {
  * The assistant's thread, on assistant-ui's React Native primitives. Text streams in;
  * tool calls render through ToolPart. Used as the side panel and as the phone sheet.
  */
-export function Thread({
-  storageKey,
-  compact = false,
-  onClose,
-}: {
-  storageKey: string;
-  compact?: boolean;
-  onClose?: () => void;
-}) {
-  const runtime = useAssistantRuntime();
+export function Thread({ compact = false, onClose }: { compact?: boolean; onClose?: () => void }) {
+  const clear = useClearConversation();
+  const voice = useVoice();
   const empty = useAuiState((s) => s.thread.messages.length === 0);
   const [help, setHelp] = useState(false);
 
@@ -208,8 +211,8 @@ export function Thread({
                 variant="subtle"
                 accessibilityLabel="Clear the conversation"
                 onPress={() => {
-                  runtime.thread.reset();
-                  clearConversation(storageKey);
+                  // A new conversation ends a voice session: it was bound to the old thread.
+                  void voice.stop().then(clear);
                 }}
               >
                 <Text>Clear</Text>

@@ -1,3 +1,4 @@
+import { t } from '@app/i18n';
 import { z } from 'zod';
 import { defineView } from '../define-view.js';
 
@@ -5,18 +6,19 @@ export const ApprovalCardView = defineView({
   name: 'approval.card',
   description:
     'Something waiting for the person to approve or reject, with exactly what it will do. Shown automatically when a tool is parked.',
-  surfaces: ['inline', 'text', 'voice'],
+  surfaces: ['inline', 'text', 'speech'],
   props: z.object({ approvalId: z.string(), summary: z.string().nullable().optional() }),
   text: (p) =>
     `Waiting for your approval: ${p.summary ?? 'a change'}. Approve or reject it in the app.`,
-  speak: (p) => `${p.summary ?? 'A change'} is waiting for your approval in the app.`,
+  speak: (p, ctx) =>
+    t(ctx.lang, 'said.waitingApproval', { summary: p.summary ?? t(ctx.lang, 'said.aChange') }),
 });
 
 export const KpiRowView = defineView({
   name: 'kpi.row',
   description:
     'Up to four numbers side by side, each with a label ("3 overdue"). Use only for counts you already have; the props carry the numbers.',
-  surfaces: ['canvas', 'text', 'voice'],
+  surfaces: ['canvas', 'text', 'speech'],
   props: z.object({
     items: z
       .array(

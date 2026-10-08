@@ -38,7 +38,7 @@ describe('present intents', () => {
   });
 
   it('voice gets the short form', async () => {
-    const res = await ana.chat("what's due this week", undefined, ['voice']);
+    const res = await ana.chat("what's due this week", undefined, ['speech']);
     expect(res.body.toolCalls[0].present.text).toMatch(/^2 to-dos: /);
   });
 

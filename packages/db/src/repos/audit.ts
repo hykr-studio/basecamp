@@ -10,6 +10,8 @@ export type WriteCtx = {
   requestId?: string | null;
   approvedBy?: string | null;
   agentVersion?: string | null;
+  /** How the turn reached the assistant: app, voice or whatsapp. */
+  channel?: string | null;
   rule?: string | null;
   reason?: string | null;
 };
@@ -39,6 +41,7 @@ export async function writeAudit(tx: DbOrTx, input: AuditInput) {
       requestId: input.requestId ?? null,
       approvedBy: input.approvedBy ?? null,
       agentVersion: input.agentVersion ?? null,
+      channel: input.channel ?? null,
       rule: input.rule ?? null,
       reason: input.reason ?? null,
       outcome: input.outcome ?? 'committed',

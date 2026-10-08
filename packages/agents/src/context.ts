@@ -19,6 +19,7 @@ export function apiFor(ctx?: ToolContext) {
   const runId =
     (ctx?.requestContext?.get('runId') as string | undefined) ??
     ctx?.tracingContext?.currentSpan?.traceId;
+  const channel = ctx?.requestContext?.get('channel') as string | undefined;
   if (!userId) {
     throw new Error('Agent tools need a userId in the request context (in Studio: pick a preset)');
   }
@@ -31,6 +32,8 @@ export function apiFor(ctx?: ToolContext) {
       'x-acting-for': userId,
       'x-run-id': runId,
       'x-agent-version': agentVersion(),
+      // The turn's channel (app, voice, whatsapp), so every audit row says how it came in.
+      ...(channel ? { 'x-channel': channel } : {}),
     }),
   });
 }

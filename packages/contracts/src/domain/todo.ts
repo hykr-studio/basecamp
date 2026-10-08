@@ -41,6 +41,14 @@ export const TodoSpec = entitySpec({
   description:
     "The user's to-dos: short tasks with an optional due date, optionally linked to a meeting.",
   schemas: { read: Todo, create: CreateTodoInput, update: UpdateTodoInput },
+  // What people call each field, in every language (approval cards, history, voice).
+  fieldLabels: {
+    title: { en: 'Title', hi: 'शीर्षक', te: 'శీర్షిక' },
+    done: { en: 'Done', hi: 'पूरा', te: 'పూర్తి' },
+    dueOn: { en: 'Due', hi: 'आखिरी तारीख', te: 'గడువు' },
+    meetingId: { en: 'Meeting', hi: 'मीटिंग', te: 'మీటింగ్' },
+    createdBy: { en: 'Created by', hi: 'किसने बनाया', te: 'ఎవరు సృష్టించారు' },
+  },
   list: {
     filterable: { done: 'boolean', dueOn: 'date', meetingId: 'id', title: 'text' },
     sortable: ['dueOn', 'createdAt', 'title'],

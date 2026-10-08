@@ -25,15 +25,17 @@ export { ApprovalsController } from './http/approvals.controller.js';
 export { commandController, entityController } from './http/controller-factory.js';
 export {
   type ApiRequest,
+  ChatAccessGuard,
   CurrentPrincipal,
   HumanOnlyGuard,
   header,
   PrincipalGuard,
+  RelayAllowed,
   RequestMeta,
   type RequestMetaValue,
 } from './http/principal.js';
 export { buildListSql, decodeCursor, encodeCursor } from './query/list-grammar.js';
-export { CORE_OPTIONS, type Conn, type CoreOptions, type Tx } from './tokens.js';
+export { type AgentKey, CORE_OPTIONS, type Conn, type CoreOptions, type Tx } from './tokens.js';
 export { ApprovalService, registerOp, toApproval } from './write/approvals.js';
 export {
   type RunResult,

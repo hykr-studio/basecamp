@@ -8,6 +8,7 @@ import { AssistantMark } from './AssistantMark';
 import { expiresIn } from './dates';
 import { errorMessage, useApprovals } from './hooks';
 import { Icon } from './Icon';
+import { useT } from './lang';
 import { useToast } from './Toast';
 import { verbOf } from './verbs';
 
@@ -65,6 +66,7 @@ export function ApprovalItem({
 }) {
   const { decide } = useApprovals();
   const toast = useToast();
+  const { t } = useT();
   const narrow = useWindowDimensions().width < 600;
   const destructive = approval.action.endsWith('.delete');
   // A delete shows what goes, unasked: the riskier the decision, the less it hides.
@@ -116,7 +118,7 @@ export function ApprovalItem({
               { color: approval.requestedBy === 'agent' ? colors.assistant : colors.approvalText },
             ]}
           >
-            {approval.requestedBy === 'agent' ? 'Asked by the assistant' : 'Asked by you'} ·{' '}
+            {approval.requestedBy === 'agent' ? t('approval.askedBy') : t('approval.askedByYou')} ·{' '}
             {expiresIn(approval.expiresAt)}
           </Text>
         </View>
@@ -171,9 +173,9 @@ export function ApprovalItem({
           fullWidth={narrow}
         />
         <Button
-          title={destructive ? 'Keep it' : 'Reject'}
+          title={destructive ? t('approval.keep') : t('approval.reject')}
           variant="secondary"
-          accessibilityLabel={`${destructive ? 'Keep it' : 'Reject'}: ${summary}`}
+          accessibilityLabel={`${destructive ? t('approval.keep') : t('approval.reject')}: ${summary}`}
           onPress={() => run(false)}
           disabled={deciding}
           fullWidth={narrow}

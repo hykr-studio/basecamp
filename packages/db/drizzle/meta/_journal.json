@@ -36,6 +36,20 @@
       "when": 1791381974560,
       "tag": "0004_channel_time_zone",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791394039657,
+      "tag": "0005_threads_and_channel",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791419958968,
+      "tag": "0006_thread_message_order",
+      "breakpoints": true
     }
   ]
 }

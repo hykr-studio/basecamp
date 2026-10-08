@@ -15,7 +15,7 @@ To bring another domain, replace these folders. Nothing outside them changes.
 | Database | `packages/db/src/schema/domain.ts` | Drizzle tables in the `app` schema, each with `id`, an owner column, `createdBy`, `createdAt`, `updatedAt` |
 | API | `apps/api/src/domain/` | `DomainModule`: one `defineEntity` / `defineCommand` per spec, each in a Nest module with `entityController` / `entityHandlers` / `commandController` |
 | Views | `packages/ui-registry/src/domain/` | `uiDomain = { views, screens }`, declared with `defineView` / `defineScreen` |
-| Assistant | `packages/agents/src/domain/` | `agentDomain: AgentDomain`: persona, domain rules, the scripted model's scripts and help, eval cases and setup |
+| Assistant | `packages/agents/src/domain/` | `agentDomain: AgentDomain`: persona, domain rules, the scripted model's scripts and help, eval cases (and spoken `voiceEvalCases`) and setup |
 | App | `apps/mobile/src/domain/` | `appDomain = defineAppDomain({ tagline, nav, suggestions, bind })`; `bind` calls `bindView` / `bindScreen` for the domain's views and screens |
 | App routes | `apps/mobile/src/app/(domain)/` | The domain's screens; the group adds no URL segment. Provide `index.tsx` (the home screen) |
 | Tests | `apps/api/test/domain/`, `packages/ui-registry/src/domain/*.test.ts` | The domain's own e2e and view tests |
@@ -23,7 +23,23 @@ To bring another domain, replace these folders. Nothing outside them changes.
 Then:
 
 1. `pnpm --filter @app/db generate --name <domain>` and `pnpm db:migrate` for the new tables.
-2. `pnpm turbo run build typecheck test`, `pnpm lint`, `pnpm lint:deps`, `pnpm --filter @app/agents eval`.
+2. `pnpm turbo run build typecheck test`, `pnpm lint`, `pnpm lint:deps`, `pnpm --filter @app/agents eval`
+   and `eval:voice`.
+
+## What a domain adds for voice and languages
+
+Voice is a framework channel (the worker in `apps/voice-worker` calls `/api/chat` like the
+app). The product speaks English, Hindi and Telugu (`@app/i18n`); a domain brings its own
+words, each as `Labels` (`{ en, hi, te }`, so a missing translation does not compile):
+
+- **Views:** `labels: { title, empty, noun }`. A list view that can be spoken must have
+  `noun` and `empty` (the registry refuses it otherwise); `speak(props, { lang })` returns the
+  short spoken form, usually `spokenList(...)`. Components get `words` (title and empty line
+  in the person's language) from the renderer.
+- **Entities:** `fieldLabels`: what the approval preview calls each field, in the person's language.
+- **Scripted model:** the domain's verbs in each language (`verbs(...)`, before or after the
+  title), answers through `sayIn(turn, { en, hi, te })`, and `written(..., turn)` for writes.
+- **Evals:** `voiceEvalCases`, scored on the tools, the answer's language and its length.
 
 ## What comes for free
 
@@ -38,13 +54,15 @@ From the contracts declaration alone:
 - History for every entity (`GET /api/history`), approval cards and history lines worded from
   each command's `verb`.
 - Present intents: an entity spec's `views` (and a command's `view`) choose what its tool
-  results show. On WhatsApp and voice they are rendered to words with the views' `text` /
-  `speak`.
+  results show. On WhatsApp they are rendered to words with the views' `text`; on a voice
+  turn the view is shown and its `speak` form, in the turn's language, is given to the model.
 
 ## What the framework owns, in every domain
 
 - Saved canvas pages (`pages`), the canvas tools, and the views `approval.card`, `kpi.row`,
   `page.list` and the screen `page.view`.
+- Threads (one saved conversation per person, shared by every channel), voice sessions
+  (`/api/voice/*`, LiveKit, the voice worker), and the framework's phrases in `@app/i18n`.
 - The WhatsApp channel, the streaming chat, and the scripted model's platform scripts
   (`save this as …`, `open my … page`).
 - The framework's tests (`apps/api/test/framework`, `packages/*/src/**/*.test.ts` outside

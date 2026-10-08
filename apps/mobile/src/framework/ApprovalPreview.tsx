@@ -1,9 +1,11 @@
 import type { Approval } from '@app/contracts';
+import { type Labels, type Lang, pick } from '@app/i18n';
 import { useQuery } from '@tanstack/react-query';
 import { Text, View } from 'react-native';
 import { colors, space, styles } from '../theme';
 import { dayLabel } from './dates';
 import { type EntityName, entityApi, specs } from './hooks';
+import { useT } from './lang';
 
 /** The resource as people say it: "to-do", not "todo". */
 export const labelOf = (type: string) =>
@@ -19,6 +21,17 @@ const humanize = (key: string) => {
     .toLowerCase();
   return words.charAt(0).toUpperCase() + words.slice(1);
 };
+/**
+ * What people call a field, in their language: the entity's fieldLabels, or the field's own
+ * name made readable when the spec gives none.
+ */
+function fieldName(type: string | undefined, key: string, lang: Lang) {
+  const spec = type ? Object.values(specs).find((s) => s.name === type) : undefined;
+  const labels = (spec?.fieldLabels as Record<string, Labels | undefined> | undefined)?.[key];
+  if (labels) return pick(labels, lang);
+  return refOf(key) ? humanize(key.slice(0, -2)) : humanize(key);
+}
+
 /** A field that points at another entity ("meetingId") and the list it lives in. */
 const refOf = (key: string): EntityName | null => {
   if (!key.endsWith('Id')) return null;
@@ -95,7 +108,17 @@ function RefValue({ list, id }: { list: EntityName; id: string }) {
  * A record (for a delete) hides "no" flags, which say nothing about what goes; parked input
  * keeps them, since there a false is the change being asked for.
  */
-function Fields({ input, record }: { input: Record<string, unknown>; record?: boolean }) {
+function Fields({
+  input,
+  record,
+  type,
+}: {
+  input: Record<string, unknown>;
+  record?: boolean;
+  /** The entity the fields belong to, for its field labels. */
+  type?: string;
+}) {
+  const { lang } = useT();
   const entries = Object.entries(input).filter(
     ([k, v]) => !hidden(k) && !isEmpty(v) && !(record && v === false),
   );
@@ -104,7 +127,7 @@ function Fields({ input, record }: { input: Record<string, unknown>; record?: bo
       {entries.map(([key, value]) => (
         <View key={key} style={{ gap: 2 }}>
           <Text style={[styles.label, { color: colors.approvalText }]}>
-            {refOf(key) ? humanize(key.slice(0, -2)) : humanize(key)}
+            {fieldName(type, key, lang)}
           </Text>
           {refOf(key) && typeof value === 'string' ? (
             <RefValue list={refOf(key) as EntityName} id={value} />
@@ -134,7 +157,7 @@ function RecordPreview({ approval }: { approval: Approval }) {
         Approving deletes this {label} permanently.
       </Text>
       {q.data ? (
-        <Fields record input={q.data as Record<string, unknown>} />
+        <Fields record type={approval.resourceType} input={q.data as Record<string, unknown>} />
       ) : q.isError ? (
         <Text style={styles.muted}>This {label} no longer exists.</Text>
       ) : (
@@ -154,5 +177,5 @@ export function ApprovalPreview({ approval }: { approval: Approval }) {
   const visible = Object.entries(input).filter(([k, v]) => !hidden(k) && !isEmpty(v));
   if (visible.length === 0)
     return <Text style={styles.text}>Approving runs it with no further changes.</Text>;
-  return <Fields input={input} />;
+  return <Fields type={approval.resourceType} input={input} />;
 }

@@ -47,20 +47,27 @@ export class WhatsappService {
 
   /** Every text message in a delivery gets one reply. Errors are logged, never retried here. */
   async handle(payload: Webhook) {
-    const jobs: Promise<void>[] = [];
+    // Different senders in parallel; one sender's messages in order, each turn after the last,
+    // so they continue one thread instead of racing on it.
+    const bySender = new Map<string, { phoneNumberId: string; text: string }[]>();
     for (const entry of payload.entry ?? [])
       for (const change of entry.changes ?? []) {
         const phoneNumberId = change.value?.metadata?.phone_number_id;
         for (const m of change.value?.messages ?? []) {
           if (m.type !== 'text' || !m.from || !m.text?.body || !phoneNumberId) continue;
-          jobs.push(
-            this.reply(phoneNumberId, m.from, m.text.body).catch((e) =>
-              log.error(`reply to ${m.from} failed: ${e instanceof Error ? e.message : e}`),
-            ),
-          );
+          const queue = bySender.get(m.from) ?? [];
+          queue.push({ phoneNumberId, text: m.text.body });
+          bySender.set(m.from, queue);
         }
       }
-    await Promise.all(jobs);
+    await Promise.all(
+      [...bySender].map(async ([from, messages]) => {
+        for (const m of messages)
+          await this.reply(m.phoneNumberId, from, m.text).catch((e) =>
+            log.error(`reply to ${from} failed: ${e instanceof Error ? e.message : e}`),
+          );
+      }),
+    );
   }
 
   private async reply(phoneNumberId: string, from: string, text: string) {
@@ -76,10 +83,15 @@ export class WhatsappService {
       );
       return;
     }
-    // The person the number belongs to, exactly as if they had signed in.
-    const p: Principal = { actor: { kind: 'user', id: link.ownerId, role: 'owner' }, scopes: [] };
+    // The person the number belongs to, exactly as if they had signed in. The turn goes to their
+    // current thread: one conversation across the app, voice and WhatsApp.
+    const p: Principal = {
+      actor: { kind: 'user', id: link.ownerId, role: 'owner' },
+      scopes: [],
+      channel: 'whatsapp',
+    };
     const turn = await this.chat.once(p, {
-      messages: [{ role: 'user', content: text }],
+      message: text,
       surfaces: ['text'],
       timeZone: link.timeZone,
     });

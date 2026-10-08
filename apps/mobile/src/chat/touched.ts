@@ -16,3 +16,15 @@ export function touchedBy(tool: string): string[] {
   const entity = Object.values(entities).find((s) => tool.endsWith(`-${s.name}`));
   return entity ? [entity.plural] : [];
 }
+
+/** After a reply (typed or spoken): refresh every list its tool calls may have changed. */
+export function refreshTouched(
+  queryClient: { invalidateQueries: (q: { queryKey: string[] }) => unknown },
+  parts: readonly { type: string }[],
+) {
+  const names = new Set<string>();
+  for (const part of parts)
+    if (part.type.startsWith('tool-')) for (const n of touchedBy(part.type.slice(5))) names.add(n);
+  if (names.size > 0) names.add('approvals');
+  for (const n of names) queryClient.invalidateQueries({ queryKey: [n] });
+}

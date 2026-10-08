@@ -66,6 +66,7 @@ export function auditCtx(
     actingFor: p.actingFor?.userId ?? null,
     runId: p.runId ?? null,
     agentVersion: p.agentVersion ?? null,
+    channel: p.channel ?? null,
     requestId: ctx.requestId,
     approvedBy: p.approvedBy ?? null,
     rule: result.rule,

@@ -24,6 +24,14 @@ export function createRegistry(input: {
   for (const v of input.views)
     if (v.collapseTo && !viewsByName.has(v.collapseTo))
       throw new Error(`${v.name} collapses to an unknown view ${v.collapseTo}`);
+  // A list can be spoken in any language only if it says what its rows are and when it is empty.
+  for (const v of input.views)
+    if (
+      v.source?.by === 'query' &&
+      v.surfaces.includes('speech') &&
+      !(v.labels.noun && v.labels.empty)
+    )
+      throw new Error(`${v.name} is a spoken list: give it labels.noun and labels.empty`);
 
   const getViewDef = (name: string): ViewDef | undefined => viewsByName.get(name);
   const getScreenDef = (name: string): ScreenDef | undefined => screensByName.get(name);

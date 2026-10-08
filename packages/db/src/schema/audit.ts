@@ -20,6 +20,8 @@ export const events = audit.table(
     /** For a replayed approval: the person who approved what the actor asked for. */
     approvedBy: text('approved_by'),
     agentVersion: text('agent_version'),
+    /** How the turn reached the assistant: app, voice or whatsapp (null for direct API use). */
+    channel: text('channel'),
     rule: text('rule'),
     reason: text('reason'),
     outcome: text('outcome').notNull().default('committed'),

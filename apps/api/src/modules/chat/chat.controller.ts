@@ -1,52 +1,33 @@
-import {
-  ChatRequest,
-  type ChatResponse,
-  ChatStreamRequest,
-  type Principal,
-  type StreamMessage,
-} from '@app/contracts';
-import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@app/core';
+import { ChatRequest, type ChatResponse, ChatStreamRequest, type Principal } from '@app/contracts';
+import { ChatAccessGuard, CurrentPrincipal, PrincipalGuard, RelayAllowed } from '@app/core';
 import { toAISdkStream } from '@mastra/ai-sdk';
 import { Body, Controller, HttpCode, Post, Res, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { OptionalAuth } from '@thallesp/nestjs-better-auth';
-import { pipeUIMessageStreamToResponse } from 'ai';
+import { createUIMessageStream, pipeUIMessageStreamToResponse } from 'ai';
 import type { Response } from 'express';
 import { createZodDto } from 'nestjs-zod';
+import { VoiceSessionGuard } from '../voice/voice-session.guard.js';
 import { ChatService } from './chat.service.js';
 
 class ChatDto extends createZodDto(ChatRequest) {}
 class ChatStreamDto extends createZodDto(ChatStreamRequest) {}
 
 /**
- * The text of each message, as the agent reads history. Tool parts are not replayed: the
- * canvas travels in the context instead, and the client cannot add tools or instructions
- * (anything but text parts is ignored).
+ * A chat turn, from a person or from a relay acting for one (the voice worker). The message
+ * goes into a thread the server keeps; the history comes from it, never from the client.
  */
-function textOf(messages: StreamMessage[]) {
-  return messages
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.parts
-        .filter((part) => part.type === 'text' && typeof part.text === 'string')
-        .map((part) => part.text as string)
-        .join('\n')
-        .trim(),
-    }))
-    .filter((m) => m.content);
-}
-
 @Controller('api/chat')
 @OptionalAuth()
-@UseGuards(PrincipalGuard, HumanOnlyGuard)
+@RelayAllowed()
+@UseGuards(PrincipalGuard, ChatAccessGuard, VoiceSessionGuard)
 export class ChatController {
   constructor(private readonly chat: ChatService) {}
 
   /**
-   * The app's chat: an AI SDK UI message stream. Tool results arrive as they happen, each
-   * carrying its present intent; the client renders them with the views it registered.
-   * `@Res()` means this handler owns the response, so nothing else writes to it.
+   * The app's chat (and the voice worker's): an AI SDK UI message stream. Tool results arrive
+   * as they happen, each carrying its present intent; the client renders them with the views
+   * it registered. `@Res()` means this handler owns the response, so nothing else writes to it.
    */
   @Post()
   @Throttle({ default: { limit: 20, ttl: 60_000 } }) // each call costs model tokens
@@ -60,26 +41,36 @@ export class ChatController {
     res.on('close', () => {
       if (!res.writableFinished) abort.abort();
     });
-    const { output, runId } = await this.chat.stream(
+    // Voice turns draw on screen and speak; the app's own turns say where they can draw.
+    const surfaces =
+      p.channel === 'voice' ? (['inline', 'canvas', 'speech'] as const) : body.surfaces;
+    const { output, runId, threadId, saved } = await this.chat.stream(
       p,
-      {
-        messages: textOf(body.messages),
-        context: body.context,
-        timeZone: body.timeZone,
-        surfaces: body.surfaces,
-      },
+      { ...body, surfaces: [...surfaces] },
       abort.signal,
     );
     pipeUIMessageStreamToResponse({
       response: res,
-      // The run id rides on the message, so the chat can link the trace in Studio.
-      stream: toAISdkStream(output, {
-        from: 'agent',
-        version: 'v7',
-        messageMetadata: () => ({ runId }),
+      // The run and thread ride on the message: the Studio link, and where the turn was saved.
+      // The response ends once the reply is saved, so a reload right after sees it.
+      stream: createUIMessageStream({
+        execute: async ({ writer }) => {
+          writer.merge(
+            toAISdkStream(output, {
+              from: 'agent',
+              version: 'v7',
+              messageMetadata: () => ({ runId, threadId }),
+            }),
+          );
+          await saved;
+        },
       }),
       // No compression on this route: buffered or gzipped chunks stall streaming on native.
-      headers: { 'x-run-id': runId, 'cache-control': 'no-cache, no-transform' },
+      headers: {
+        'x-run-id': runId,
+        'x-thread-id': threadId,
+        'cache-control': 'no-cache, no-transform',
+      },
     });
   }
 

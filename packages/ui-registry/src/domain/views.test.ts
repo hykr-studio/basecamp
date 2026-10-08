@@ -22,14 +22,20 @@ describe('domain views', () => {
       title: 'Due this week',
       items: [todo('Order tiles', { dueOn: '2026-10-09' }), todo('Call the plumber')],
     };
-    expect(TodoListView.text(p, { timeZone: 'UTC' })).toBe(
+    expect(TodoListView.text(p, { timeZone: 'UTC', lang: 'en' as const })).toBe(
       'Due this week\n• Order tiles (due Fri 9 Oct)\n• Call the plumber',
     );
-    expect(TodoListView.speak(p, { timeZone: 'UTC' })).toBe(
+    expect(TodoListView.speak(p, { timeZone: 'UTC', lang: 'en' as const })).toBe(
       '2 to-dos: Order tiles, Call the plumber.',
     );
     const many = { items: ['a', 'b', 'c', 'd', 'e'].map((t) => todo(t)) };
-    expect(TodoListView.speak(many, { timeZone: 'UTC' })).toBe('5 to-dos: a, b, c, and 2 more.');
+    expect(TodoListView.speak(many, { timeZone: 'UTC', lang: 'en' as const })).toBe(
+      '5 to-dos: a, b, c, and 2 more.',
+    );
+    expect(TodoListView.speak(p, { timeZone: 'UTC', lang: 'te' })).toBe(
+      '2 పనులు: Order tiles, Call the plumber.',
+    );
+    expect(TodoListView.speak({ items: [] }, { timeZone: 'UTC', lang: 'hi' })).toBe('कोई काम नहीं।');
   });
 
   it('are in the app registry, and the week collapses to the day view on a phone', () => {

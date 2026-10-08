@@ -1,0 +1,60 @@
+# Voice mode on a native build (Step 15): the microphone permission, the room, the worker's
+# state, a turn answered through the voice path, and ending the session.
+#   maestro test maestro/voice.yaml -e EMAIL=you@example.com -e PASSWORD=...
+# Needs the API, Metro, LiveKit (pnpm infra:up) and the voice worker (VOICE_MODE=fake works:
+# a typed line in voice mode is answered as a spoken turn). On a dev build the floating tools
+# button can cover sign-out; start signed out with `xcrun simctl keychain booted reset`.
+appId: dev.agenticstack.template
+---
+- runFlow: open.yaml
+# The session lives in the Keychain, which survives clearing the app's data: sign out first.
+- runFlow:
+    when:
+      notVisible: "e.g. you@example.com"
+    commands:
+      - tapOn: "Sign out .*"
+      - tapOn: "Sign out"
+- extendedWaitUntil:
+    visible: "e.g. you@example.com"
+    timeout: 30000
+- tapOn: "e.g. you@example.com"
+- inputText: ${EMAIL}
+- tapOn:
+    text: "Password"
+    index: 1
+- inputText: ${PASSWORD}
+- tapOn:
+    text: "Sign in"
+    index: 1
+- tapOn:
+    text: "Not Now"
+    optional: true
+- extendedWaitUntil:
+    visible: "Today"
+    timeout: 30000
+
+- tapOn: "Open the assistant"
+- tapOn: "Talk"
+# iOS asks once for the microphone.
+- tapOn:
+    text: "Allow"
+    optional: true
+- extendedWaitUntil:
+    visible: "Listening"
+    timeout: 30000
+- takeScreenshot: ios-voice-1-listening
+
+- runFlow:
+    file: say.yaml
+    env:
+      TEXT: "add Call the plumber"
+- extendedWaitUntil:
+    visible: 'Added "Call the plumber".'
+    timeout: 30000
+- takeScreenshot: ios-voice-2-turn
+
+- tapOn: "End"
+- extendedWaitUntil:
+    visible: "Talk"
+    timeout: 15000
+- takeScreenshot: ios-voice-3-ended

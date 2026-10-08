@@ -1,0 +1,37 @@
+{
+  "name": "@app/voice-worker",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./say": {
+      "types": "./dist/say.d.ts",
+      "default": "./dist/say.js"
+    },
+    "./turn": {
+      "types": "./dist/turn.d.ts",
+      "default": "./dist/turn.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "tsx --env-file=../../.env src/main.ts dev",
+    "start": "node --env-file=../../.env dist/main.js start"
+  },
+  "dependencies": {
+    "@app/api-client": "workspace:*",
+    "@app/contracts": "workspace:*",
+    "@app/i18n": "workspace:*",
+    "@livekit/agents": "1.9.1",
+    "@livekit/agents-plugin-sarvam": "1.9.1",
+    "@livekit/agents-plugin-silero": "1.9.1",
+    "@livekit/rtc-node": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "vite": "^8.3.3",
+    "vitest": "^5.0.3"
+  }
+}

@@ -30,10 +30,15 @@ function MeetingLine({ m, onOpen }: { m: MeetingView; onOpen: () => void }) {
   );
 }
 
-export function MeetingListComponent({ title, items, act }: ViewProps<typeof MeetingListView>) {
+export function MeetingListComponent({
+  title,
+  items,
+  act,
+  words,
+}: ViewProps<typeof MeetingListView>) {
   return (
-    <ViewCard title={title ?? 'Meetings'} count={items.length}>
-      <Rows items={items} empty="No meetings here.">
+    <ViewCard title={title ?? words.title} count={items.length}>
+      <Rows items={items} empty={words.empty}>
         {(m) => <MeetingLine m={m} onOpen={() => act('open', m)} />}
       </Rows>
     </ViewCard>

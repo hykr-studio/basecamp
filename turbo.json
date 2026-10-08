@@ -18,13 +18,41 @@
         "BETTER_AUTH_URL",
         "WEB_ORIGINS",
         "AGENT_API_KEY",
-        "API_INTERNAL_URL"
+        "API_INTERNAL_URL",
+        "VOICE_AGENT_KEY",
+        "VOICE_MODE",
+        "VOICE_DAILY_MINUTES",
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "SARVAM_API_KEY"
       ]
     },
     "dev": {
       "dependsOn": ["^build"],
       "cache": false,
       "persistent": true
+    },
+    "@app/voice-worker#test": {
+      "dependsOn": ["build", "@app/api#build"],
+      "env": [
+        "MODEL_MODE",
+        "GUARDRAILS",
+        "DATABASE_URL",
+        "REDIS_URL",
+        "BETTER_AUTH_SECRET",
+        "BETTER_AUTH_URL",
+        "WEB_ORIGINS",
+        "AGENT_API_KEY",
+        "API_INTERNAL_URL",
+        "VOICE_AGENT_KEY",
+        "VOICE_MODE",
+        "VOICE_DAILY_MINUTES",
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "SARVAM_API_KEY"
+      ]
     }
   }
 }

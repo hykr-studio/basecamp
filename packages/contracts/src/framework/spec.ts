@@ -1,3 +1,4 @@
+import type { Labels } from '@app/i18n';
 import { z } from 'zod';
 import type { Principal } from '../principal.js';
 import type { ListConfig } from './list.js';
@@ -28,6 +29,10 @@ export interface EntitySpec<
   pascal: string;
   /** How people say it: "to-do", "meeting". */
   label: string;
+  /**
+   * What people call each field, in every language (the approval preview). A field without one is shown with its name, humanized.
+   */
+  fieldLabels?: Partial<Record<keyof z.infer<R> & string, Labels>>;
   /** For tool descriptions and OpenAPI. */
   description: string;
   schemas: { read: R; create: C; update: U };

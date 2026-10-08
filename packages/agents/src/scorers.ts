@@ -1,4 +1,5 @@
 import { commands } from '@app/contracts';
+import { type Lang, scriptCounts } from '@app/i18n';
 import { createScorer } from '@mastra/core/evals';
 import { extractAgentResponseMessages, mergeToolInvocations } from '@mastra/evals/scorers/utils';
 
@@ -132,4 +133,72 @@ export const expectedOutcome = createScorer({
       ? 'reply ok'
       : `reply missing or mentioning the wrong words: "${r.reply.slice(0, 80)}"`;
     return `${tools}; ${reply}`;
+  });
+
+/** What a voice eval case expects beyond its tools: the language the answer is in. */
+export type VoiceExpected = Expected & { lang: Lang };
+
+/** Enough letters to be a word in the language, not a stray character. */
+const MIN_LETTERS = 3;
+
+const reply = (output: AgentOutput) => extractAgentResponseMessages(output).join('\n').trim();
+
+/** "Reply in {language}": the answer is written in the turn's script. */
+export const repliesInLanguage = createScorer({
+  id: 'replies-in-language',
+  name: 'Answers in the turn’s language',
+  description: 'Hindi in Devanagari, Telugu in Telugu script, English in neither.',
+  type: 'agent',
+})
+  .preprocess(({ run }) => {
+    const text = reply(run.output);
+    const want = (run.groundTruth as VoiceExpected | undefined)?.lang ?? 'en';
+    // Titles stay as the person said them, so a Telugu answer may hold English words (a list
+    // of English titles may even be most of it). So: an Indian language needs real words in
+    // its script (a few letters, not a stray sign) and none in the other's; English needs
+    // none in either. Quoted titles never count.
+    const own = text.replace(/"[^"]*"|“[^”]*”|‘[^’]*’/g, '');
+    const { hi, te, en } = scriptCounts(own);
+    const got =
+      te >= MIN_LETTERS && hi === 0
+        ? 'te'
+        : hi >= MIN_LETTERS && te === 0
+          ? 'hi'
+          : hi === 0 && te === 0 && en > 0
+            ? 'en'
+            : 'mixed';
+    return { want, got, text };
+  })
+  .generateScore(({ results }) => {
+    const { want, got } = results.preprocessStepResult;
+    return want === got ? 1 : 0;
+  })
+  .generateReason(({ results }) => {
+    const { want, got, text } = results.preprocessStepResult;
+    return want === got ? `Answered in ${want}.` : `Expected ${want}, got ${got}: "${text}"`;
+  });
+
+/** Two short sentences, said aloud: about fifteen seconds. */
+const MAX_SPOKEN_CHARS = 240;
+
+/** "On channel voice: at most two short sentences." */
+export const briefForVoice = createScorer({
+  id: 'brief-for-voice',
+  name: 'Short enough to say',
+  description: 'A spoken answer is at most two sentences; lists and details are on screen.',
+  type: 'agent',
+})
+  .preprocess(({ run }) => {
+    const text = reply(run.output);
+    // A line break is a sentence too: a list read out line by line is not brief.
+    const sentences = text.split(/(?<=[.!?।])\s+|\n+/).filter((s) => s.trim()).length;
+    return { sentences, chars: text.length, text };
+  })
+  .generateScore(({ results }) => {
+    const { sentences, chars } = results.preprocessStepResult;
+    return sentences <= 2 && chars <= MAX_SPOKEN_CHARS ? 1 : 0;
+  })
+  .generateReason(({ results }) => {
+    const { sentences, chars, text } = results.preprocessStepResult;
+    return `${sentences} sentence(s), ${chars} characters: "${text}"`;
   });

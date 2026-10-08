@@ -1,5 +1,5 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import type { Principal } from '@app/contracts';
+import { Channel, type Principal } from '@app/contracts';
 import { userExists } from '@app/db';
 import {
   type CanActivate,
@@ -8,8 +8,10 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  SetMetadata,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import type { Request, Response } from 'express';
 import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
 
@@ -29,6 +31,17 @@ export const header = (req: Request, name: string) => {
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest();
 
+const RELAY_ALLOWED = 'core:relay-allowed';
+/**
+ * The routes a relay agent (the voice worker) may call: starting a turn for its person, and
+ * its own housekeeping. Everywhere else its key is refused, so a leaked relay key can never
+ * read or write data directly; it can only ask the assistant, like the person would.
+ */
+export const RelayAllowed = () => SetMetadata(RELAY_ALLOWED, true);
+
+/** A run id names a trace and audit rows: short, and safe to log. */
+const RUN_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
 /**
  * Turns every request into exactly one principal before the handler runs: a signed-in
  * person, or the agent acting for one. Anything else is a 401.
@@ -36,7 +49,10 @@ const sha256 = (value: string) => createHash('sha256').update(value).digest();
  */
 @Injectable()
 export class PrincipalGuard implements CanActivate {
-  constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {}
+  constructor(
+    @Inject(CORE_OPTIONS) private readonly options: CoreOptions,
+    private readonly reflector: Reflector,
+  ) {}
 
   async canActivate(context: ExecutionContext) {
     const http = context.switchToHttp();
@@ -48,16 +64,27 @@ export class PrincipalGuard implements CanActivate {
 
     const agentKey = header(req, 'x-agent-key');
     req.principal = agentKey ? await this.agentPrincipal(req, agentKey) : this.userPrincipal(req);
+    if (req.principal.actor.kind === 'agent') {
+      const agent = this.options.agents.find((a) => a.id === req.principal?.actor.id);
+      const allowed = this.reflector.getAllAndOverride<boolean>(RELAY_ALLOWED, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      if (agent?.relay && !allowed) throw new ForbiddenException('A relay can only start turns');
+    }
     return true;
   }
 
   private async agentPrincipal(req: ApiRequest, agentKey: string): Promise<Principal> {
     // Hash both sides: equal lengths for timingSafeEqual, and nothing leaks the key's length.
-    // A presented key that is wrong never falls back to the session.
-    if (!timingSafeEqual(sha256(agentKey), sha256(this.options.agentApiKey))) {
-      throw new UnauthorizedException('invalid agent key');
-    }
-    if (header(req, 'x-agent-id') !== this.options.agentId) {
+    // A presented key that is wrong never falls back to the session. The key identifies the
+    // agent; the claimed x-agent-id must match it.
+    const presented = sha256(agentKey);
+    const agent = this.options.agents.find(
+      (a) => a.key.length > 0 && timingSafeEqual(presented, sha256(a.key)),
+    );
+    if (!agent) throw new UnauthorizedException('invalid agent key');
+    if (header(req, 'x-agent-id') !== agent.id) {
       throw new UnauthorizedException('unknown agent');
     }
     const userId = header(req, 'x-acting-for');
@@ -65,15 +92,21 @@ export class PrincipalGuard implements CanActivate {
     if (!userId || !runId) {
       throw new UnauthorizedException('agent requests need x-acting-for and x-run-id');
     }
+    if (!RUN_ID.test(runId)) throw new UnauthorizedException('x-run-id is not a run id');
     if (!(await userExists(this.options.db, userId))) {
       throw new UnauthorizedException('x-acting-for is not a known user');
     }
+    // A relay's channel is fixed by its key; the assistant forwards the channel of the turn
+    // it is running (checked against the known channels, never free text).
+    const forwarded = Channel.safeParse(header(req, 'x-channel'));
+    const channel = agent.channel ?? (forwarded.success ? forwarded.data : undefined);
     return {
-      actor: { kind: 'agent', id: this.options.agentId, role: 'agent' },
+      actor: { kind: 'agent', id: agent.id, role: 'agent' },
       actingFor: { userId },
       runId,
       agentVersion: header(req, 'x-agent-version'),
       scopes: [],
+      ...(channel ? { channel } : {}),
     };
   }
 
@@ -81,6 +114,24 @@ export class PrincipalGuard implements CanActivate {
     const id = req.session?.user?.id;
     if (!id) throw new UnauthorizedException();
     return { actor: { kind: 'user', id, role: 'owner' }, scopes: [] };
+  }
+}
+
+/**
+ * A chat turn: a person, or a relay agent (the voice worker) starting a turn for the person it
+ * acts for. The assistant itself never starts turns. Pair with @RelayAllowed() (and, for a
+ * relay, a check that it is inside a session for that person; see the API's voice module).
+ */
+@Injectable()
+export class ChatAccessGuard implements CanActivate {
+  constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {}
+
+  canActivate(context: ExecutionContext) {
+    const p = context.switchToHttp().getRequest<ApiRequest>().principal;
+    if (p?.actor.kind === 'user') return true;
+    const agent = this.options.agents.find((a) => a.id === p?.actor.id);
+    if (p?.actor.kind === 'agent' && agent?.relay && p.actingFor) return true;
+    throw new ForbiddenException('Only people, or a relay acting for one, can start a turn');
   }
 }
 

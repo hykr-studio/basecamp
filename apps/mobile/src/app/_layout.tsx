@@ -24,7 +24,7 @@ import { auth, type SessionUser } from '../api';
 import { Canvas } from '../canvas/Canvas';
 import { bindPlatformScreens } from '../canvas/screens';
 import { useCanvas } from '../canvas/store';
-import { ChatRuntime, conversationKey } from '../chat/ChatRuntime';
+import { ChatRuntime } from '../chat/ChatRuntime';
 import { Thread } from '../chat/Thread';
 import { Button } from '../components/Button';
 import { WhatsAppLink } from '../components/WhatsAppLink';
@@ -35,10 +35,12 @@ import type { NavItem as Destination } from '../framework/app-domain';
 import { AssistantProvider } from '../framework/assistant-context';
 import { isHovered } from '../framework/hover';
 import { Icon } from '../framework/Icon';
+import { LangProvider } from '../framework/lang';
 import { ToastProvider } from '../framework/Toast';
 import { SignIn } from '../screens/SignIn';
 import { colors, space, styles } from '../theme';
 import { bindPlatformViews } from '../views';
+import { VoiceStrip } from '../voice/VoiceBar';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -122,7 +124,6 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const canvasOpen = useCanvas((c) => c.state.kind !== 'closed');
   const closeCanvas = useCanvas((c) => c.close);
-  const chatKey = conversationKey(user.id);
   const stack = (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
   );
@@ -171,7 +172,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
           {stack}
         </View>
         <View style={{ width: 380, padding: space.lg, paddingLeft: 0 }}>
-          <Thread storageKey={chatKey} />
+          <Thread />
         </View>
       </View>
     );
@@ -222,8 +223,17 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
         {/* The conversation lives in ChatRuntime, so the sheet can unmount when closed. */}
         {chatOpen && !canvasOpen && (
           <View style={{ height: '60%' }}>
-            <Thread storageKey={chatKey} compact onClose={() => setChatOpen(false)} />
+            <Thread compact onClose={() => setChatOpen(false)} />
           </View>
+        )}
+        {/* Voice goes on with the sheet closed: keep it in sight, and a way to end it. */}
+        {!(chatOpen && !canvasOpen) && (
+          <VoiceStrip
+            onOpen={() => {
+              closeCanvas();
+              setChatOpen(true);
+            }}
+          />
         )}
         <View style={s.tabBar} role="navigation">
           {NAV.map((n) => (
@@ -274,34 +284,36 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <AssistantProvider>
-          <StatusBar style="dark" />
-          {user === undefined || !(fontsLoaded || fontError) ? (
-            <View style={styles.screen}>
-              <ActivityIndicator
-                style={{ marginTop: 96 }}
-                color={colors.primary}
-                accessibilityLabel="Loading your session"
-              />
-            </View>
-          ) : user === null ? (
-            <View style={styles.screen}>
-              <SignIn onSignedIn={setUser} />
-            </View>
-          ) : (
-            <ChatRuntime storageKey={conversationKey(user.id)}>
-              <Shell
-                user={user}
-                onSignOut={() => {
-                  auth.signOut().finally(() => {
-                    queryClient.clear();
-                    setUser(null);
-                  });
-                }}
-              />
-            </ChatRuntime>
-          )}
-        </AssistantProvider>
+        <LangProvider>
+          <AssistantProvider>
+            <StatusBar style="dark" />
+            {user === undefined || !(fontsLoaded || fontError) ? (
+              <View style={styles.screen}>
+                <ActivityIndicator
+                  style={{ marginTop: 96 }}
+                  color={colors.primary}
+                  accessibilityLabel="Loading your session"
+                />
+              </View>
+            ) : user === null ? (
+              <View style={styles.screen}>
+                <SignIn onSignedIn={setUser} />
+              </View>
+            ) : (
+              <ChatRuntime key={user.id}>
+                <Shell
+                  user={user}
+                  onSignOut={() => {
+                    auth.signOut().finally(() => {
+                      queryClient.clear();
+                      setUser(null);
+                    });
+                  }}
+                />
+              </ChatRuntime>
+            )}
+          </AssistantProvider>
+        </LangProvider>
       </ToastProvider>
     </QueryClientProvider>
   );

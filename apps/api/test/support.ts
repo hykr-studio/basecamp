@@ -78,7 +78,7 @@ export class Person {
   /** One turn as JSON (/api/chat/once). Surfaces default to text, as for any plain caller. */
   chat(content: string, context?: object, surfaces?: string[]) {
     return this.call('POST', '/api/chat/once', {
-      messages: [{ role: 'user', content }],
+      message: content,
       ...(context ? { context } : {}),
       ...(surfaces ? { surfaces } : {}),
     });
@@ -90,7 +90,7 @@ export class Person {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin, cookie: this.cookie },
       body: JSON.stringify({
-        messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: content }] }],
+        message: content,
         surfaces,
         ...(context ? { context } : {}),
       }),

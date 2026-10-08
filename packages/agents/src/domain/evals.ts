@@ -1,5 +1,5 @@
 import type { PageSpec } from '@app/contracts';
-import type { EvalCase } from '../agent-domain.js';
+import type { EvalCase, VoiceEvalCase } from '../agent-domain.js';
 
 /** The eval conversation for this domain (packages/agents/evals runs it). */
 const NO_SCREEN = ['canvas', 'screen', 'opened'];
@@ -101,5 +101,103 @@ export const evalCases: EvalCase[] = [
     input: 'open Eval sync',
     surfaces: ['text'],
     expect: { must: ['list-meetings'], mustNot: ['canvas-open'], replyExcludes: NO_SCREEN },
+  },
+];
+
+/**
+ * Spoken turns, in order, in English, Hindi and Telugu, code-mixed as people speak: tools are
+ * called in English with the title as said, and the answer comes back in the turn's language,
+ * short enough to say.
+ */
+export const voiceEvalCases: VoiceEvalCase[] = [
+  {
+    lang: 'en',
+    why: 'adds (English)',
+    input: 'add Call the electrician',
+    expect: { must: ['create-todo'] },
+  },
+  {
+    lang: 'te',
+    why: 'adds (Telugu)',
+    input: 'జోడించు Buy cement',
+    expect: { must: ['create-todo'] },
+  },
+  {
+    lang: 'te',
+    why: 'adds, verb last (Telugu)',
+    input: 'Order tiles జోడించండి',
+    expect: { must: ['create-todo'] },
+  },
+  {
+    lang: 'hi',
+    why: 'adds (Hindi)',
+    input: 'जोड़ो Book the site visit',
+    expect: { must: ['create-todo'] },
+  },
+  {
+    lang: 'hi',
+    why: 'adds, verb last, code-mixed (Hindi)',
+    input: 'Pay the plumber जोड़ें',
+    expect: { must: ['create-todo'] },
+  },
+  {
+    lang: 'en',
+    why: 'lists, briefly (English)',
+    input: 'list',
+    expect: { must: ['list-todos'], mustNot: ['delete-todo'] },
+  },
+  {
+    lang: 'te',
+    why: 'lists (Telugu)',
+    input: 'జాబితా',
+    expect: { must: ['list-todos'], mustNot: ['delete-todo'] },
+  },
+  {
+    lang: 'hi',
+    why: 'lists (Hindi)',
+    input: 'सूची',
+    expect: { must: ['list-todos'], mustNot: ['delete-todo'] },
+  },
+  {
+    lang: 'te',
+    why: 'completes by title (Telugu)',
+    input: 'Buy cement పూర్తి',
+    expect: { must: ['list-todos', 'update-todo'], mustNot: ['delete-todo'] },
+  },
+  {
+    lang: 'hi',
+    why: 'completes by title (Hindi)',
+    input: 'Book the site visit पूरा करो',
+    expect: { must: ['list-todos', 'update-todo'], mustNot: ['delete-todo'] },
+  },
+  {
+    lang: 'te',
+    why: 'a delete by voice is parked (Telugu)',
+    input: 'తొలగించు Order tiles',
+    expect: { must: ['list-todos', 'delete-todo'] },
+  },
+  {
+    lang: 'hi',
+    why: 'a delete by voice is parked (Hindi)',
+    input: 'Pay the plumber हटाओ',
+    expect: { must: ['list-todos', 'delete-todo'] },
+  },
+  {
+    lang: 'en',
+    why: 'a delete by voice is parked (English)',
+    input: 'delete Call the electrician',
+    expect: { must: ['list-todos', 'delete-todo'] },
+  },
+  {
+    lang: 'te',
+    why: 'no invented id (Telugu)',
+    input: 'తొలగించు Buy a boat',
+    expect: { must: ['list-todos'], mustNot: ['delete-todo'] },
+  },
+  {
+    lang: 'hi',
+    why: 'no invented id (Hindi)',
+    input: 'Buy a boat हटाओ',
+    expect: { must: ['list-todos'], mustNot: ['delete-todo'] },
   },
 ];
