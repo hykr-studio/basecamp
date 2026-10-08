@@ -25,7 +25,9 @@ export const appDomain = defineAppDomain({
     { text: 'delete Book the site visit', what: 'asks you to approve the delete' },
     {
       text: 'close <meeting>',
-      what: 'then paste notes on the next lines; waits for your approval',
+      // The message box keeps line breaks (Shift+Enter on the web), and a meeting's own
+      // screen is the chat's context, so "close this one" names it.
+      what: 'paste the notes on the lines below, or on a meeting say "close this one"; waits for your approval',
     },
     { text: 'move <meeting> to 2026-10-31', what: 'moves it and its to-dos' },
   ],

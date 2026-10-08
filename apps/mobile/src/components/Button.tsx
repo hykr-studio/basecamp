@@ -98,7 +98,7 @@ const s = StyleSheet.create({
   },
   iconOnly: { paddingHorizontal: 0, width: 44 },
   primary: { backgroundColor: colors.primary },
-  primaryHover: { backgroundColor: '#264cc8' },
+  primaryHover: { backgroundColor: colors.primaryHover },
   destructive: { backgroundColor: colors.danger },
   destructiveHover: { backgroundColor: colors.dangerHover },
   secondary: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border },

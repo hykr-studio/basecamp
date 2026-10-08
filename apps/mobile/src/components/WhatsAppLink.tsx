@@ -131,7 +131,7 @@ export function WhatsAppLink() {
           accessibilityRole="button"
           accessibilityLabel="Unlink WhatsApp"
           onPress={() => remove.mutate()}
-          className="min-h-9 justify-center px-1"
+          className="min-h-11 justify-center px-1"
         >
           <Text variant="muted" className="text-primary">
             Unlink
@@ -145,7 +145,7 @@ export function WhatsAppLink() {
     <Pressable
       accessibilityRole="button"
       onPress={() => setEditing(true)}
-      className="min-h-9 flex-row items-center gap-1.5 self-start"
+      className="min-h-11 flex-row items-center gap-1.5 self-start"
     >
       <Icon name="message-square" color={colors.primary} size={14} />
       <Text variant="muted" className="text-primary">

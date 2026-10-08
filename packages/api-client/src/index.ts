@@ -242,6 +242,14 @@ export function createApiClient(opts: ApiClientOptions) {
         'GET',
         `/api/history?resourceType=${resourceType}&resourceId=${encodeURIComponent(resourceId)}`,
       ),
+    /** The latest 20 lines across every record, newest first: since a moment, by one actor. */
+    recentHistory: (q: { since?: string; actor?: 'assistant' | 'you' } = {}) => {
+      const params = new URLSearchParams();
+      if (q.since) params.set('since', q.since);
+      if (q.actor) params.set('actor', q.actor);
+      const qs = params.toString();
+      return call<HistoryEntry[]>('GET', `/api/history${qs ? `?${qs}` : ''}`);
+    },
     decideApproval: (id: string, approve: boolean) =>
       call<Approval>(
         'POST',

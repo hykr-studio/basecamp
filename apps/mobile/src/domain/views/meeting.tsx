@@ -141,7 +141,7 @@ export function CalendarWeekComponent({
                   key={m.id}
                   variant="secondary"
                   size="sm"
-                  className="min-h-9 items-start justify-start px-1.5 py-1"
+                  className="min-h-11 items-start justify-start px-1.5 py-1"
                   accessibilityLabel={`Open ${m.title}, ${when(m.startsAt)}`}
                   onPress={() => act('open', m)}
                 >

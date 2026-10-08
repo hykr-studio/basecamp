@@ -7,6 +7,7 @@ import { colors, space, styles } from '../theme';
 import { AssistantMark } from './AssistantMark';
 import { Icon, type IconName } from './Icon';
 import { verbOf } from './verbs';
+import { inApp, webHref } from './web-link';
 
 function describe(e: HistoryEntry): { text: string; icon: IconName; tone: string } {
   const verb = verbOf(e.action);
@@ -75,7 +76,8 @@ export function History({ type, id }: { type: string; id: string }) {
               {__DEV__ && e.runId && e.runId.length === 32 && (
                 <Pressable
                   accessibilityRole="link"
-                  onPress={() => Linking.openURL(`${STUDIO_URL}/traces/${e.runId}`)}
+                  {...webHref(`${STUDIO_URL}/traces/${e.runId}`)}
+                  onPress={inApp(() => Linking.openURL(`${STUDIO_URL}/traces/${e.runId}`))}
                   style={{ alignSelf: 'flex-start' }}
                 >
                   <Text

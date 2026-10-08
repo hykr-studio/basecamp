@@ -77,6 +77,7 @@ export function toApproval(row: ApprovalRow): Approval {
     requestedBy: row.requestedBy,
     expiresAt: row.expiresAt.toISOString(),
     failureReason: row.failureReason,
+    decidedAt: row.decidedAt?.toISOString() ?? null,
   };
 }
 

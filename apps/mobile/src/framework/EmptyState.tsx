@@ -1,8 +1,8 @@
 import { Text, View } from 'react-native';
 import { Button } from '../components/Button';
 import { colors, space, styles } from '../theme';
-import { useAssistant } from './assistant-context';
 import { Icon, type IconName } from './Icon';
+import { TryPrompt } from './TryPrompt';
 
 /** An empty list that teaches: what goes here, the main action, and what to ask the assistant. */
 export function EmptyState({
@@ -16,26 +16,20 @@ export function EmptyState({
   title: string;
   body?: string;
   action?: { label: string; onPress: () => void };
-  /** A message to send the assistant, shown as a suggestion. */
+  /** A message to send the assistant, shown as a suggestion: the same thing, done by asking. */
   ask?: string;
 }) {
-  const assistant = useAssistant();
   return (
     <View style={{ alignItems: 'flex-start', gap: space.sm, paddingVertical: space.md }}>
       <Icon name={icon} color={colors.muted} size={22} />
       <Text style={styles.heading}>{title}</Text>
       {body ? <Text style={styles.muted}>{body}</Text> : null}
-      <View style={[styles.row, { flexWrap: 'wrap' }]}>
-        {action && <Button title={action.label} onPress={action.onPress} variant="secondary" />}
-        {ask && (
-          <Button
-            title={`Ask: “${ask}”`}
-            variant="subtle"
-            icon="message-circle"
-            onPress={() => assistant.send(ask)}
-          />
-        )}
-      </View>
+      {action && (
+        <View style={styles.row}>
+          <Button title={action.label} onPress={action.onPress} variant="secondary" />
+        </View>
+      )}
+      {ask && <TryPrompt text={ask} />}
     </View>
   );
 }

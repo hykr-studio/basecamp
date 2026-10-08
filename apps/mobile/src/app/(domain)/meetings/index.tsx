@@ -27,12 +27,29 @@ const chips = (): Chip[] => {
   ];
 };
 
+/**
+ * A new meeting starts at the next full hour, so it is not born "Needs closing"; after the
+ * working day (from 18:00) it moves to tomorrow at 10:00.
+ */
+function nextSlot(now = new Date()): { date: string; time: string } {
+  const next = new Date(now);
+  next.setMinutes(0, 0, 0);
+  next.setHours(next.getHours() + 1);
+  if (now.getHours() >= 18 || next.getDate() !== now.getDate()) {
+    const tomorrow = new Date(now);
+    tomorrow.setDate(now.getDate() + 1);
+    return { date: tomorrow.toLocaleDateString('sv'), time: '10:00' };
+  }
+  return { date: todayLocal(), time: `${String(next.getHours()).padStart(2, '0')}:00` };
+}
+
 function NewMeeting({ onDone }: { onDone: () => void }) {
   const { create } = useEntityMutation('meetings');
   const toast = useToast();
+  const [slot] = useState(nextSlot);
   const [title, setTitle] = useState('');
-  const [date, setDate] = useState(todayLocal());
-  const [time, setTime] = useState('10:00');
+  const [date, setDate] = useState(slot.date);
+  const [time, setTime] = useState(slot.time);
   const [minutes, setMinutes] = useState('60');
   const [attendees, setAttendees] = useState('');
   const valid = title.trim() && isValidDate(date) && isValidTime(time) && Number(minutes) > 0;

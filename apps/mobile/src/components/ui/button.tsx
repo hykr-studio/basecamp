@@ -16,7 +16,10 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        primary: cn('bg-primary active:opacity-85', Platform.select({ web: 'hover:bg-[#264cc8]' })),
+        primary: cn(
+          'bg-primary active:opacity-85',
+          Platform.select({ web: 'hover:bg-primary-hover' }),
+        ),
         secondary: cn(
           'bg-card border border-border active:opacity-85',
           Platform.select({ web: 'hover:bg-primary-tint' }),
@@ -30,7 +33,7 @@ const buttonVariants = cva(
       },
       size: {
         default: 'min-h-11 px-4',
-        sm: 'min-h-9 px-3',
+        sm: 'min-h-11 px-3',
         icon: 'size-11',
       },
     },
@@ -57,12 +60,16 @@ type ButtonProps = React.ComponentProps<typeof Pressable> &
   VariantProps<typeof buttonVariants>;
 
 function Button({ className, variant, size, ...props }: ButtonProps) {
+  // Disabled: the disabled tokens for fill and label alike, and no hover colour over them.
+  const off = !!props.disabled;
   return (
-    <TextClassContext.Provider value={buttonTextVariants({ variant, size })}>
+    <TextClassContext.Provider
+      value={cn(buttonTextVariants({ variant, size }), off && 'text-disabled-text')}
+    >
       <Pressable
         className={cn(
           buttonVariants({ variant, size }),
-          props.disabled && 'bg-disabled-bg border-disabled-bg',
+          off && 'bg-disabled-bg border-disabled-bg hover:bg-disabled-bg',
           className,
         )}
         role="button"

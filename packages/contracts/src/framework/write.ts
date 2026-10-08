@@ -22,6 +22,8 @@ export const Approval = z.object({
   expiresAt: z.iso.datetime(),
   /** Set when an approved replay was refused, e.g. the meeting was closed meanwhile. */
   failureReason: z.string().nullable(),
+  /** When the person decided it (null while it waits), so a client can say "since approved at 2:38". */
+  decidedAt: z.iso.datetime().nullable().optional(),
 });
 export type Approval = z.infer<typeof Approval>;
 

@@ -30,13 +30,15 @@ import { Button } from '../components/Button';
 import { WhatsAppLink } from '../components/WhatsAppLink';
 import { appDomain } from '../domain';
 import { ApprovalCard } from '../framework/ApprovalCard';
+import { ApprovalsAnnouncer } from '../framework/ApprovalsAnnouncer';
 import { ASSISTANT_ICON } from '../framework/AssistantMark';
 import type { NavItem as Destination } from '../framework/app-domain';
-import { AssistantProvider } from '../framework/assistant-context';
-import { isHovered } from '../framework/hover';
+import { AssistantProvider, useAssistant } from '../framework/assistant-context';
+import { isFocused, isHovered } from '../framework/hover';
 import { Icon } from '../framework/Icon';
 import { LangProvider } from '../framework/lang';
 import { ToastProvider } from '../framework/Toast';
+import { inApp, webHref } from '../framework/web-link';
 import { SignIn } from '../screens/SignIn';
 import { colors, space, styles } from '../theme';
 import { bindPlatformViews } from '../views';
@@ -72,7 +74,9 @@ function useBrowserSurfaces() {
       ::selection { background: ${colors.primaryTint}; color: ${colors.text}; }
       input, textarea { caret-color: ${colors.primary}; }
       :focus-visible { outline: 2px solid ${colors.primary} !important; outline-offset: 2px; border-radius: 6px; }
-      * { scrollbar-color: #c3c9d3 transparent; }
+      * { scrollbar-color: ${colors.scrollbar} transparent; }
+      /* The skip link's target takes focus without a ring around the whole column. */
+      #main:focus-visible, #canvas:focus-visible { outline: none !important; }
     `;
     document.head.appendChild(style);
     return () => style.remove();
@@ -93,11 +97,13 @@ function NavItem({
       accessibilityRole="link"
       accessibilityState={{ selected: active }}
       accessibilityLabel={item.label}
-      onPress={() => router.navigate(item.href)}
+      // A real anchor on the web, so Enter follows it.
+      {...webHref(item.href)}
+      onPress={inApp(() => router.navigate(item.href))}
       style={(state) => [
         vertical ? s.railItem : s.tabItem,
         active && (vertical ? s.railActive : null),
-        isHovered(state) && !active && vertical && { backgroundColor: '#e2e6ec' },
+        isHovered(state) && !active && vertical && { backgroundColor: colors.railHover },
       ]}
     >
       <Icon
@@ -117,6 +123,36 @@ function NavItem({
   );
 }
 
+/** Shows the full text on hover (web), where a single line cuts it short. */
+const withTitle = (title: string) => (node: unknown) => {
+  if (Platform.OS === 'web' && node instanceof HTMLElement) node.title = title;
+};
+
+/**
+ * The first stop for Tab on the web: past the navigation to the screen itself. Hidden until
+ * it has keyboard focus. With the canvas open on a wide screen, the canvas is the content.
+ */
+function SkipLink() {
+  if (Platform.OS !== 'web') return null;
+  return (
+    <Pressable
+      accessibilityRole="link"
+      {...webHref('#main')}
+      onPress={inApp(() => {
+        const target = [document.getElementById('main'), document.getElementById('canvas')].find(
+          (el) => el && el.offsetParent !== null,
+        );
+        if (!target) return;
+        target.setAttribute('tabindex', '-1');
+        target.focus();
+      })}
+      style={(state) => (isFocused(state) ? [s.skip, s.skipShown] : s.skip)}
+    >
+      <Text style={[styles.label, { color: colors.primary }]}>Skip to content</Text>
+    </Pressable>
+  );
+}
+
 function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }) {
   const wide = useWindowDimensions().width >= 900;
   const path = usePathname();
@@ -124,6 +160,19 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const canvasOpen = useCanvas((c) => c.state.kind !== 'closed');
   const closeCanvas = useCanvas((c) => c.close);
+  const { registerReveal } = useAssistant();
+  // A screen's "Try: …" prompt opens the phone's sheet so the reply is in sight; wide
+  // layouts always show the thread.
+  useEffect(() => {
+    registerReveal(
+      wide
+        ? () => {}
+        : () => {
+            closeCanvas();
+            setChatOpen(true);
+          },
+    );
+  }, [wide, registerReveal, closeCanvas]);
   const stack = (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
   );
@@ -131,6 +180,8 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
   if (wide) {
     return (
       <View style={[styles.screen, { flexDirection: 'row' }]}>
+        <SkipLink />
+        <ApprovalsAnnouncer />
         <View style={s.rail} role="navigation">
           <View style={{ gap: 2, paddingHorizontal: space.md, paddingBottom: space.lg }}>
             <Text style={styles.heading}>Basecamp</Text>
@@ -144,7 +195,12 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
             <Text style={styles.label} numberOfLines={1}>
               {user.name}
             </Text>
-            <Text style={styles.muted} numberOfLines={1}>
+            <Text
+              ref={withTitle(user.email)}
+              style={styles.muted}
+              numberOfLines={1}
+              accessibilityLabel={user.email}
+            >
               {user.email}
             </Text>
             <WhatsAppLink />
@@ -153,11 +209,11 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
         </View>
         {/* The canvas takes the main column's place; the person's screen stays mounted under it. */}
         {canvasOpen && (
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1 }} id="canvas">
             <Canvas />
           </View>
         )}
-        <View style={[{ flex: 1 }, canvasOpen && { display: 'none' }]} role="main">
+        <View style={[{ flex: 1 }, canvasOpen && { display: 'none' }]} role="main" id="main">
           <View
             style={{
               paddingHorizontal: space.lg,
@@ -186,6 +242,8 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+        <SkipLink />
+        <ApprovalsAnnouncer />
         <View style={s.topBar}>
           <Text style={styles.heading}>Basecamp</Text>
           {confirmSignOut ? (
@@ -203,7 +261,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
             />
           )}
         </View>
-        <View style={{ flex: 1 }} role="main">
+        <View style={{ flex: 1 }} role="main" id="main">
           {stack}
           {/* A canvas intent opens as a sheet over the screen, between the top bar and the
             tabs (so clear of the notch); "Chat" goes back to the thread. */}
@@ -320,6 +378,18 @@ export default function RootLayout() {
 }
 
 const s = StyleSheet.create({
+  // Off screen until focused; then a small card at the top left, above everything.
+  skip: { position: 'absolute', left: -10000, top: space.sm, zIndex: 10 },
+  skipShown: {
+    left: space.sm,
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: space.lg,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+  },
   rail: {
     width: 228,
     backgroundColor: colors.rail,

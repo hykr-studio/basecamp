@@ -20,6 +20,7 @@ import {
  *   delete <title>                  list-todos → delete-todo (parked for approval)
  *   today                           list-meetings + list-todos for today → summary
  *   close <meeting>\n<summary>\n- item …   list-meetings → close-meeting (parked for approval)
+ *   close this one\n<notes>        on a meeting: close-meeting on it (parked for approval)
  *   move <meeting> to <YYYY-MM-DD>  list-meetings → reschedule-meeting
  *   what's due this week            list-todos due within 7 days → one line (the view shows them)
  *   open <meeting>                  list-meetings → canvas-open; without a canvas, get-meeting
@@ -65,6 +66,17 @@ const startsWith = (verb: Verb, text: string) =>
 /** A verb at the end decides first (that is where Hindi and Telugu put it), then one at the start. */
 const command = (verb: Verb, text: string) => endsWith(verb, text) ?? startsWith(verb, text);
 const quoted = (title: string) => `"${title}"`;
+
+/** "this one", "this meeting", "it": the meeting on screen. */
+const THIS = /^(?:this(?: one| meeting)?|it)\.?$/i;
+
+const closeCall = (meetingId: string, intent: { summary: string; items: string[] }) =>
+  call('close-meeting', {
+    meetingId,
+    summary: intent.summary,
+    decisions: [],
+    actionItems: intent.items.map((title) => ({ title })),
+  });
 
 export const domainScripts = [
   defineScript({
@@ -218,18 +230,16 @@ export const domainScripts = [
     step: (intent, turn) => {
       const r = turn.result('close-meeting');
       if (r) return [say(written(r, () => `Closed ${intent.title}.`))];
+      // "close this one" on a meeting: the screen names it, so there is nothing to look up.
+      const here = turn.record?.type === 'meeting' && THIS.test(intent.title);
+      if (here && turn.record) return [closeCall(turn.record.id, intent)];
+      if (THIS.test(intent.title))
+        return [say('Which meeting? Open it first, or name it: "close Site review".')];
       const list = turn.result('list-meetings');
       if (!list) return [call('list-meetings', { q: intent.title })];
       const meeting = items(list).find((x) => sameTitle(x.title, intent.title)) ?? items(list)[0];
       if (!meeting) return [say(`I couldn't find a meeting called "${intent.title}".`)];
-      return [
-        call('close-meeting', {
-          meetingId: meeting.id,
-          summary: intent.summary,
-          decisions: [],
-          actionItems: intent.items.map((title) => ({ title })),
-        }),
-      ];
+      return [closeCall(meeting.id, intent)];
     },
   }),
   defineScript({

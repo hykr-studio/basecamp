@@ -11,6 +11,9 @@ type Assistant = {
   /** Set by the chat panel; screens call it to send a message as the person. */
   send: (text: string) => Promise<void>;
   registerSend: (fn: (text: string) => Promise<void>) => void;
+  /** Bring the thread into view (the phone layout opens its sheet; wide layouts show it). */
+  reveal: () => void;
+  registerReveal: (fn: () => void) => void;
 };
 
 const AssistantContext = createContext<Assistant | null>(null);
@@ -18,6 +21,7 @@ const AssistantContext = createContext<Assistant | null>(null);
 export function AssistantProvider({ children }: { children: ReactNode }) {
   const [context, setContext] = useState<ChatContext | undefined>();
   const sendRef = useRef<(text: string) => Promise<void>>(async () => {});
+  const revealRef = useRef<() => void>(() => {});
   return (
     <AssistantContext.Provider
       value={{
@@ -26,6 +30,10 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
         send: (text) => sendRef.current(text),
         registerSend: (fn) => {
           sendRef.current = fn;
+        },
+        reveal: () => revealRef.current(),
+        registerReveal: (fn) => {
+          revealRef.current = fn;
         },
       }}
     >

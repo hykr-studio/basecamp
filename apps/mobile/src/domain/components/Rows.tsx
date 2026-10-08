@@ -7,6 +7,7 @@ import { Button } from '../../components/Button';
 import { ByAssistant } from '../../framework/AssistantMark';
 import { clock, relativeDay, when } from '../../framework/dates';
 import { entityApi, useEntity, useEntityMutation, useUndoableDelete } from '../../framework/hooks';
+import { isFocused, isHovered } from '../../framework/hover';
 import { Icon } from '../../framework/Icon';
 import { Markdown } from '../../framework/Markdown';
 import { useToast } from '../../framework/Toast';
@@ -104,9 +105,19 @@ export function TodoRow({
             accessibilityRole="button"
             accessibilityLabel={`Rename “${todo.title}”`}
             onPress={() => setEditing(true)}
-            style={{ minHeight: 28, justifyContent: 'center' }}
+            style={s.rename}
           >
-            <Text style={[styles.text, todo.done && s.done]}>{todo.title}</Text>
+            {(state) => (
+              <>
+                <Text style={[styles.text, { flexShrink: 1 }, todo.done && s.done]}>
+                  {todo.title}
+                </Text>
+                {/* Hover or keyboard focus shows that the title can be renamed. */}
+                {(isHovered(state) || isFocused(state)) && (
+                  <Icon name="edit-2" color={colors.muted} size={14} />
+                )}
+              </>
+            )}
           </Pressable>
         )}
         {(due || (showMeeting && todo.meetingId) || todo.createdBy === 'assistant') && (
@@ -216,12 +227,21 @@ export function StatusBadge({ meeting }: { meeting: { status: string; startsAt: 
 const s = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: space.sm, minHeight: 52 },
   hit: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  // A 44px target that takes only a line of text's room: the negative margin keeps the row's
+  // spacing as it was, and the extra height reaches into the row's own padding.
+  rename: {
+    minHeight: 44,
+    marginVertical: -8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   box: {
     width: 22,
     height: 22,
     borderRadius: 6,
     borderWidth: 2,
-    borderColor: '#aab2bf',
+    borderColor: colors.controlBorder,
     alignItems: 'center',
     justifyContent: 'center',
   },

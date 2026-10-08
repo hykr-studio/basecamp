@@ -61,7 +61,7 @@ function SaveButton() {
         autoFocus
         accessibilityLabel="Name for this page"
         onSubmitEditing={() => name.trim() && save()}
-        className="min-h-9 w-44 rounded-control border border-border bg-card px-2 text-body text-text"
+        className="min-h-11 w-44 rounded-control border border-border bg-card px-2 text-body text-text"
       />
       <Button size="sm" accessibilityLabel="Save it" disabled={!name.trim() || busy} onPress={save}>
         <Text>Save</Text>

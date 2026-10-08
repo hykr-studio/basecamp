@@ -169,6 +169,22 @@ describe('meetings, end to end', () => {
     expect(one.body.status).toBe('approved');
     expect((await bob.call('GET', `/api/approvals/${approvals.rows[0].id}`)).status).toBe(404);
 
+    // Without a record: what the assistant did lately, newest first, with each record's name.
+    const feed = await ana.call('GET', '/api/history?actor=assistant');
+    expect(feed.status).toBe(200);
+    const close = feed.body.find(
+      (e: { action: string; outcome: string }) =>
+        e.action === 'meeting.close' && e.outcome === 'committed',
+    );
+    expect(close).toMatchObject({ actor: 'assistant', resourceId: siteReview.id });
+    expect(feed.body.every((e: { actor: string }) => e.actor === 'assistant')).toBe(true);
+    const later = await ana.call(
+      'GET',
+      `/api/history?actor=assistant&since=${encodeURIComponent(new Date().toISOString())}`,
+    );
+    expect(later.body).toEqual([]);
+    expect((await ana.call('GET', '/api/history?resourceType=meeting')).status).toBe(400);
+
     // History is for people: the assistant's own key is refused.
     const asAgent = await new Person('agent-history').call(
       'GET',

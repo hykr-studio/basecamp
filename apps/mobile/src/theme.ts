@@ -38,6 +38,20 @@ export const colors = {
   assistant: '#6a3fc8', // 6.7:1 on white, 5.9:1 on assistantTint
   assistantTint: '#f4effd',
   assistantBorder: '#ddd0f7',
+  /** Hover on a filled primary button. */
+  primaryHover: '#264cc8',
+  /** Hover on a rail item: one step darker than the rail. */
+  railHover: '#e2e6ec',
+  /** An unticked checkbox's outline. */
+  controlBorder: '#aab2bf',
+  scrollbar: '#c3c9d3',
+  shadow: '#000000',
+  /** The toast: a dark surface, so an outcome reads apart from the page. */
+  inverseBg: '#1c2430',
+  inverseText: '#ffffff',
+  inverseLink: '#a9c1ff',
+  inverseSuccess: '#9be3bb',
+  inverseError: '#ffb4ad',
 };
 
 /**

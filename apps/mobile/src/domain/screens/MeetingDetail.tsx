@@ -162,7 +162,7 @@ export function MeetingDetail({ id, embedded = false }: { id: string; embedded?:
         {!closed && !panel && (
           <View style={[styles.row, { flexWrap: 'wrap', marginTop: space.xs }]}>
             {started ? (
-              <Button title="Write the close…" icon="edit-3" onPress={() => setPanel('close')} />
+              <Button title="Draft the close…" icon="edit-3" onPress={() => setPanel('close')} />
             ) : null}
             <Button
               title="Reschedule"
@@ -174,7 +174,8 @@ export function MeetingDetail({ id, embedded = false }: { id: string; embedded?:
               <Button
                 title="Mark as held"
                 accessibilityLabel="Mark as held: it happened, notes to follow"
-                variant="subtle"
+                // Outlined, so on a phone (where it wraps to its own line) it reads as a button.
+                variant="secondary"
                 onPress={() =>
                   meetingMutation.update.mutate({ id: m.id, patch: { status: 'held' } })
                 }

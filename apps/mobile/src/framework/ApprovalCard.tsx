@@ -1,6 +1,8 @@
 import type { Approval } from '@app/contracts';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { createContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { api } from '../api';
 import { Button } from '../components/Button';
 import { colors, space, styles } from '../theme';
 import { ApprovalPreview, labelOf } from './ApprovalPreview';
@@ -13,10 +15,13 @@ import { useToast } from './Toast';
 import { verbOf } from './verbs';
 
 /*
- * Approvals a screen shows inline (the close form shows its own draft) are left out of the
- * global card, so each request has one place to decide it.
+ * One place to decide each request. A screen that shows a request (the close form shows its
+ * own draft) owns it; otherwise the chat card that brought it does; otherwise the global card.
+ * Every other place that mentions it points to the owner instead of offering a second
+ * Approve button, and the global card leaves owned requests out.
  */
-const inline = new Set<string>();
+type Owner = { token: symbol; kind: 'screen' | 'chat'; where?: string };
+const owners = new Map<string, Owner[]>();
 const listeners = new Set<() => void>();
 const emit = () => {
   for (const l of listeners) l();
@@ -25,18 +30,92 @@ const subscribe = (l: () => void) => {
   listeners.add(l);
   return () => listeners.delete(l);
 };
-const snapshot = () => [...inline].sort().join(',');
+const snapshot = () => [...owners.keys()].sort().join(',');
 
-export function useShownInline(id: string | undefined) {
+/** The owner of a request: the first screen that shows it, else the first chat card. */
+function ownerOf(id: string): Owner | undefined {
+  const list = owners.get(id) ?? [];
+  return list.find((o) => o.kind === 'screen') ?? list[0];
+}
+
+function useOwnership(id: string | undefined, kind: Owner['kind'], where?: string) {
+  const [token] = useState(() => Symbol(kind));
   useEffect(() => {
     if (!id) return;
-    inline.add(id);
+    const owner: Owner = { token, kind, where };
+    owners.set(id, [...(owners.get(id) ?? []), owner]);
     emit();
     return () => {
-      inline.delete(id);
+      const rest = (owners.get(id) ?? []).filter((o) => o !== owner);
+      if (rest.length) owners.set(id, rest);
+      else owners.delete(id);
       emit();
     };
-  }, [id]);
+  }, [id, kind, where, token]);
+  return token;
+}
+
+/**
+ * Call from a screen that decides a request in place (it renders ApprovalItem itself), so
+ * the global card and the chat point here instead. `where` names the place for the pointer:
+ * "Waiting for you on Site review".
+ */
+export function useShownInline(id: string | undefined, where?: string) {
+  useOwnership(id, 'screen', where);
+}
+
+/**
+ * Call from a chat card that mentions a request: 'here' when it should offer the decision,
+ * or where the decision lives instead (a screen, or an earlier card in the thread).
+ */
+export function useDecisionPlace(
+  id: string | undefined,
+): { here: true } | { here: false; where?: string; onScreen: boolean } {
+  const token = useOwnership(id, 'chat');
+  const owner = useSyncExternalStore(
+    subscribe,
+    () => (id ? ownerOf(id) : undefined),
+    () => (id ? ownerOf(id) : undefined),
+  );
+  if (!owner || owner.token === token) return { here: true };
+  return { here: false, where: owner.where, onScreen: owner.kind === 'screen' };
+}
+
+/**
+ * Set by a chat that covers the screen (the phone sheet): how to step aside, so a pointer to
+ * a decision on the screen can show it.
+ */
+export const LeaveChat = createContext<(() => void) | undefined>(undefined);
+
+/** The element a request is decided in, for a pointer to scroll to (web). */
+const anchorId = (id: string) => `approval-${id}`;
+
+/** Bring the place a request is decided into view and put focus there (web; native: no-op). */
+export function revealDecision(id: string) {
+  if (typeof document === 'undefined') return;
+  const el = document.getElementById(anchorId(id));
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+  el.focus({ preventScroll: true });
+}
+
+/**
+ * What became of a request: pending while it is on the waiting list, then its final state
+ * (fetched once it leaves the list). The chat's lines and cards all read it from here.
+ */
+export function useApprovalStatus(id: string | undefined) {
+  const { approvals } = useApprovals();
+  const pending = id ? approvals.find((a) => a.id === id) : undefined;
+  const decided = useQuery({
+    queryKey: ['approval', id],
+    queryFn: () => api.getApproval(id as string),
+    enabled: !!id && !pending,
+    // A pending answer is never final: fetch again once it has left the waiting list.
+    staleTime: 0,
+  });
+  const approval: Approval | undefined = pending ?? decided.data;
+  return { approval, status: pending ? 'pending' : decided.data?.status };
 }
 
 /**
@@ -107,7 +186,8 @@ export function ApprovalItem({
   }
 
   return (
-    <View style={s.item}>
+    // The anchor a pointer elsewhere ("Waiting for you on …") scrolls to.
+    <View style={s.item} nativeID={anchorId(approval.id)}>
       <View style={{ gap: 2 }}>
         <Text style={[styles.text, { fontWeight: '600' }]}>{summary}</Text>
         <View style={[styles.row, { gap: space.xs }]}>
@@ -296,7 +376,9 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.xs,
-    minHeight: 32,
+    // A 44px target that still sits like a 32px line: the extra height overlaps the gaps.
+    minHeight: 44,
+    marginVertical: -6,
     alignSelf: 'flex-start',
   },
   preview: {

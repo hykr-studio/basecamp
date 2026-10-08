@@ -44,6 +44,8 @@ export type Turn = {
   lang: Lang;
   /** A voice turn: say the gist, the screen shows the rest. */
   spoken: boolean;
+  /** The record the person is looking at, as the instructions state it ("close this one"). */
+  record?: { type: string; id: string };
 };
 
 /** One thing the scripted model knows how to do. The first script that matches runs. */
@@ -180,6 +182,10 @@ function turnOf(prompt: LanguageModelV2Prompt): Turn {
     canvas: fromSystem(prompt, /The canvas shows this page: (\{.*\})\s*$/m, (m) =>
       JSON.parse(m[1]),
     ),
+    record: fromSystem(prompt, /The user is looking at ([a-z_]+) ([0-9a-f-]{36})\./, (m) => ({
+      type: m[1],
+      id: m[2],
+    })),
   };
 }
 

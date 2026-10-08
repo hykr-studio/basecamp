@@ -37,6 +37,16 @@
   --color-assistant: #6a3fc8;
   --color-assistant-tint: #f4effd;
   --color-assistant-border: #ddd0f7;
+  --color-primary-hover: #264cc8;
+  --color-rail-hover: #e2e6ec;
+  --color-control-border: #aab2bf;
+  --color-scrollbar: #c3c9d3;
+  --color-shadow: #000000;
+  --color-inverse-bg: #1c2430;
+  --color-inverse-text: #ffffff;
+  --color-inverse-link: #a9c1ff;
+  --color-inverse-success: #9be3bb;
+  --color-inverse-error: #ffb4ad;
 
   --font-heading: "SchibstedGrotesk_600SemiBold";
   --font-title: "SchibstedGrotesk_700Bold";

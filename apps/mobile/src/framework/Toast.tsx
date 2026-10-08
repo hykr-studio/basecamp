@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useCallback, useContext, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { space } from '../theme';
+import { colors, space } from '../theme';
 import { Icon, type IconName } from './Icon';
 
 type ToastInput = {
@@ -46,10 +46,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               name={icon[toast.tone ?? 'neutral']}
               color={
                 toast.tone === 'error'
-                  ? '#ffb4ad'
+                  ? colors.inverseError
                   : toast.tone === 'success'
-                    ? '#9be3bb'
-                    : '#ffffff'
+                    ? colors.inverseSuccess
+                    : colors.inverseText
               }
             />
             <Text style={s.text}>{toast.message}</Text>
@@ -71,7 +71,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               onPress={() => setToast(null)}
               style={s.close}
             >
-              <Icon name="x" color="#ffffff" size={16} />
+              <Icon name="x" color={colors.inverseText} size={16} />
             </Pressable>
           </View>
         )}
@@ -99,19 +99,19 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.md,
-    backgroundColor: '#1c2430',
+    backgroundColor: colors.inverseBg,
     borderRadius: 10,
     paddingLeft: space.lg,
     paddingRight: space.xs,
     paddingVertical: space.xs,
     maxWidth: 560,
-    shadowColor: '#000',
+    shadowColor: colors.shadow,
     shadowOpacity: 0.18,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 4 },
   },
-  text: { color: '#ffffff', fontSize: 14, flexShrink: 1, paddingVertical: space.sm },
+  text: { color: colors.inverseText, fontSize: 14, flexShrink: 1, paddingVertical: space.sm },
   action: { minHeight: 44, justifyContent: 'center', paddingHorizontal: space.md },
-  actionText: { color: '#a9c1ff', fontWeight: '700', fontSize: 14 },
+  actionText: { color: colors.inverseLink, fontWeight: '700', fontSize: 14 },
   close: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
 });

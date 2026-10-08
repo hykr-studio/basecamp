@@ -26,11 +26,13 @@ export function FilterChips({
             // Announced as a toggle that is pressed or not.
             {...({ 'aria-pressed': on } as object)}
             onPress={() => onSelect(c)}
-            style={[s.chip, on && s.on]}
+            style={s.hit}
           >
-            <Text style={[styles.label, { color: on ? colors.primary : colors.muted }]}>
-              {c.label}
-            </Text>
+            <View style={[s.chip, on && s.on]}>
+              <Text style={[styles.label, { color: on ? colors.primary : colors.muted }]}>
+                {c.label}
+              </Text>
+            </View>
           </Pressable>
         );
       })}
@@ -61,6 +63,8 @@ export function SearchBox({
 }
 
 const s = StyleSheet.create({
+  // A 44px target around a chip drawn smaller; the negative margin keeps the row's spacing.
+  hit: { minHeight: 44, marginVertical: -7, justifyContent: 'center', borderRadius: 999 },
   chip: {
     borderWidth: 1,
     borderColor: colors.border,

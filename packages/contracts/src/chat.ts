@@ -93,6 +93,10 @@ export const HistoryEntry = z.object({
   outcome: z.enum(['committed', 'denied', 'needs_approval']),
   reason: z.string().nullable(),
   runId: z.string().nullable(),
+  /** Which record, and its name: set on every line, needed by a feed across records. */
+  resourceType: z.string().optional(),
+  resourceId: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
 });
 export type HistoryEntry = z.infer<typeof HistoryEntry>;
 

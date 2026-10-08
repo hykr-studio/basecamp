@@ -10,6 +10,7 @@ import { when } from '../../framework/dates';
 import { EmptyState, LoadError } from '../../framework/EmptyState';
 import { useEntityList, useUndoableDelete } from '../../framework/hooks';
 import { Icon } from '../../framework/Icon';
+import { inApp, webHref } from '../../framework/web-link';
 import { colors, listRow, styles } from '../../theme';
 
 /** Pages saved from the canvas. Each holds queries, so it opens with today's data. */
@@ -44,7 +45,8 @@ export default function Pages() {
                 <Pressable
                   accessibilityRole="link"
                   accessibilityLabel={`Open ${item.name}`}
-                  onPress={() => router.navigate(`/pages/${item.id}`)}
+                  {...webHref(`/pages/${item.id}`)}
+                  onPress={inApp(() => router.navigate(`/pages/${item.id}`))}
                   className="flex-1 gap-0.5 py-2"
                 >
                   <Text className="font-semibold">{item.name}</Text>

@@ -40,7 +40,7 @@ export function CloseMeetingForm({
     (a) => a.action === 'meeting.close' && a.resourceId === meeting.id && a.status === 'pending',
   );
   // Decided here, so the global card leaves it out.
-  useShownInline(parked?.id);
+  useShownInline(parked?.id, meeting.title);
   // When the draft appears, move focus to it: it is what the person came here to decide.
   const draftRef = useRef<View>(null);
   useEffect(() => {
@@ -250,7 +250,7 @@ const s = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   segmentItem: {
-    minHeight: 40,
+    minHeight: 44,
     paddingHorizontal: space.lg,
     borderRadius: 8,
     justifyContent: 'center',
