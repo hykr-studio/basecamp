@@ -51,11 +51,16 @@ export function useEntity<N extends EntityName>(name: N, id: string | undefined)
   });
 }
 
-/** After any write: the lists that might show it, and approvals (it may have been parked). */
+/**
+ * After any write: the lists that might show it, approvals (it may have been parked) and
+ * history (every write leaves an audit row).
+ */
 function useInvalidate() {
   const client = useQueryClient();
   return (names: readonly string[]) =>
-    Promise.all([...names, 'approvals'].map((n) => client.invalidateQueries({ queryKey: [n] })));
+    Promise.all(
+      [...names, 'approvals', 'history'].map((n) => client.invalidateQueries({ queryKey: [n] })),
+    );
 }
 
 /** create / update / remove, each with a fresh idempotency key (the client makes one). */
@@ -99,7 +104,7 @@ export function useApprovals() {
       // Anything that showed this request (the chat's trace line) sees the decision at once,
       // even if it cached the request while it was still pending.
       client.setQueryData(['approval', decided.id], decided);
-      return invalidate([...Object.keys(specs), 'history']);
+      return invalidate(Object.keys(specs));
     },
   });
   return { approvals: list.data ?? [], decide };

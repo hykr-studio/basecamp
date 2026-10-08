@@ -80,8 +80,16 @@ export function AssistantActivity({
       .filter((e) => e.outcome === 'committed' && !/\.(create|update|delete)$/.test(e.action))
       .map((e) => e.runId),
   );
+  // An ask that has since been done shows once, as what was done ("…, approved by you").
+  const done = new Set(
+    (q.data ?? [])
+      .filter((e) => e.outcome === 'committed' && e.resourceId)
+      .map((e) => `${e.action}:${e.resourceId}`),
+  );
   const all = (q.data ?? []).filter(
-    (e) => !(e.action.endsWith('.update') && e.runId && commandRuns.has(e.runId)),
+    (e) =>
+      !(e.action.endsWith('.update') && e.runId && commandRuns.has(e.runId)) &&
+      !(e.outcome === 'needs_approval' && done.has(`${e.action}:${e.resourceId}`)),
   );
   const entries = after ? all.filter((e) => e.at > after) : all;
 

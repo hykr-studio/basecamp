@@ -1,10 +1,11 @@
 import { router } from 'expo-router';
 import { type ReactNode, useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { Button } from '../../components/Button';
 import { ScreenTitle, SectionHeading } from '../../components/ScreenTitle';
 import { MeetingRow, TodoRow } from '../../domain/components/Rows';
 import { needsClosing as toClose } from '../../domain/meetings';
+import { DecisionScrollView } from '../../framework/ApprovalCard';
 import { AssistantActivity } from '../../framework/AssistantActivity';
 import { useScreenContext } from '../../framework/assistant-context';
 import { dayBounds, todayLocal } from '../../framework/dates';
@@ -166,7 +167,7 @@ export default function Today() {
   );
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
+    <DecisionScrollView contentContainerStyle={styles.content}>
       <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={{ gap: space.xl }}>
         <ScreenTitle title="Today" subtitle={date} />
         {wide ? (
@@ -190,6 +191,6 @@ export default function Today() {
           </>
         )}
       </View>
-    </ScrollView>
+    </DecisionScrollView>
   );
 }

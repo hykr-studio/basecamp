@@ -92,6 +92,41 @@ function useSuperseded(): Superseded {
   }, [parked, status, approval?.decidedAt]);
 }
 
+/**
+ * Why a reply failed, in words: the model provider's message (it arrives as the serialised
+ * error, stack and all), never its stack trace. The trace link below keeps the detail.
+ */
+function replyError(error: unknown): string {
+  let detail: { message?: unknown; statusCode?: unknown } = {};
+  if (typeof error === 'string') {
+    try {
+      detail = JSON.parse(error);
+    } catch {
+      detail = { message: error };
+    }
+  } else if (error instanceof Error) detail = { message: error.message };
+  else if (error && typeof error === 'object') detail = error;
+  const message = typeof detail.message === 'string' ? detail.message.split('\n')[0] : '';
+  if (detail.statusCode === 429 || /rate.?limit/i.test(message))
+    return 'The model is busy right now (rate-limited). Wait a moment, then send it again.';
+  return message
+    ? `The assistant couldn't answer: ${message.slice(0, 200)}`
+    : "The assistant couldn't answer. Send it again.";
+}
+
+function ReplyError() {
+  const error = useAuiState((s) => {
+    const status = s.message.status;
+    return status?.type === 'incomplete' && status.reason === 'error' ? status.error : undefined;
+  });
+  return (
+    <View className="flex-row items-start gap-2">
+      <Icon name="alert-circle" color={colors.danger} size={16} />
+      <Text className="shrink text-danger">{replyError(error)}</Text>
+    </View>
+  );
+}
+
 /** Dev only: the run's trace in Studio (the run id is the trace id). */
 function RunLink() {
   const runId = useAuiState(
@@ -136,7 +171,7 @@ function AssistantMessage() {
           <MessagePrimitive.Parts components={{ Text: TextPart, tools: { Fallback: ToolPart } }} />
         </SupersededContext.Provider>
         <ErrorPrimitive.Root>
-          <ErrorPrimitive.Message className="text-danger text-small" />
+          <ReplyError />
         </ErrorPrimitive.Root>
         <RunLink />
       </View>

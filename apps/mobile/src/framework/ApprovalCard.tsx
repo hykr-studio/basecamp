@@ -1,7 +1,25 @@
 import type { Approval } from '@app/contracts';
 import { useQuery } from '@tanstack/react-query';
-import { createContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  type ComponentProps,
+  createContext,
+  type RefObject,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+import {
+  AccessibilityInfo,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { api } from '../api';
 import { Button } from '../components/Button';
 import { colors, space, styles } from '../theme';
@@ -90,14 +108,96 @@ export const LeaveChat = createContext<(() => void) | undefined>(undefined);
 /** The element a request is decided in, for a pointer to scroll to (web). */
 const anchorId = (id: string) => `approval-${id}`;
 
-/** Bring the place a request is decided into view and put focus there (web; native: no-op). */
-export function revealDecision(id: string) {
-  if (typeof document === 'undefined') return;
+/** Native: how to bring each decision on a screen into view, registered by ApprovalItem. */
+const nativeReveal = new Map<string, () => void>();
+const DecisionScroll = createContext<RefObject<ScrollView | null> | null>(null);
+
+/**
+ * A screen's ScrollView that a pointer ("Waiting for you on …") can scroll to a decision in.
+ * The web scrolls the element itself; native needs the scroll view.
+ */
+export function DecisionScrollView(props: ComponentProps<typeof ScrollView>) {
+  const ref = useRef<ScrollView>(null);
+  return (
+    <DecisionScroll.Provider value={ref}>
+      <ScrollView ref={ref} {...props} />
+    </DecisionScroll.Provider>
+  );
+}
+
+/** Places that show a request folded (Today's lines): how to unfold one for a pointer. */
+const unfolders = new Map<string, (open: boolean) => void>();
+/** A pointer's request whose decision was folded away: shown if it renders within a second. */
+let pendingReveal: { id: string; until: number } | null = null;
+const takePending = (id: string) => {
+  const due = pendingReveal?.id === id && Date.now() < pendingReveal.until;
+  if (pendingReveal?.id === id) pendingReveal = null;
+  return due;
+};
+
+/** Call from a place that shows a request folded, so a pointer to it unfolds it. */
+export function useUnfoldOnReveal(id: string, setOpen: (open: boolean) => void) {
+  useEffect(() => {
+    unfolders.set(id, setOpen);
+    return () => {
+      if (unfolders.get(id) === setOpen) unfolders.delete(id);
+    };
+  }, [id, setOpen]);
+}
+
+/** Scroll to the decision and put focus there; false when it is not rendered. */
+function show(id: string): boolean {
+  if (Platform.OS !== 'web') {
+    const reveal = nativeReveal.get(id);
+    reveal?.();
+    return !!reveal;
+  }
   const el = document.getElementById(anchorId(id));
-  if (!el) return;
+  if (!el) return false;
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
   el.focus({ preventScroll: true });
+  return true;
+}
+
+/** Bring the place a request is decided into view (unfolding it first) and put focus there. */
+export function revealDecision(id: string) {
+  unfolders.get(id)?.(true);
+  pendingReveal = show(id) ? null : { id, until: Date.now() + 1000 };
+}
+
+/**
+ * Native: register how to scroll this decision into view and move the screen reader to it.
+ * On every platform, finish a pointer's reveal that had to wait for this to render.
+ */
+function useReveal(id: string) {
+  const scroll = useContext(DecisionScroll);
+  const anchor = useRef<View>(null);
+  const title = useRef<Text>(null);
+  useEffect(() => {
+    // Native shows it once the scroll view registration below exists.
+    if (Platform.OS === 'web' && takePending(id)) show(id);
+  }, [id]);
+  useEffect(() => {
+    if (Platform.OS === 'web' || !scroll) return;
+    const reveal = () => {
+      const node = anchor.current;
+      const list = scroll.current;
+      const content = list?.getInnerViewNode();
+      if (!node || !list || !content) return;
+      node.measureLayout(content, (_x, y) => {
+        list.scrollTo({ y: Math.max(0, y - space.lg), animated: true });
+        // The summary, not the container: a screen reader reads what is being decided.
+        if (title.current) AccessibilityInfo.sendAccessibilityEvent(title.current, 'focus');
+      });
+    };
+    nativeReveal.set(id, reveal);
+    if (takePending(id)) reveal();
+    return () => {
+      if (nativeReveal.get(id) === reveal) nativeReveal.delete(id);
+    };
+  }, [id, scroll]);
+  return { anchor, title };
 }
 
 /**
@@ -153,6 +253,7 @@ export function ApprovalItem({
   const summary = approval.summary ?? approval.action;
   const deciding = decide.isPending && decide.variables?.id === approval.id;
   const confirm = actionLabel(approval);
+  const { anchor, title } = useReveal(approval.id);
   const [armed, setArmed] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setArmed(true), ARM_MS);
@@ -187,9 +288,11 @@ export function ApprovalItem({
 
   return (
     // The anchor a pointer elsewhere ("Waiting for you on …") scrolls to.
-    <View style={s.item} nativeID={anchorId(approval.id)}>
+    <View ref={anchor} style={s.item} nativeID={anchorId(approval.id)}>
       <View style={{ gap: 2 }}>
-        <Text style={[styles.text, { fontWeight: '600' }]}>{summary}</Text>
+        <Text ref={title} style={[styles.text, { fontWeight: '600' }]}>
+          {summary}
+        </Text>
         <View style={[styles.row, { gap: space.xs }]}>
           {approval.requestedBy === 'agent' && <AssistantMark size={16} />}
           <Text

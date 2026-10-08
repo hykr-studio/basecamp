@@ -42,8 +42,8 @@ export const colors = {
   primaryHover: '#264cc8',
   /** Hover on a rail item: one step darker than the rail. */
   railHover: '#e2e6ec',
-  /** An unticked checkbox's outline. */
-  controlBorder: '#aab2bf',
+  /** An unticked checkbox's outline: 3.3:1 on white, 3.1:1 on bg (WCAG 1.4.11). */
+  controlBorder: '#858e9c',
   scrollbar: '#c3c9d3',
   shadow: '#000000',
   /** The toast: a dark surface, so an outcome reads apart from the page. */

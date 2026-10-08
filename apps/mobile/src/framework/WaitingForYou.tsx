@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SectionHeading } from '../components/ScreenTitle';
 import { colors, space, styles } from '../theme';
-import { ApprovalItem, useShownInline } from './ApprovalCard';
+import { ApprovalItem, useShownInline, useUnfoldOnReveal } from './ApprovalCard';
 import { AssistantMark } from './AssistantMark';
 import { expiresIn } from './dates';
 import { useApprovals } from './hooks';
@@ -22,6 +22,8 @@ function Waiting({ approval, initiallyOpen }: { approval: Approval; initiallyOpe
   // On a phone the chevron alone says it opens; the line keeps its width for the words.
   const narrow = useWindowDimensions().width < 600;
   const [open, setOpen] = useState(initiallyOpen);
+  // A pointer in the chat ("Waiting for you on Today") unfolds the line it points to.
+  useUnfoldOnReveal(approval.id, setOpen);
   const summary = approval.summary ?? approval.action;
   const byAssistant = approval.requestedBy === 'agent';
   if (open) {

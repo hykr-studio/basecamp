@@ -2,9 +2,10 @@ import { ApiError } from '@app/api-client';
 import { type MeetingView, RescheduleMeetingSpec } from '@app/contracts';
 import { Link, router } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Button } from '../../components/Button';
 import { SectionHeading } from '../../components/ScreenTitle';
+import { DecisionScrollView } from '../../framework/ApprovalCard';
 import { useScreenContext } from '../../framework/assistant-context';
 import { DateField, TimeField } from '../../framework/DateField';
 import { at, clock, isValidDate, isValidTime, when } from '../../framework/dates';
@@ -136,7 +137,7 @@ export function MeetingDetail({ id, embedded = false }: { id: string; embedded?:
   const summaryTitle = `Summary: ${m.title}`;
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
+    <DecisionScrollView contentContainerStyle={styles.content}>
       {!embedded && back}
       <View style={{ gap: space.sm }}>
         <View style={[styles.row, { justifyContent: 'space-between', flexWrap: 'wrap' }]}>
@@ -275,6 +276,6 @@ export function MeetingDetail({ id, embedded = false }: { id: string; embedded?:
           <History type="meeting" id={m.id} />
         </View>
       </View>
-    </ScrollView>
+    </DecisionScrollView>
   );
 }
