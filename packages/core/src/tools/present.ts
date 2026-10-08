@@ -1,5 +1,11 @@
 import type { ApiClient } from '@app/api-client';
-import { drawsComponents, type PageSpec, type Present, type Surface } from '@app/contracts';
+import {
+  type Choice,
+  drawsComponents,
+  type PageSpec,
+  type Present,
+  type Surface,
+} from '@app/contracts';
 import { isLang, type Lang, t } from '@app/i18n';
 import type { ViewDef } from '@app/ui-registry';
 import type { ToolContext, ToolKit } from './tool-factory.js';
@@ -31,19 +37,31 @@ async function inWords(
   surfaces: Surface[],
   ctx: ToolContext | undefined,
   client: ApiClient,
-): Promise<string | undefined> {
+): Promise<{ text: string; choices?: Choice[] } | undefined> {
   const props: Record<string, unknown> = { ...present.props };
+  let rows: Record<string, unknown>[] | undefined;
   if (view.source) {
     const api = client.entity(view.source.entity);
     if (view.source.by === 'id') props[view.source.into] = await api.get(String(props.id));
-    else
-      props[view.source.into] = (await api.list({ ...present.query, limit: view.textLimit })).items;
+    else {
+      rows = (await api.list({ ...present.query, limit: view.textLimit })).items as Record<
+        string,
+        unknown
+      >[];
+      props[view.source.into] = rows;
+    }
   }
   const parsed = view.props.safeParse(props);
   if (!parsed.success) return undefined;
   const timeZone = (ctx?.requestContext?.get('timeZone') as string | undefined) ?? 'UTC';
   const words = surfaces.includes('text') ? view.text : view.speak;
-  return words(parsed.data, { timeZone, lang: langOf(ctx) });
+  const text = words(parsed.data, { timeZone, lang: langOf(ctx) });
+  // A list's rows, to tap on a channel that has buttons: what they are called, and their ids.
+  const choices = rows?.flatMap((r) => {
+    const title = r.title ?? r.name;
+    return typeof r.id === 'string' && typeof title === 'string' ? [{ id: r.id, title }] : [];
+  });
+  return { text, ...(choices?.length ? { choices } : {}) };
 }
 
 /**
@@ -64,7 +82,7 @@ async function spoken(
   // The words are extra: a failed lookup must never turn a done write into a refusal.
   try {
     const words = view && (await inWords(view, present, ['speech'], ctx, kit.clientFor(ctx)));
-    return words || onScreen;
+    return words?.text || onScreen;
   } catch {
     return onScreen;
   }
@@ -93,8 +111,10 @@ export async function resolvePresent(
       : { present: checked.present };
   if (present.kind === 'inline' && !drawsComponents(surfaces)) {
     const view = kit.registry.getViewDef(present.view);
-    const text = view ? await inWords(view, present, surfaces, ctx, kit.clientFor(ctx)) : undefined;
-    return text ? { present: { kind: 'text', text } } : {};
+    const words = view
+      ? await inWords(view, present, surfaces, ctx, kit.clientFor(ctx))
+      : undefined;
+    return words ? { present: { kind: 'text', ...words } } : {};
   }
   return {};
 }

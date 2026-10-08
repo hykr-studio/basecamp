@@ -7,10 +7,28 @@ import type {
   Principal,
   WriteAction,
 } from '@app/contracts';
-import { listInputSchema } from '@app/contracts';
-import { subjectOf } from '@app/policy';
+import { listInputSchema, parksFor } from '@app/contracts';
+import { defaultOwnerOf } from '@app/db';
+import {
+  type Access,
+  accessFor,
+  DEFAULT_ACCESS,
+  type Grant,
+  rowAllowed,
+  subjectOf,
+} from '@app/policy';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
-import { and, type Column, count, eq, getTableColumns, type SQL, type Table } from 'drizzle-orm';
+import {
+  and,
+  type Column,
+  count,
+  eq,
+  getTableColumns,
+  or,
+  type SQL,
+  sql,
+  type Table,
+} from 'drizzle-orm';
 import type { z } from 'zod';
 import { RuleDenied } from '../authorize.js';
 import { buildListSql, decodeCursor, encodeCursor } from '../query/list-grammar.js';
@@ -33,8 +51,16 @@ export type EntityRule<T extends Table> = (
 
 export interface EntityConfig<S extends EntitySpec, T extends Table> {
   table: T;
-  /** The owner column: every query is scoped to it, and writes set it. */
+  /** The owner column: the person whose record it is ('own' access), set on create. */
   owner: (table: T) => Column;
+  /** The customer column, when customers have records here ('customer' access). */
+  customer?: (table: T) => Column;
+  /**
+   * Who reaches which rows, by role: their own, their customer's, or the whole business.
+   * Rows are always limited to the principal's business first. Default: everyone their own,
+   * customers theirs.
+   */
+  access?: Access;
   rules?: EntityRule<T>[];
   /** What an approval card says. Defaults to e.g. Delete "Buy cement". */
   summarize?: (
@@ -99,11 +125,20 @@ export function toJson(value: unknown): unknown {
   return value;
 }
 
+/** The person a principal acts for, when it has an account (a contact has none). */
 export function subjectOrThrow(p: Principal): string {
   const subject = subjectOf(p);
   if (!subject)
     throw new ForbiddenException({ error: 'forbidden', rule: 'agent_needs_acting_for' });
-  return subject;
+  if (subject.kind !== 'user')
+    throw new ForbiddenException({ error: 'forbidden', rule: 'needs_an_account' });
+  return subject.userId;
+}
+
+/** The business a principal works in. Every scoped query starts here. */
+export function tenantOf(p: Principal): string {
+  if (!p.tenantId) throw new ForbiddenException({ error: 'forbidden', rule: 'no_tenant' });
+  return p.tenantId;
 }
 
 export function defineEntity<S extends EntitySpec, T extends Table>(
@@ -115,20 +150,70 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
   const idCol = columns.id;
   const ownerCol = config.owner(table);
   const ownerKey = Object.entries(columns).find(([, c]) => c === ownerCol)?.[0];
-  if (!idCol || !ownerKey)
-    throw new Error(`${spec.name}: table needs an id column and an owner column`);
+  const tenantCol = columns.tenantId;
+  const customerCol = config.customer?.(table);
+  if (!idCol || !ownerKey || !tenantCol)
+    throw new Error(`${spec.name}: table needs id, tenantId and owner columns`);
+  const keyOf = (col: Column) => Object.entries(columns).find(([, c]) => c === col)?.[0];
   const rules = config.rules ?? [];
   const label = spec.label;
+  const access = config.access ?? DEFAULT_ACCESS;
 
-  const scoped = (p: Principal, ...more: SQL[]) =>
-    and(eq(ownerCol, subjectOrThrow(p)), ...more) as SQL;
+  /** One grant as SQL: own rows, the customer's rows, or every row in the tenant. */
+  const grantSql = (p: Principal, g: Grant): SQL | undefined => {
+    if (g === 'tenant') return sql`true`;
+    if (g === 'own') {
+      const s = subjectOf(p);
+      return s?.kind === 'user' ? eq(ownerCol, s.userId) : undefined;
+    }
+    return customerCol && p.customerId ? eq(customerCol, p.customerId) : undefined;
+  };
+
+  /**
+   * The rows this principal reaches, for reading or writing: its tenant, then any of its
+   * grants. No grant: no rows (a 404 for someone else's id, never a hint it exists).
+   */
+  const scoped = (p: Principal, op: 'read' | 'write', ...more: SQL[]) => {
+    const decision = accessFor(p, access, op);
+    const grants =
+      decision.kind === 'grants' ? decision.grants.flatMap((g) => grantSql(p, g) ?? []) : [];
+    return and(
+      eq(tenantCol, tenantOf(p)),
+      grants.length ? or(...grants) : sql`false`,
+      ...more,
+    ) as SQL;
+  };
+
+  /**
+   * Who a new row belongs to. A person's own record is theirs; a customer's record is the
+   * customer's, owned by the business's default owner (so it shows in the owner's lists).
+   */
+  const ownership = async (tx: Tx, p: Principal) => {
+    const decision = accessFor(p, access, 'write');
+    const grants = decision.kind === 'grants' ? decision.grants : [];
+    const subject = subjectOf(p);
+    const tenantId = tenantOf(p);
+    if (subject?.kind === 'user' && (grants.includes('own') || grants.includes('tenant')))
+      return { tenantId, ownerId: subject.userId };
+    if (grants.includes('customer') && customerCol && p.customerId)
+      return { tenantId, ownerId: await defaultOwnerOf(tx, tenantId), customerId: p.customerId };
+    throw new ForbiddenException({ error: 'forbidden', rule: 'no_access' });
+  };
 
   /** Only real columns, with ISO strings turned into Dates for timestamp columns. */
   function toValues(input: Record<string, unknown>) {
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(input)) {
       const c = columns[key];
-      if (!c || value === undefined || key === ownerKey || key === 'id' || key === 'createdBy')
+      if (
+        !c ||
+        value === undefined ||
+        key === ownerKey ||
+        key === 'id' ||
+        key === 'createdBy' ||
+        key === 'tenantId' ||
+        c === customerCol
+      )
         continue;
       out[key] =
         typeof value === 'string' && c.columnType === 'PgTimestamp' ? new Date(value) : value;
@@ -154,7 +239,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       const [row] = await conn
         .select()
         .from(table as Table)
-        .where(scoped(p, eq(idCol, id)))
+        .where(scoped(p, 'read', eq(idCol, id)))
         .limit(1);
       return row as Row<T> | undefined;
     },
@@ -170,7 +255,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
           ? (input as ListQuery)
           : listInputSchema(spec, { maxLimit: 1000 }).parse(input);
       const built = buildListSql(table, spec.list, q);
-      const where = [eq(ownerCol, subjectOrThrow(p)), ...built.where];
+      const where = [scoped(p, 'read'), ...built.where];
       const cursorWhere = q.cursor ? [built.after(decodeCursor(q.cursor, q.sort))] : [];
       const rows = (await conn
         .select()
@@ -197,11 +282,16 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     async insert(tx, p, input, ctx = { via: 'crud' }) {
       const parsed = spec.schemas.create.parse(input) as Record<string, unknown>;
       checkRules(p, 'create', null, parsed, ctx);
+      const owned = await ownership(tx, p);
       const [row] = await tx
         .insert(table as Table)
         .values({
           ...toValues(parsed),
-          [ownerKey]: subjectOrThrow(p),
+          tenantId: owned.tenantId,
+          [ownerKey]: owned.ownerId,
+          ...(owned.customerId && customerCol
+            ? { [keyOf(customerCol) as string]: owned.customerId }
+            : {}),
           // Provenance, when the table records it: the assistant's rows stay marked as its own.
           ...(columns.createdBy
             ? { createdBy: p.actor.kind === 'agent' ? 'assistant' : 'person' }
@@ -216,7 +306,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       const [updated] = await tx
         .update(table as Table)
         .set(toValues(parsed) as never)
-        .where(scoped(p, eq(idCol, (row as { id: string }).id)))
+        .where(scoped(p, 'write', eq(idCol, (row as { id: string }).id)))
         .returning();
       if (!updated)
         throw new NotFoundException({ error: 'not_found', message: `No such ${label}` });
@@ -226,7 +316,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       checkRules(p, 'delete', row, null, ctx);
       const [deleted] = await tx
         .delete(table as Table)
-        .where(scoped(p, eq(idCol, (row as { id: string }).id)))
+        .where(scoped(p, 'write', eq(idCol, (row as { id: string }).id)))
         .returning();
       if (!deleted)
         throw new NotFoundException({ error: 'not_found', message: `No such ${label}` });
@@ -258,7 +348,25 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
           ? `Create ${label} "${title(row, input)}"`
           : `${verb[action]} "${title(row, input)}"`),
     decide(p, action, row, input) {
-      // Framework checks first: who may call this action at all.
+      // Whose rows these are: a write needs a grant that covers the row (or, to create, any).
+      const reach = accessFor(p, access, 'write');
+      if (reach.kind === 'needs_assurance')
+        return {
+          decision: 'deny',
+          rule: 'needs_assurance',
+          reason: `To ${action} a ${label} here, link your number to your account in the app`,
+        };
+      const owned = row as { ownerId?: unknown; customerId?: unknown } | null;
+      if (
+        reach.kind === 'none' ||
+        (owned &&
+          !rowAllowed(p, reach.grants, {
+            ownerId: owned[ownerKey as 'ownerId'],
+            customerId: customerCol ? owned[keyOf(customerCol) as 'customerId'] : undefined,
+          }))
+      )
+        return { decision: 'deny', rule: 'no_access', reason: `You can't ${action} this ${label}` };
+      // Framework checks: who may call this action at all.
       if (p.actor.kind === 'agent' && spec.expose[action] !== 'all') {
         return {
           decision: 'deny',
@@ -273,8 +381,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       }
       // Then approval: who must confirm this action.
       const approval = spec.approval[action];
-      const parked = approval === 'always' || (typeof approval === 'function' && approval(p));
-      if (parked) {
+      if (parksFor(approval, p)) {
         return {
           decision: 'needs_approval',
           rule: `${spec.name}_${action}_needs_approval`,
@@ -287,8 +394,8 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       }
       return {
         decision: 'allow',
-        rule: 'owner_access',
-        reason: `Owner works on their own ${spec.plural}`,
+        rule: 'scoped_access',
+        reason: `Works on ${spec.plural} they may reach`,
       };
     },
     cqrs: defineEntityCqrs(spec.pascal, spec.plural),

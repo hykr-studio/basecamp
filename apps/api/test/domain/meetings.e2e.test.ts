@@ -73,7 +73,12 @@ describe('meetings, end to end', () => {
         ok: true,
         outcome: 'done',
         // A JSON caller has no screen: the list comes back in words.
-        present: { kind: 'text', text: expect.stringContaining('• Site review') },
+        // …with its rows, for a channel that can offer them to tap.
+        present: {
+          kind: 'text',
+          text: expect.stringContaining('• Site review'),
+          choices: [{ id: siteReview.id, title: 'Site review' }],
+        },
       },
       // Parked, not done: the trace says so, with what is waiting.
       {

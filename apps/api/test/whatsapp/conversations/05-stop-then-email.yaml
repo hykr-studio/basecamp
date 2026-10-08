@@ -1,0 +1,14 @@
+name: after STOP, the meeting reminder goes by email instead
+steps:
+  - linkOwner: {}
+  - say: { as: owner, text: STOP }
+  - expect: { to: owner, text: "won't get reminders" }
+  - api:
+      as: owner
+      method: POST
+      path: /api/meetings
+      body: { title: Plumber call, startsAt: "${soon.startsAt}", endsAt: "${soon.endsAt}" }
+      save: meeting
+  - fire: { dedupe: "meeting.reminder:${meeting.value.id}" }
+  - expectEmail: { to: owner, subject: "Reminder: Plumber call" }
+  - expectNone: { to: owner, for: 1500 }

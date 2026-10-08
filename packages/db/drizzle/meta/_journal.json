@@ -50,6 +50,55 @@
       "when": 1791419958968,
       "tag": "0006_thread_message_order",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791432051856,
+      "tag": "0007_tenants",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791432067408,
+      "tag": "0008_tenant_backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791432075231,
+      "tag": "0009_tenant_required",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791433116609,
+      "tag": "0010_channel",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791433131815,
+      "tag": "0011_channel_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791433542899,
+      "tag": "0012_tenant_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791434544069,
+      "tag": "0013_message_meta",
+      "breakpoints": true
     }
   ]
 }

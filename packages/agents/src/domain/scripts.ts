@@ -99,7 +99,11 @@ export const domainScripts = [
             te: 'మీకు పనులు ఏవీ లేవు.',
           }),
         ];
-      return [say(todos.map((t) => `[${t.done ? 'x' : ' '}] ${t.title}`).join('\n'))];
+      const list = todos.map((t) => `[${t.done ? 'x' : ' '}] ${t.title}`).join('\n');
+      // Typed in Hindi or Telugu: a line in their language before the titles (which are data).
+      if (turn.lang === 'en') return [say(list)];
+      const lead = { en: 'Your to-dos:', hi: 'आपके काम ये हैं:', te: 'మీ పనులు ఇవి:' };
+      return [say(`${lead[turn.lang]}\n${list}`)];
     },
   }),
   defineScript({

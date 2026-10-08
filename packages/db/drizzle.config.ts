@@ -11,5 +11,5 @@ export default defineConfig({
   out: './drizzle',
   dbCredentials: { url },
   // Own public, app, and audit. Leave mastra and mastra_obs to Mastra.
-  schemaFilter: ['public', 'app', 'audit'],
+  schemaFilter: ['public', 'app', 'audit', 'channel'],
 });

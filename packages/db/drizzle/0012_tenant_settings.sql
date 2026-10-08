@@ -1,0 +1,1 @@
+ALTER TABLE "app"."tenants" ADD COLUMN "settings" jsonb DEFAULT '{}'::jsonb NOT NULL;

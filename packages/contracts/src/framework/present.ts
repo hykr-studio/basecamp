@@ -55,6 +55,14 @@ export const PageSpec = z.object({
 });
 export type PageSpec = z.infer<typeof PageSpec>;
 
+/** One row a person can pick: what to call it, and its id. */
+export const Choice = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string().optional(),
+});
+export type Choice = z.infer<typeof Choice>;
+
 /**
  * What a tool result asks to show. The agent never produces components: it names a
  * registered view (or screen) and a query, and the surface decides how it is shown.
@@ -78,7 +86,14 @@ export const Present = z.discriminatedUnion('kind', [
     query: ViewQuery.optional(),
     props: z.record(z.string(), z.unknown()).optional(),
   }),
-  /** Text and voice: the server already rendered the view into words. */
-  z.object({ kind: z.literal('text'), text: z.string() }),
+  /**
+   * Text and voice: the server already rendered the view into words. A list's rows come too,
+   * as choices, so a channel with buttons or lists (WhatsApp) can offer them to tap.
+   */
+  z.object({
+    kind: z.literal('text'),
+    text: z.string(),
+    choices: z.array(Choice).optional(),
+  }),
 ]);
 export type Present = z.infer<typeof Present>;

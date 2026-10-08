@@ -1,6 +1,13 @@
 import { createHash } from 'node:crypto';
-import type { Approval, AuthorizeResult, Principal, WriteResult } from '@app/contracts';
+import type {
+  Approval,
+  ApprovalRule,
+  AuthorizeResult,
+  Principal,
+  WriteResult,
+} from '@app/contracts';
 import { type WriteCtx as AuditCtx, type Database, idempotencyKeys, writeAudit } from '@app/db';
+import { subjectKeyOf, subjectOf } from '@app/policy';
 import { ConflictException, ForbiddenException, HttpException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import type { z } from 'zod';
@@ -42,6 +49,8 @@ export interface WriteOp<I, L, V> {
   input: z.ZodType<I>;
   /** What a replay needs besides the input, e.g. { id } for an update. */
   args?: Record<string, unknown>;
+  /** Who decides it when it is parked (the approval rule's object form). */
+  approval?: ApprovalRule;
   load?(tx: Tx, p: Principal, input: I): Promise<L>;
   authorize(p: Principal, loaded: L, input: I): AuthorizeResult;
   summarize(input: I, loaded: L): string;
@@ -60,10 +69,19 @@ export function auditCtx(
   result: Pick<AuthorizeResult, 'rule' | 'reason'>,
   ctx: WriteCtx,
 ): AuditCtx {
+  const subject = subjectOf(p);
   return {
     actorKind: p.actor.kind,
     actorId: p.actor.id,
-    actingFor: p.actingFor?.userId ?? null,
+    // A person's id as before (history reads it); a contact as "contact:<id>".
+    actingFor:
+      p.actor.kind === 'agent'
+        ? subject?.kind === 'user'
+          ? subject.userId
+          : (subjectKeyOf(p) ?? null)
+        : null,
+    tenantId: p.tenantId ?? null,
+    subjectKind: subject?.kind ?? null,
     runId: p.runId ?? null,
     agentVersion: p.agentVersion ?? null,
     channel: p.channel ?? null,
@@ -76,7 +94,7 @@ export function auditCtx(
 
 /** Keys are per caller: the agent acting for Ana never shares a key with Ana herself. */
 const principalKey = (p: Principal) =>
-  [p.actor.kind, p.actor.id, p.actingFor?.userId ?? ''].join(':');
+  [p.actor.kind, p.actor.id, p.tenantId ?? '', subjectKeyOf(p) ?? ''].join(':');
 
 const verbs = { created: 'create', updated: 'update', deleted: 'delete' } as const;
 
@@ -136,7 +154,9 @@ export async function runWrite<I, L, V>(
     let result: WriteResult;
     let events: object[] = [];
     if (decision.decision === 'needs_approval') {
-      const approval: Approval = await parkForApproval(tx, ctx, op, input, loaded, decision);
+      const parked = await parkForApproval(tx, ctx, op, input, loaded, decision);
+      const approval: Approval = parked.approval;
+      events = [parked.event];
       await writeAudit(tx, {
         ...auditCtx(p, decision, ctx),
         action: op.name,

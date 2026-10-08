@@ -10,9 +10,11 @@ import type {
   Surface,
   ToolCallSummary,
 } from '@app/contracts';
+import { LANG_ENGLISH_NAMES } from '@app/i18n';
+import { subjectKeyOf, userIdOf } from '@app/policy';
 import { RequestContext } from '@mastra/core/request-context';
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
-import { type SavedPart, ThreadsService } from '../threads/threads.service.js';
+import { type SavedPart, ThreadsService, threadOwnerOf } from '../threads/threads.service.js';
 
 /** One turn's input, whatever the channel: the app's stream, a JSON caller, WhatsApp, voice. */
 export type Turn = {
@@ -29,9 +31,8 @@ export type Turn = {
 /** How many saved messages the model reads as history. */
 const HISTORY = 12;
 
-/** The person a turn is for: the caller, or the person a relay (voice) acts for. */
-const subjectOf = (p: Principal) =>
-  p.actor.kind === 'user' ? p.actor.id : (p.actingFor?.userId ?? p.actor.id);
+/** Whom a turn is for ("user:<id>" or "contact:<id>"): the caller, or whom a relay acts for. */
+const subjectOf = (p: Principal) => subjectKeyOf(p) ?? `agent:${p.actor.id}`;
 
 /** Saved in place of a reply that failed or was cut off, so the thread says what happened. */
 const INTERRUPTED = '(The reply was interrupted.)';
@@ -140,11 +141,12 @@ export class ChatService {
       throw new ServiceUnavailableException('Set OPENROUTER_API_KEY in .env to use the assistant');
     }
     // Who the agent acts for comes from the server-side principal, never the request body.
-    const userId = subjectOf(p);
+    const subject = subjectOf(p);
     const channel: Channel = p.channel ?? 'app';
+    const owner = threadOwnerOf(p);
     const thread = turn.threadId
-      ? await this.threads.owned(turn.threadId, userId)
-      : await this.threads.current(userId);
+      ? await this.threads.owned(turn.threadId, owner)
+      : await this.threads.current(owner);
     const history = await this.threads.history(thread.id, HISTORY - 1);
     await this.threads.append({
       threadId: thread.id,
@@ -158,7 +160,10 @@ export class ChatService {
     // matching trace in Studio. A relay (voice) names the run it already started.
     const runId = p.runId ?? randomUUID().replaceAll('-', '');
     const requestContext = new RequestContext();
-    requestContext.set('userId', userId);
+    // Whom the agent's tools act for, in which business: the API checks both again.
+    requestContext.set('actingFor', subject);
+    requestContext.set('tenantId', owner.tenantId);
+    requestContext.set('userId', userIdOf(p) ?? subject);
     requestContext.set('runId', runId);
     requestContext.set('channel', channel);
     if (turn.lang) requestContext.set('lang', turn.lang);
@@ -182,7 +187,7 @@ export class ChatService {
     const options = {
       requestContext,
       maxSteps: 8,
-      tracingOptions: { traceId: runId, metadata: { userId, channel } },
+      tracingOptions: { traceId: runId, metadata: { subject, channel } },
     };
     const save = (text: string, results: unknown[]) =>
       this.threads.append({
@@ -204,22 +209,52 @@ export class ChatService {
     tokens: unknown,
     started: number,
   ) {
-    const userId = subjectOf(p);
+    const subject = subjectOf(p);
     const channel = p.channel ?? 'app';
     // One line per turn: in this terminal, and in Studio → Logs (run = trace id).
     mastra.loggerVNext.info('chat turn', {
       runId,
-      userId,
+      subject,
       channel,
       tools: toolCalls,
       tokens,
       ms: Date.now() - started,
     });
     log.log(
-      `run=${runId} user=${userId} channel=${channel} tools=[${toolCalls
+      `run=${runId} for=${subject} channel=${channel} tools=[${toolCalls
         .map((c) => `${c.tool}:${c.outcome}`)
         .join(',')}] tokens=${tokens ?? '?'} ${Date.now() - started}ms`,
     );
+  }
+
+  /**
+   * A reply for staff to edit and send (the back office): words only, no tools, nothing saved
+   * to any thread. The conversation is the customer's, as the thread holds it.
+   */
+  async draft(
+    p: Principal,
+    conversation: { role: string; text: string }[],
+    lang?: Lang,
+  ): Promise<string> {
+    const requestContext = new RequestContext();
+    requestContext.set('actingFor', subjectOf(p));
+    requestContext.set('tenantId', p.tenantId);
+    requestContext.set('channel', 'whatsapp');
+    requestContext.set('surfaces', ['text']);
+    if (lang) requestContext.set('lang', lang);
+    const transcript = conversation
+      .map((m) => `${m.role === 'user' ? 'Customer' : 'Business'}: ${m.text}`)
+      .join('\n');
+    const result = await agentFor(['text']).generate(
+      [
+        {
+          role: 'user' as const,
+          content: `Draft a reply to this customer for the business to send. Write only the message, short and polite${lang ? `, in ${LANG_ENGLISH_NAMES[lang]}` : ''}.\n\n${transcript}`,
+        },
+      ],
+      { requestContext, maxSteps: 1, toolChoice: 'none' },
+    );
+    return result.text.trim();
   }
 
   /** The whole turn as one JSON answer: tests, scripts and channels without streaming. */

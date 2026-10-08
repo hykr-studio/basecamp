@@ -22,8 +22,14 @@ export function callsIn(output: AgentOutput): Call[] {
   );
 }
 
-/** Writes that act on an existing row (updates, deletes, any command), so need an id first. */
-const commandTools = new Set(commands.flatMap((c) => (c.tool ? [c.tool] : [])));
+/**
+ * Writes that act on an existing row (updates, deletes, any command that changes records), so
+ * need an id first. A command that touches no records (handing the conversation to a person)
+ * needs no lookup.
+ */
+const commandTools = new Set(
+  commands.flatMap((c) => (c.tool && (c.touches?.length ?? 1) > 0 ? [c.tool] : [])),
+);
 const isWrite = (tool: string) => /^(update|delete)-/.test(tool) || commandTools.has(tool);
 const isLookup = (tool: string) => /^(list|get)-/.test(tool);
 

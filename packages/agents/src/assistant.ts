@@ -7,7 +7,14 @@ import { fakeModel } from './fake/engine.js';
 import { platformScripts } from './fake/platform-scripts.js';
 import { listBeforeWrite, noRetryAfterRefusal } from './scorers.js';
 import { type Profile, toolsFor } from './tools/index.js';
-import { AGENT_ID, INSTRUCTIONS, isFakeModel, modelId, VOICE_RULES } from './version.js';
+import {
+  AGENT_ID,
+  BUSINESS_ONLY_RULE,
+  INSTRUCTIONS,
+  isFakeModel,
+  modelId,
+  VOICE_RULES,
+} from './version.js';
 
 /** Today's date and where the person is, from the chat endpoint's request context. */
 function instructions({ requestContext }: { requestContext?: { get(key: string): unknown } }) {
@@ -38,6 +45,7 @@ function instructions({ requestContext }: { requestContext?: { get(key: string):
         : 'Reply in the language the user writes in.',
     )
     .replace('{voice}', spoken ? voiceRule : '')
+    .replace('{business}', requestContext?.get('channel') === 'whatsapp' ? BUSINESS_ONLY_RULE : '')
     .replace('{timeZone}', timeZone)
     .replace('{screen}', where)
     .replace('{surfaces}', surfaces.join(', '))

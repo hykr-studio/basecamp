@@ -35,14 +35,32 @@ services:
   # WhatsApp Cloud API emulator: chat UI at http://localhost:8080
   # SQLite defaults to memory. To keep chats across restarts, mount a volume and set
   # WHALOC_DB_PATH=/data/whaloc.db (the image declares /data; the process runs as uid 1000).
+  # One business account and one number (the ids in WA_WABA_ID and WA_PHONE_NUMBER_ID);
+  # templates come from `pnpm templates:sync`, approved after 2 seconds.
   whaloc:
-    image: ghcr.io/dgadelha/whaloc:latest # pin a digest: the project is new
+    image: ghcr.io/dgadelha/whaloc@sha256:793780655dbe3be764de559625be0026a67978a3a9527e23d9d023f613c51314 # v0.1.0
     environment:
       WHALOC_WEBHOOK_URL: http://host.docker.internal:3000/webhooks/whatsapp
       WHALOC_APP_SECRET: dev-app-secret
       WHALOC_WEBHOOK_VERIFY_TOKEN: dev-verify-token
+      WHALOC_SEED: '[{"id":"666635535888644","name":"Agentic Stack Demo","phoneNumbers":[{"id":"573542517421694","displayPhoneNumber":"+91 80 4000 0100","verifiedName":"Agentic Stack Demo"}]}]'
+      WHALOC_TEMPLATE_AUTO_APPROVE: "2000"
     ports: ["8080:8080"]
     extra_hosts: ["host.docker.internal:host-gateway"] # lets it reach the API on your Mac (and on Linux CI)
+  # The golden conversations' own whaloc: its webhooks go to the test API on port 3099, so tests
+  # never touch the dev one. Fast statuses and template approval keep the tests quick.
+  whaloc-test:
+    image: ghcr.io/dgadelha/whaloc@sha256:793780655dbe3be764de559625be0026a67978a3a9527e23d9d023f613c51314 # v0.1.0
+    environment:
+      WHALOC_WEBHOOK_URL: http://host.docker.internal:3099/webhooks/whatsapp
+      WHALOC_APP_SECRET: test-app-secret
+      WHALOC_WEBHOOK_VERIFY_TOKEN: test-verify-token
+      WHALOC_SEED: '[{"id":"666635535888699","name":"Agentic Stack Test","phoneNumbers":[{"id":"573542517421699","displayPhoneNumber":"+91 80 4000 0199","verifiedName":"Agentic Stack Test"}]}]'
+      WHALOC_TEMPLATE_AUTO_APPROVE: "200"
+      WHALOC_STATUS_DELAYS: "sent:0,delivered:100"
+      WHALOC_PUBLIC_URL: http://localhost:8090 # media links point here, not at the dev whaloc's 8080
+    ports: ["8090:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
   # Voice: the WebRTC media server the app and the voice worker meet in. Dev mode uses the
   # devkey/secret pair; --bind 0.0.0.0 so the host can reach it, and the node IP the app is
   # told to send media to (127.0.0.1 for a simulator; your LAN IP for a phone).

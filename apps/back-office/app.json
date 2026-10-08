@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "Back office",
+    "slug": "back-office",
+    "version": "1.0.0",
+    "userInterfaceStyle": "light",
+    "platforms": ["web"],
+    "web": { "favicon": "./assets/favicon.png", "output": "single", "bundler": "metro" },
+    "plugins": ["expo-router"],
+    "scheme": "backoffice"
+  }
+}

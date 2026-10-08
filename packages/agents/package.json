@@ -17,7 +17,9 @@
     "eval": "MODEL_MODE=fake tsx --env-file=../../.env evals/assistant.eval.ts",
     "eval:live": "MODEL_MODE=live tsx --env-file=../../.env evals/assistant.eval.ts",
     "eval:voice": "MODEL_MODE=fake tsx --env-file=../../.env evals/voice.eval.ts",
-    "eval:voice:live": "MODEL_MODE=live tsx --env-file=../../.env evals/voice.eval.ts"
+    "eval:voice:live": "MODEL_MODE=live tsx --env-file=../../.env evals/voice.eval.ts",
+    "eval:whatsapp": "MODEL_MODE=fake tsx --env-file=../../.env evals/whatsapp.eval.ts",
+    "eval:whatsapp:live": "MODEL_MODE=live tsx --env-file=../../.env evals/whatsapp.eval.ts"
   },
   "dependencies": {
     "@app/api-client": "workspace:*",

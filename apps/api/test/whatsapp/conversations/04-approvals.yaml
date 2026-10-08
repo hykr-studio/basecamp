@@ -1,0 +1,14 @@
+name: a customer's request reaches the owner; a forwarded button does nothing; Approve works once
+steps:
+  - linkOwner: {}
+  - api: { as: kavya, method: POST, path: /api/todos, body: { title: Return the samples }, save: todo }
+  - api: { as: kavya, method: DELETE, path: "/api/todos/${todo.value.id}" }
+  - expect: { to: owner, template: approval_request_v1 }
+  - tap: { as: kavya, sentTo: owner, button: Approve }
+  - expect: { to: kavya, text: "isn't for this number" }
+  - tap: { as: owner, button: Approve }
+  - expect: { to: owner, text: "Done: Delete" }
+  - expect: { to: kavya, template: approval_outcome_v1 }
+  - repeat: {}
+  - expect: { to: owner, text: already decided }
+  - expectAudit: { action: approval.approved, count: 1 }

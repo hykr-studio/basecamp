@@ -76,6 +76,7 @@ describe('present intents by surface', () => {
     expect(res.body.toolCalls[0].present).toEqual({
       kind: 'text',
       text: 'Your pages\n• Focus board',
+      choices: [{ id: expect.any(String), title: 'Focus board' }],
     });
     expect(res.body.reply).not.toMatch(/canvas|screen|opened/i);
   });

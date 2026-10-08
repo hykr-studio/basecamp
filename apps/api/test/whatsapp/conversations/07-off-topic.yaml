@@ -1,0 +1,5 @@
+name: an off-topic ask gets what the business can help with, not an essay
+steps:
+  - say: { as: ravi, text: write me a poem about cricket }
+  - expect: { to: ravi, text: "/privacy/" }
+  - expect: { to: ravi, text: "I can add, list" }

@@ -1,5 +1,13 @@
-import type { Channel, Lang, ThreadMessage } from '@app/contracts';
+import {
+  type Channel,
+  type Lang,
+  type Principal,
+  type Subject,
+  subjectKey,
+  type ThreadMessage,
+} from '@app/contracts';
 import { type Database, schema } from '@app/db';
+import { subjectOf } from '@app/policy';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { DB } from '../../infra/db.module.js';
@@ -9,6 +17,30 @@ const { threads, threadMessages } = schema;
 /** A UI message part saved with a reply: a tool call with its input and output. */
 export type SavedPart = { type: string } & Record<string, unknown>;
 
+/** Whose conversation: a person, or a WhatsApp contact without an account, in one business. */
+export type ThreadOwner = { tenantId: string; subject: Subject };
+
+/** The conversation's owner, from a principal: whom it acts for, in its business. */
+export function threadOwnerOf(p: Principal): ThreadOwner {
+  const subject = subjectOf(p);
+  if (!subject || !p.tenantId) throw new NotFoundException('No conversation here');
+  return { tenantId: p.tenantId, subject };
+}
+
+const whose = (o: ThreadOwner) =>
+  and(
+    eq(threads.tenantId, o.tenantId),
+    o.subject.kind === 'user'
+      ? eq(threads.ownerId, o.subject.userId)
+      : eq(threads.contactId, o.subject.contactId),
+  );
+const columnsOf = (o: ThreadOwner) => ({
+  tenantId: o.tenantId,
+  ...(o.subject.kind === 'user'
+    ? { ownerId: o.subject.userId }
+    : { contactId: o.subject.contactId }),
+});
+
 /**
  * Conversations the server keeps, one person each. Every channel (the app, voice, WhatsApp)
  * reads its history from here and saves its turns here, so they all share one conversation.
@@ -17,8 +49,8 @@ export type SavedPart = { type: string } & Record<string, unknown>;
 export class ThreadsService {
   constructor(@Inject(DB) private readonly db: Database) {}
 
-  async create(ownerId: string) {
-    const [row] = await this.db.insert(threads).values({ ownerId }).returning();
+  async create(owner: ThreadOwner) {
+    const [row] = await this.db.insert(threads).values(columnsOf(owner)).returning();
     return row;
   }
 
@@ -27,27 +59,28 @@ export class ThreadsService {
    * for the transaction), so the app loading, a voice session and a WhatsApp message arriving
    * together still find one thread, not three.
    */
-  async current(ownerId: string) {
+  async current(owner: ThreadOwner) {
+    const key = `thread:${owner.tenantId}:${subjectKey(owner.subject)}`;
     return this.db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`thread:${ownerId}`}))`);
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
       const [row] = await tx
         .select()
         .from(threads)
-        .where(eq(threads.ownerId, ownerId))
+        .where(whose(owner))
         .orderBy(desc(threads.updatedAt))
         .limit(1);
       if (row) return row;
-      const [created] = await tx.insert(threads).values({ ownerId }).returning();
+      const [created] = await tx.insert(threads).values(columnsOf(owner)).returning();
       return created;
     });
   }
 
-  /** The thread, if it is this person's; otherwise 404 (never a hint that it exists). */
-  async owned(threadId: string, ownerId: string) {
+  /** The thread, if it is theirs; otherwise 404 (never a hint that it exists). */
+  async owned(threadId: string, owner: ThreadOwner) {
     const [row] = await this.db
       .select()
       .from(threads)
-      .where(and(eq(threads.id, threadId), eq(threads.ownerId, ownerId)));
+      .where(and(eq(threads.id, threadId), whose(owner)));
     if (!row) throw new NotFoundException('No such thread');
     return row;
   }

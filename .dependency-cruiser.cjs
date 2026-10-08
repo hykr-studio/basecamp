@@ -72,6 +72,51 @@ module.exports = {
       },
     },
     {
+      name: 'back-office-is-a-client',
+      comment:
+        "The back office is the business's window on the API: it calls /api/backoffice through the typed client and holds no rules, data, model or channel code of its own.",
+      severity: 'error',
+      from: { path: '^apps/back-office/src/' },
+      to: {
+        path: [
+          '^packages/(db|policy|core|agents|channels|notifications)/',
+          '(^|/)@app/(db|policy|core|agents|channels|notifications)(/|$)',
+          '(^|/)@mastra/',
+          '^apps/(?!back-office/)',
+        ],
+      },
+    },
+    {
+      name: 'channels-is-transport',
+      comment:
+        'packages/channels moves messages (verify, parse, render, send): no database, policy, framework core, agent, Nest, queue or model in it, so a channel can be tested and replaced on its own.',
+      severity: 'error',
+      from: { path: '^packages/channels/src/' },
+      to: {
+        path: [
+          '^packages/(db|policy|core|agents)/',
+          '(^|/)@app/(db|policy|core|agents)(/|$)',
+          '(^|/)(@mastra|@nestjs|drizzle-orm|bullmq)(/|$)',
+          '^apps/',
+        ],
+      },
+    },
+    {
+      name: 'notifications-are-definitions',
+      comment:
+        'packages/notifications declares templates and notifications: what may be sent, in which words, to whom and when. Sending, consent and queues live in the API.',
+      severity: 'error',
+      from: { path: '^packages/notifications/src/' },
+      to: {
+        path: [
+          '^packages/(db|policy|core|agents)/',
+          '(^|/)@app/(db|policy|core|agents)(/|$)',
+          '(^|/)(@mastra|@nestjs|drizzle-orm|bullmq)(/|$)',
+          '^apps/',
+        ],
+      },
+    },
+    {
       name: 'i18n-is-a-leaf',
       comment:
         "The product's words are read by every app and package, the voice worker included: they import nothing.",

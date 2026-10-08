@@ -1,4 +1,4 @@
-import type { AuthorizeResult, CommandSpec, Principal } from '@app/contracts';
+import type { ApproverRule, AuthorizeResult, CommandSpec, Principal } from '@app/contracts';
 import { Inject, type Type } from '@nestjs/common';
 import { CommandHandler, EventBus } from '@nestjs/cqrs';
 import type { z } from 'zod';
@@ -27,6 +27,11 @@ export interface CommandConfig<S extends CommandSpec, L, V> {
     loaded: L;
     via: RuleContext;
   }) => Promise<RunResult<V>>;
+  /**
+   * Who decides it when authorize parks it: by role, on which channels, how surely. Default:
+   * the person it is for (a customer's request: the business's owner and ops).
+   */
+  approval?: ApproverRule;
 }
 
 export class AppCommand {
@@ -74,6 +79,7 @@ export function defineCommand<S extends CommandSpec, L, V>(
       load: config.load,
       authorize: config.authorize,
       summarize: config.summarize,
+      approval: config.approval,
       run: (a) => config.run({ ...a, via }),
       present: (value) => spec.output.parse(toJson(value)),
     }),

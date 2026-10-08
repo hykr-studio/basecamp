@@ -17,6 +17,14 @@ export function createDb(url: string) {
 export type { Database, DbOrTx } from './database.js';
 export { type AuditInput, type WriteCtx, writeAudit } from './repos/audit.js';
 export { idempotencyRepo } from './repos/idempotency.js';
+export {
+  type Contact,
+  contactById,
+  defaultOwnerOf,
+  ensureDefaultTenant,
+  type Membership,
+  membershipOf,
+} from './repos/tenancy.js';
 export { userExists } from './repos/users.js';
 export * as schema from './schema/index.js';
 export * from './schema/index.js';

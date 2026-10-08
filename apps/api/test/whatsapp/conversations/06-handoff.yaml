@@ -1,0 +1,26 @@
+name: a person takes over, the assistant goes quiet, staff reply and hand it back
+steps:
+  - say: { as: imran, text: talk to a person }
+  - expect: { to: imran, text: "/privacy/" }
+  - expect: { to: imran, text: Someone from the team }
+  - say: { as: imran, text: "hello?" }
+  - expectNone: { to: imran, for: 2500 }
+  - query:
+      sql: >
+        select h.id from channel.handoffs h join channel.contacts c on c.id = h.contact_id
+        where c.address = $1 and h.state <> 'closed'
+      params: ["${address.imran}"]
+      save: handoff
+  - api:
+      as: owner
+      method: POST
+      path: "/api/backoffice/handoffs/${handoff.id}/reply"
+      body: { text: Your tiles arrive on Friday. }
+  - expect: { to: imran, text: arrive on Friday }
+  - api:
+      as: owner
+      method: POST
+      path: "/api/backoffice/handoffs/${handoff.id}/return"
+      body: { resolution: Told them Friday }
+  - say: { as: imran, text: list }
+  - expect: { to: imran, text: "/./" }

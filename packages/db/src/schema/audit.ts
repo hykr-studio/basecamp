@@ -14,6 +14,10 @@ export const events = audit.table(
     actorKind: text('actor_kind').notNull(),
     actorId: text('actor_id').notNull(),
     actingFor: text('acting_for'),
+    /** The business it happened in. */
+    tenantId: text('tenant_id'),
+    /** Whom it was for: a person ('user') or a WhatsApp contact without an account ('contact'). */
+    subjectKind: text('subject_kind'),
     runId: text('run_id'),
     /** The HTTP request that caused this row; an approval's replay shares the approve request's. */
     requestId: text('request_id'),
@@ -33,5 +37,6 @@ export const events = audit.table(
     index('events_at_idx').on(table.at),
     index('events_run_idx').on(table.runId),
     index('events_request_idx').on(table.requestId),
+    index('events_tenant_at_idx').on(table.tenantId, table.at),
   ],
 );

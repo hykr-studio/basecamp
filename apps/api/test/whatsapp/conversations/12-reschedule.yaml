@@ -1,0 +1,17 @@
+name: a reschedule moves the reminder; deleting the meeting cancels it
+steps:
+  - api:
+      as: owner
+      method: POST
+      path: /api/meetings
+      body: { title: Tile review, startsAt: "${soon.startsAt}", endsAt: "${soon.endsAt}" }
+      save: meeting
+  - expectScheduled: { dedupe: "meeting.reminder:${meeting.value.id}", at: "${soon.reminderAt}" }
+  - api:
+      as: owner
+      method: POST
+      path: "/api/meetings/${meeting.value.id}/reschedule"
+      body: { startsAt: "${later.startsAt}", endsAt: "${later.endsAt}" }
+  - expectScheduled: { dedupe: "meeting.reminder:${meeting.value.id}", at: "${later.reminderAt}" }
+  - api: { as: owner, method: DELETE, path: "/api/meetings/${meeting.value.id}" }
+  - expectScheduled: { dedupe: "meeting.reminder:${meeting.value.id}", at: null }

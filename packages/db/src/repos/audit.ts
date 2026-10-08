@@ -3,9 +3,12 @@ import { events } from '../schema/audit.js';
 
 /** Who is writing, carried into every audit row. */
 export type WriteCtx = {
-  actorKind: 'user' | 'agent';
+  actorKind: 'user' | 'agent' | 'contact' | 'system';
   actorId: string;
   actingFor?: string | null;
+  /** The business it happened in, and whom for: a person ('user') or a contact ('contact'). */
+  tenantId?: string | null;
+  subjectKind?: string | null;
   runId?: string | null;
   requestId?: string | null;
   approvedBy?: string | null;
@@ -37,6 +40,8 @@ export async function writeAudit(tx: DbOrTx, input: AuditInput) {
       actorKind: input.actorKind,
       actorId: input.actorId,
       actingFor: input.actingFor ?? null,
+      tenantId: input.tenantId ?? null,
+      subjectKind: input.subjectKind ?? null,
       runId: input.runId ?? null,
       requestId: input.requestId ?? null,
       approvedBy: input.approvedBy ?? null,

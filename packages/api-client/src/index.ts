@@ -5,10 +5,14 @@ import {
   type ChatStreamRequest,
   type CommandSpec,
   type EntitySpec,
+  type HandoffThread,
   type HistoryEntry,
+  type Inbox,
   type ListInput,
+  type Me,
   type Page,
   pathParams,
+  type TemplateStatus,
   type Thread,
   type ThreadMessage,
   toQueryString,
@@ -172,6 +176,43 @@ export function createApiClient(opts: ApiClientOptions) {
   return {
     entity,
     command,
+    /** Who is signed in, in which business, with which roles. */
+    me: () => call<Me>('GET', '/api/me'),
+    /** The back office: conversations staff have taken from the assistant (staff only). */
+    backoffice: {
+      inbox: () => call<Inbox>('GET', '/api/backoffice/inbox'),
+      handoff: (id: string) =>
+        call<HandoffThread>('GET', `/api/backoffice/handoffs/${encodeURIComponent(id)}`),
+      take: (id: string) =>
+        call<unknown>('POST', `/api/backoffice/handoffs/${encodeURIComponent(id)}/take`),
+      /** As text inside the 24-hour window; as the reply template outside it. */
+      reply: (id: string, text: string) =>
+        call<{ sent: 'text' | 'template' }>(
+          'POST',
+          `/api/backoffice/handoffs/${encodeURIComponent(id)}/reply`,
+          { text },
+        ),
+      /** The assistant's suggested reply, to edit before sending. */
+      draft: (id: string) =>
+        call<{ text: string }>('POST', `/api/backoffice/handoffs/${encodeURIComponent(id)}/draft`),
+      /** Back to the assistant, with what was resolved. */
+      giveBack: (id: string, resolution?: string) =>
+        call<{ state: string }>(
+          'POST',
+          `/api/backoffice/handoffs/${encodeURIComponent(id)}/return`,
+          resolution ? { resolution } : {},
+        ),
+      templates: () => call<TemplateStatus[]>('GET', '/api/backoffice/templates'),
+      consent: (
+        contactId: string,
+        input: { topic: 'service' | 'reminders' | 'marketing'; granted: boolean; note?: string },
+      ) =>
+        call<unknown>(
+          'POST',
+          `/api/backoffice/contacts/${encodeURIComponent(contactId)}/consent`,
+          input,
+        ),
+    },
     /** People only: the agent gets 403. */
     listApprovals: () => call<Approval[]>('GET', '/api/approvals'),
     getApproval: (id: string) => call<Approval>('GET', `/api/approvals/${encodeURIComponent(id)}`),
@@ -179,10 +220,18 @@ export function createApiClient(opts: ApiClientOptions) {
     whatsapp: {
       get: () =>
         call<{ address: string; timeZone: string } | null>('GET', '/api/channels/whatsapp'),
-      link: (phone: string, timeZone: string) =>
-        call<{ address: string; timeZone: string }>('POST', '/api/channels/whatsapp', {
+      /** A one-time code to the number (WhatsApp's login_code_v1): proof the person holds it. */
+      sendCode: (phone: string, timeZone: string, lang: 'en' | 'hi' | 'te' = 'en') =>
+        call<{ sentTo: string; expiresInSeconds: number }>('POST', '/api/channels/whatsapp/code', {
           phone,
           timeZone,
+          lang,
+        }),
+      /** The code they received: the number is linked to their account. */
+      verify: (phone: string, code: string) =>
+        call<{ address: string; timeZone: string }>('POST', '/api/channels/whatsapp/verify', {
+          phone,
+          code,
         }),
       unlink: () => call<void>('DELETE', '/api/channels/whatsapp'),
     },

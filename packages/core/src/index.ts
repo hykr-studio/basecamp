@@ -8,7 +8,13 @@ export {
   defineCommand,
 } from './command/define-command.js';
 export { CoreModule } from './core.module.js';
-export { EntityCommand, EntityEvent, EntityQuery } from './entity/cqrs-classes.js';
+export {
+  EntityCommand,
+  EntityEvent,
+  EntityQuery,
+  isNamedEvent,
+  type NamedEvent,
+} from './entity/cqrs-classes.js';
 export {
   type AnyEntityDef,
   defineEntity,
@@ -34,9 +40,10 @@ export {
   RequestMeta,
   type RequestMetaValue,
 } from './http/principal.js';
+export { PrincipalResolver, type Standing } from './http/resolver.js';
 export { buildListSql, decodeCursor, encodeCursor } from './query/list-grammar.js';
 export { type AgentKey, CORE_OPTIONS, type Conn, type CoreOptions, type Tx } from './tokens.js';
-export { ApprovalService, registerOp, toApproval } from './write/approvals.js';
+export { ApprovalEvent, ApprovalService, registerOp, toApproval } from './write/approvals.js';
 export {
   type RunResult,
   runWrite,

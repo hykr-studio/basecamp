@@ -1,0 +1,12 @@
+name: a 429 from WhatsApp is retried, and the reminder still arrives
+steps:
+  - linkOwner: {}
+  - api:
+      as: owner
+      method: POST
+      path: /api/meetings
+      body: { title: Carpenter, startsAt: "${soon.startsAt}", endsAt: "${soon.endsAt}" }
+      save: meeting
+  - inject: { preset: rate_limit_429 }
+  - fire: { dedupe: "meeting.reminder:${meeting.value.id}" }
+  - expect: { to: owner, template: meeting_reminder_v1, within: 25000 }

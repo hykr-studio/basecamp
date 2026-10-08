@@ -5,6 +5,7 @@ import {
   listInputObject,
   type Present,
   type Principal,
+  parksFor,
   type WriteResult,
 } from '@app/contracts';
 import type { Registry } from '@app/ui-registry';
@@ -75,12 +76,12 @@ export async function safely<T>(
 const agentPrincipal: Principal = {
   actor: { kind: 'agent', id: 'agent', role: 'agent' },
   actingFor: { userId: 'user' },
+  subject: { kind: 'user', userId: 'user' },
   scopes: [],
 };
 
 function needsApproval(spec: EntitySpec, action: 'create' | 'update' | 'delete') {
-  const rule = spec.approval[action];
-  return rule === 'always' || (typeof rule === 'function' && rule(agentPrincipal));
+  return parksFor(spec.approval[action], agentPrincipal);
 }
 
 const APPROVAL =

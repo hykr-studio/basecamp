@@ -1,0 +1,17 @@
+name: a Hindi voice note is heard, done, and answered in Hindi; the audio is not kept
+steps:
+  - voice: { as: sita, lang: hi, text: "जोड़ो Pay the electrician" }
+  - expect: { to: sita, text: "/privacy/" }
+  - expect: { to: sita, lang: hi }
+  - expectDb:
+      sql: >
+        select count(*)::int as n from app.todos
+        where tenant_id = $1 and title = 'Pay the electrician' and customer_id is not null
+      params: [$tenant]
+      rows: [{ n: 1 }]
+  - expectDb:
+      sql: >
+        select m.kind, m.body from channel.messages m join channel.contacts c on c.id = m.contact_id
+        where c.address = $1 and m.direction = 'in'
+      params: ["${address.sita}"]
+      rows: [{ kind: text, body: null }]

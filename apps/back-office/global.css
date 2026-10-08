@@ -1,0 +1,51 @@
+@import "tailwindcss";
+@import "uniwind";
+
+/*
+ * The app's design tokens (apps/mobile/global.css), so the back office reads as the same
+ * product. Spacing is Tailwind's 4px scale.
+ */
+@theme {
+  --color-bg: #f5f6f8;
+  --color-rail: #eceff3;
+  --color-card: #ffffff;
+  --color-border: #dfe3e8;
+  --color-divider: #eceef2;
+  --color-text: #1c2430;
+  --color-muted: #5f6b7d;
+  --color-primary: #2f5bea;
+  --color-primary-tint: #e9eefd;
+  --color-primary-text: #ffffff;
+  --color-danger: #b4302a;
+  --color-danger-tint: #fdecea;
+  --color-warn-bg: #fff8db;
+  --color-warn-border: #efd36a;
+  --color-warn-text: #7a5600;
+  --color-success: #146b3d;
+  --color-success-tint: #e6f4ec;
+  --color-disabled-bg: #e7e9ee;
+  --color-disabled-text: #6b7480;
+  --color-placeholder: #6b7684;
+  --color-approval-bg: #f3f6ff;
+  --color-approval-border: #cdd7f6;
+  --color-approval-text: #2f4a9e;
+  --color-danger-hover: #962722;
+  --color-user-bubble: #243042;
+  --color-agent-bubble: #eef1f5;
+  --color-assistant: #6a3fc8;
+  --color-assistant-tint: #f4effd;
+  --color-assistant-border: #ddd0f7;
+
+  --font-heading: "SchibstedGrotesk_600SemiBold";
+  --font-title: "SchibstedGrotesk_700Bold";
+
+  --text-title: 24px;
+  --text-heading: 17px;
+  --text-body: 15px;
+  --text-body--line-height: 21px;
+  --text-small: 13px;
+  --text-small--line-height: 18px;
+
+  --radius-card: 12px;
+  --radius-control: 8px;
+}

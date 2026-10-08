@@ -7,22 +7,36 @@ import { api } from '../api';
 import { timeZone } from '../framework/dates';
 import { errorMessage } from '../framework/hooks';
 import { Icon } from '../framework/Icon';
+import { useLang } from '../framework/lang';
 import { colors } from '../theme';
 
 /**
  * The person's WhatsApp number: messages from it reach the same assistant, answered in
- * words (no screen there). Only the person can link a number; the assistant cannot.
+ * words (no screen there). Linked with a one-time code sent to the number, so only someone
+ * holding the phone can link it; the assistant cannot.
  */
 export function WhatsAppLink() {
   const client = useQueryClient();
+  const { lang } = useLang();
   const link = useQuery({ queryKey: ['whatsapp'], queryFn: () => api.whatsapp.get() });
   const [editing, setEditing] = useState(false);
   const [phone, setPhone] = useState('');
+  const [code, setCode] = useState('');
+  const [codeSent, setCodeSent] = useState(false);
+  const reset = () => {
+    setEditing(false);
+    setCodeSent(false);
+    setPhone('');
+    setCode('');
+  };
+  const send = useMutation({
+    mutationFn: () => api.whatsapp.sendCode(phone, timeZone(), lang),
+    onSuccess: () => setCodeSent(true),
+  });
   const save = useMutation({
-    mutationFn: () => api.whatsapp.link(phone, timeZone()),
+    mutationFn: () => api.whatsapp.verify(phone, code),
     onSuccess: () => {
-      setEditing(false);
-      setPhone('');
+      reset();
       return client.invalidateQueries({ queryKey: ['whatsapp'] });
     },
   });
@@ -30,6 +44,49 @@ export function WhatsAppLink() {
     mutationFn: () => api.whatsapp.unlink(),
     onSuccess: () => client.invalidateQueries({ queryKey: ['whatsapp'] }),
   });
+
+  if (editing && codeSent) {
+    return (
+      <View className="gap-1.5">
+        <Text variant="label">Code sent to WhatsApp</Text>
+        <Text variant="muted">Type the 6-digit code that arrived on {phone}.</Text>
+        <TextInput
+          value={code}
+          onChangeText={(v) => setCode(v.replace(/\D/g, '').slice(0, 6))}
+          accessibilityLabel="The 6-digit code"
+          placeholder="123456"
+          placeholderTextColor={colors.placeholder}
+          keyboardType="number-pad"
+          textContentType="oneTimeCode"
+          autoComplete="one-time-code"
+          autoFocus
+          onSubmitEditing={() => code.length === 6 && save.mutate()}
+          className="min-h-11 rounded-control border border-border bg-card px-3 text-body text-text"
+        />
+        {save.error && <Text variant="error">{errorMessage(save.error)}</Text>}
+        <View className="flex-row gap-1">
+          <Button
+            size="sm"
+            disabled={code.length !== 6 || save.isPending}
+            onPress={() => save.mutate()}
+          >
+            <Text>Link</Text>
+          </Button>
+          <Button
+            size="sm"
+            variant="subtle"
+            onPress={() => send.mutate()}
+            disabled={send.isPending}
+          >
+            <Text>Send again</Text>
+          </Button>
+          <Button size="sm" variant="subtle" onPress={reset}>
+            <Text>Cancel</Text>
+          </Button>
+        </View>
+      </View>
+    );
+  }
 
   if (editing) {
     return (
@@ -43,19 +100,19 @@ export function WhatsAppLink() {
           placeholderTextColor={colors.placeholder}
           keyboardType="phone-pad"
           autoFocus
-          onSubmitEditing={() => phone.trim() && save.mutate()}
+          onSubmitEditing={() => phone.trim() && send.mutate()}
           className="min-h-11 rounded-control border border-border bg-card px-3 text-body text-text"
         />
-        {save.error && <Text variant="error">{errorMessage(save.error)}</Text>}
+        {send.error && <Text variant="error">{errorMessage(send.error)}</Text>}
         <View className="flex-row gap-1">
           <Button
             size="sm"
-            disabled={!phone.trim() || save.isPending}
-            onPress={() => save.mutate()}
+            disabled={!phone.trim() || send.isPending}
+            onPress={() => send.mutate()}
           >
-            <Text>Link</Text>
+            <Text>Send code</Text>
           </Button>
-          <Button size="sm" variant="subtle" onPress={() => setEditing(false)}>
+          <Button size="sm" variant="subtle" onPress={reset}>
             <Text>Cancel</Text>
           </Button>
         </View>

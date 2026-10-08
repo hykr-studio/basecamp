@@ -1,12 +1,17 @@
 import { MeetingSpec, type MeetingStatus } from '@app/contracts';
 import { defineEntity, deny } from '@app/core';
 import { meetings } from '@app/db';
+import { BUSINESS_ACCESS } from '../access.js';
 
 const order: MeetingStatus[] = ['scheduled', 'held', 'closed'];
 
 export const Meeting = defineEntity(MeetingSpec, {
   table: meetings,
   owner: (t) => t.ownerId,
+  // Who reaches which meetings: the owner theirs, ops and admins the whole business, a
+  // customer (on WhatsApp, or with an account) the ones that are theirs.
+  customer: (t) => t.customerId,
+  access: BUSINESS_ACCESS,
   rules: [
     // Domain rules run after the framework's owner and expose checks.
     (_p, action, row, input) =>

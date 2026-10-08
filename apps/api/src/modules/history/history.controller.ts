@@ -26,14 +26,17 @@ export class HistoryController {
   @Get()
   async list(@CurrentPrincipal() p: Principal, @Query() q: HistoryQuery): Promise<HistoryEntry[]> {
     const me = p.actor.id;
+    // In this business: what you (or the assistant for you) did; ops see the whole business's.
+    const everyone = (p.roles ?? []).some((r) => r === 'ops' || r === 'admin');
     const rows = await this.db
       .select()
       .from(events)
       .where(
         and(
+          eq(events.tenantId, p.tenantId ?? ''),
           eq(events.resourceType, q.resourceType),
           eq(events.resourceId, q.resourceId),
-          or(eq(events.actorId, me), eq(events.actingFor, me)),
+          everyone ? undefined : or(eq(events.actorId, me), eq(events.actingFor, me)),
         ),
       )
       .orderBy(asc(events.at))

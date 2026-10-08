@@ -15,12 +15,17 @@ type ToolContext = {
  * Without one, as in Studio, the trace id is used, so audit rows still point at the trace.
  */
 export function apiFor(ctx?: ToolContext) {
-  const userId = ctx?.requestContext?.get('userId') as string | undefined;
+  // Whom it acts for ("user:<id>" / "contact:<id>"), in which business; Studio and evals give
+  // a bare user id, which the API also accepts.
+  const actingFor =
+    (ctx?.requestContext?.get('actingFor') as string | undefined) ??
+    (ctx?.requestContext?.get('userId') as string | undefined);
+  const tenantId = ctx?.requestContext?.get('tenantId') as string | undefined;
   const runId =
     (ctx?.requestContext?.get('runId') as string | undefined) ??
     ctx?.tracingContext?.currentSpan?.traceId;
   const channel = ctx?.requestContext?.get('channel') as string | undefined;
-  if (!userId) {
+  if (!actingFor) {
     throw new Error('Agent tools need a userId in the request context (in Studio: pick a preset)');
   }
   if (!runId) throw new Error('Agent tools need a runId or a trace');
@@ -29,7 +34,8 @@ export function apiFor(ctx?: ToolContext) {
     headers: () => ({
       'x-agent-key': process.env.AGENT_API_KEY ?? '',
       'x-agent-id': AGENT_ID,
-      'x-acting-for': userId,
+      'x-acting-for': actingFor,
+      ...(tenantId ? { 'x-tenant-id': tenantId } : {}),
       'x-run-id': runId,
       'x-agent-version': agentVersion(),
       // The turn's channel (app, voice, whatsapp), so every audit row says how it came in.

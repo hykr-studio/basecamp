@@ -1,28 +1,35 @@
 import { sql } from 'drizzle-orm';
 import {
   bigserial,
+  check,
   index,
   jsonb,
-  pgSchema,
   primaryKey,
   text,
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
+import { app, id } from './base.js';
+import { contacts } from './channel.js';
+import { tenantColumn } from './tenancy.js';
 
-export const app = pgSchema('app');
-
-/** A text uuid primary key, as every table uses. */
-export const id = () => text('id').primaryKey().default(sql`gen_random_uuid()::text`);
+export { app, id };
 
 export const approvals = app.table(
   'approvals',
   {
     id: id(),
-    ownerId: text('owner_id')
-      .notNull()
-      .references(() => user.id),
+    tenantId: tenantColumn(),
+    /** Who asked, when they have an account; a contact's request names the contact instead. */
+    ownerId: text('owner_id').references(() => user.id),
+    requesterContactId: text('requester_contact_id'),
+    /** Who decides: one person (their own assistant's request), or anyone with these roles. */
+    approverUserId: text('approver_user_id'),
+    approverRoles: text('approver_roles').array().notNull().default(sql`'{}'::text[]`),
+    /** Where it may be decided (null: anywhere the decider may act). */
+    approverChannels: text('approver_channels').array(),
+    minAssurance: text('min_assurance'),
     action: text('action').notNull(),
     rule: text('rule').notNull(),
     reason: text('reason').notNull(),
@@ -44,7 +51,10 @@ export const approvals = app.table(
     failureReason: text('failure_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
-  (table) => [index('approvals_owner_status_idx').on(table.ownerId, table.status)],
+  (table) => [
+    index('approvals_owner_status_idx').on(table.ownerId, table.status),
+    index('approvals_tenant_status_idx').on(table.tenantId, table.status),
+  ],
 );
 
 export const idempotencyKeys = app.table(
@@ -64,6 +74,7 @@ export const pages = app.table(
   'pages',
   {
     id: id(),
+    tenantId: tenantColumn(),
     ownerId: text('owner_id')
       .notNull()
       .references(() => user.id),
@@ -89,6 +100,7 @@ export const channelLinks = app.table(
   'channel_links',
   {
     id: id(),
+    tenantId: tenantColumn(),
     ownerId: text('owner_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
@@ -106,14 +118,17 @@ export const channelLinks = app.table(
   ],
 );
 
-/** A conversation the server keeps for one person: typed, spoken and WhatsApp turns. */
+/**
+ * A conversation the server keeps for one person (typed, spoken and WhatsApp turns), or for a
+ * WhatsApp contact without an account. Exactly one of the two.
+ */
 export const threads = app.table(
   'threads',
   {
     id: id(),
-    ownerId: text('owner_id')
-      .notNull()
-      .references(() => user.id, { onDelete: 'cascade' }),
+    tenantId: tenantColumn(),
+    ownerId: text('owner_id').references(() => user.id, { onDelete: 'cascade' }),
+    contactId: text('contact_id').references(() => contacts.id, { onDelete: 'cascade' }),
     title: text('title'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
@@ -121,7 +136,11 @@ export const threads = app.table(
       .$onUpdate(() => new Date())
       .notNull(),
   },
-  (table) => [index('threads_owner_updated_idx').on(table.ownerId, table.updatedAt)],
+  (table) => [
+    index('threads_owner_updated_idx').on(table.ownerId, table.updatedAt),
+    index('threads_contact_updated_idx').on(table.contactId, table.updatedAt),
+    check('threads_one_subject', sql`(${table.ownerId} is null) <> (${table.contactId} is null)`),
+  ],
 );
 
 /**
@@ -152,4 +171,23 @@ export const threadMessages = app.table(
     index('thread_messages_thread_created_idx').on(table.threadId, table.createdAt),
     index('thread_messages_thread_seq_idx').on(table.threadId, table.seq),
   ],
+);
+
+/**
+ * Notifications to send, written in the same transaction as the business change that causes
+ * them: if it rolls back, nothing is sent; if the process stops after commit, a relay still
+ * delivers them.
+ */
+export const outbox = app.table(
+  'outbox',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    tenantId: tenantColumn(),
+    /** The notification's key, e.g. meeting.reminder. */
+    key: text('key').notNull(),
+    payload: jsonb('payload').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    relayedAt: timestamp('relayed_at', { withTimezone: true }),
+  },
+  (table) => [index('outbox_pending_idx').on(table.id).where(sql`${table.relayedAt} is null`)],
 );

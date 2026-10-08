@@ -22,7 +22,7 @@ import { sql } from 'drizzle-orm';
 import { AccessToken, RoomAgentDispatch, RoomConfiguration } from 'livekit-server-sdk';
 import { config } from '../../config.js';
 import { DB } from '../../infra/db.module.js';
-import { ThreadsService } from '../threads/threads.service.js';
+import { ThreadsService, threadOwnerOf } from '../threads/threads.service.js';
 
 /** The start of today in UTC: the day the budget counts. */
 const todayUtc = sql`date_trunc('day', now() at time zone 'utc') at time zone 'utc'`;
@@ -55,8 +55,8 @@ export class VoiceService {
       );
 
     const thread = input.threadId
-      ? await this.threads.owned(input.threadId, userId)
-      : await this.threads.current(userId);
+      ? await this.threads.owned(input.threadId, threadOwnerOf(p))
+      : await this.threads.current(threadOwnerOf(p));
     // One room per session: LiveKit dispatches the worker when a room is created.
     const room = voiceRoom(userId, thread.id, randomUUID().slice(0, 8));
     const maxSeconds = Math.max(1, Math.min(config.voiceMaxSeconds, limit - used));

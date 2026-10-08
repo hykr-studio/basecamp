@@ -42,6 +42,7 @@ export function entityOp(
     resourceId: (_input, loaded) => loaded?.id ?? null,
     input: schema as z.ZodType<Record<string, unknown>>,
     args: id ? { id } : undefined,
+    approval: def.spec.approval[action],
     load: id ? (tx, p) => repo.get(tx, p, id) as Promise<Row> : undefined,
     authorize: (p, loaded, input) =>
       def.decide(p, action, loaded, action === 'delete' ? null : input),

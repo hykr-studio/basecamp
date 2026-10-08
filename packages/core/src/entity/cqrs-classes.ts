@@ -8,13 +8,32 @@ import type { WriteCtx } from '../write/pipeline.js';
 export class EntityQuery {}
 export class EntityCommand {}
 
-export class EntityEvent {
+export class EntityEvent implements NamedEvent {
   constructor(
     readonly entity: string,
     readonly change: 'created' | 'updated' | 'deleted',
     readonly row: unknown,
   ) {}
+  get eventName() {
+    return `${this.entity}.${this.change}`;
+  }
 }
+
+/**
+ * An event other parts of the system can react to without knowing its class: what happened
+ * ("meeting.closed") and to which row. Entity events are; a command's events opt in (a
+ * notification schedules on them, for one).
+ */
+export interface NamedEvent {
+  readonly eventName: string;
+  readonly row: unknown;
+}
+
+export const isNamedEvent = (e: unknown): e is NamedEvent =>
+  typeof e === 'object' &&
+  e !== null &&
+  typeof (e as NamedEvent).eventName === 'string' &&
+  'row' in (e as object);
 
 function named<C>(cls: C, name: string): C {
   Object.defineProperty(cls, 'name', { value: name });

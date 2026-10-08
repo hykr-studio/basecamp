@@ -1,0 +1,7 @@
+name: the same webhook delivered twice runs one turn
+steps:
+  - say: { as: dev, text: list }
+  - expect: { to: dev, text: "/privacy/" }
+  - expect: { to: dev, text: "/./" }
+  - redeliver: { as: dev }
+  - expectNone: { to: dev, for: 3000 }

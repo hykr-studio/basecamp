@@ -1,0 +1,9 @@
+name: the owner's linked number acts as them; the to-do is theirs, not a customer's
+steps:
+  - linkOwner: {}
+  - say: { as: owner, text: "add Call the plumber" }
+  - expect: { to: owner, text: "Call the plumber" }
+  - expectDb:
+      sql: select customer_id from app.todos where owner_id = $1 and tenant_id = $2 and title = 'Call the plumber'
+      params: [$owner, $tenant]
+      rows: [{ customer_id: null }]

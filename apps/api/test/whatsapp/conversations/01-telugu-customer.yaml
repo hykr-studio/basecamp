@@ -1,0 +1,11 @@
+name: a new customer writes in Telugu; welcomed, then answered in Telugu
+steps:
+  - say: { as: lakshmi, text: "జాబితా" }
+  - expect: { to: lakshmi, text: "/privacy/" }
+  - expect: { to: lakshmi, lang: te }
+  - say: { as: lakshmi, text: "జాబితా" }
+  - expect: { to: lakshmi, lang: te }
+  - expectDb:
+      sql: select locale, customer_id is not null as customer from channel.contacts where address = $1
+      params: ["${address.lakshmi}"]
+      rows: [{ locale: te-IN, customer: true }]

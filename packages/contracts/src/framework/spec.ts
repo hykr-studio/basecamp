@@ -1,6 +1,7 @@
 import type { Labels } from '@app/i18n';
 import { z } from 'zod';
-import type { Principal } from '../principal.js';
+import type { Assurance, Principal, TenantRole } from '../principal.js';
+import type { Channel } from '../voice.js';
 import type { ListConfig } from './list.js';
 
 /**
@@ -16,7 +17,40 @@ export type CreatedBy = z.infer<typeof CreatedBy>;
 export type Expose = 'all' | 'human' | 'internal';
 export type EntityAction = 'list' | 'get' | 'create' | 'update' | 'delete';
 export type WriteAction = 'create' | 'update' | 'delete';
-export type ApprovalRule = 'always' | 'never' | ((p: Principal) => boolean);
+/**
+ * Who decides a parked action, and where. By default the person it is for decides (their own
+ * assistant's request); a customer's request goes to the business (owner and ops).
+ * `channels` limits where it may be decided (['app'] for anything irreversible), and
+ * `minAssurance` how sure we must be of the decider ('session' needs a signed-in account).
+ */
+export type ApproverRule = {
+  by?: readonly TenantRole[] | 'self';
+  channels?: readonly Channel[];
+  minAssurance?: Assurance;
+};
+
+/**
+ * When an action waits for approval: always, never, when a check on the requester says so,
+ * or the object form, which also says who decides it.
+ */
+export type ApprovalRule =
+  | 'always'
+  | 'never'
+  | ((p: Principal) => boolean)
+  | (ApproverRule & { when?: 'always' | ((p: Principal) => boolean) });
+
+/** Does this rule park the action for this principal? */
+export function parksFor(rule: ApprovalRule | undefined, p: Principal): boolean {
+  if (!rule || rule === 'never') return false;
+  if (rule === 'always') return true;
+  if (typeof rule === 'function') return rule(p);
+  const when = rule.when ?? 'always';
+  return when === 'always' || when(p);
+}
+
+/** Who decides, from a rule (the object form; the others use the defaults). */
+export const approverOf = (rule: ApprovalRule | undefined): ApproverRule =>
+  rule && typeof rule === 'object' ? rule : {};
 
 export interface EntitySpec<
   R extends z.ZodObject = z.ZodObject,

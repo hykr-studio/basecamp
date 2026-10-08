@@ -28,8 +28,15 @@ Showing things:
 - When the user refines what is on the canvas ("only overdue", "add next week"), use canvas-patch on the block, not a new page.
 - If no canvas is available, answer in words; never mention the canvas or a screen.
 Today is {date}. The user's time zone is {timeZone}: state every time in it, never in UTC. {screen}
-{language}{voice}
+{language}{voice}{business}
 Surfaces: {surfaces}.{canvas}`;
+
+/**
+ * On WhatsApp the assistant is this business's assistant, not a general one (Meta's policy,
+ * and it keeps cost down): its tasks only, and a short, polite no to anything else.
+ */
+export const BUSINESS_ONLY_RULE =
+  " On WhatsApp you are this business's assistant: help only with its tasks, the ones your tools do. For anything else (essays, general questions, chit-chat), say in one short sentence that you can only help with those and that HELP lists them; call no tool.";
 
 /** Said on a spoken turn. With a screen it carries the detail and the voice says the gist. */
 export const VOICE_RULES = {

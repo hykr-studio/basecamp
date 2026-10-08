@@ -1,6 +1,5 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Channel, type Principal } from '@app/contracts';
-import { userExists } from '@app/db';
 import {
   type CanActivate,
   createParamDecorator,
@@ -14,10 +13,11 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { Request, Response } from 'express';
 import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
+import { PrincipalResolver } from './resolver.js';
 
 export type ApiRequest = Request & {
   /** Set by Better Auth's guard when the request carries a valid session. */
-  session?: { user: { id: string } } | null;
+  session?: { user: { id: string; name?: string } } | null;
   principal?: Principal;
   requestId?: string;
 };
@@ -52,6 +52,7 @@ export class PrincipalGuard implements CanActivate {
   constructor(
     @Inject(CORE_OPTIONS) private readonly options: CoreOptions,
     private readonly reflector: Reflector,
+    private readonly resolver: PrincipalResolver,
   ) {}
 
   async canActivate(context: ExecutionContext) {
@@ -63,7 +64,9 @@ export class PrincipalGuard implements CanActivate {
     res.setHeader('x-request-id', req.requestId);
 
     const agentKey = header(req, 'x-agent-key');
-    req.principal = agentKey ? await this.agentPrincipal(req, agentKey) : this.userPrincipal(req);
+    req.principal = agentKey
+      ? await this.agentPrincipal(req, agentKey)
+      : await this.userPrincipal(req);
     if (req.principal.actor.kind === 'agent') {
       const agent = this.options.agents.find((a) => a.id === req.principal?.actor.id);
       const allowed = this.reflector.getAllAndOverride<boolean>(RELAY_ALLOWED, [
@@ -87,22 +90,30 @@ export class PrincipalGuard implements CanActivate {
     if (header(req, 'x-agent-id') !== agent.id) {
       throw new UnauthorizedException('unknown agent');
     }
-    const userId = header(req, 'x-acting-for');
+    const actingFor = header(req, 'x-acting-for');
     const runId = header(req, 'x-run-id');
-    if (!userId || !runId) {
+    if (!actingFor || !runId) {
       throw new UnauthorizedException('agent requests need x-acting-for and x-run-id');
     }
     if (!RUN_ID.test(runId)) throw new UnauthorizedException('x-run-id is not a run id');
-    if (!(await userExists(this.options.db, userId))) {
-      throw new UnauthorizedException('x-acting-for is not a known user');
-    }
     // A relay's channel is fixed by its key; the assistant forwards the channel of the turn
     // it is running (checked against the known channels, never free text).
     const forwarded = Channel.safeParse(header(req, 'x-channel'));
     const channel = agent.channel ?? (forwarded.success ? forwarded.data : undefined);
+    // Whom it acts for, in which business (one they belong to), with what roles: the server's.
+    const standing = await this.resolver
+      .forActingFor(actingFor, { tenantId: header(req, 'x-tenant-id'), channel })
+      .catch((e) => {
+        if (e instanceof UnauthorizedException)
+          throw new UnauthorizedException('x-acting-for names nobody we know');
+        throw e;
+      });
+    const subject = standing.subject;
     return {
       actor: { kind: 'agent', id: agent.id, role: 'agent' },
-      actingFor: { userId },
+      actingFor:
+        subject.kind === 'user' ? { userId: subject.userId } : { contactId: subject.contactId },
+      ...standing,
       runId,
       agentVersion: header(req, 'x-agent-version'),
       scopes: [],
@@ -110,10 +121,14 @@ export class PrincipalGuard implements CanActivate {
     };
   }
 
-  private userPrincipal(req: ApiRequest): Principal {
+  private async userPrincipal(req: ApiRequest): Promise<Principal> {
     const id = req.session?.user?.id;
     if (!id) throw new UnauthorizedException();
-    return { actor: { kind: 'user', id, role: 'owner' }, scopes: [] };
+    const standing = await this.resolver.forUser(id, {
+      tenantId: header(req, 'x-tenant-id'),
+      name: req.session?.user?.name,
+    });
+    return { actor: { kind: 'user', id, role: 'owner' }, ...standing, scopes: [] };
   }
 }
 
@@ -130,7 +145,7 @@ export class ChatAccessGuard implements CanActivate {
     const p = context.switchToHttp().getRequest<ApiRequest>().principal;
     if (p?.actor.kind === 'user') return true;
     const agent = this.options.agents.find((a) => a.id === p?.actor.id);
-    if (p?.actor.kind === 'agent' && agent?.relay && p.actingFor) return true;
+    if (p?.actor.kind === 'agent' && agent?.relay && p.actingFor?.userId) return true;
     throw new ForbiddenException('Only people, or a relay acting for one, can start a turn');
   }
 }

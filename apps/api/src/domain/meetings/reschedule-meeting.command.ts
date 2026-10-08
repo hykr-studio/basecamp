@@ -1,9 +1,14 @@
 import { RescheduleMeetingSpec } from '@app/contracts';
-import { allow, defineCommand, deny, needsApproval } from '@app/core';
+import { allow, defineCommand, deny, type NamedEvent, needsApproval } from '@app/core';
 import { Todo } from '../todos/todo.entity.js';
 import { Meeting } from './meeting.entity.js';
 
-export class MeetingRescheduled {
+/** meeting.rescheduled: what happened, to which meeting (a NamedEvent: notifications schedule on it). */
+export class MeetingRescheduled implements NamedEvent {
+  readonly eventName = 'meeting.rescheduled';
+  get row() {
+    return this.meeting;
+  }
   constructor(
     readonly meeting: unknown,
     readonly shiftDays: number,

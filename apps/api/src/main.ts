@@ -10,5 +10,7 @@ const { AppModule } = await import('./app.module.js');
 // Better Auth reads the raw body; the auth module adds parsing back for other routes.
 const app = await NestFactory.create(AppModule, { bodyParser: false });
 app.enableCors({ origin: config.webOrigins, credentials: true });
+const { mountBullBoard } = await import('./channels/admin/bull-board.js');
+mountBullBoard(app);
 app.enableShutdownHooks();
 await app.listen(config.port);

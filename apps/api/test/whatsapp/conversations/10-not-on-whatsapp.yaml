@@ -1,0 +1,16 @@
+name: a number not on WhatsApp fails once, without retries; email instead, and marked unreachable
+steps:
+  - linkOwner: {}
+  - api:
+      as: owner
+      method: POST
+      path: /api/meetings
+      body: { title: Painter, startsAt: "${soon.startsAt}", endsAt: "${soon.endsAt}" }
+      save: meeting
+  - inject: { code: 131026, message: Message undeliverable }
+  - fire: { dedupe: "meeting.reminder:${meeting.value.id}" }
+  - expectEmail: { to: owner, subject: "Reminder: Painter" }
+  - expectDb:
+      sql: select unreachable_at is not null as unreachable from channel.contacts where address = $1
+      params: ["${address.owner}"]
+      rows: [{ unreachable: true }]

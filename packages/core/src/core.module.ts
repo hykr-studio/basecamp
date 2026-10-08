@@ -1,6 +1,7 @@
 import { type DynamicModule, Global, Module } from '@nestjs/common';
 import { ApprovalsController } from './http/approvals.controller.js';
 import { HumanOnlyGuard, PrincipalGuard } from './http/principal.js';
+import { PrincipalResolver } from './http/resolver.js';
 import { CORE_OPTIONS, type CoreOptions } from './tokens.js';
 import { ApprovalService, setApprovalTtl } from './write/approvals.js';
 
@@ -19,11 +20,12 @@ export class CoreModule {
       controllers: [ApprovalsController],
       providers: [
         { provide: CORE_OPTIONS, useValue: options },
+        PrincipalResolver,
         PrincipalGuard,
         HumanOnlyGuard,
         ApprovalService,
       ],
-      exports: [CORE_OPTIONS, PrincipalGuard, HumanOnlyGuard, ApprovalService],
+      exports: [CORE_OPTIONS, PrincipalResolver, PrincipalGuard, HumanOnlyGuard, ApprovalService],
     };
   }
 }

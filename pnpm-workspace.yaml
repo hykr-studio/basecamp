@@ -8,6 +8,8 @@ allowBuilds:
   # needs its install script (one downloads GPU builds, the other a local model we don't use).
   onnxruntime-node: false
   "@livekit/local-inference": false
+  # BullMQ's fast msgpack: prebuilt binaries ship with it, and it falls back to plain JS.
+  msgpackr-extract: false
 
 # @mastra/evals declares vitest <5 for its optional test helpers, which we don't use; the
 # repo runs vitest 5. Allowed explicitly rather than downgrading every package's tests.

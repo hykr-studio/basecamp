@@ -1,10 +1,15 @@
 import { CloseMeetingSpec } from '@app/contracts';
-import { allow, defineCommand, deny, needsApproval } from '@app/core';
+import { allow, defineCommand, deny, type NamedEvent, needsApproval } from '@app/core';
 import { Note } from '../notes/note.entity.js';
 import { Todo } from '../todos/todo.entity.js';
 import { Meeting } from './meeting.entity.js';
 
-export class MeetingClosed {
+/** meeting.closed: what happened, to which meeting (a NamedEvent: notifications schedule on it). */
+export class MeetingClosed implements NamedEvent {
+  readonly eventName = 'meeting.closed';
+  get row() {
+    return this.meeting;
+  }
   constructor(
     readonly meeting: unknown,
     readonly note: unknown,

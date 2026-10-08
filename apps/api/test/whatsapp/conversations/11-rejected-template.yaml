@@ -1,0 +1,14 @@
+name: a template Meta rejected is not sent; the reminder goes by email
+steps:
+  - linkOwner: {}
+  - template: { name: meeting_reminder_v1, status: reject }
+  - api:
+      as: owner
+      method: POST
+      path: /api/meetings
+      body: { title: Electrician, startsAt: "${soon.startsAt}", endsAt: "${soon.endsAt}" }
+      save: meeting
+  - fire: { dedupe: "meeting.reminder:${meeting.value.id}" }
+  - expectEmail: { to: owner, subject: "Reminder: Electrician" }
+  - expectNone: { to: owner, for: 1500 }
+  - template: { name: meeting_reminder_v1, status: approve }

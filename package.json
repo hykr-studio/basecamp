@@ -12,7 +12,9 @@
     "lint:deps": "depcruise apps packages --config .dependency-cruiser.cjs",
     "infra:up": "docker compose up -d",
     "db:generate": "pnpm --filter @app/db generate",
-    "db:migrate": "pnpm --filter @app/db migrate"
+    "db:migrate": "pnpm --filter @app/db migrate",
+    "templates:sync": "pnpm --filter @app/api templates:sync",
+    "templates:check": "pnpm --filter @app/api templates:check"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

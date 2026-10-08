@@ -1,6 +1,6 @@
 import { domain } from './domain/index.js';
 import type { CommandSpec, EntitySpec } from './framework/spec.js';
-import { platformEntities } from './platform/index.js';
+import { platformCommands, platformEntities } from './platform/index.js';
 
 /**
  * Every entity and command the system serves: the domain's plus the framework's own.
@@ -8,7 +8,7 @@ import { platformEntities } from './platform/index.js';
  */
 export const entities = { ...domain.entities, ...platformEntities };
 export type EntityKey = keyof typeof entities;
-export const commands: readonly CommandSpec[] = domain.commands;
+export const commands: readonly CommandSpec[] = [...domain.commands, ...platformCommands];
 
 const all = Object.values(entities) as EntitySpec[];
 /** Entity names as audited ('todo', 'page'): the resource types history can show. */
