@@ -208,7 +208,7 @@ pnpm infra:up          # docker compose: every service in framework/cli/compose.
 pnpm db:migrate        # the framework's migrations, then the application's
 pnpm templates:sync    # sends WhatsApp templates to whaloc; needs the build and whaloc
 pnpm dev               # the framework in watch mode, then basecamp dev: API + queue worker,
-                       # mobile web, back office, voice worker
+                       # mobile web, back office, voice worker, Studio
 ```
 
 The root scripts call the `basecamp` command (`@hykr/cli`) inside `application/`. You can run it there yourself: `cd application && pnpm exec basecamp <dev | start api|worker|voice | infra up|down | db migrate | db generate | templates sync|check | eval | studio>`. `pnpm exec basecamp --help` lists them.
@@ -241,7 +241,7 @@ Things that will trip you up:
 | whaloc | http://localhost:8080 | WhatsApp Cloud API emulator with a chat UI |
 | Mailpit | http://localhost:8025 | Email sent by notifications |
 | pgAdmin | http://localhost:5050 | `admin@example.com` / `admin`; server `app` (host `postgres`, user `app`) is preregistered |
-| Mastra Studio | http://localhost:4000 | Try the assistant and its tools: `cd application && pnpm exec basecamp studio` (needs the API running) |
+| Mastra Studio | http://localhost:4000 | Try the assistant and its tools, and read traces. `pnpm dev` starts it once the API is up and skips it if ports 4000 or 4111 are taken; it restarts when the agent's code changes. On its own: `cd application && pnpm exec basecamp studio` (needs the API running) |
 | LiveKit | ws://localhost:7880 | Voice rooms (dev keys `devkey` / `secret`) |
 | MinIO | http://localhost:9001 | Runs in compose, but no code uses it yet |
 

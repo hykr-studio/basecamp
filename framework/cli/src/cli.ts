@@ -22,7 +22,7 @@ type Config = {
 
 const HELP = `basecamp: run an application on the Basecamp framework
 
-  basecamp dev                       compile in watch mode; run the API, worker, voice worker and apps
+  basecamp dev                       compile in watch mode; run the API, worker, voice worker, apps, Studio
   basecamp start api|worker|voice    run one process (production)
   basecamp infra up|down             the local services (Postgres, Redis, WhatsApp emulator, LiveKit…)
   basecamp db migrate                the framework's migrations, then the application's
@@ -160,6 +160,8 @@ async function main() {
       run('api', process.execPath, ['--watch', runner, 'api', server], root);
       run('worker', process.execPath, ['--watch', runner, 'worker', server], root);
       run('voice', process.execPath, [voiceWorker(), 'dev'], root);
+      // Mastra Studio (4000), once the API is up; skipped if Studio already runs elsewhere.
+      run('studio', process.execPath, ['--watch', runner, 'studio', server], root);
       for (const app of config.apps ?? []) run(app, pm, ['run', 'dev'], resolve(root, app));
       return;
     }

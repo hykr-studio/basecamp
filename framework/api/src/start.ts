@@ -113,9 +113,12 @@ export async function runEval(
   return run[suite](app.agents);
 }
 
-/** Mastra Studio for the application's assistant (`basecamp studio`); `dir` keeps its presets. */
-export async function startStudio(app: Basecamp, dir: string) {
+/**
+ * Mastra Studio for the application's assistant (`basecamp studio`); `dir` keeps its presets.
+ * With `dev`, it waits for the API and steps aside if Studio already runs (`basecamp dev`).
+ */
+export async function startStudio(app: Basecamp, dir: string, options: { dev?: boolean } = {}) {
   setRuntime(app);
   const { startStudio } = await import('@hykr/agents/studio');
-  await startStudio(app.agents, { dir });
+  return startStudio(app.agents, { dir, dev: options.dev });
 }

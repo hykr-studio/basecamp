@@ -100,11 +100,38 @@ pnpm build          # the framework, the application and the basecamp command
 pnpm infra:up       # Postgres, Redis, MinIO, Mailpit, pgAdmin, LiveKit, WhatsApp emulator
 pnpm db:migrate     # the framework's migrations, then the application's
 pnpm templates:sync # register the WhatsApp templates with the emulator
-pnpm dev            # API, worker, app, back office and voice worker
+pnpm dev            # API, worker, app, back office, voice worker and Mastra Studio
 ```
 
 The `framework/cli/infra/postgres/init.sql` script runs automatically the first time the
 Postgres container starts. It enables PostGIS and pgcrypto and fixes the `app` role's search path.
+
+### Local addresses
+
+| Service | URL |
+|---|---|
+| App (Expo web) | http://localhost:8081 |
+| Back office | http://localhost:8082 |
+| API | http://localhost:3000 (health at `/health`) |
+| Queues (Bull Board, development only) | http://localhost:3000/admin/queues |
+| Mastra Studio | http://localhost:4000 (started by `pnpm dev` once the API is up) |
+| WhatsApp emulator (whaloc) | http://localhost:8080 |
+| Mailpit | http://localhost:8025 |
+| pgAdmin | http://localhost:5050 |
+| MinIO console | http://localhost:9001 |
+| LiveKit | ws://localhost:7880 |
+
+whaloc stands in for Meta's WhatsApp Cloud API. The adapter only knows a Graph URL, so moving
+to Meta is a matter of configuration (`WA_GRAPH_URL`, the account ids and the tokens).
+
+### Native apps
+
+```bash
+pnpm --filter @application/mobile ios       # or android
+```
+
+To use voice from a phone on the same Wi-Fi, set `LIVEKIT_NODE_IP` to your machine's LAN IP.
+Maestro flows for the demo moments are in `application/mobile/maestro/`.
 
 ### Starting a new application
 
@@ -214,13 +241,13 @@ Inside `application/` (or any application), the `basecamp` command does the rest
 
 | Command | What it does |
 |---|---|
-| `basecamp dev` | Compile the application in watch mode; run the API, worker, voice worker and apps |
+| `basecamp dev` | Compile the application in watch mode; run the API, worker, voice worker, apps and Studio |
 | `basecamp start api\|worker\|voice` | Run one process |
 | `basecamp infra up\|down` | The local services |
 | `basecamp db migrate` / `db generate [--name n]` | Migrations |
 | `basecamp templates sync\|check` | WhatsApp templates at the provider |
 | `basecamp eval [assistant\|voice\|whatsapp] [--live]` | Score the assistant |
-| `basecamp studio` | Mastra Studio for the assistant |
+| `basecamp studio` | Mastra Studio on its own, with the API running (`basecamp dev` starts it too) |
 
 ## Testing
 
