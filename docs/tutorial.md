@@ -7,18 +7,18 @@ In this tutorial you add **site visits** to the template:
 3. The customer gets a confirmation, and later a reminder an hour before the visit.
 4. Cancelling a **confirmed** visit needs staff approval. Cancelling a visit that is still only requested happens at once.
 
-Every step below comes from an implementation that was built and tested against this repository: it builds, its API tests and golden WhatsApp conversation pass, and the assistant's evals pass with the new cases. The snippets are trimmed, and every name in them is real. The sample domain on `main` does not include site visits; you add them as you go. When you finish, you will have touched one folder in each layer that [`DOMAIN.md`](../DOMAIN.md) lists. You will not have changed any framework code.
+Every step below comes from an implementation that was built and tested against this repository: it builds, its API tests and golden WhatsApp conversation pass, and the assistant's evals pass with the new cases. The snippets are trimmed, and every name in them is real. The sample domain on `main` does not include site visits; you add them as you go. When you finish, you will have touched one folder in each layer of `application/domain` that [`DOMAIN.md`](../DOMAIN.md) lists, plus `application/mobile` and the tests. You will not have changed any framework code (nothing in `framework/`), and `application/api/src/server.ts` needs at most one sentence (step 6): it already hands each layer's `index` to `defineServer`.
 
 | Layer | What you add | File |
 |---|---|---|
-| Contracts | `VisitSpec`, `ConfirmVisitSpec`, `CancelVisitSpec` | `packages/contracts/src/domain/visit.ts` |
-| Database | the `app.visits` table and migration `0014` | `packages/db/src/schema/domain.ts`, `packages/db/drizzle/0014_site_visits.sql` |
-| API | `Visit` (`defineEntity`), `ConfirmVisit` and `CancelVisit` (`defineCommand`), `VisitsModule` | `apps/api/src/domain/visits/` |
-| Views | `visit.list`, `visit.card` | `packages/ui-registry/src/domain/visit.ts` |
-| Notifications | two templates, two notifications | `packages/notifications/src/domain/visits.ts` |
-| Assistant | scripted-model turns, rules, eval cases | `packages/agents/src/domain/visits.ts`, `evals.ts`, `index.ts` |
-| App | a Visits screen and the inline view components | `apps/mobile/src/app/(domain)/visits.tsx`, `apps/mobile/src/domain/views/visit.tsx` |
-| Tests | API e2e test, view test, golden WhatsApp conversation | `apps/api/test/domain/visits.e2e.test.ts`, `packages/ui-registry/src/domain/visits.test.ts`, `apps/api/test/whatsapp/conversations/13-site-visit.yaml` |
+| Contracts | `VisitSpec`, `ConfirmVisitSpec`, `CancelVisitSpec` | `application/domain/src/contracts/visit.ts` |
+| Database | the `app.visits` table and migration `0001` | `application/domain/src/db/schema.ts`, `application/domain/drizzle/0001_site_visits.sql` |
+| API | `Visit` (`defineEntity`), `ConfirmVisit` and `CancelVisit` (`defineCommand`), `VisitsModule` | `application/domain/src/server/visits/` |
+| Views | `visit.list`, `visit.card` | `application/domain/src/views/visit.ts` |
+| Notifications | two templates, two notifications | `application/domain/src/notifications/visits.ts` |
+| Assistant | scripted-model turns, rules, eval cases | `application/domain/src/agent/visits.ts`, `evals.ts`, `index.ts` |
+| App | a Visits screen and the inline view components | `application/mobile/src/app/(domain)/visits.tsx`, `application/mobile/src/domain/views/visit.tsx` |
+| Tests | API e2e test, view test, golden WhatsApp conversation | `application/api/test/domain/visits.e2e.test.ts`, `application/domain/src/views/visits.test.ts`, `application/api/test/whatsapp/conversations/13-site-visit.yaml` |
 
 ---
 
@@ -28,31 +28,34 @@ You need the toolchain from the root `package.json`: pnpm 12 (`packageManager: p
 
 ```bash
 pnpm install
-cp .env.example .env          # fill BETTER_AUTH_SECRET, AGENT_API_KEY, VOICE_AGENT_KEY, APPROVAL_SECRET
-                              # with `openssl rand -hex 32`; set MODEL_MODE=fake to work without a model key
-pnpm infra:up                 # docker compose up -d: postgres, redis, mailpit, whaloc, whaloc-test, livekit, ...
+cp application/.env.example .env   # at the repository root; fill BETTER_AUTH_SECRET, AGENT_API_KEY,
+                                   # VOICE_AGENT_KEY, APPROVAL_SECRET with `openssl rand -hex 32`;
+                                   # set MODEL_MODE=fake to work without a model key
+pnpm infra:up                      # basecamp infra up: postgres, redis, mailpit, whaloc, whaloc-test, livekit, ...
 pnpm build
-pnpm db:migrate
+pnpm db:migrate                    # the framework's migrations, then the application's
 ```
+
+The root scripts run the `basecamp` command inside `application/`. You can also run it there directly: `cd application && pnpm exec basecamp <command>` (`--help` lists them).
 
 A few facts that matter throughout:
 
-- **The API tests run the compiled app.** `apps/api/test/support.ts` imports `../dist/app.module.js`, because Vitest's esbuild emits no decorator metadata. Build before you test.
-- **`MODEL_MODE=fake` runs a scripted model.** It has no network and costs nothing. The vitest config forces it on for tests, along with `WORKER_INLINE=1`, `THROTTLE=off` and a fresh `BULL_PREFIX`.
-- **The framework reads each domain folder only through its `index`.** `pnpm lint:deps` enforces this with the rule `framework-reads-the-domain-through-its-index`. Each step below therefore ends with a one-line change to an `index.ts`.
+- **The API tests run the compiled app.** A test imports `boot` from `@hykr/api/testing` (compiled) and the application's server from `../../dist/server.js`, because Vitest's esbuild emits no decorator metadata. Build before you test.
+- **`MODEL_MODE=fake` runs a scripted model.** It has no network and costs nothing. `application/api/vitest.config.ts` forces it on for tests, along with `WORKER_INLINE=1`, `THROTTLE=off` and a fresh `BULL_PREFIX`.
+- **The framework never imports the application.** The application passes its domain in: `application/api/src/server.ts` hands each layer's `index` to `defineServer({ domain, module, views, notifications, agent, ... })`, and `application/mobile/src/domain/index.ts` builds the app's catalog and registry from the same exports. `pnpm lint:deps` enforces the line with the rule `framework-never-imports-application`. Each step below therefore ends with a one-line change to the layer's `index.ts`.
 
 ---
 
 ## Step 1. Declare the entity and its commands (contracts)
 
-Everything starts from a spec. The REST routes, list grammar, agent tools, typed client and app hooks are all derived from it. Specs live in `@app/contracts`, which may depend only on `zod` and `@app/i18n` (rule `contracts-stays-a-leaf`).
+Everything starts from a spec. The REST routes, list grammar, agent tools, typed client and app hooks are all derived from it. Specs live in `application/domain/src/contracts` (`@application/domain/contracts`). The server and the apps both read them, so they may not import the database, Nest, Drizzle or the server-only `@hykr/*` packages (rule `domain-specs-and-views-are-isomorphic`).
 
 ### The record and its schemas
 
 ```ts
-// packages/contracts/src/domain/visit.ts
+// application/domain/src/contracts/visit.ts
+import { CreatedBy, commandSpec, entitySpec } from '@hykr/contracts';
 import { z } from 'zod';
-import { CreatedBy, commandSpec, entitySpec } from '../framework/spec.js';
 
 const title = z.string().min(1).max(200);
 const address = z.string().min(1).max(300);
@@ -87,7 +90,7 @@ export const UpdateVisitInput = z
   .refine((v) => Object.values(v).some((x) => x !== undefined), 'Send at least one field to change');
 ```
 
-> **Pitfall: a field your commands set must be in the update schema.** `repo.update()` in `packages/core/src/entity/define-entity.ts` calls `spec.schemas.update.parse(patch)` before it writes. Zod drops keys that are not in the schema. If you leave `status` out, `Visit.repo.update(..., { status: 'confirmed' })` succeeds and silently changes nothing. The sample `UpdateMeetingInput` includes `status` for the same reason. You protect the field with a rule in step 3.
+> **Pitfall: a field your commands set must be in the update schema.** `repo.update()` in `framework/core/src/entity/define-entity.ts` calls `spec.schemas.update.parse(patch)` before it writes. Zod drops keys that are not in the schema. If you leave `status` out, `Visit.repo.update(..., { status: 'confirmed' })` succeeds and silently changes nothing. The sample `UpdateMeetingInput` includes `status` for the same reason. You protect the field with a rule in step 3.
 
 ### The entity spec
 
@@ -133,7 +136,7 @@ export const VisitSpec = entitySpec({
 | `expose` | `'all'` gives a route and an agent tool. `'human'` gives a route behind `HumanOnlyGuard` and no tool. `'internal'` gives neither. |
 | `views` | The registered views (step 4) used to show tool results. |
 
-The operators each field type accepts (`packages/contracts/src/framework/list.ts`):
+The operators each field type accepts (`framework/contracts/src/framework/list.ts`):
 
 | Type | Operators |
 |---|---|
@@ -190,7 +193,9 @@ export const CancelVisitSpec = commandSpec({
 ### Register the specs
 
 ```ts
-// packages/contracts/src/domain/index.ts
+// application/domain/src/contracts/index.ts
+import { defineDomain } from '@hykr/contracts';
+// …the sample's imports and re-exports…
 import { CancelVisitSpec, ConfirmVisitSpec, VisitSpec } from './visit.js';
 export * from './visit.js';
 
@@ -203,11 +208,11 @@ export const domain = defineDomain({
 
 The key must be the plural. `defineDomain` throws `Domain entity "visit" must be keyed by its plural (visits)` if it is not.
 
-**What you get for free at this step.** `packages/contracts/src/catalog.ts` merges your specs into `entities` and `commands`. Several things are derived from those lists:
+**What you get for free at this step.** `createCatalog(domain)` (`framework/contracts/src/catalog.ts`) merges your specs with the framework's own into a catalog's `entities` and `commands`. `defineServer` builds one for the server, and `application/mobile/src/domain/index.ts` builds one for the app. Several things are derived from those lists:
 
 - the agent's tools (`list-visits`, `get-visit`, `create-visit`, `cancel-visit`)
 - the history resource types
-- the app's `useEntityList('visits', …)`
+- the app's `useEntityList('visits', …)`, typed through the `Register` declaration in `application/mobile/src/domain/index.ts`
 
 None of it works until the API serves the routes (step 3).
 
@@ -215,7 +220,7 @@ None of it works until the API serves the routes (step 3).
 
 ## Step 2. The table and its migration (database)
 
-Add the table to `packages/db/src/schema/domain.ts`, next to the sample tables:
+Add the table to `application/domain/src/db/schema.ts`, next to the sample tables. The helpers (`app`, `id`, `tenantColumn`, `customerColumn`, `user`) come from `@hykr/db`, which the file already imports:
 
 ```ts
 /** Site visits a customer asked for; staff confirm them with a time. */
@@ -261,18 +266,18 @@ The framework depends on these columns:
 | `createdBy` | Optional. When present, the framework sets it to `'assistant'` or `'person'`. |
 | `startsAt` (nullable) | Sorting a nullable timestamp works, because nulls sort last. Sorting a nullable column of another type throws `Sorting on nullable ... is not supported`. |
 
-Generate the migration. `drizzle-kit generate` diffs the snapshots and needs no database.
+Generate the migration. `pnpm db:generate` runs `basecamp db generate`, which runs `drizzle-kit generate` in `application/domain` (the `db` entry of the `basecamp` block). It diffs the snapshots and needs no database.
 
 ```bash
-pnpm --filter @app/db generate --name site_visits
+pnpm db:generate --name site_visits
 #   visits 11 columns 2 indexes 3 fks
-#   [✓] Your SQL migration file ➜ drizzle/0014_site_visits.sql 🚀
-pnpm db:migrate
+#   [✓] Your SQL migration file ➜ drizzle/0001_site_visits.sql 🚀
+pnpm db:migrate      # the framework's migrations, then the application's
 ```
 
-The generated file is a plain `CREATE TABLE "app"."visits"` with three foreign keys and two indexes. Commit it together with `drizzle/meta/0014_snapshot.json` and the updated `_journal.json`.
+The generated file, `application/domain/drizzle/0001_site_visits.sql`, is a plain `CREATE TABLE "app"."visits"` with three foreign keys and two indexes. Commit it together with `drizzle/meta/0001_snapshot.json` and the updated `_journal.json`. The framework's own tables are not in this folder: they ship with `@hykr/db` and `pnpm db:migrate` applies them first.
 
-> **Pitfall: shared databases and drizzle's bookkeeping.** `drizzle-kit migrate` records each applied migration with its timestamp. If several branches (or agents) each generate a `0014_…` and apply them to one database, the later merge can skip or collide. On a shared dev database, apply your migration from your own branch only. Expect to regenerate after you rebase onto someone else's migration.
+> **Pitfall: shared databases and drizzle's bookkeeping.** The migrator records each applied application migration in `drizzle.__app_migrations`, with its timestamp. If several branches (or agents) each generate a `0001_…` and apply them to one database, the later merge can skip or collide. On a shared dev database, apply your migration from your own branch only. Expect to regenerate after you rebase onto someone else's migration.
 
 ---
 
@@ -281,11 +286,11 @@ The generated file is a plain `CREATE TABLE "app"."visits"` with three foreign k
 ### The entity: table, owner, customer, access, rules
 
 ```ts
-// apps/api/src/domain/visits/visit.entity.ts
-import { VisitSpec } from '@app/contracts';
-import { defineEntity, deny } from '@app/core';
-import { visits } from '@app/db';
-import type { Access } from '@app/policy';
+// application/domain/src/server/visits/visit.entity.ts
+import { defineEntity, deny } from '@hykr/core';
+import type { Access } from '@hykr/policy';
+import { VisitSpec } from '../../contracts/index.js';
+import { visits } from '../../db/schema.js';
 
 /**
  * Visits are the business's, not one person's: everyone on the team reaches every visit, a
@@ -320,7 +325,7 @@ export const Visit = defineEntity(VisitSpec, {
 });
 ```
 
-**Why not `BUSINESS_ACCESS`?** The sample `apps/api/src/domain/access.ts` gives `staff: 'own'`. A customer's visit is owned by the business's default owner, so a staff member with `'own'` would never see the visits they need to confirm. Visits belong to the whole team, so every team role gets `'tenant'`. A `Grant` is one of three values (`packages/policy/src/access.ts`):
+**Why not `BUSINESS_ACCESS`?** The sample `application/domain/src/server/access.ts` gives `staff: 'own'`. A customer's visit is owned by the business's default owner, so a staff member with `'own'` would never see the visits they need to confirm. Visits belong to the whole team, so every team role gets `'tenant'`. A `Grant` is one of three values (`framework/policy/src/access.ts`):
 
 | Grant | Rows it reaches |
 |---|---|
@@ -342,9 +347,10 @@ A command passes `via` (`{ via: 'visit.confirm' }`), so the rule can tell a comm
 ### The commands: load, authorize, summarize, run
 
 ```ts
-// apps/api/src/domain/visits/visit.commands.ts
-import { CancelVisitSpec, ConfirmVisitSpec, type Principal } from '@app/contracts';
-import { allow, defineCommand, deny, type NamedEvent, needsApproval } from '@app/core';
+// application/domain/src/server/visits/visit.commands.ts
+import type { Principal } from '@hykr/contracts';
+import { allow, defineCommand, deny, type NamedEvent, needsApproval } from '@hykr/core';
+import { CancelVisitSpec, ConfirmVisitSpec } from '../../contracts/index.js';
 import { Visit } from './visit.entity.js';
 
 const STAFF = ['owner', 'admin', 'ops', 'staff'];
@@ -416,7 +422,7 @@ export const CancelVisit = defineCommand(CancelVisitSpec, {
 });
 ```
 
-Every command write goes through `runWrite` in `packages/core/src/write/pipeline.ts`, in this order:
+Every command write goes through `runWrite` in `framework/core/src/write/pipeline.ts`, in this order:
 
 1. **Validate.** The input is parsed again with the full `spec.input`.
 2. **Idempotency.** An `idempotency-key` header is honoured.
@@ -426,7 +432,7 @@ Every command write goes through `runWrite` in `packages/core/src/write/pipeline
 6. **Allow.** `run` executes. There is one audit row per `touched` entry, plus one for the command. The caller gets `{ status: 'done', value }`.
 7. **Events.** They are published only **after commit**.
 
-Who decides a parked cancel? For a command, `approval` is an `ApproverRule` (`{ by, channels, minAssurance }`). It says **who** decides. Whether the command parks at all is decided only by `authorize`. Without `by`, `decidersFor` in `packages/core/src/write/approvals.ts` behaves like this:
+Who decides a parked cancel? For a command, `approval` is an `ApproverRule` (`{ by, channels, minAssurance }`). It says **who** decides. Whether the command parks at all is decided only by `authorize`. Without `by`, `decidersFor` in `framework/core/src/write/approvals.ts` behaves like this:
 
 | Requester | Who decides by default |
 |---|---|
@@ -440,12 +446,12 @@ When the team approves, `ApprovalService.decide` replays the stored op in one tr
 - The replay runs as the original requester, re-resolved with `resolver.refresh` and given `approvedBy: <decider>`.
 - `authorize`'s `needs_approval` then becomes `allow` with rule `approved:confirmed_visit_cancel`.
 
-> **Pitfall: entity events are not published for repo calls inside a command.** `visit.created/updated/deleted` come from the CRUD handlers (`entityOp` in `packages/core/src/entity/handlers.ts`). When your command calls `Visit.repo.update(...)`, nothing named `visit.updated` is published. If notifications should react to a command, publish your own `NamedEvent` (`eventName` and `row`), as `VisitConfirmed` does above.
+> **Pitfall: entity events are not published for repo calls inside a command.** `visit.created/updated/deleted` come from the CRUD handlers (`entityOp` in `framework/core/src/entity/handlers.ts`). When your command calls `Visit.repo.update(...)`, nothing named `visit.updated` is published. If notifications should react to a command, publish your own `NamedEvent` (`eventName` and `row`), as `VisitConfirmed` does above.
 
 ### Wire the Nest module
 
 ```ts
-// apps/api/src/domain/visits/visits.module.ts
+// application/domain/src/server/visits/visits.module.ts
 @Module({
   controllers: [
     entityController(Visit),
@@ -456,16 +462,15 @@ When the team approves, `ApprovalService.decide` replays the stored op in one tr
 })
 export class VisitsModule {}
 
-// apps/api/src/domain/index.ts
+// application/domain/src/server/index.ts (server.ts passes DomainModule to defineServer)
 @Module({ imports: [TodosModule, NotesModule, MeetingsModule, VisitsModule] })
 export class DomainModule {}
 ```
 
-Build and typecheck the API and everything it depends on:
+Build and typecheck the application's API and everything it depends on (`application/domain` and the framework):
 
 ```bash
-pnpm turbo run build typecheck --filter=@app/api...
-#  Tasks:    22 successful, 22 total
+pnpm turbo run build typecheck --filter=@application/api...
 ```
 
 **What you get for free at this step:**
@@ -488,7 +493,7 @@ The build also gives you:
 
 ### Try it with curl
 
-Start the API with `pnpm dev`, which runs the API and the worker. After a build you can instead run `pnpm --filter @app/api start` and `pnpm --filter @app/api start:worker`. The worker runs the queue processors that send WhatsApp messages and notifications: the API process registers `ChannelsModule.forRoot({ processors: config.workerInline })`, so with `start` alone the curl calls below work but nothing consumes the queues. Then:
+Start the API with `pnpm dev`, which runs the API and the worker. After a build you can instead run `pnpm exec basecamp start api` and `pnpm exec basecamp start worker` in `application/`. The worker runs the queue processors that send WhatsApp messages and notifications: the API process registers `ChannelsModule.forRoot({ processors: config.workerInline })` (`framework/api/src/app.module.ts`), so with `start api` alone the curl calls below work but nothing consumes the queues. Then:
 
 ```bash
 API=http://localhost:3000
@@ -524,7 +529,7 @@ Sign-up and sign-in need an `origin` header from `WEB_ORIGINS`, because Better A
 
 ## Step 4. Views: how a visit is shown, written and spoken
 
-A view is declared once in `packages/ui-registry`. The registry may import only contracts and i18n (rule `ui-registry-no-runtime`). Each surface uses a different part of it:
+A view is declared once in `application/domain/src/views`, with `defineView` from `@hykr/ui-registry`. Like the specs, views are read by the server and the apps, so they import only contracts, i18n, the registry and `zod` (rule `domain-specs-and-views-are-isomorphic`). Each surface uses a different part of it:
 
 | Surface | What it uses |
 |---|---|
@@ -533,11 +538,11 @@ A view is declared once in `packages/ui-registry`. The registry may import only 
 | Voice | `speak(props, ctx)` |
 
 ```ts
-// packages/ui-registry/src/domain/visit.ts
-import { Visit, VisitSpec } from '@app/contracts';
-import { type Labels, pick, spokenWhen, whenText } from '@app/i18n';
+// application/domain/src/views/visit.ts
+import { type Labels, pick, spokenWhen, whenText } from '@hykr/i18n';
+import { action, defineView, spokenList, type TextContext, type ViewLabels } from '@hykr/ui-registry';
 import { z } from 'zod';
-import { action, defineView, spokenList, type TextContext, type ViewLabels } from '../define-view.js';
+import { Visit, VisitSpec } from '../contracts/index.js';
 
 const STATUS: Record<Visit['status'], Labels> = {
   requested: { en: 'waiting for a time', hi: 'समय तय होना बाकी', te: 'సమయం ఇంకా ఖరారు కాలేదు' },
@@ -596,15 +601,15 @@ export const VisitCardView = defineView({
 });
 ```
 
-Register both views in `uiDomain.views` in `packages/ui-registry/src/domain/index.ts`, and export them from there.
+Register both views in `uiDomain.views` in `application/domain/src/views/index.ts`, and export them from there.
 
 The registry adds checks of its own:
 
-- **Speakable list views need words.** `createRegistry` refuses a `by: 'query'` view that has the `speech` surface but no `labels.noun` and `labels.empty`.
+- **Speakable list views need words.** `createUiRegistry` refuses a `by: 'query'` view that has the `speech` surface but no `labels.noun` and `labels.empty`.
 - **Queries are checked against the entity.** `checkPresent` validates a list view's query with `listInputSchema`. `{ address: 'x' }` is an error, because `address` is searchable but not filterable.
 - **The assistant never writes the fetched data.** `agentProps(view)` omits `source.into` from the props.
 
-The view test (`packages/ui-registry/src/domain/visits.test.ts`) pins the exact words:
+The view test (`application/domain/src/views/visits.test.ts`) pins the exact words:
 
 ```ts
 expect(VisitListView.text({ items }, en)).toBe(
@@ -618,7 +623,7 @@ expect(VisitListView.speak({ items: [] }, { ...en, lang: 'hi' })).toBe('को�
 ```
 
 ```bash
-pnpm --filter @app/ui-registry test
+pnpm --filter @application/domain test
 ```
 
 **What you get for free at this step.** A `list-visits` result on WhatsApp is turned into words with `text`. The rows also become `choices`, so a customer can tap one. This is the real `/api/chat/once` result from the scripted model:
@@ -635,14 +640,13 @@ On a voice turn, the model is given `speak`'s short form in the turn's language.
 
 ## Step 5. Notifications: the confirmation and the reminder
 
-WhatsApp delivers only approved templates outside the 24-hour window. Everything the business sends on its own initiative is therefore a template. `packages/notifications` holds definitions only (rule `notifications-are-definitions`). The API decides consent, quiet hours, language, channel and fallback.
+WhatsApp delivers only approved templates outside the 24-hour window. Everything the business sends on its own initiative is therefore a template. `application/domain/src/notifications` holds definitions only, built with `@hykr/notifications` (rule `domain-specs-and-views-are-isomorphic`). The API decides consent, quiet hours, language, channel and fallback.
 
 ```ts
-// packages/notifications/src/domain/visits.ts
-import { spokenWhen } from '@app/i18n';
+// application/domain/src/notifications/visits.ts
+import { spokenWhen } from '@hykr/i18n';
+import { defineNotification, defineTemplate, type Row } from '@hykr/notifications';
 import { z } from 'zod';
-import { defineNotification, type Row } from '../define-notification.js';
-import { defineTemplate } from '../define-template.js';
 
 export const SiteVisitConfirmed = defineTemplate({
   name: 'site_visit_confirmed_v1',
@@ -720,11 +724,11 @@ export const VisitReminderNotification = defineNotification<VisitRow>({
 });
 ```
 
-Then add the templates to `domainTemplates` and the notifications to `domainNotifications` in `packages/notifications/src/domain/index.ts`.
+Then add the templates to `domainTemplates` and the notifications to `domainNotifications` in `application/domain/src/notifications/index.ts`. `server.ts` passes both to `defineServer({ notifications })`, and `createNotificationCatalog` adds them to the framework's own.
 
 How the pieces connect:
 
-- **Events.** `NotifyService` (`apps/api/src/channels/notify/notify.service.ts`) subscribes to every `NamedEvent` on the event bus. That covers entity events (`visit.updated`) and your own (`visit.confirmed`, `visit.cancelled`). The row is passed as JSON, so dates arrive as ISO strings.
+- **Events.** `NotifyService` (`framework/api/src/channels/notify/notify.service.ts`) subscribes to every `NamedEvent` on the event bus. That covers entity events (`visit.updated`) and your own (`visit.confirmed`, `visit.cancelled`). The row is passed as JSON, so dates arrive as ISO strings.
 - **`schedule.at`.** Returning `null`, or a time in the past, cancels any scheduled job. `cancelOn` removes it. A new time replaces it, and the `dedupe` key makes that work.
 - **Topics.**
   - `service`: on until STOP, and it ignores quiet hours.
@@ -740,7 +744,7 @@ How the pieces connect:
   Feature code never sends a message itself.
 - **Channels.** These notifications use `channels: ['whatsapp']` only. A customer who has only a WhatsApp number has no email address, and email needs a user with one.
 
-Send the templates for review and check them. Both commands run the built CLI (`dist/channels/templates/cli.js`), so build first:
+Send the templates for review and check them. Both commands run `basecamp templates`, which loads the application's compiled server (`application/api/dist/server.js`), so build first:
 
 ```bash
 pnpm build
@@ -765,7 +769,7 @@ You don't write any tools. They come from the specs. You add three things:
 ### Persona and rules
 
 ```ts
-// packages/agents/src/domain/index.ts (changed lines)
+// application/domain/src/agent/index.ts (changed lines)
 persona:
   'You are a meetings assistant. You help the user plan meetings, keep notes, track action items, and arrange site visits.',
 rules: [
@@ -778,7 +782,20 @@ scripts: [...visitScripts, ...domainScripts],
 evalCases: [...evalCases, ...visitEvalCases],
 ```
 
-> **Pitfall: keep the start of `help`.** `apps/api/test/whatsapp/conversations/07-off-topic.yaml` expects the off-topic answer to contain `I can add, list`. Extend the sentence; don't rewrite it.
+> **Pitfall: keep the start of `help`.** `application/api/test/whatsapp/conversations/07-off-topic.yaml` expects the off-topic answer to contain `I can add, list`. Extend the sentence; don't rewrite it.
+
+The WhatsApp welcome and the HELP reply have their own sentence about what the assistant does: `channel.does` in `application/api/src/server.ts`. It starts with the same words. Extend it in all three languages too, keeping that start:
+
+```ts
+// application/api/src/server.ts (changed lines)
+channel: {
+  does: {
+    en: 'I can add, list and complete your to-dos and meetings, and book site visits.',
+    hi: '…',
+    te: '…',
+  },
+},
+```
 
 ### Scripts for the scripted model
 
@@ -790,8 +807,8 @@ A script matches the person's message, then works step by step:
 The first script that matches wins, after the platform scripts.
 
 ```ts
-// packages/agents/src/domain/visits.ts
-import { call, defineScript, items, type Row, say, sayIn } from '../fake/engine.js';
+// application/domain/src/agent/visits.ts
+import { call, defineScript, items, type Row, say, sayIn } from '@hykr/agents/script';
 
 type Visit = Row & { address: string; status: string };
 
@@ -868,9 +885,9 @@ export const visitScripts = [
 
 The `list-visits` script is what eval case 17 (`my site visits`) and the app's `my site visits` suggestion rely on.
 
-- **Don't use `written()` for a customer's parked request.** The helper in `fake/engine.ts` answers a parked English write with "I've asked for **your** approval…". That is right for an owner's own assistant, but wrong for a customer whose request goes to the team.
+- **Don't use `written()` for a customer's parked request.** The helper (`framework/agents/src/fake/engine.ts`) answers a parked English write with "I've asked for **your** approval…". That is right for an owner's own assistant, but wrong for a customer whose request goes to the team.
 - **WhatsApp adds the team line.** `InboundProcessor.converse` appends `approval.askedTeam` ("I've asked the team to confirm. I'll tell you here when they do.") to any reply whose approval has no single approver. Your own reply should explain *why* the cancel waits, not repeat that.
-- **The scripted model reads the system prompt.** It finds the language and surfaces with regexes. `Reply in <Language>.` comes from `packages/agents/src/assistant.ts` and `Surfaces: …` from `INSTRUCTIONS` in `packages/agents/src/version.ts`. Your rules can add lines, but if you edit either wording, scripted tests can break silently.
+- **The scripted model reads the system prompt.** It finds the language and surfaces with regexes. `Reply in <Language>.` comes from `framework/agents/src/assistant.ts` and `Surfaces: …` from `buildInstructions` in `framework/agents/src/version.ts`. Your rules can add lines, but if you edit either wording, scripted tests can break silently.
 
 Try it through the chat endpoint (a real response from the scripted model):
 
@@ -883,7 +900,7 @@ api $API/api/chat/once -d '{"message":"book a site visit for Kitchen tiles at 12
 ### Eval cases
 
 ```ts
-// packages/agents/src/domain/evals.ts
+// application/domain/src/agent/evals.ts (EvalCase from @hykr/agents/script)
 export const visitEvalCases: EvalCase[] = [
   {
     why: 'asks for a site visit with what it is for and where',
@@ -913,7 +930,7 @@ The evals call a **running** API (`API_INTERNAL_URL`, default `http://localhost:
 | `noRetryAfterRefusal` | The model does not try again after a refusal. |
 
 ```bash
-pnpm --filter @app/agents eval
+pnpm eval              # basecamp eval assistant, against the running API
 # PASS  16. asks for a site visit with what it is for and where  "book a site visit for Kitchen tiles at …"
 # PASS  17. lists visits  "my site visits"
 # PASS  18. cancels a requested visit at once, using an id from the list  "cancel my site visit for Kitchen tiles"
@@ -921,7 +938,7 @@ pnpm --filter @app/agents eval
 # 19/19 turns passed. Scores and traces are in Studio.
 ```
 
-`pnpm --filter @app/agents eval:live` runs the same cases against the real model (it needs `OPENROUTER_API_KEY`).
+`pnpm eval --live` (`basecamp eval --live`) runs the same cases against the real model (it needs `OPENROUTER_API_KEY`).
 
 ---
 
@@ -932,9 +949,12 @@ The mobile app derives its data hooks from the same specs, so you need no client
 ### A Visits screen with the confirm command
 
 ```tsx
-// apps/mobile/src/app/(domain)/visits.tsx (excerpt)
-import { CancelVisitSpec, ConfirmVisitSpec, type Visit } from '@app/contracts';
-import { errorMessage, useCommand, useEntityList } from '../../framework/hooks';
+// application/mobile/src/app/(domain)/visits.tsx (excerpt)
+import { CancelVisitSpec, ConfirmVisitSpec, type Visit } from '@application/domain/contracts';
+import {
+  at, Button, type Chip, DateField, errorMessage, isValidDate, isValidTime, styles, TimeField,
+  todayLocal, useCommand, useEntityList, useScreenContext,
+} from '@hykr/app';
 
 const chips: Chip[] = [
   { label: 'To confirm', query: { status: 'requested', sort: 'createdAt' } },
@@ -969,23 +989,28 @@ export default function Visits() {
 ```
 
 - `useCommand(spec)` posts to the spec's route and invalidates every entity query on success.
-- `useEntityList('visits', query)` is typed by the `entities` catalog. Its query uses the same list grammar as the API.
+- `useEntityList('visits', query)` is typed by the catalog registered in `application/mobile/src/domain/index.ts`. Its query uses the same list grammar as the API.
 
 ### Nav item, suggestion and inline views
 
 ```ts
-// apps/mobile/src/domain/index.ts
+// application/mobile/src/domain/index.ts, in defineAppDomain({ nav })
 { href: '/visits', label: 'Visits', icon: 'map-pin', match: (p) => p.startsWith('/visits') },
 // suggestions:
 { text: 'my site visits', what: 'lists the site visits' },
 
-// apps/mobile/src/domain/bindings.tsx
+// application/mobile/src/domain/bindings.tsx, in bindDomain()
 bindView(VisitListView, VisitListComponent);
 bindView(VisitCardView, VisitCardComponent);
 ```
 
 ```tsx
-// apps/mobile/src/domain/views/visit.tsx (excerpt)
+// application/mobile/src/domain/views/visit.tsx (excerpt)
+import type { Visit } from '@application/domain/contracts';
+import type { VisitCardView, VisitListView } from '@application/domain/views';
+import { Rows, ViewCard } from '@hykr/app';
+import type { ViewProps } from '@hykr/ui-registry/react';
+
 export function VisitListComponent({ title, items, act, words }: ViewProps<typeof VisitListView>) {
   return (
     <ViewCard title={title ?? words.title} count={items.length}>
@@ -1002,15 +1027,15 @@ export function VisitListComponent({ title, items, act, words }: ViewProps<typeo
 - **Actions run as the person.** `act('cancel', v)` runs the view action through `useAct`, which here posts `visit.cancel`. A parked result shows a toast, and the app refreshes `approvals` and `history`.
 
 ```bash
-pnpm turbo run typecheck --filter=@app/mobile
-pnpm --filter @app/mobile dev       # http://localhost:8081 → Visits
+pnpm turbo run typecheck --filter=@application/mobile
+pnpm --filter @application/mobile dev       # http://localhost:8081 → Visits
 ```
 
 ---
 
 ## Step 8. Test it end to end (API)
 
-`apps/api/test/domain/visits.e2e.test.ts` runs the whole flow against the compiled app with three actors:
+`application/api/test/domain/visits.e2e.test.ts` runs the whole flow against the compiled app with three actors:
 
 | Actor | How the test creates it | How it calls the API |
 |---|---|---|
@@ -1018,13 +1043,15 @@ pnpm --filter @app/mobile dev       # http://localhost:8081 → Visits
 | Sita, on staff | `addMember(sita, tenantId, ['staff'])` | calls with `x-tenant-id` |
 | Kavya, a WhatsApp customer | `seedContact` | through her assistant, `asAssistant('contact:<id>')` |
 
-The setup and helpers come first. Everything is imported from `apps/api/test/support.ts`, and `NotifyService` from the compiled app:
+The setup and helpers come first. The helpers come from `@hykr/api/testing`, `NotifyService` from `@hykr/api/testing/internals`, and the application's server from its build:
 
 ```ts
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addMember, asAssistant, boot, eventually, me, Person, pool, seedContact, server, shutdown,
-} from '../support.js';
+} from '@hykr/api/testing';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+// Compiled, like the app runs: Nest's DI needs the decorator metadata tsc emits.
+import { server as application } from '../../dist/server.js';
 
 const owner = new Person('Owner Visits');
 const sita = new Person('Sita Staff');
@@ -1037,7 +1064,7 @@ const asSita = (method: string, path: string, body?: unknown) =>
   sita.call(method, path, body, { 'x-tenant-id': tenantId });
 
 beforeAll(async () => {
-  await boot();
+  await boot(application);
   await owner.signUp();
   await sita.signUp();
   tenantId = (await me(owner)).tenantId;
@@ -1051,7 +1078,7 @@ afterAll(shutdown);
 
 /** When the reminder for this visit is scheduled (null: not at all). */
 async function reminderAt(visitId: string) {
-  const { NotifyService } = await import('../../dist/channels/notify/notify.service.js');
+  const { NotifyService } = await import('@hykr/api/testing/internals');
   return server.app?.get(NotifyService).scheduledFor(`visit.reminder:${visitId}`);
 }
 
@@ -1106,8 +1133,8 @@ The other cases in the file cover:
 - The scripted assistant books and cancels in the owner's own words through `/api/chat/once`.
 
 ```bash
-pnpm turbo run build --filter=@app/api...
-cd apps/api && pnpm vitest run test/domain/visits.e2e.test.ts
+pnpm turbo run build --filter=@application/api...
+cd application/api && pnpm vitest run test/domain/visits.e2e.test.ts
 #  Test Files  1 passed (1)
 #       Tests  6 passed (6)
 ```
@@ -1119,7 +1146,7 @@ cd apps/api && pnpm vitest run test/domain/visits.e2e.test.ts
 A golden conversation plays a real WhatsApp exchange against **whaloc-test** (port 8090). The test app listens on port 3099, with queues inline and the scripted model. The runner syncs and approves every template first, your new ones included.
 
 ```yaml
-# apps/api/test/whatsapp/conversations/13-site-visit.yaml
+# application/api/test/whatsapp/conversations/13-site-visit.yaml
 name: a customer asks for a site visit; staff confirm it; the reminder comes; cancelling waits for the team
 steps:
   - linkOwner: {}
@@ -1160,9 +1187,9 @@ What the framework did on that path:
 - **The outcome.** Meera received `approval_outcome_v1` because she was the requesting contact.
 
 ```bash
-docker compose up -d whaloc-test
-cd apps/api && pnpm vitest run test/whatsapp -t "13-site-visit"   # just this file
-cd apps/api && pnpm vitest run test/whatsapp                      # all 13 conversations
+pnpm infra:up                                                            # whaloc-test is one of the services
+cd application/api && pnpm vitest run test/whatsapp -t "13-site-visit"   # just this file
+cd application/api && pnpm vitest run test/whatsapp                      # all 13 conversations
 ```
 
 The golden tests are skipped (`describe.skipIf`) when whaloc-test is not running, and CI does not run them.
@@ -1171,7 +1198,7 @@ The golden tests are skipped (`describe.skipIf`) when whaloc-test is not running
 
 ## Step 10. Try it by hand: whaloc, the app, the approvals
 
-Run everything with `pnpm dev`. It starts the API with the queue worker, the app on 8081, the back office on 8082 and the voice worker. Then:
+Run everything with `pnpm dev`. It watch-builds the framework and runs `basecamp dev`, which starts the API with the queue worker, the app on 8081, the back office on 8082 and the voice worker. Then:
 
 1. **Sign up in the app** at http://localhost:8081. You are the owner of a new business.
 2. **Claim the business number.** This is done once. Without it, inbound messages are dropped with `unknown number`. Run it as the owner with your session cookie:
@@ -1211,11 +1238,11 @@ FROM audit.events WHERE run_id = '<run-id>' ORDER BY at;
 3. **Entity rules can only deny.** A rule that returns `needsApproval` is ignored. For conditional approval, use a command's `authorize`. `spec.approval` covers the unconditional or principal-based cases (`approval: { delete: (p) => p.actor.kind === 'agent' }`).
 4. **A command's `approval` is who decides, not whether.** Without `by`, a person decides their own assistant's request. Set `by` when the team must decide.
 5. **Repo calls inside a command publish no entity events.** Publish a `NamedEvent` from `run` for notifications to react to.
-6. **Tests run `dist/`.** Run `pnpm turbo run build --filter=@app/api...` before `vitest run`.
+6. **Tests run `dist/`.** Run `pnpm turbo run build --filter=@application/api...` before `vitest run`.
 7. **Templates are versioned forever.** Changing a body means a new `_vN`, then `templates:sync`.
 8. **The scripted model's wording matters.** Keep the start of `help` (`07-off-topic.yaml`). Write your own reply for parked customer requests rather than using `written()`.
-9. **One database, many processes.** `OutboxRelay` relays every unrelayed `app.outbox` row in the database, whatever process wrote it. Do not run a `pnpm dev` worker from another checkout against the same database while you run the API tests. It will steal outbox rows: `framework/notifications.e2e.test.ts` then fails waiting for a message the other worker sent through the dev whaloc. The same applies to migrations: apply them from one branch only.
-10. **A fresh worktree or clone needs `pnpm install` and a `.env`.** The API and the tests read the root `.env` (`--env-file=../../.env`, `loadEnv('test', '../..')`).
+9. **One database, many processes.** `OutboxRelay` relays every unrelayed `app.outbox` row in the database, whatever process wrote it. Do not run a `pnpm dev` worker from another checkout against the same database while you run the API tests. It will steal outbox rows: `framework/api/test/framework/notifications.e2e.test.ts` then fails waiting for a message the other worker sent through the dev whaloc. The same applies to migrations: apply them from one branch only.
+10. **A fresh worktree or clone needs `pnpm install` and a `.env`.** Copy `application/.env.example` to `.env` at the repository root. The `basecamp` command loads the nearest `.env` at or above `application/`, and the tests read it with `loadEnv('test', '../..')`.
 11. **Quiet hours move reminders.** `topic: 'reminders'` is rescheduled out of quiet hours. `service` is not. The golden runner disables quiet hours for its business, but your dev business keeps the defaults.
 
 ---
@@ -1224,13 +1251,13 @@ FROM audit.events WHERE run_id = '<run-id>' ORDER BY at;
 
 - [ ] **Contracts:** `entitySpec` with schemas (any status field that commands set is in `update`), `label`, `fieldLabels` in en/hi/te, `list`, `expose` and `views`. Each command has a `commandSpec` with `http`, `tool` (or none), `expose`, `approvalNote`, `view`, `verb` and `touches`.
 - [ ] **Contracts index:** the entity is added to `defineDomain({ entities })` under its plural, and the commands to `commands`. The new file is re-exported.
-- [ ] **Database:** the table in `packages/db/src/schema/domain.ts` has `id()`, `tenantColumn()`, an owner column, `customerColumn()`, `createdBy`, `createdAt` and `updatedAt`. The migration was generated with `pnpm --filter @app/db generate --name <name>` and applied with `pnpm db:migrate`. The SQL, the snapshot and the journal are committed.
+- [ ] **Database:** the table in `application/domain/src/db/schema.ts` has `id()`, `tenantColumn()`, an owner column, `customerColumn()`, `createdBy`, `createdAt` and `updatedAt`. The migration was generated with `pnpm db:generate --name <name>` and applied with `pnpm db:migrate`. The SQL, the snapshot and the journal in `application/domain/drizzle/` are committed.
 - [ ] **API entity:** `defineEntity` with `table`, `owner`, `customer`, `access` and `rules` (deny-only, `ctx.via` for command-only fields).
 - [ ] **API commands:** `defineCommand` with `resource`, a scoped `load`, `authorize` (`allow`, `deny`, `needsApproval`), `summarize`, a `run` that passes `via` and returns `touched` and `events`, and `approval: { by }` when the team decides.
-- [ ] **Nest:** a module with `entityController`, `entityHandlers`, `commandController` and `commandHandler`, added to `DomainModule`.
-- [ ] **Views:** `defineView` list and card with `text`, `speak`, `labels.noun` and `labels.empty`. Registered in `uiDomain`, with a view test.
+- [ ] **Nest:** a module in `application/domain/src/server/` with `entityController`, `entityHandlers`, `commandController` and `commandHandler`, added to `DomainModule`.
+- [ ] **Views:** `defineView` list and card with `text`, `speak`, `labels.noun` and `labels.empty`. Registered in `uiDomain` (`application/domain/src/views/index.ts`), with a view test.
 - [ ] **Notifications:** `defineTemplate` (versioned name, en/hi/te, an example) and `defineNotification` (`send.on` or `schedule`, `cancelOn`, `topic`, `to`, `channels`, `dedupe`). Registered in `domainTemplates` and `domainNotifications`. `pnpm templates:sync` and `pnpm templates:check` pass.
-- [ ] **Assistant:** persona and rules updated, the `help` prefix kept, scripts added before `domainScripts`, eval cases added. `pnpm --filter @app/agents eval` passes with the API running.
-- [ ] **App:** a screen in `apps/mobile/src/app/(domain)/`, a nav item, and `bindView` for each view. `pnpm turbo run typecheck --filter=@app/mobile` passes.
-- [ ] **Tests:** an e2e test in `apps/api/test/domain/` and a golden YAML in `apps/api/test/whatsapp/conversations/`. Both pass with `cd apps/api && pnpm vitest run <file>`.
+- [ ] **Assistant:** persona and rules updated, the `help` prefix kept (and `channel.does` in `server.ts` extended), scripts added before `domainScripts`, eval cases added. `pnpm eval` passes with the API running.
+- [ ] **App:** a screen in `application/mobile/src/app/(domain)/`, a nav item, and `bindView` for each view. `pnpm turbo run typecheck --filter=@application/mobile` passes.
+- [ ] **Tests:** an e2e test in `application/api/test/domain/` and a golden YAML in `application/api/test/whatsapp/conversations/`. Both pass with `cd application/api && pnpm vitest run <file>`.
 - [ ] **Repository checks:** `pnpm turbo run build typecheck test`, `pnpm lint` and `pnpm lint:deps` all pass.

@@ -32,6 +32,27 @@
       "dependsOn": ["^build"],
       "cache": false,
       "persistent": true
+    },
+    "@application/api#test": {
+      "dependsOn": ["build", "@hykr/api#test"],
+      "env": [
+        "MODEL_MODE",
+        "GUARDRAILS",
+        "DATABASE_URL",
+        "REDIS_URL",
+        "BETTER_AUTH_SECRET",
+        "BETTER_AUTH_URL",
+        "WEB_ORIGINS",
+        "AGENT_API_KEY",
+        "API_INTERNAL_URL",
+        "VOICE_AGENT_KEY",
+        "VOICE_MODE",
+        "VOICE_DAILY_MINUTES",
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "SARVAM_API_KEY"
+      ]
     }
   }
 }
