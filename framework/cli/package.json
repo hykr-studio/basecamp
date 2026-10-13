@@ -1,0 +1,29 @@
+{
+  "name": "@hykr/cli",
+  "version": "0.1.0",
+  "description": "The basecamp command: run, migrate, evaluate and serve an application built on Basecamp.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "basecamp": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "compose.yaml",
+    "infra"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json -w --preserveWatchOutput",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hykr/voice-worker": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

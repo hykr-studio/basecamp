@@ -8,9 +8,12 @@
   "files": {
     "includes": [
       "**",
-      "!packages/db/drizzle",
-      "!apps/mobile/src/uniwind-types.d.ts",
-      "!apps/back-office/src/uniwind-types.d.ts",
+      "!framework/db/drizzle",
+      "!application/domain/drizzle",
+      "!framework/api/test/fixture/drizzle",
+      "!framework/create-basecamp/template",
+      "!application/mobile/src/uniwind-types.d.ts",
+      "!application/back-office/src/uniwind-types.d.ts",
       "!.claude"
     ]
   },

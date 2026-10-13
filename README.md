@@ -43,24 +43,38 @@ agent version, and a chat's `runId` is its trace id in Mastra Studio.
 
 ## Repository layout
 
+The framework and the application are separate. `framework/` is Basecamp itself, published as
+`@hykr/*` packages; `application/` is one application built on it (the sample domain). The
+framework never imports the application: the application passes its domain in. The
+application uses the framework only through the packages' public exports, as it would from
+npm. `pnpm lint:deps` enforces both rules.
+
 ```
-apps/
-  api/            NestJS API and queue worker (REST, chat, voice sessions, WhatsApp webhook, back office API)
-  mobile/         Expo app: entity screens, the assistant, canvas, pages, voice mode
-  back-office/    Expo web app where staff pick up conversations handed off from WhatsApp
-  voice-worker/   LiveKit agent: speech in, a chat turn for the person, speech and UI parts out
-packages/
-  contracts/      Entity and command specs (Zod), the domain catalog, shared types
+framework/                 Basecamp: @hykr/* packages, publishable to npm
+  contracts/      defineDomain, entity and command specs (Zod), createCatalog
   core/           defineEntity / defineCommand, the write path, list grammar, generated tools
-  db/             Drizzle schema and migrations
+  db/             the framework's tables and migrations, builders for an application's tables
   policy/         authorize(): who may do what
-  agents/         The assistant (Mastra), scripted model, scorers, evals, Studio
-  api-client/     Typed client used by the app, the agents and the voice worker
-  ui-registry/    defineView / defineScreen: what tool results render as, in text, speech and UI
+  agents/         the assistant (Mastra): createAgents, scripted model, scorers, evals, Studio
+  api-client/     typed client used by the apps, the agents and the voice worker
+  ui-registry/    defineView / defineScreen, createUiRegistry
   channels/       WhatsApp adapter, renderer, keywords, signed approval tokens
-  notifications/  Templates and notifications as code, and dispatch rules
-  i18n/           Framework phrases and date and count words in en, hi and te
-infra/            Postgres init and pgAdmin config
+  notifications/  templates and notifications as code, dispatch rules
+  i18n/           framework phrases and date and count words in en, hi and te
+  api/            the NestJS API and queue worker as a library: defineServer, startApi, startWorker
+  app/            the Expo app shell as a library: AppShell, hooks, UI kit, assistant, canvas, voice
+  back-office/    the back office (WhatsApp handoffs) as a library
+  voice-worker/   LiveKit agent: speech in, a chat turn for the person, speech and UI parts out
+  cli/            the `basecamp` command (dev, db, infra, templates, eval, studio); Compose and infra
+  create-basecamp/  `npm create @hykr/basecamp`: a new application from the one below
+  tsconfig/       shared TypeScript settings
+application/               one application on the framework: the sample domain
+  package.json    the "basecamp" block (where the server and apps are) and scripts
+  domain/         the domain: contracts, db (tables + migrations), server (Nest), views,
+                  notifications, agent
+  api/            server.ts = defineServer({ ... }); main.ts, worker.ts; the domain's e2e tests
+  mobile/         Expo app: <AppShell> plus the domain's routes and screens
+  back-office/    Expo web app on @hykr/back-office
 ```
 
 ## Getting started
@@ -77,47 +91,34 @@ infra/            Postgres init and pgAdmin config
 
 ```bash
 pnpm install
-cp .env.example .env
+cp application/.env.example .env
 # Fill in BETTER_AUTH_SECRET, AGENT_API_KEY, VOICE_AGENT_KEY and APPROVAL_SECRET:
 #   openssl rand -hex 32
 # No model key? Set MODEL_MODE=fake (and VOICE_MODE=fake).
 
 pnpm infra:up       # Postgres, Redis, MinIO, Mailpit, pgAdmin, LiveKit, WhatsApp emulator
 pnpm build
-pnpm db:migrate
+pnpm db:migrate     # the framework's migrations, then the application's
 pnpm templates:sync # register the WhatsApp templates with the emulator
 pnpm dev            # API, worker, app, back office and voice worker
 ```
 
-The `infra/postgres/init.sql` script runs automatically the first time the Postgres container
-starts. It enables PostGIS and pgcrypto and fixes the `app` role's search path.
+The `framework/cli/infra/postgres/init.sql` script runs automatically the first time the
+Postgres container starts. It enables PostGIS and pgcrypto and fixes the `app` role's search path.
 
-### Local addresses
+### Starting a new application
 
-| Service | URL |
-|---|---|
-| App (Expo web) | http://localhost:8081 |
-| Back office | http://localhost:8082 |
-| API | http://localhost:3000 (health at `/health`) |
-| Queues (Bull Board, development only) | http://localhost:3000/admin/queues |
-| Mastra Studio | http://localhost:4000 (`pnpm --filter @app/agents studio`, with the API running) |
-| WhatsApp emulator (whaloc) | http://localhost:8080 |
-| Mailpit | http://localhost:8025 |
-| pgAdmin | http://localhost:5050 |
-| MinIO console | http://localhost:9001 |
-| LiveKit | ws://localhost:7880 |
-
-whaloc stands in for Meta's WhatsApp Cloud API. The adapter only knows a Graph URL, so moving
-to Meta is a matter of configuration (`WA_GRAPH_URL`, the account ids and the tokens).
-
-### Native apps
+The same thing, from npm, without this repository (once the packages are published):
 
 ```bash
-pnpm --filter @app/mobile ios       # or android
+npm create @hykr/basecamp my-app      # or: pnpm create @hykr/basecamp my-app
+cd my-app && pnpm install && cp .env.example .env
+pnpm exec basecamp infra up && pnpm -r build && pnpm exec basecamp db migrate
+pnpm exec basecamp dev
 ```
 
-To use voice from a phone on the same Wi-Fi, set `LIVEKIT_NODE_IP` to your machine's LAN IP.
-Maestro flows for the demo moments are in `apps/mobile/maestro/`.
+It starts from the sample domain in `application/`; replace it with yours (see
+[DOMAIN.md](DOMAIN.md)). CI scaffolds one this way from the packed packages on every push.
 
 ## Try it
 
@@ -138,8 +139,9 @@ exactly what was called, parked and refused.
 
 ## Defining an entity
 
-An entity is one spec in `packages/contracts` plus a table and a module that wires it up.
-For example, the sample to-do:
+An entity is one spec in `application/domain/src/contracts`, a table in
+`application/domain/src/db/schema.ts`, and a module in `application/domain/src/server` that
+wires it up. For example, the sample to-do:
 
 ```ts
 export const TodoSpec = entitySpec({
@@ -167,11 +169,25 @@ From the declaration alone you get:
   assistant writes
 - history, approval cards, and how tool results look in the app, on WhatsApp and in speech
 
+The application hands its domain to the framework in two places: the server
+(`application/api/src/server.ts`) and the app (`application/mobile/src/app/_layout.tsx`):
+
+```ts
+export const server = defineServer({
+  domain,                 // defineDomain({ name, entities, commands })
+  module: DomainModule,   // the Nest module with defineEntity / defineCommand
+  views: uiDomain,        // defineView / defineScreen
+  notifications: { templates: domainTemplates, notifications: domainNotifications },
+  agent: agentDomain,     // persona, rules, scripts, eval cases
+  migrations: [migrations],
+});
+```
+
 ## Replacing the domain
 
-Meetings, notes and to-dos live in one `domain/` folder per layer. The framework reads each
-folder only through its `index`, and `pnpm lint:deps` enforces that boundary. To build a real
-product, replace those folders and nothing else changes.
+Meetings, notes and to-dos live in `application/`; nothing in `framework/` names them. To
+build a real product, replace `application/domain` and the domain's screens in
+`application/mobile`, or start fresh with `npm create @hykr/basecamp`.
 
 **[DOMAIN.md](DOMAIN.md)** covers:
 
@@ -185,27 +201,42 @@ product, replace those folders and nothing else changes.
 
 | Command | What it does |
 |---|---|
-| `pnpm dev` | Run every app in watch mode |
+| `pnpm dev` | Watch-build the framework, and `basecamp dev` for the application |
 | `pnpm build` / `typecheck` / `test` | Build, typecheck or test all workspaces (Turborepo) |
 | `pnpm lint` / `format` | Biome check, or check and fix |
 | `pnpm lint:deps` | dependency-cruiser boundary rules |
 | `pnpm infra:up` | Start the Docker Compose services |
-| `pnpm db:generate` / `db:migrate` | Generate or apply Drizzle migrations |
+| `pnpm db:generate` / `db:migrate` | Generate the application's migration, or apply the framework's and the application's |
 | `pnpm templates:sync` / `templates:check` | Send WhatsApp templates for review, or check they're approved |
-| `pnpm --filter @app/agents eval` | Scripted assistant eval (`eval:voice`, `eval:whatsapp`, and `:live` variants) |
-| `pnpm --filter @app/agents studio` | Mastra Studio for the assistant |
+| `pnpm eval` | Scripted assistant eval |
+
+Inside `application/` (or any application), the `basecamp` command does the rest:
+
+| Command | What it does |
+|---|---|
+| `basecamp dev` | Compile the application in watch mode; run the API, worker, voice worker and apps |
+| `basecamp start api\|worker\|voice` | Run one process |
+| `basecamp infra up\|down` | The local services |
+| `basecamp db migrate` / `db generate [--name n]` | Migrations |
+| `basecamp templates sync\|check` | WhatsApp templates at the provider |
+| `basecamp eval [assistant\|voice\|whatsapp] [--live]` | Score the assistant |
+| `basecamp studio` | Mastra Studio for the assistant |
 
 ## Testing
 
 - **Unit tests:** Vitest in each package.
-- **End-to-end tests:** `apps/api/test` boots the compiled API on a random port against real
-  Postgres and Redis, with the scripted model. Framework tests use only platform features or
-  fixture entities, so they pass with any domain.
-- **Golden WhatsApp conversations:** run against a separate emulator, `whaloc-test` on port
-  8090.
+- **Framework end-to-end tests:** `framework/api/test/framework` boots the compiled API on a
+  random port against real Postgres and Redis, with the scripted model, on a small fixture
+  application (`framework/api/test/fixture`: tasks and visits). They need no application.
+- **Application end-to-end tests:** `application/api/test` boots the application's server the
+  same way, through `@hykr/api/testing`.
+- **Golden WhatsApp conversations:** `application/api/test/whatsapp`, against a separate
+  emulator, `whaloc-test` on port 8090.
 - **Evals:** scored per turn on tool use, refusals, answer language and spoken length.
 - **CI:** `.github/workflows/ci.yml` runs lint, build, typecheck, `lint:deps`, migrations and
-  tests on every push and pull request, using the scripted model so no keys are needed.
+  tests on every push and pull request, using the scripted model so no keys are needed. A
+  second job packs every `@hykr/*` package, scaffolds an application with `create-basecamp`,
+  installs it from the tarballs and builds it.
 
 ## Notes
 

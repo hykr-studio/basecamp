@@ -1,0 +1,9 @@
+{
+  "extends": "../../../tsconfig/nest.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": false
+  },
+  "include": ["src"]
+}

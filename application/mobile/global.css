@@ -1,0 +1,7 @@
+@import "tailwindcss";
+@import "uniwind";
+/* The framework's design tokens (colours, type, radii) as Tailwind theme values. */
+@import "@hykr/app/theme.css";
+
+/* Tailwind generates only the classes it finds: the framework's components use them too. */
+@source "./node_modules/@hykr/app/dist";
