@@ -5,9 +5,10 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "basecamp": "./dist/cli.js"
+    "basecamp": "./bin/basecamp.js"
   },
   "files": [
+    "bin",
     "dist",
     "compose.yaml",
     "infra"

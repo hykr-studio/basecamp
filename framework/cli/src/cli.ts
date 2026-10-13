@@ -1,5 +1,4 @@
-#!/usr/bin/env node
-// basecamp: run an application on the Basecamp framework (see HELP).
+// basecamp: run an application on the Basecamp framework (see HELP). The bin is bin/basecamp.js.
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -17,6 +16,8 @@ type Config = {
   apps?: string[];
   /** The package with drizzle.config.ts and the application's migrations. */
   db?: string;
+  /** The Docker Compose project for `basecamp infra` (default: basecamp). */
+  project?: string;
 };
 
 const HELP = `basecamp: run an application on the Basecamp framework
@@ -37,12 +38,12 @@ application's root, and the nearest .env at or above it is loaded.`;
 const here = dirname(fileURLToPath(import.meta.url));
 const ownRequire = createRequire(import.meta.url);
 
-function findRoot(from: string): { root: string; config: Config; name: string } {
+function findRoot(from: string): { root: string; config: Config } {
   for (let dir = resolve(from); ; dir = dirname(dir)) {
     const file = join(dir, 'package.json');
     if (existsSync(file)) {
       const pkg = JSON.parse(readFileSync(file, 'utf8'));
-      if (pkg.basecamp) return { root: dir, config: pkg.basecamp, name: pkg.name ?? 'basecamp' };
+      if (pkg.basecamp) return { root: dir, config: pkg.basecamp };
     }
     if (dirname(dir) === dir)
       fail(
@@ -146,7 +147,7 @@ async function main() {
     console.log(HELP);
     return;
   }
-  const { root, config, name } = findRoot(process.cwd());
+  const { root, config } = findRoot(process.cwd());
   loadEnv(root);
   const pm = packageManager(root);
   const server = resolve(root, config.server);
@@ -178,10 +179,7 @@ async function main() {
     case 'infra': {
       if (sub !== 'up' && sub !== 'down') fail('infra up or infra down');
       const compose = join(here, '..', 'compose.yaml');
-      const project = name
-        .replace(/^@/, '')
-        .replace(/[^a-z0-9_-]/gi, '-')
-        .toLowerCase();
+      const project = config.project ?? 'basecamp';
       const args = [
         'compose',
         '-f',

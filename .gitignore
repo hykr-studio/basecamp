@@ -93,3 +93,6 @@ docker-compose.override.yml
 # The framework's test fixture, compiled before its e2e tests run
 /framework/api/test/fixture/dist/
 /framework/create-basecamp/template/
+
+# Redis snapshots from a local redis-server
+dump.rdb

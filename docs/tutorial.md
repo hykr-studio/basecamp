@@ -31,7 +31,7 @@ pnpm install
 cp application/.env.example .env   # at the repository root; fill BETTER_AUTH_SECRET, AGENT_API_KEY,
                                    # VOICE_AGENT_KEY, APPROVAL_SECRET with `openssl rand -hex 32`;
                                    # set MODEL_MODE=fake to work without a model key
-pnpm infra:up                      # basecamp infra up: postgres, redis, mailpit, whaloc, whaloc-test, livekit, ...
+pnpm infra:up                      # docker compose: postgres, redis, mailpit, whaloc, whaloc-test, livekit, ...
 pnpm build
 pnpm db:migrate                    # the framework's migrations, then the application's
 ```

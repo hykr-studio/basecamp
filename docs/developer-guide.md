@@ -200,11 +200,11 @@ MODEL_MODE=fake     # scripted assistant, no OPENROUTER_API_KEY needed
 VOICE_MODE=fake     # voice worker takes text in, gives text out
 ```
 
-Then start the services, build, migrate and run:
+Then build, start the services, migrate and run:
 
 ```bash
-pnpm infra:up          # basecamp infra up: every service in framework/cli/compose.yaml
 pnpm build             # the CLI, the API and the tests run from dist/
+pnpm infra:up          # docker compose: every service in framework/cli/compose.yaml
 pnpm db:migrate        # the framework's migrations, then the application's
 pnpm templates:sync    # sends WhatsApp templates to whaloc; needs the build and whaloc
 pnpm dev               # the framework in watch mode, then basecamp dev: API + queue worker,
@@ -225,7 +225,8 @@ Things that will trip you up:
 - `basecamp dev` also starts the voice worker, which exits at startup if `VOICE_AGENT_KEY` is missing or short, or if `VOICE_MODE=live` has no `SARVAM_API_KEY` (`assertConfig()` in `framework/voice-worker/src/config.ts`). `basecamp dev` reports `voice … exited (1)`, keeps the other processes running, and does not start the worker again. `application/.env.example` ships `VOICE_AGENT_KEY=` empty and `VOICE_MODE=live`. Set `VOICE_AGENT_KEY` and `VOICE_MODE=fake`, then restart `pnpm dev`.
 - Mobile web serves on 8081 and the back office on 8082. If something else holds either port, Expo cannot ask for another one (`basecamp dev` gives it no terminal), so that app exits.
 - With `MODEL_MODE=live` (the default in `.env.example`) and no `OPENROUTER_API_KEY`, chat answers 503 "Set OPENROUTER_API_KEY in .env to use the assistant".
-- There is no root `infra:down` script. Run `pnpm --dir application exec basecamp infra down`. The services run as the Compose project `application-app` (named after the application's package) from `framework/cli/compose.yaml`, so a plain `docker compose down` at the root finds nothing.
+- Stop the services with `pnpm infra:down` (or `basecamp infra down`). They run as the Compose project `basecamp` from `framework/cli/compose.yaml` (an application can name its own with `"project"` in its `basecamp` block), so a plain `docker compose down` at the root finds nothing.
+- `basecamp` is compiled: in this repository it works only after `pnpm build`, and says so until then. `pnpm infra:up` runs `docker compose` directly and needs no build.
 - `templates:sync`, `templates:check`, `db:migrate` and `eval` load the application's compiled server (`application/api/dist/server.js`, the `server` entry of the `basecamp` block). Build first.
 - Compose's Postgres runs `framework/cli/infra/postgres/init.sql` (postgis and pgcrypto extensions, and `ALTER ROLE app SET search_path = public`) only on a fresh volume. On any other Postgres, run it yourself before `pnpm db:migrate`, or Better Auth's tables land in the `app` schema.
 
@@ -1104,7 +1105,7 @@ An earlier outline described an API that was never built. Map it like this:
 | `scope: 'tenant'` | `access: { read: { … }, write: { … } }` with grants `own`, `customer`, `tenant` per role |
 | `ruleTable()` | `rules: EntityRule[]` on `defineEntity`, and `authorize` on `defineCommand`, using `allow` / `deny` / `needsApproval` |
 | `pnpm gen:client` | Nothing to generate. `@hykr/api-client` builds typed methods from the spec at runtime: `api.entity(Spec)`, `api.command(Spec, input)`. The app uses `useEntityList` / `useEntity` / `useEntityMutation` / `useCommand`. |
-| `pnpm infra:up` | Exists: `basecamp infra up`, which runs `docker compose up -d` on `framework/cli/compose.yaml` |
+| `pnpm infra:up` | Exists: `docker compose up -d` on `framework/cli/compose.yaml` (project `basecamp`); `basecamp infra up` does the same in an application |
 | `packages/evals` | `framework/agents/src/evals/` (harness, `@hykr/agents/evals`) and `application/domain/src/agent/evals.ts` (cases). Run with `pnpm eval`. |
 | `messages/*.json` | TypeScript: framework phrases in `framework/i18n/src/messages.ts`, and domain words as `Labels` next to the domain code |
 | `defineQuery` | Not built. Use the list grammar or a command. |

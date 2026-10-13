@@ -96,8 +96,8 @@ cp application/.env.example .env
 #   openssl rand -hex 32
 # No model key? Set MODEL_MODE=fake (and VOICE_MODE=fake).
 
+pnpm build          # the framework, the application and the basecamp command
 pnpm infra:up       # Postgres, Redis, MinIO, Mailpit, pgAdmin, LiveKit, WhatsApp emulator
-pnpm build
 pnpm db:migrate     # the framework's migrations, then the application's
 pnpm templates:sync # register the WhatsApp templates with the emulator
 pnpm dev            # API, worker, app, back office and voice worker
@@ -205,7 +205,7 @@ build a real product, replace `application/domain` and the domain's screens in
 | `pnpm build` / `typecheck` / `test` | Build, typecheck or test all workspaces (Turborepo) |
 | `pnpm lint` / `format` | Biome check, or check and fix |
 | `pnpm lint:deps` | dependency-cruiser boundary rules |
-| `pnpm infra:up` | Start the Docker Compose services |
+| `pnpm infra:up` / `infra:down` | Start or stop the Docker Compose services |
 | `pnpm db:generate` / `db:migrate` | Generate the application's migration, or apply the framework's and the application's |
 | `pnpm templates:sync` / `templates:check` | Send WhatsApp templates for review, or check they're approved |
 | `pnpm eval` | Scripted assistant eval |
