@@ -86,7 +86,7 @@ pnpm infra:up       # Postgres, Redis, MinIO, Mailpit, pgAdmin, LiveKit, WhatsAp
 pnpm build
 pnpm db:migrate
 pnpm templates:sync # register the WhatsApp templates with the emulator
-pnpm dev            # API, worker, app, back office and voice worker
+pnpm dev            # API, worker, app, back office, voice worker and Mastra Studio
 ```
 
 The `infra/postgres/init.sql` script runs automatically the first time the Postgres container
@@ -100,7 +100,7 @@ starts. It enables PostGIS and pgcrypto and fixes the `app` role's search path.
 | Back office | http://localhost:8082 |
 | API | http://localhost:3000 (health at `/health`) |
 | Queues (Bull Board, development only) | http://localhost:3000/admin/queues |
-| Mastra Studio | http://localhost:4000 (`pnpm --filter @app/agents studio`, with the API running) |
+| Mastra Studio | http://localhost:4000 (started by `pnpm dev` once the API is up) |
 | WhatsApp emulator (whaloc) | http://localhost:8080 |
 | Mailpit | http://localhost:8025 |
 | pgAdmin | http://localhost:5050 |
@@ -193,7 +193,7 @@ product, replace those folders and nothing else changes.
 | `pnpm db:generate` / `db:migrate` | Generate or apply Drizzle migrations |
 | `pnpm templates:sync` / `templates:check` | Send WhatsApp templates for review, or check they're approved |
 | `pnpm --filter @app/agents eval` | Scripted assistant eval (`eval:voice`, `eval:whatsapp`, and `:live` variants) |
-| `pnpm --filter @app/agents studio` | Mastra Studio for the assistant |
+| `pnpm --filter @app/agents studio` | Mastra Studio on its own, with the API running (`pnpm dev` starts it too) |
 
 ## Testing
 

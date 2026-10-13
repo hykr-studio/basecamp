@@ -197,7 +197,7 @@ pnpm infra:up          # docker compose up -d: every service in compose.yaml
 pnpm build             # the API's tests and CLIs run from dist/
 pnpm db:migrate
 pnpm templates:sync    # sends WhatsApp templates to whaloc; needs the build and whaloc
-pnpm dev               # API + queue worker, mobile web, back office, voice worker
+pnpm dev               # API + queue worker, mobile web, back office, voice worker, Studio
 ```
 
 Check it is up:
@@ -208,7 +208,7 @@ curl http://localhost:3000/health     # {"ok":true}
 
 Things that will trip you up:
 
-- Everything in `pnpm dev` reloads on save. Each package runs `tsc -w` into its `dist/`; the API and queue worker restart under `node --watch`, the voice worker under `tsx watch`, and both Expo apps fast-refresh through Metro. An edit in `packages/*` reaches every app that imports it. `pnpm dev` passes `--concurrency=20` because it runs 14 persistent tasks and turbo's default is 10; pass it too when you run `pnpm turbo run dev` yourself.
+- Everything in `pnpm dev` reloads on save. Each package runs `tsc -w` into its `dist/`; the API and queue worker restart under `node --watch`, the voice worker and Studio's Mastra server under `tsx watch`, and both Expo apps fast-refresh through Metro. An edit in `packages/*` reaches every app that imports it. `pnpm dev` passes `--concurrency=20` because it runs 15 persistent tasks and turbo's default is 10; pass it too when you run `pnpm turbo run dev` yourself.
 - `pnpm dev` also starts the voice worker, which exits at startup if `VOICE_AGENT_KEY` is missing or short, or if `VOICE_MODE=live` has no `SARVAM_API_KEY` (`assertConfig()` in `apps/voice-worker/src/config.ts`). `tsx watch` then waits for a file change before it starts the worker again. `.env.example` ships `VOICE_AGENT_KEY=` empty and `VOICE_MODE=live`. Set `VOICE_AGENT_KEY` and `VOICE_MODE=fake`, or run `pnpm dev --filter=!@app/voice-worker`.
 - Mobile web serves on 8081 and the back office on 8082. If something else holds either port, Expo cannot ask for another one under turbo, so that app exits.
 - With `MODEL_MODE=live` (the default in `.env.example`) and no `OPENROUTER_API_KEY`, chat answers 503 "Set OPENROUTER_API_KEY in .env to use the assistant".
@@ -227,7 +227,7 @@ Things that will trip you up:
 | whaloc | http://localhost:8080 | WhatsApp Cloud API emulator with a chat UI |
 | Mailpit | http://localhost:8025 | Email sent by notifications |
 | pgAdmin | http://localhost:5050 | `admin@example.com` / `admin`; server `app` (host `postgres`, user `app`) is preregistered |
-| Mastra Studio | http://localhost:4000 | Try the assistant and its tools: `pnpm --filter @app/agents studio` (needs the API running) |
+| Mastra Studio | http://localhost:4000 | Try the assistant and its tools, and read traces. `pnpm dev` starts it once the API is up and skips it if ports 4000 or 4111 are taken. On its own: `pnpm --filter @app/agents studio` (needs the API running) |
 | LiveKit | ws://localhost:7880 | Voice rooms (dev keys `devkey` / `secret`) |
 | MinIO | http://localhost:9001 | Runs in compose, but no code uses it yet |
 

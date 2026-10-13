@@ -15,6 +15,7 @@
     "dev": "tsc -p tsconfig.json -w --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "studio": "node scripts/studio.mjs",
+    "dev:studio": "node scripts/studio.mjs --dev",
     "eval": "MODEL_MODE=fake tsx --env-file=../../.env evals/assistant.eval.ts",
     "eval:live": "MODEL_MODE=live tsx --env-file=../../.env evals/assistant.eval.ts",
     "eval:voice": "MODEL_MODE=fake tsx --env-file=../../.env evals/voice.eval.ts",

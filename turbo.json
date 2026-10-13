@@ -33,6 +33,11 @@
       "cache": false,
       "persistent": true
     },
+    "@app/agents#dev:studio": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true
+    },
     "@app/voice-worker#test": {
       "dependsOn": ["build", "@app/api#build"],
       "env": [
