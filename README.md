@@ -144,8 +144,10 @@ pnpm exec basecamp infra up && pnpm -r build && pnpm exec basecamp db migrate
 pnpm exec basecamp dev
 ```
 
-It starts from the sample domain in `application/`; replace it with yours (see
-[DOMAIN.md](DOMAIN.md)). CI scaffolds one this way from the packed packages on every push.
+It starts from the sample domain in `application/`; replace it with yours. **[Build a new
+application](docs/new-application.md)** walks through it end to end with a small repair-jobs
+product, and [DOMAIN.md](DOMAIN.md) is the reference for each layer. CI scaffolds an
+application this way from the packed packages on every push.
 
 ## Try it
 

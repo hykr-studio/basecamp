@@ -17,7 +17,8 @@ Two dependency-cruiser rules, run by `pnpm lint:deps`, keep it that way:
 `@hykr/*` package exports, never a path into `framework/`).
 
 New here? Read the [developer guide](docs/developer-guide.md), then build a feature with the
-[tutorial](docs/tutorial.md). To start an application outside this repository, run
+[tutorial](docs/tutorial.md); to build a new product from scratch, follow
+[Build a new application](docs/new-application.md). To start an application outside this repository, run
 `npm create @hykr/basecamp <folder>`: you get a copy of `application/` on the published
 packages.
 

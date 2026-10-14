@@ -1,5 +1,8 @@
 # Basecamp tutorial: build a feature end to end (site visits)
 
+> Starting a new product rather than extending the sample? Read
+> [Build a new application](new-application.md) first.
+
 In this tutorial you add **site visits** to the template:
 
 1. A customer asks for a site visit on WhatsApp. The assistant records it.
