@@ -1,0 +1,54 @@
+{
+  "name": "@hykr/back-office",
+  "version": "0.1.0",
+  "description": "Basecamp's staff back office as a library: the inbox of handed-over conversations, each conversation, and message templates.",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./theme.css": "./theme.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "theme.css"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json -w --preserveWatchOutput",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@expo-google-fonts/schibsted-grotesk": "^0.4.2",
+    "@hykr/api-client": "workspace:*",
+    "@hykr/contracts": "workspace:*"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "^5",
+    "expo": "~57.0.27",
+    "expo-font": "^57.0.4",
+    "expo-router": "~57.0.25",
+    "react": "^19.2.0",
+    "react-native": ">=0.86.0",
+    "uniwind": "^1.12.2"
+  },
+  "devDependencies": {
+    "@tanstack/react-query": "^5.104.1",
+    "@types/react": "~19.2.2",
+    "expo": "~57.0.27",
+    "expo-font": "^57.0.4",
+    "expo-router": "~57.0.25",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.3",
+    "uniwind": "^1.12.2"
+  }
+}

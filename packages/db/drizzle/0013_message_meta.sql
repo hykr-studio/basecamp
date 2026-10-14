@@ -1,1 +1,0 @@
-ALTER TABLE "channel"."messages" ADD COLUMN "meta" jsonb;

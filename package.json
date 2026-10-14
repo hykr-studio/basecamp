@@ -3,18 +3,20 @@
   "private": true,
   "packageManager": "pnpm@12.9.1+sha512.06b055fff5cd20dc12781de173ced3310ce0951bf2ec620211a16045d5444d5c93a663210764ef29a653a610459ba0368f0e74f84d80c54723cf95aae7bc0d6d",
   "scripts": {
-    "dev": "turbo run dev @app/agents#dev:studio --concurrency=20",
+    "dev": "turbo run dev --concurrency=30 --filter=./framework/* --filter=@application/app",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "lint:deps": "depcruise apps packages --config .dependency-cruiser.cjs",
-    "infra:up": "docker compose up -d",
-    "db:generate": "pnpm --filter @app/db generate",
-    "db:migrate": "pnpm --filter @app/db migrate",
-    "templates:sync": "pnpm --filter @app/api templates:sync",
-    "templates:check": "pnpm --filter @app/api templates:check"
+    "lint:deps": "depcruise framework application --config .dependency-cruiser.cjs",
+    "infra:up": "docker compose -f framework/cli/compose.yaml -p basecamp up -d",
+    "infra:down": "docker compose -f framework/cli/compose.yaml -p basecamp down",
+    "db:generate": "pnpm --dir application exec basecamp db generate",
+    "db:migrate": "pnpm --dir application exec basecamp db migrate",
+    "templates:sync": "pnpm --dir application exec basecamp templates sync",
+    "templates:check": "pnpm --dir application exec basecamp templates check",
+    "eval": "pnpm --dir application exec basecamp eval"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

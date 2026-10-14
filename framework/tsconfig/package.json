@@ -1,0 +1,17 @@
+{
+  "name": "@hykr/tsconfig",
+  "version": "0.1.0",
+  "description": "Basecamp's TypeScript settings, for the framework's packages and an application's.",
+  "license": "MIT",
+  "files": [
+    "base.json",
+    "nest.json"
+  ],
+  "exports": {
+    "./base.json": "./base.json",
+    "./nest.json": "./nest.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
