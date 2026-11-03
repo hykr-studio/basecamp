@@ -1,6 +1,8 @@
 packages:
-  - "apps/*"
-  - "packages/*"
+  - "framework/*"
+  # The application: its root (the basecamp config and scripts) and its packages.
+  - "application"
+  - "application/*"
 
 allowBuilds:
   esbuild: true

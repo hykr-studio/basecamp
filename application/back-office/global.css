@@ -1,0 +1,7 @@
+@import "tailwindcss";
+@import "uniwind";
+/* The back office's design tokens (colours, type, radii) as Tailwind theme values. */
+@import "@hykr/back-office/theme.css";
+
+/* Tailwind generates only the classes it finds: the back office's screens are in the library. */
+@source "./node_modules/@hykr/back-office/dist";

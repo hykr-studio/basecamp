@@ -1,0 +1,9 @@
+{
+  "extends": "@hykr/tsconfig/nest.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "exclude": ["**/*.test.ts"]
+}

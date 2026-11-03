@@ -1,0 +1,25 @@
+{
+  "name": "@hykr/create-basecamp",
+  "version": "0.1.0",
+  "description": "npm create @hykr/basecamp: a new application on the Basecamp framework.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "create-basecamp": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "template"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "node scripts/pack-template.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

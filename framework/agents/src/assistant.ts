@@ -1,0 +1,99 @@
+import type { Catalog } from '@hykr/contracts';
+import { drawsComponents, type Surface } from '@hykr/contracts';
+import type { ToolKit } from '@hykr/core/tools';
+import { isLang, LANG_ENGLISH_NAMES } from '@hykr/i18n';
+import { Agent } from '@mastra/core/agent';
+import { PromptInjectionDetector, UnicodeNormalizer } from '@mastra/core/processors';
+import type { AgentDomain } from './agent-domain.js';
+import { fakeModel } from './fake/engine.js';
+import { platformScripts } from './fake/platform-scripts.js';
+import { listBeforeWrite, noRetryAfterRefusal } from './scorers.js';
+import { type Profile, toolsFor } from './tools/index.js';
+import { AGENT_ID, BUSINESS_ONLY_RULE, isFakeModel, modelId, VOICE_RULES } from './version.js';
+
+/** Today's date and where the person is, from the chat endpoint's request context. */
+const fillIn =
+  (template: string) =>
+  ({ requestContext }: { requestContext?: { get(key: string): unknown } }) => {
+    const timeZone = (requestContext?.get('timeZone') as string | undefined) ?? 'UTC';
+    const today =
+      (requestContext?.get('today') as string | undefined) ??
+      new Date().toLocaleDateString('sv', { timeZone });
+    const screen = requestContext?.get('screen') as string | undefined;
+    const record = requestContext?.get('record') as { type: string; id: string } | undefined;
+    const where = record
+      ? `The user is looking at ${record.type} ${record.id}.`
+      : screen
+        ? `The user is on the ${screen} screen.`
+        : '';
+    const surfaces = (requestContext?.get('surfaces') as string[] | undefined) ?? ['inline'];
+    // The page on the canvas, so "only overdue" can patch the right block (ids and queries).
+    const page = (requestContext?.get('canvas') as { page?: unknown } | undefined)?.page;
+    const lang = requestContext?.get('lang');
+    const spoken = surfaces.includes('speech') || requestContext?.get('channel') === 'voice';
+    const voiceRule = drawsComponents(surfaces as Surface[])
+      ? VOICE_RULES.screen
+      : VOICE_RULES.noScreen;
+    return template
+      .replace('{date}', today)
+      .replace(
+        '{language}',
+        isLang(lang)
+          ? `Reply in ${LANG_ENGLISH_NAMES[lang]}.`
+          : 'Reply in the language the user writes in.',
+      )
+      .replace('{voice}', spoken ? voiceRule : '')
+      .replace(
+        '{business}',
+        requestContext?.get('channel') === 'whatsapp' ? BUSINESS_ONLY_RULE : '',
+      )
+      .replace('{timeZone}', timeZone)
+      .replace('{screen}', where)
+      .replace('{surfaces}', surfaces.join(', '))
+      .replace('{canvas}', page ? ` The canvas shows this page: ${JSON.stringify(page)}` : '');
+  };
+
+const NAMES: Record<Profile, string> = {
+  app: 'Assistant',
+  inline: 'Assistant (inline only)',
+  text: 'Assistant (text only)',
+};
+
+/**
+ * One assistant, three tool sets: what it may show depends on where the person is. The
+ * app gets the canvas tools; a phone with the canvas closed does not; WhatsApp and voice
+ * get words only. The API sees the same agent identity for all three.
+ */
+export function createAssistant(input: {
+  profile: Profile;
+  instructions: string;
+  domain: AgentDomain;
+  catalog: Catalog;
+  kit: ToolKit;
+}): Agent {
+  const { profile, domain, catalog, kit } = input;
+  const fake = isFakeModel();
+  return new Agent({
+    id: profile === 'app' ? AGENT_ID : `${AGENT_ID}-${profile}`,
+    name: NAMES[profile],
+    instructions: fillIn(input.instructions),
+    // An openrouter/<provider>/<model> string is all Mastra needs; it reads OPENROUTER_API_KEY.
+    // The framework's scripts first (more specific), then the application's.
+    model: fake ? fakeModel([...platformScripts, ...domain.scripts], domain.help) : modelId(),
+    tools: toolsFor(kit, catalog, profile),
+    // Scored on every turn; results show in Studio when the agent is registered with storage.
+    scorers: {
+      listBeforeWrite: {
+        scorer: listBeforeWrite(catalog.commands),
+        sampling: { type: 'ratio', rate: 1 },
+      },
+      noRetryAfterRefusal: { scorer: noRetryAfterRefusal, sampling: { type: 'ratio', rate: 1 } },
+    },
+    inputProcessors: [
+      new UnicodeNormalizer(),
+      ...(process.env.GUARDRAILS === 'on' && !fake
+        ? [new PromptInjectionDetector({ model: modelId(), strategy: 'block', threshold: 0.8 })]
+        : []),
+    ],
+  });
+}

@@ -25,6 +25,10 @@ jobs:
       redis:
         image: redis:7.4-alpine
         ports: ["6379:6379"]
+      # Email, for notifications WhatsApp can't deliver (the notification tests read it).
+      mailpit:
+        image: axllent/mailpit:latest
+        ports: ["1025:1025", "8025:8025"]
 
     env:
       DATABASE_URL: postgres://app:app@localhost:5432/app
@@ -56,7 +60,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Prepare the database (extensions, search path)
-        run: psql postgres://app:app@localhost:5432/app -v ON_ERROR_STOP=1 -f infra/postgres/init.sql
+        run: psql postgres://app:app@localhost:5432/app -v ON_ERROR_STOP=1 -f framework/cli/infra/postgres/init.sql
 
       - run: pnpm lint
       - run: pnpm build
@@ -64,3 +68,46 @@ jobs:
       - run: pnpm lint:deps
       - run: pnpm db:migrate
       - run: pnpm test
+
+  # The framework as a user gets it: every @hykr/* package packed as it would be published, a
+  # new application scaffolded with create-basecamp, installed from those tarballs (no
+  # workspace links), then built and typechecked.
+  consumer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build --filter="./framework/*"
+
+      - name: Pack the framework
+        run: |
+          mkdir -p "$RUNNER_TEMP/tgz"
+          for dir in framework/*/; do (cd "$dir" && pnpm pack --pack-destination "$RUNNER_TEMP/tgz"); done
+
+      - name: Scaffold an application from the packed create-basecamp
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir cb && tar xzf tgz/hykr-create-basecamp-*.tgz -C cb
+          node cb/package/dist/index.js myapp
+          # The tarballs stand in for the registry.
+          { echo; echo "overrides:"; for t in "$RUNNER_TEMP"/tgz/hykr-*.tgz; do
+              n=$(basename "$t" .tgz | sed 's/^hykr-//; s/-[0-9.]*$//')
+              echo "  \"@hykr/$n\": \"file:$t\""
+            done; } >> myapp/pnpm-workspace.yaml
+
+      - name: Install, build and typecheck it
+        working-directory: ${{ runner.temp }}/myapp
+        run: |
+          pnpm install
+          pnpm -r build
+          pnpm -r typecheck
+          pnpm exec basecamp --help

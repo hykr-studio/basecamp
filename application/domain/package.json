@@ -1,0 +1,59 @@
+{
+  "name": "@application/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "default": "./dist/contracts/index.js"
+    },
+    "./views": {
+      "types": "./dist/views/index.d.ts",
+      "default": "./dist/views/index.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications/index.d.ts",
+      "default": "./dist/notifications/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "default": "./dist/agent/index.js"
+    },
+    "./db": {
+      "types": "./dist/db/index.d.ts",
+      "default": "./dist/db/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "default": "./dist/server/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json -w --preserveWatchOutput",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@hykr/agents": "workspace:*",
+    "@hykr/contracts": "workspace:*",
+    "@hykr/core": "workspace:*",
+    "@hykr/db": "workspace:*",
+    "@hykr/i18n": "workspace:*",
+    "@hykr/notifications": "workspace:*",
+    "@hykr/policy": "workspace:*",
+    "@hykr/ui-registry": "workspace:*",
+    "@nestjs/common": "^11.2.7",
+    "drizzle-orm": "^0.45.3",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@hykr/tsconfig": "workspace:*",
+    "@types/node": "^26.6.4",
+    "drizzle-kit": "^0.31.11",
+    "typescript": "~5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

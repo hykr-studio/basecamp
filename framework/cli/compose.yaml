@@ -1,0 +1,72 @@
+name: basecamp
+services:
+  postgres:
+    # multi-arch (amd64 + arm64) build of postgis/postgis, which ships amd64 only
+    image: ${POSTGRES_IMAGE:-imresamu/postgis:17-3.5}
+    environment: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U app -d app"], interval: 5s, retries: 20 }
+  redis:
+    image: redis:7.4-alpine
+    ports: ["6379:6379"]
+  minio:
+    # MinIO no longer publishes free images (quay.io/minio/minio now 401s); Chainguard's build is multi-arch
+    image: ${MINIO_IMAGE:-cgr.dev/chainguard/minio:latest}
+    command: server /data --console-address ":9001"
+    volumes: ["miniodata:/data"]
+    environment: { MINIO_ROOT_USER: minioadmin, MINIO_ROOT_PASSWORD: minioadmin }
+    ports: ["9000:9000", "9001:9001"]
+  mailpit:
+    image: axllent/mailpit:latest
+    ports: ["1025:1025", "8025:8025"]
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports: ["5050:80"]
+    volumes: ["./infra/pgadmin/servers.json:/pgadmin4/servers.json:ro"]
+    depends_on: { postgres: { condition: service_healthy } }
+  # WhatsApp Cloud API emulator: chat UI at http://localhost:8080
+  # SQLite defaults to memory. To keep chats across restarts, mount a volume and set
+  # WHALOC_DB_PATH=/data/whaloc.db (the image declares /data; the process runs as uid 1000).
+  # One business account and one number (the ids in WA_WABA_ID and WA_PHONE_NUMBER_ID);
+  # templates come from `pnpm templates:sync`, approved after 2 seconds.
+  whaloc:
+    image: ghcr.io/dgadelha/whaloc@sha256:793780655dbe3be764de559625be0026a67978a3a9527e23d9d023f613c51314 # v0.1.0
+    environment:
+      WHALOC_WEBHOOK_URL: http://host.docker.internal:3000/webhooks/whatsapp
+      WHALOC_APP_SECRET: dev-app-secret
+      WHALOC_WEBHOOK_VERIFY_TOKEN: dev-verify-token
+      WHALOC_SEED: '[{"id":"666635535888644","name":"Basecamp Demo","phoneNumbers":[{"id":"573542517421694","displayPhoneNumber":"+91 80 4000 0100","verifiedName":"Basecamp Demo"}]}]'
+      WHALOC_TEMPLATE_AUTO_APPROVE: "2000"
+    ports: ["8080:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"] # lets it reach the API on your Mac (and on Linux CI)
+  # The golden conversations' own whaloc: its webhooks go to the test API on port 3099, so tests
+  # never touch the dev one. Fast statuses and template approval keep the tests quick.
+  whaloc-test:
+    image: ghcr.io/dgadelha/whaloc@sha256:793780655dbe3be764de559625be0026a67978a3a9527e23d9d023f613c51314 # v0.1.0
+    environment:
+      WHALOC_WEBHOOK_URL: http://host.docker.internal:3099/webhooks/whatsapp
+      WHALOC_APP_SECRET: test-app-secret
+      WHALOC_WEBHOOK_VERIFY_TOKEN: test-verify-token
+      WHALOC_SEED: '[{"id":"666635535888699","name":"Basecamp Test","phoneNumbers":[{"id":"573542517421699","displayPhoneNumber":"+91 80 4000 0199","verifiedName":"Basecamp Test"}]}]'
+      WHALOC_TEMPLATE_AUTO_APPROVE: "200"
+      WHALOC_STATUS_DELAYS: "sent:0,delivered:100"
+      WHALOC_PUBLIC_URL: http://localhost:8090 # media links point here, not at the dev whaloc's 8080
+    ports: ["8090:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  # Voice: the WebRTC media server the app and the voice worker meet in. Dev mode uses the
+  # devkey/secret pair; --bind 0.0.0.0 so the host can reach it, and the node IP the app is
+  # told to send media to (127.0.0.1 for a simulator; your LAN IP for a phone).
+  livekit:
+    image: livekit/livekit-server:v1.13.8
+    command: --dev --bind 0.0.0.0 --node-ip ${LIVEKIT_NODE_IP:-127.0.0.1}
+    ports: ["7880:7880", "7881:7881", "7882:7882/udp"]
+    healthcheck: { test: ["CMD-SHELL", "wget -q -O- http://localhost:7880 || exit 1"], interval: 5s, retries: 20 }
+volumes: { pgdata: {}, miniodata: {} }

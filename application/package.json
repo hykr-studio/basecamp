@@ -1,0 +1,36 @@
+{
+  "name": "@application/app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A Basecamp application: the sample domain (meetings, notes and to-dos). Replace it with your own.",
+  "type": "module",
+  "basecamp": {
+    "server": "api/dist/server.js",
+    "watch": [
+      "domain",
+      "api"
+    ],
+    "apps": [
+      "mobile",
+      "back-office"
+    ],
+    "db": "domain"
+  },
+  "scripts": {
+    "dev": "basecamp dev",
+    "infra:up": "basecamp infra up",
+    "db:generate": "basecamp db generate",
+    "db:migrate": "basecamp db migrate",
+    "templates:sync": "basecamp templates sync",
+    "templates:check": "basecamp templates check",
+    "eval": "basecamp eval assistant",
+    "eval:voice": "basecamp eval voice",
+    "eval:whatsapp": "basecamp eval whatsapp",
+    "studio": "basecamp studio"
+  },
+  "devDependencies": {
+    "@application/api": "workspace:*",
+    "@application/domain": "workspace:*",
+    "@hykr/cli": "workspace:*"
+  }
+}
