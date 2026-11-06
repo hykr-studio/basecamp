@@ -1,4 +1,4 @@
-import { TenantSettings } from '@hykr/contracts';
+import { parseTenantSettings, type TenantConfig } from '@hykr/contracts';
 import { type Database, schema } from '@hykr/db';
 import { Inject, Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
@@ -9,11 +9,11 @@ import { DB } from '../infra/db.module.js';
 export class TenantsService {
   constructor(@Inject(DB) private readonly db: Database) {}
 
-  async get(tenantId: string): Promise<{ name: string; settings: TenantSettings }> {
+  async get(tenantId: string): Promise<{ name: string; settings: TenantConfig }> {
     const [row] = await this.db
       .select({ name: schema.tenants.name, settings: schema.tenants.settings })
       .from(schema.tenants)
       .where(eq(schema.tenants.id, tenantId));
-    return { name: row?.name ?? '', settings: TenantSettings.parse(row?.settings ?? {}) };
+    return { name: row?.name ?? '', settings: parseTenantSettings(row?.settings) };
   }
 }
