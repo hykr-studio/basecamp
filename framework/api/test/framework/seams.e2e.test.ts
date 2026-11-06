@@ -44,8 +44,17 @@ const registries = {
   authPlugins: api.authPlugins,
 } as const;
 
+/** What the framework's features put in the registries themselves, by name. */
+const frameworkOwn = new Set<string>();
+
 beforeAll(async () => {
   await boot(seams);
+  const { installFeatures } = await import('../../dist/features/install.js');
+  for (const f of installFeatures())
+    for (const items of Object.values(f.contributes ?? {}))
+      for (const x of items as { name?: string }[]) if (x.name) frameworkOwn.add(x.name);
+  // The push channel is a Nest provider that registers itself.
+  frameworkOwn.add('push');
   await ana.signUp();
 });
 afterAll(shutdown);
@@ -58,7 +67,12 @@ describe('contributions', () => {
       expect(registry.get(NAME), key).toBe(contributed);
       // The framework registers its own queues too (the channel's, the events queue).
       if (key === 'queues') expect(registry.all(), key).toContain(contributed);
-      else expect(registry.all(), key).toEqual([contributed]);
+      // Beside the framework features' own (the push channel, its schedule and contributors).
+      else
+        expect(
+          (registry.all() as { name: string }[]).filter((x) => !frameworkOwn.has(x.name)),
+          key,
+        ).toEqual([contributed]);
     }
     expect(api.runtime().contributions).toEqual(seamsContributions);
   });
