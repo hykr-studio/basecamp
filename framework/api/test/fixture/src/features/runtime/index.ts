@@ -131,7 +131,8 @@ export const GateHook: TurnHook = {
     if (turn.message.includes('turn shape'))
       return {
         context: ['The secret word is papaya.'],
-        model: 'openrouter/fixture/first',
+        // A registered model (the scripted one): the model policy checks what a hook asks for.
+        model: 'fake/scripted',
         withoutTools: ['delete-task'],
       };
     return null;
@@ -141,14 +142,17 @@ export const GateHook: TurnHook = {
   },
 };
 
-/** A second opinion: its context joins, its model loses to the first, its removal adds up. */
+/**
+ * A second opinion: its context joins, its model loses to the first (it is no model of the
+ * deployment: had it won, the turn would be refused), its removal adds up.
+ */
 export const SecondHook: TurnHook = {
   name: 'fixture.runtime.second',
   before: async (turn) =>
     turn.message.includes('turn shape')
       ? {
           context: ['Second line.'],
-          model: 'openrouter/fixture/second',
+          model: 'fixture/second',
           withoutTools: ['canvas-open'],
         }
       : null,

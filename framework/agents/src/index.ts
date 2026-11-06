@@ -7,8 +7,9 @@ export type {
   VoiceEvalCase,
 } from './agent-domain.js';
 export { AGENT_KEYS, type Agents, createAgents, profileFor } from './agents.js';
-export { modelFor } from './assistant.js';
+export { ModelNotChosen, modelFor, turnModel } from './assistant.js';
 export { type ApiFor, createApiFor } from './context.js';
+export * from './models/index.js';
 export { type AgentModuleOf, mergeAgentModules, scriptConflicts, suitesFor } from './modules.js';
 export {
   briefForVoice,
@@ -17,4 +18,4 @@ export {
   noRetryAfterRefusal,
   repliesInLanguage,
 } from './scorers.js';
-export { AGENT_ID, agentVersion, buildInstructions, modelId } from './version.js';
+export { AGENT_ID, agentVersion, buildInstructions, isFakeModel } from './version.js';

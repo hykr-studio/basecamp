@@ -2,3 +2,4 @@
 // Each is a `defineFeature(...)` in its own folder; FeaturesModule loads every one of them.
 export { eventsFeature } from './events/index.js';
 export { settingsFeature } from './settings/index.js';
+export { modelsFeature } from './models/index.js';

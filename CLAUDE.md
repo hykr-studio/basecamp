@@ -49,7 +49,12 @@ pnpm dev              # framework tsc -w watchers + `basecamp dev` (API, worker,
 - `pnpm --dir application exec basecamp module add <name> [--entity <singular>]` scaffolds a module (both
   halves) and adds its line to each module list.
 - `pnpm eval` runs the scripted assistant eval and needs the API running. From `application/`:
-  `pnpm exec basecamp eval [assistant|voice|whatsapp] [--module <name>] [--live]`.
+  `pnpm exec basecamp eval [assistant|voice|whatsapp] [--module <name>] [--live [--model <ref>]]`
+  (`--model` runs the evals on one model of `MODEL_PROVIDERS`).
+- Models: `MODEL_PROVIDERS` (JSON) lists the deployment's OpenAI-compatible gateways and their models
+  (`<provider>/<model>` refs, regions, prices); `OPENROUTER_API_KEY` adds OpenRouter in development.
+  Each business picks among them with its `models` settings section (`PUT /api/models/policy`), which
+  fails closed (developer guide 7.5).
 - `pnpm dev` passes `--concurrency=30` because turbo runs 16 persistent tasks. Pass it too if you call
   `turbo run dev` yourself.
 

@@ -6,7 +6,7 @@ import { type MastraScorer, runEvals } from '@mastra/core/evals';
 import { RequestContext } from '@mastra/core/request-context';
 import type { EvalCase, EvalSetup } from '../agent-domain.js';
 import { AGENT_KEYS, type Agents, profileFor } from '../agents.js';
-import { modelId } from '../version.js';
+import { modelRegistry } from '../models/registry.js';
 
 const api = process.env.API_INTERNAL_URL ?? 'http://localhost:3000';
 export const APP: Surface[] = ['inline', 'canvas'];
@@ -39,7 +39,10 @@ export async function prepare(what: string, setup?: EvalSetup) {
     if (!res.ok) throw new Error(`Eval setup ${method} ${path} failed: ${res.status}`);
     return res.json();
   });
-  const model = process.env.MODEL_MODE === 'fake' ? 'scripted model' : modelId();
+  const model =
+    process.env.MODEL_MODE === 'fake'
+      ? 'scripted model'
+      : (modelRegistry().defaults.chat ?? 'no model (set MODEL_PROVIDERS or AGENT_MODEL)');
   console.log(`Evaluating ${what} with ${model}, acting for a fresh user\n`);
   return userId;
 }
