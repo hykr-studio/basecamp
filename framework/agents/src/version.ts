@@ -48,16 +48,15 @@ export const VOICE_RULES = {
     ' This turn is spoken and there is no screen: answer in at most two short sentences. For a list, say how many and the first few.',
 } as const;
 
+/** The scripted model answers every turn: read on each call, so a test can switch it. */
 export const isFakeModel = () => process.env.MODEL_MODE === 'fake';
 
-export const modelId = () => process.env.AGENT_MODEL ?? 'openrouter/openai/gpt-6-luna';
-
 /**
- * Agent id + model + a short hash of the instructions. The API stamps it on every
- * audit row, so you can tell which version of the agent made a decision.
+ * Agent id + the turn's model (its ref, '<provider>/<model>') + a short hash of the
+ * instructions. The API stamps it on every audit row, so you can tell which version of the
+ * agent, on which model, made a decision.
  */
-export function agentVersion(instructions: string) {
-  const model = isFakeModel() ? 'fake/scripted' : modelId();
+export function agentVersion(instructions: string, model: string) {
   // Everything the instructions can say: a change to any of it is a new version.
   const prompt = [
     instructions,

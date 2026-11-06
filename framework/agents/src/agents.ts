@@ -1,7 +1,7 @@
 import { type Catalog, drawsComponents, type Surface } from '@hykr/contracts';
 import type { Registry } from '@hykr/ui-registry';
 import type { AgentDomain } from './agent-domain.js';
-import { createAssistant } from './assistant.js';
+import { createAssistant, versionModel } from './assistant.js';
 import { createApiFor } from './context.js';
 import { createMastra } from './mastra/index.js';
 import type { Profile } from './tools/index.js';
@@ -27,8 +27,9 @@ export function profileFor(surfaces: readonly Surface[]): Profile {
 export function createAgents(input: { catalog: Catalog; registry: Registry; domain: AgentDomain }) {
   const { catalog, registry, domain } = input;
   const instructions = buildInstructions(domain);
-  // Read per call: MODEL_MODE decides the model's part of the version.
-  const version = () => agentVersion(instructions);
+  // Per call: the model part names the model this turn runs on (the scripted one in fake mode).
+  const version = (ctx?: { requestContext?: { get(key: string): unknown } }) =>
+    agentVersion(instructions, versionModel(ctx ?? {}));
   const kit = { clientFor: createApiFor(version), registry };
   const assistant = (profile: Profile) =>
     createAssistant({ profile, instructions, domain, catalog, kit });
