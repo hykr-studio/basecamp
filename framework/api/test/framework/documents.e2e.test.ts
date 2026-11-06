@@ -272,6 +272,11 @@ describe('who reaches a document', () => {
   });
 
   it('a field hidden from staff stays out of their copy, and they never open the owner’s', async () => {
+    // The read projector hides the secret line from staff on the record itself.
+    const record = await staff.call('GET', `/api/memos/${plan.id}`, undefined, inTenant());
+    expect(record.status).toBe(200);
+    expect(record.body.title).toBe('Plan');
+    expect(record.body).not.toHaveProperty('secret');
     const theirs = await made(staff, 'memos.memo', plan.id);
     const text = (await pdf(theirs.url)).bytes.toString('utf8');
     expect(text).toContain('PLAN');
@@ -352,6 +357,10 @@ describe('sending a document', () => {
       expect.objectContaining({ FileName: 'memo-Plan.pdf', ContentType: 'application/pdf' }),
     ]);
     expect((await audit(ownerCopy.id)).map((a) => a.action)).toContain('document.sent');
+    // The send row is audited with the write that asked for it.
+    expect(await audit(res.body.value.id)).toEqual([
+      expect.objectContaining({ action: 'documentSend.create', outcome: 'committed' }),
+    ]);
   });
 
   it('by WhatsApp to a customer: the PDF uploaded, then the template with a document header', async () => {

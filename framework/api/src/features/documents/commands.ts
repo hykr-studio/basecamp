@@ -316,7 +316,20 @@ export const SendDocument = defineCommand(SendDocumentSpec, {
       .returning();
     return {
       value: row,
-      touched: [],
+      // The send itself is audited with the write (documentSend.create): to whom, how, its state.
+      touched: [
+        {
+          type: 'documentSend',
+          id: row.id,
+          change: 'created',
+          after: {
+            documentId: row.documentId,
+            to: row.recipient,
+            channel: row.channel,
+            status: row.status,
+          },
+        },
+      ],
       events: [
         new DocumentEvent(
           'document.send_requested',
