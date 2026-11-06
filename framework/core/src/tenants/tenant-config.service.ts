@@ -54,6 +54,15 @@ export class TenantConfigService {
     return info !== null && featureEnabled(info.settings, key);
   }
 
+  /**
+   * The business as cached in this process, without a query: undefined when it is not cached
+   * (or expired). For synchronous readers on a path that just loaded it with `get`.
+   */
+  peek(tenantId: string): TenantInfo | undefined {
+    const hit = this.cache.get(tenantId);
+    return hit && Date.now() - hit.at < this.ttlMs ? hit.info : undefined;
+  }
+
   /** The business from the cache or the database; null when there is no such business. */
   private async load(tenantId: string): Promise<TenantInfo | null> {
     const hit = this.cache.get(tenantId);

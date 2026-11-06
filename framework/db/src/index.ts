@@ -14,6 +14,8 @@ export function createDb(url: string) {
   };
 }
 
+export { customFieldsColumn } from './columns/custom-fields.js';
+export { sharedFromColumn } from './columns/shared.js';
 export type { Database, DbOrTx } from './database.js';
 export {
   frameworkMigrations,

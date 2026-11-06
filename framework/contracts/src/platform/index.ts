@@ -14,3 +14,4 @@ export * from './page.js';
 
 export const platformEntities = { pages: SavedPageSpec } as const;
 export const platformCommands: readonly CommandSpec[] = [SendTemplateSpec, RequestHumanSpec];
+export * from './settings.js';

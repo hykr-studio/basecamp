@@ -4,6 +4,7 @@
 
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
+export { FeatureFlagsService } from './features/settings/flags.service.js';
 export {
   type AgentIdentity,
   type AgentIdentityProvider,

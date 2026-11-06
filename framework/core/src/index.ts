@@ -66,6 +66,22 @@ export {
 } from './http/principal.js';
 export { PrincipalResolver, type Standing } from './http/resolver.js';
 export {
+  customFieldsHook,
+  customFieldsOf,
+  customFieldsPlugin,
+  customListSql,
+  hasCustomFields,
+  mergeCustom,
+} from './plugins/custom-fields.js';
+export {
+  configureSharedRecords,
+  defineSharedEntity,
+  isShared,
+  platformTenantId,
+  sharedRecordsHook,
+  sharedRecordsPlugin,
+} from './plugins/shared.js';
+export {
   type ListFieldFilter,
   type ListFieldSql,
   listFieldSql,

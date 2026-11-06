@@ -26,7 +26,14 @@ export async function boot(application: Basecamp) {
   setRuntime(application);
   const { AppModule } = await import('./app.module.js');
   const app = await NestFactory.create(AppModule, { bodyParser: false, logger: false });
-  app.enableCors({ origin, credentials: true });
+  // As startApi does (verified custom domains included), plus the tests' own origin.
+  const { corsOrigin } = await import('./infra/cors.js');
+  const check = corsOrigin();
+  app.enableCors({
+    origin: (o: string | undefined, cb: (err: Error | null, allow?: boolean) => void) =>
+      o === origin ? cb(null, true) : check(o, cb),
+    credentials: true,
+  });
   await app.listen(Number(process.env.TEST_PORT ?? 0)); // a random free port unless pinned
   server.app = app;
   server.base = (await app.getUrl()).replace('[::1]', 'localhost');

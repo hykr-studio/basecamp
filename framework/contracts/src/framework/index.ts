@@ -1,3 +1,4 @@
+export * from './custom-fields.js';
 export * from './domain.js';
 export * from './events.js';
 export * from './list.js';
@@ -5,6 +6,7 @@ export * from './module.js';
 export * from './money.js';
 export * from './present.js';
 export * from './registry.js';
+export * from './shared.js';
 export * from './spec.js';
 export * from './traits.js';
 export * from './write.js';
