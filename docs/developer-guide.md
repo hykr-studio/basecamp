@@ -742,7 +742,10 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `TenantConfigService` (`@hykr/core`, global): `get(tenantId)` caches them for 10 seconds per process
   (`CoreModule.forRoot({ tenantConfigTtlMs })`), `invalidate(tenantId)` after you change them, and
   `isEnabled(tenantId, key)` is true only for a stored `true` (no business, an unknown one or
-  settings that do not parse are all off).
+  settings that do not parse are all off). `get` throws when any part does not parse;
+  `section(tenantId, key)` reads one section, parsed alone in that case, so another feature's
+  broken section does not stop yours. A test that changes settings with SQL calls
+  `settingsChanged(tenantId)` (`@hykr/api/testing`): the server reads them on every request.
 
 A framework feature also keeps its phrases, its scripted-model scripts and its fixture tables in files of its own, so parallel work never edits a shared file. One line in a barrel registers each one: `framework/i18n/src/messages/index.ts` (section 9), `framework/agents/src/fake/scripts/index.ts` (section 7.3). The fixture's per-feature migration sets need no line (section 12). These barrels merge with `merge=union` (`.gitattributes`).
 
@@ -1147,7 +1150,9 @@ account (`customer`). A capability with `grantable: false` is given only by code
 **A business's own roles.** Each business shapes its roles from the registered capabilities, without a
 deploy, in its `roles` settings section: `defined` (roles it made: name, label, capabilities) and `edits`
 (its label or capabilities for a declared role, which win over the application's). The resolver reads
-them per request (cached 10 seconds per process); a name nobody has grants nothing. `standingIn(names,
+them per request (cached 10 seconds per process); a name nobody has grants nothing. A `roles` section
+that does not parse leaves members their roles' rows but no capability (fail closed); another section
+that does not parse does not touch capabilities, so its owner can still repair it. `standingIn(names,
 settings)` and `rolesOfBusiness(settings)` (`@hykr/contracts`) resolve them. The `members` feature
 serves them, people only, every write audited:
 
