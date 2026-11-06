@@ -40,6 +40,9 @@ export {
   type EntityPlugin,
   type EntityPluginTarget,
   entityPlugins,
+  type GrantKind,
+  type GrantTarget,
+  grantKinds,
   type IdentityRequest,
   identityProviders,
   projectRead,
@@ -65,6 +68,8 @@ export {
   type RequestMetaValue,
 } from './http/principal.js';
 export { PrincipalResolver, type Standing } from './http/resolver.js';
+export { fieldPolicyPlugin, fieldPolicyProblems } from './plugins/field-policy.js';
+export { grantsCleanup, holdsGrant, recordGrantKind } from './plugins/grants.js';
 export {
   type ListFieldFilter,
   type ListFieldSql,

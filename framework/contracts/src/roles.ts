@@ -10,6 +10,8 @@ declare module './framework/module.js' {
   interface Contributions {
     roles: readonly RoleDef[];
     capabilities: readonly CapabilityDef[];
+    roleOverrides: readonly RoleOverride[];
+    roleDefaults: readonly RoleDefault[];
   }
 }
 
@@ -32,7 +34,35 @@ export interface CapabilityDef {
   label: Labels;
   /** The roles that have it by default. A role the application lacks is ignored. */
   roles?: readonly string[];
+  /**
+   * May a business give it to its roles (a role it made, or its edit of a declared one)?
+   * Default true. False keeps it with the code that declares roles: something that reaches
+   * beyond one business (the job queues of every business) must never be a business's choice.
+   */
+  grantable?: boolean;
 }
+
+/**
+ * The application's change to a role someone else declared (the framework's, another
+ * module's): another label, or the capabilities it has instead of its defaults. `capabilities`
+ * replaces the whole default set: the role's own list and every capability naming the role.
+ */
+export interface RoleOverride {
+  role: string;
+  label?: Labels;
+  capabilities?: readonly string[];
+}
+
+/**
+ * The roles the framework hands out itself: to the person who creates a business (`creator`)
+ * and to a WhatsApp contact without an account (`contact`). An application names its own; the
+ * framework's are `owner` and `customer`.
+ */
+export interface RoleDefault {
+  name: RoleDefaultName;
+  roles: readonly string[];
+}
+export type RoleDefaultName = 'creator' | 'contact';
 
 /** A role, checked: a valid name, and capability names that look like capabilities. */
 export function defineRole(def: RoleDef): RoleDef {
@@ -64,6 +94,16 @@ export const capabilities = createHookRegistry<CapabilityDef>(
   { collects: 'capabilities' },
 );
 
+/** Application overrides of declared roles, by role name. Collects `contributes.roleOverrides`. */
+export const roleOverrides = createHookRegistry<RoleOverride>('role override', (o) => o.role, {
+  collects: 'roleOverrides',
+});
+
+/** The roles given to a business's creator and to a contact. Collects `contributes.roleDefaults`. */
+export const roleDefaults = createHookRegistry<RoleDefault>('role default', (d) => d.name, {
+  collects: 'roleDefaults',
+});
+
 /** The framework's roles, as every business had them before roles could be added. */
 export const FrameworkRoles = {
   owner: defineRole({
@@ -90,6 +130,17 @@ export const FrameworkRoles = {
 } as const;
 
 const TEAM = ['owner', 'admin', 'ops', 'staff'];
+
+/** Who gets which role when the framework hands one out, unless the application says otherwise. */
+const FRAMEWORK_DEFAULTS: Readonly<Record<RoleDefaultName, readonly string[]>> = {
+  creator: [FrameworkRoles.owner.name],
+  contact: [FrameworkRoles.customer.name],
+};
+
+/** The roles the framework gives a business's creator or a contact: the application's, or its own. */
+export function givenRoles(name: RoleDefaultName): string[] {
+  return [...(roleDefaults.get(name)?.roles ?? FRAMEWORK_DEFAULTS[name])];
+}
 
 /** The framework's own capabilities, with the roles that had each one before. */
 export const FrameworkCapabilities = {
@@ -133,7 +184,10 @@ export const FrameworkCapabilities = {
     },
     roles: ['owner', 'admin'],
   }),
-  /** The job queues' dashboard (Bull Board, development only). */
+  /**
+   * The job queues' dashboard (Bull Board, development only). It shows every business's jobs,
+   * so no business may give it to a role.
+   */
   queues: defineCapability({
     name: 'queues.admin',
     label: {
@@ -142,6 +196,37 @@ export const FrameworkCapabilities = {
       te: 'జాబ్ క్యూలను తెరవండి',
     },
     roles: ['owner', 'admin'],
+    grantable: false,
+  }),
+  /** The business's members and roles, read only (GET /api/members). */
+  readMembers: defineCapability({
+    name: 'members.read',
+    label: {
+      en: "See the business's members",
+      hi: 'व्यवसाय के सदस्य देखें',
+      te: 'వ్యాపార సభ్యులను చూడండి',
+    },
+    roles: TEAM,
+  }),
+  /** Invite people, change and remove members, define and edit the business's roles. */
+  manageMembers: defineCapability({
+    name: 'members.manage',
+    label: {
+      en: 'Invite people and manage roles',
+      hi: 'लोगों को आमंत्रित करें और भूमिकाएँ संभालें',
+      te: 'వ్యక్తులను ఆహ్వానించండి, పాత్రలను నిర్వహించండి',
+    },
+    roles: ['owner', 'admin'],
+  }),
+  /** Give a member access to one record (an access rule's `granted` reach), and take it back. */
+  grantRecords: defineCapability({
+    name: 'records.grant',
+    label: {
+      en: 'Give people access to a record',
+      hi: 'किसी रिकॉर्ड की पहुँच लोगों को दें',
+      te: 'ఒక రికార్డుకు ప్రాప్తిని ఇవ్వండి',
+    },
+    roles: ['owner', 'admin', 'ops'],
   }),
 } as const;
 
@@ -154,21 +239,59 @@ export function knownRoles(names: readonly string[]): string[] {
 }
 
 /**
- * What these roles allow: each role's own list, plus every capability that names the role.
- * Unknown roles add nothing. Sorted, each once.
+ * A declared role's capabilities, as the application has it: its override's list when it gives
+ * one, else the role's own list plus every capability naming the role. Sorted, each once.
  */
-export function capabilitiesOf(roleNames: readonly string[]): string[] {
-  const held = new Set(knownRoles(roleNames));
-  const out = new Set<string>();
-  for (const name of held) for (const c of roles.get(name)?.capabilities ?? []) out.add(c);
-  for (const c of capabilities.all()) if (c.roles?.some((r) => held.has(r))) out.add(c.name);
+export function declaredCapabilities(roleName: string): string[] {
+  if (!roles.has(roleName)) return [];
+  const override = roleOverrides.get(roleName)?.capabilities;
+  if (override) return [...new Set(override)].sort();
+  const out = new Set(roles.get(roleName)?.capabilities ?? []);
+  for (const c of capabilities.all()) if (c.roles?.includes(roleName)) out.add(c.name);
   return [...out].sort();
 }
 
-/** Fails when a role names a capability nobody defines (a typo would grant nothing, silently). */
+/** A declared role's label, as the application has it (its override's, if any). */
+export function declaredLabel(roleName: string): Labels | undefined {
+  return roleOverrides.get(roleName)?.label ?? roles.get(roleName)?.label;
+}
+
+/**
+ * What these declared roles allow (application overrides applied). Unknown roles add nothing.
+ * Sorted, each once. A business's own roles and edits: `standingIn` (settings/roles.ts).
+ */
+export function capabilitiesOf(roleNames: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const name of knownRoles(roleNames)) for (const c of declaredCapabilities(name)) out.add(c);
+  return [...out].sort();
+}
+
+/** May a business give this capability to a role? Defined, and not kept for code. */
+export const isGrantable = (name: string): boolean =>
+  capabilities.get(name)?.grantable !== false && capabilities.has(name);
+
+/**
+ * Fails when a role or an override names a capability nobody defines (a typo would grant
+ * nothing, silently), an override or default names a role nobody declares, or a default hands
+ * out no role at all.
+ */
 export function checkRoles(): void {
+  const undefinedCapability = (who: string, c: string) =>
+    new Error(`${who} names capability "${c}", which nobody defines`);
   for (const role of roles.all())
     for (const c of role.capabilities ?? [])
-      if (!capabilities.has(c))
-        throw new Error(`Role "${role.name}" names capability "${c}", which nobody defines`);
+      if (!capabilities.has(c)) throw undefinedCapability(`Role "${role.name}"`, c);
+  for (const o of roleOverrides.all()) {
+    if (!roles.has(o.role))
+      throw new Error(`The override of role "${o.role}" names a role nobody declares`);
+    for (const c of o.capabilities ?? [])
+      if (!capabilities.has(c)) throw undefinedCapability(`The override of role "${o.role}"`, c);
+  }
+  for (const d of roleDefaults.all()) {
+    if (d.name !== 'creator' && d.name !== 'contact')
+      throw new Error(`Role default "${d.name}": only "creator" and "contact" exist`);
+    if (!d.roles.length) throw new Error(`Role default "${d.name}" gives no role`);
+    for (const r of d.roles)
+      if (!roles.has(r)) throw new Error(`Role default "${d.name}" names "${r}", no role`);
+  }
 }

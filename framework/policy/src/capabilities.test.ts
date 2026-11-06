@@ -34,21 +34,39 @@ const access: Access = {
 
 describe('the framework roles and capabilities', () => {
   it('give exactly what the hard-coded role checks gave', () => {
+    // Plus the members feature's (A4): the team reads members, owner and admin manage them,
+    // and owner, admin and ops give access to single records.
     expect(capabilitiesOf(['owner'])).toEqual([
       'backoffice.use',
       'channels.manage',
       'customers.message',
+      'members.manage',
+      'members.read',
       'queues.admin',
+      'records.grant',
     ]);
     expect(capabilitiesOf(['admin'])).toEqual([
       'backoffice.use',
       'channels.manage',
       'customers.message',
       'history.all',
+      'members.manage',
+      'members.read',
       'queues.admin',
+      'records.grant',
     ]);
-    expect(capabilitiesOf(['ops'])).toEqual(['backoffice.use', 'customers.message', 'history.all']);
-    expect(capabilitiesOf(['staff'])).toEqual(['backoffice.use', 'customers.message']);
+    expect(capabilitiesOf(['ops'])).toEqual([
+      'backoffice.use',
+      'customers.message',
+      'history.all',
+      'members.read',
+      'records.grant',
+    ]);
+    expect(capabilitiesOf(['staff'])).toEqual([
+      'backoffice.use',
+      'customers.message',
+      'members.read',
+    ]);
     expect(capabilitiesOf(['customer'])).toEqual([]);
   });
 
@@ -122,7 +140,11 @@ describe('access for the new actor kinds', () => {
   };
 
   it('the system reaches every row of its one business', () => {
-    expect(accessFor(system, access, 'write')).toEqual({ kind: 'grants', grants: ['tenant'] });
+    expect(accessFor(system, access, 'write')).toEqual({
+      kind: 'grants',
+      grants: ['tenant'],
+      rules: [{ grant: 'tenant' }],
+    });
     expect(rowAllowed(system, ['tenant'], { ownerId: 'bob' })).toBe(true);
     expect(accessFor({ ...system, tenantId: undefined }, access, 'read')).toEqual({
       kind: 'none',

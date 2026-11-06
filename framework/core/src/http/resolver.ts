@@ -1,12 +1,13 @@
 import {
   type Assurance,
   type Channel,
-  capabilitiesOf,
   checkRoles,
-  knownRoles,
+  givenRoles,
   type Principal,
   parseSubjectKey,
   type Subject,
+  standingIn,
+  type TenantConfig,
 } from '@hykr/contracts';
 import { contactById, ensureDefaultTenant, membershipOf, userExists } from '@hykr/db';
 import {
@@ -16,6 +17,7 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
+import { TenantConfigService } from '../tenants/tenant-config.service.js';
 import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
 
 /** The part of a principal that says who it is for and what they may do, in which business. */
@@ -42,22 +44,20 @@ const CHANNEL_ASSURANCE: Record<Channel, Assurance> = {
 const logger = new Logger('PrincipalResolver');
 const warned = new Set<string>();
 
-/** The registered roles among these; an unknown one grants nothing, and is logged once. */
-function rolesOf(values: readonly string[]): string[] {
-  const known = knownRoles(values);
-  for (const r of values)
-    if (!known.includes(r) && !warned.has(r)) {
+/**
+ * Roles and what they allow in this business, as a principal carries them: the declared roles
+ * (with the application's overrides and the business's edits) and the business's own. A name
+ * it does not have grants nothing, and is logged once.
+ */
+function standingOf(values: readonly string[], settings: TenantConfig | undefined) {
+  const { roles, capabilities, unknown } = standingIn(values, settings);
+  for (const r of unknown)
+    if (!warned.has(r)) {
       warned.add(r);
-      logger.warn(`Role "${r}" is in a membership but nobody registered it: it grants nothing`);
+      logger.warn(`Role "${r}" is in a membership but nobody declared it: it grants nothing`);
     }
-  return known;
+  return { roles, capabilities };
 }
-
-/** Roles and what they allow, as a principal carries them. */
-const standingOf = (values: readonly string[]) => {
-  const roles = rolesOf(values);
-  return { roles, capabilities: capabilitiesOf(roles) };
-};
 
 /**
  * Who a request is for, from facts the server holds: the session, the person or contact an
@@ -67,9 +67,26 @@ const standingOf = (values: readonly string[]) => {
  */
 @Injectable()
 export class PrincipalResolver {
-  constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {
-    // When the API or worker starts: a role naming a capability nobody defines stops it.
+  constructor(
+    @Inject(CORE_OPTIONS) private readonly options: CoreOptions,
+    @Inject(TenantConfigService) private readonly tenants: TenantConfigService,
+  ) {
+    // When the API or worker starts: a role, override or role default naming a capability or
+    // role nobody declares stops it.
     checkRoles();
+  }
+
+  /**
+   * A business's settings, for its roles. Settings that do not parse give the declared roles
+   * only (the business's own grant nothing), never an error on every request.
+   */
+  private async settingsOf(tenantId: string): Promise<TenantConfig | undefined> {
+    try {
+      return (await this.tenants.get(tenantId)).settings;
+    } catch (e) {
+      logger.warn(`Settings of business ${tenantId} do not parse; only declared roles count: ${e}`);
+      return undefined;
+    }
   }
 
   /**
@@ -92,7 +109,7 @@ export class PrincipalResolver {
     return {
       subject: { kind: 'user', userId },
       tenantId: membership.tenantId,
-      ...standingOf(membership.roles),
+      ...standingOf(membership.roles, await this.settingsOf(membership.tenantId)),
       ...(membership.customerId ? { customerId: membership.customerId } : {}),
       assurance: this.assurance(opts.channel),
     };
@@ -123,7 +140,8 @@ export class PrincipalResolver {
     return {
       subject: { kind: 'contact', contactId },
       tenantId: contact.tenantId,
-      ...standingOf(['customer']),
+      // The roles the application gives a contact (the framework's: customer).
+      ...standingOf(givenRoles('contact'), await this.settingsOf(contact.tenantId)),
       ...(contact.customerId ? { customerId: contact.customerId } : {}),
       assurance: 'whatsapp_number',
     };
