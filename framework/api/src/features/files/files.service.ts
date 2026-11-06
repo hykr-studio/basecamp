@@ -40,6 +40,7 @@ import {
 import { and, count, eq, gt, inArray, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
 import { assertFilesConfig, type FilesConfig, filesConfig } from './config.js';
 import { fileFieldOf, fileFieldProblems, maxBytesOf } from './fields.js';
+import { fileHolders } from './holders.js';
 import { bytesFit, SNIFF_BYTES, sniff } from './sniff.js';
 import { SPEECH, type Speech } from './speech.js';
 import { STORAGE, type StorageDriver } from './storage/index.js';
@@ -377,7 +378,17 @@ export class FilesService implements OnApplicationBootstrap {
     if (!row.resourceType || !row.resourceId || !row.field) return uploadedBy(row, p);
     if (row.status !== 'ready') return false;
     const def = entityDef(row.resourceType);
-    if (!def) return false;
+    // Not an entity: a holder that keeps files (a job's results) answers, or nobody reaches it.
+    if (!def)
+      return (
+        (await fileHolders.get(row.resourceType)?.reaches({
+          p,
+          resourceId: row.resourceId,
+          field: row.field,
+          fileId: row.id,
+          db: this.db,
+        })) ?? false
+      );
     if (p.actor.kind === 'agent' && def.spec.expose.get !== 'all') return false;
     const key = `${def.name}:${row.resourceId}`;
     if (!seen.has(key)) {

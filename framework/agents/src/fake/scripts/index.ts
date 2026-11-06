@@ -3,5 +3,6 @@
 // file and its line here; each set's `order` decides where its scripts run, not this list.
 export { filesScripts } from './files.js';
 export { handoffScripts } from './handoff.js';
+export { jobsScripts } from './jobs.js';
 export { pagesScripts } from './pages.js';
 export { testingScripts } from './testing.js';

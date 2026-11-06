@@ -10,6 +10,7 @@ import { SavedPageSpec } from './page.js';
 export * from './backoffice.js';
 export * from './file.js';
 export * from './handoff.js';
+export * from './job.js';
 export * from './notify.js';
 export * from './page.js';
 

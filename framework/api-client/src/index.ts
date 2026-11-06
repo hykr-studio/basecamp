@@ -11,7 +11,9 @@ import {
   type HandoffThread,
   type HistoryEntry,
   type Inbox,
+  type JobInfo,
   type ListInput,
+  type ListJobsQuery,
   type Me,
   type Page,
   type PresignFileInput,
@@ -232,11 +234,28 @@ export function createApiClient(opts: ApiClientOptions) {
     },
   };
 
+  const jobUrl = (id: string, rest = '') => `/api/jobs/${encodeURIComponent(id)}${rest}`;
+  const jobs = {
+    /** One job: its status, progress, message, output and result files' ids. */
+    get: (id: string) => call<JobInfo>('GET', jobUrl(id)),
+    /** A record's jobs (`entity` and `id`), or else the caller's own; newest first. */
+    list: async (q: ListJobsQuery = {}) => {
+      const params = new URLSearchParams();
+      for (const [k, v] of Object.entries(q)) if (v !== undefined) params.set(k, String(v));
+      const qs = params.toString();
+      return (await call<{ items: JobInfo[] }>('GET', `/api/jobs${qs ? `?${qs}` : ''}`)).items;
+    },
+    /** Stop a job that has not finished (people only). */
+    cancel: (id: string) => call<JobInfo>('POST', jobUrl(id, '/cancel')),
+  };
+
   return {
     entity,
     command,
     /** Files: uploads, and files reached through the records they are on. */
     files,
+    /** Long-running jobs: a record's, or the caller's own. */
+    jobs,
     /** Who is signed in, in which business, with which roles. */
     me: () => call<Me>('GET', '/api/me'),
     /** The back office: conversations staff have taken from the assistant (staff only). */
