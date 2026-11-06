@@ -77,3 +77,16 @@ export function projectPayload(body: string, resourceType: string, p: Principal)
     },
   };
 }
+
+/**
+ * What a try sends: the stored body projected again for the endpoint as it is now, or null
+ * when its record may no longer leave (its entity stopped sending webhooks, the body does not
+ * parse). A body is built once, at fan-out, with the capabilities the endpoint had then; a
+ * capability taken away since takes its fields out of every try that follows, so a redelivery
+ * never sends more than the endpoint may read today.
+ */
+export function bodyToSend(body: string, resourceType: string, endpoint: Principal): string | null {
+  if (!webhookable(resourceType)) return null;
+  const projected = projectPayload(body, resourceType, endpoint);
+  return projected === null ? null : JSON.stringify(projected);
+}

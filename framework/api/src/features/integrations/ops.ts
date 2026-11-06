@@ -152,16 +152,17 @@ const manage = (p: Principal) =>
 /**
  * An endpoint reads with its capabilities, so whoever points it somewhere must hold them: a
  * person can give an endpoint, or send an endpoint's reads to a new URL, only with what they
- * may read themselves.
+ * may read themselves. A capability no longer registered grants nothing, so it is not asked for.
  */
-function holds(p: Principal, names: readonly string[]) {
+function holds(
+  p: Principal,
+  names: Iterable<string>,
+  reason = 'You can give an endpoint only what you may read yourself',
+) {
   const held = new Set(p.capabilities ?? []);
-  const missing = names.filter((n) => !held.has(n));
+  const missing = [...new Set(names)].filter((n) => capabilities.has(n) && !held.has(n)).sort();
   return missing.length
-    ? deny(
-        'capability_not_held',
-        `You can give an endpoint only what you may read yourself (not ${missing.join(', ')})`,
-      )
+    ? deny('capability_not_held', `${reason} (not ${missing.join(', ')})`)
     : null;
 }
 
@@ -253,9 +254,12 @@ export function updateEndpointOp(
     authorize: (p, row, input) => {
       const allowed = manage(p);
       if (allowed.decision !== 'allow') return allowed;
-      // Pausing or describing it sends nothing new anywhere.
+      // Pausing or describing it sends nothing new anywhere. A new URL or a new set of
+      // capabilities needs every capability the endpoint has and will have: otherwise someone
+      // could empty a set they do not hold, then point the endpoint (and its log) elsewhere.
       const redirects = input.url !== undefined || input.capabilities !== undefined;
-      return (redirects && holds(p, input.capabilities ?? row.capabilities)) || allowed;
+      const affected = [...row.capabilities, ...(input.capabilities ?? [])];
+      return (redirects && holds(p, affected)) || allowed;
     },
     summarize: (input, row) =>
       input.status === 'paused'
@@ -467,10 +471,13 @@ export function deleteConnectionOp(args: Id): WriteOp<Record<string, never>, Con
   };
 }
 
+/** A delivery, with the capabilities its endpoint reads with now. */
+type DeliveryToRetry = DeliveryRow & { endpointCapabilities: string[] };
+
 /** One more try of a delivery, now (its job is added once the write commits). */
 export function retryDeliveryOp(
   args: Id,
-): WriteOp<Record<string, never>, DeliveryRow, DeliveryRow> {
+): WriteOp<Record<string, never>, DeliveryToRetry, DeliveryRow> {
   const id = idOf(args);
   return {
     name: 'integrations.delivery.retry',
@@ -480,21 +487,38 @@ export function retryDeliveryOp(
     input: Nothing,
     args: { id },
     load: async (tx, p) => {
-      const [row] = await tx
-        .select()
+      const [found] = await tx
+        .select({
+          delivery: integrationDeliveries,
+          capabilities: integrationEndpoints.capabilities,
+        })
         .from(integrationDeliveries)
+        .innerJoin(
+          integrationEndpoints,
+          and(
+            eq(integrationEndpoints.id, integrationDeliveries.endpointId),
+            eq(integrationEndpoints.tenantId, integrationDeliveries.tenantId),
+          ),
+        )
         .where(
           and(
             eq(integrationDeliveries.id, id),
             eq(integrationDeliveries.tenantId, p.tenantId ?? ''),
           ),
         );
-      if (!row) throw notFound('delivery');
-      return row;
+      if (!found) throw notFound('delivery');
+      return { ...found.delivery, endpointCapabilities: found.capabilities };
     },
     authorize: (p, row) => {
       const allowed = manage(p);
       if (allowed.decision !== 'allow') return allowed;
+      // A redelivery sends what the endpoint reads: only someone who may read it sends it.
+      const refused = holds(
+        p,
+        row.endpointCapabilities,
+        'You can send an endpoint again only what you may read yourself',
+      );
+      if (refused) return refused;
       return row.status === 'sending'
         ? deny('delivery_in_flight', 'This delivery is being sent right now')
         : allowed;

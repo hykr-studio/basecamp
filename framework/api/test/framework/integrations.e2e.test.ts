@@ -404,6 +404,144 @@ describe('retries', () => {
   });
 });
 
+describe('an endpoint reads as it is now', () => {
+  let owned: { id: string; secret: string };
+  let made: { id: string; title: string };
+  let first: { id: string };
+
+  beforeAll(async () => {
+    owned = await endpoint(ana, {
+      url: `${base}/ok/replay-owner`,
+      events: ['task.created'],
+      capabilities: ['fixture.tasks.dates'],
+    });
+    made = await task(ana, { title: 'Replay me', dueOn: '2030-08-01' });
+    const sent = await eventually(() =>
+      at('/ok/replay-owner').find((x) => parse(x).data.resourceId === made.id),
+    );
+    expect(parse(sent).data.row).toMatchObject({ dueOn: '2030-08-01' });
+    [first] = await eventually(async () => {
+      const rows = (await deliveryRows(owned.id)).filter((r) => r.status === 'delivered');
+      return rows.length ? rows : undefined;
+    });
+  });
+
+  it('someone without its capability can neither empty it, point it elsewhere, nor send it again', async () => {
+    for (const body of [
+      { url: `${base}/ok/replay-thief`, capabilities: [] },
+      { capabilities: [] },
+      { url: `${base}/ok/replay-thief` },
+    ]) {
+      const res = await asAda('PATCH', `/api/integrations/endpoints/${owned.id}`, body);
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ rule: 'capability_not_held' });
+    }
+    const replay = await asAda('POST', `/api/integrations/deliveries/${first.id}/retry`);
+    expect(replay.status).toBe(403);
+    expect(replay.body).toMatchObject({ rule: 'capability_not_held' });
+    expect(await auditOf('integrations.delivery.retry', first.id)).toContainEqual(
+      expect.objectContaining({ outcome: 'denied', rule: 'capability_not_held' }),
+    );
+    const got = await ana.call('GET', `/api/integrations/endpoints/${owned.id}`);
+    expect(got.body).toMatchObject({
+      url: `${base}/ok/replay-owner`,
+      capabilities: ['fixture.tasks.dates'],
+    });
+    expect(at('/ok/replay-thief')).toHaveLength(0);
+  });
+
+  it('a capability taken away leaves every later try, a redelivery included, and the log', async () => {
+    // Its owner takes the capability away; then an admin without it may move the endpoint.
+    const emptied = await ana.call('PATCH', `/api/integrations/endpoints/${owned.id}`, {
+      capabilities: [],
+    });
+    expect(emptied.body).toMatchObject({ status: 'done', value: { capabilities: [] } });
+    const moved = await asAda('PATCH', `/api/integrations/endpoints/${owned.id}`, {
+      url: `${base}/ok/replay-thief`,
+    });
+    expect(moved.body).toMatchObject({ status: 'done', value: { url: `${base}/ok/replay-thief` } });
+
+    // The old delivery, built with the date, is sent again without it.
+    const again = await asAda('POST', `/api/integrations/deliveries/${first.id}/retry`);
+    expect(again.body).toMatchObject({ status: 'done', value: { status: 'retrying' } });
+    const r = await eventually(() =>
+      at('/ok/replay-thief').find((x) => x.headers['webhook-id'] === first.id),
+    );
+    expect(verifyWebhook({ secret: owned.secret, headers: r.headers, body: r.body }).ok).toBe(true);
+    expect(parse(r).data.row).toMatchObject({ id: made.id, title: 'Replay me' });
+    expect(parse(r).data.row).not.toHaveProperty('dueOn');
+    await eventually(async () =>
+      (await deliveryRows(owned.id)).find(
+        (x) => x.id === first.id && x.status === 'delivered' && x.attempts === 2,
+      ),
+    );
+    // The log keeps what was sent: the date is gone from it, for its owner too.
+    const log = await ana.call('GET', `/api/integrations/deliveries/${first.id}`);
+    expect(log.body.payload.data.row).toMatchObject({ title: 'Replay me' });
+    expect(log.body.payload.data.row).not.toHaveProperty('dueOn');
+    const { rows } = await pool.query('select body from app.integration_deliveries where id = $1', [
+      first.id,
+    ]);
+    expect(rows[0].body).not.toContain('2030-08-01');
+
+    // A delivery still waiting, built when the endpoint had the capability, leaves without it too.
+    const waiting = JSON.stringify({
+      type: 'task.created',
+      timestamp: new Date().toISOString(),
+      data: {
+        eventId: `evt-${randomUUID()}`,
+        tenantId: anaTenant,
+        resourceType: 'task',
+        resourceId: made.id,
+        row: { id: made.id, title: 'Waiting', done: false, dueOn: '2030-09-01' },
+      },
+    });
+    const { rows: queued } = await pool.query(
+      `insert into app.integration_deliveries
+         (tenant_id, endpoint_id, event_id, event_name, resource_type, resource_id, body, status,
+          next_attempt_at, queues)
+       values ($1, $2, $3, 'task.created', 'task', $4, $5, 'pending', now() - interval '2 minutes', $6)
+       returning id`,
+      [anaTenant, owned.id, `evt-${randomUUID()}`, made.id, waiting, process.env.BULL_PREFIX],
+    );
+    const sweeper = server.app?.get(DeliveriesService, { strict: false }) as DeliveriesService;
+    await sweeper.sweep();
+    const w = await eventually(() =>
+      at('/ok/replay-thief').find((x) => x.headers['webhook-id'] === queued[0].id),
+    );
+    expect(parse(w).data.row).toMatchObject({ title: 'Waiting' });
+    expect(parse(w).data.row).not.toHaveProperty('dueOn');
+    expect(w.body).not.toContain('2030-09-01');
+  });
+
+  it('a delivery whose record may no longer leave is cancelled, not sent', async () => {
+    // A memo opts out of webhooks: a stored body for one (an entity that opted out since) stays.
+    const memo = JSON.stringify({
+      type: 'memo.created',
+      timestamp: new Date().toISOString(),
+      data: { resourceType: 'memo', row: { id: 'm', title: 'Inside only' } },
+    });
+    const { rows } = await pool.query(
+      `insert into app.integration_deliveries
+         (tenant_id, endpoint_id, event_id, event_name, resource_type, body, status,
+          next_attempt_at, queues)
+       values ($1, $2, $3, 'memo.created', 'memo', $4, 'pending', now() - interval '2 minutes', $5)
+       returning id`,
+      [anaTenant, owned.id, `evt-${randomUUID()}`, memo, process.env.BULL_PREFIX],
+    );
+    const sweeper = server.app?.get(DeliveriesService, { strict: false }) as DeliveriesService;
+    await sweeper.sweep();
+    const d = await eventually(async () =>
+      (await deliveryRows(owned.id)).find((x) => x.id === rows[0].id && x.status === 'cancelled'),
+    );
+    expect(d).toMatchObject({
+      attempts: 0,
+      last_error: 'The record may no longer leave the platform',
+    });
+    expect(at('/ok/replay-thief').map((x) => x.headers['webhook-id'])).not.toContain(rows[0].id);
+  });
+});
+
 describe('the sweeper', () => {
   it('a due delivery whose job was lost is sent', async () => {
     const { id, secret } = await endpoint(ana, {

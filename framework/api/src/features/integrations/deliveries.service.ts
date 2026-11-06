@@ -21,7 +21,7 @@ import { DB } from '../../infra/db.module.js';
 import { JOBS } from '../../queues/define.js';
 import { matchesEvent } from '../events/subscriber.js';
 import type { EndpointRow } from './ops.js';
-import { buildBody } from './payload.js';
+import { bodyToSend, buildBody } from './payload.js';
 import { endpointAad, outboundPolicy, retrySchedule, secretBox } from './settings.js';
 
 const log = new Logger('Webhooks');
@@ -166,6 +166,23 @@ export class DeliveriesService {
       return 'cancelled';
     }
 
+    // The endpoint reads as it is now, not as it was at fan-out: whoever changed its URL or
+    // capabilities since gets no field it may no longer read, on a retry or a redelivery.
+    const body = bodyToSend(d.body, d.resourceType, endpointPrincipal(endpoint));
+    if (body === null) {
+      await this.finish(d.id, {
+        status: 'cancelled',
+        lastError: 'The record may no longer leave the platform',
+      });
+      return 'cancelled';
+    }
+    // The log keeps what was sent, so a field taken out never comes back.
+    if (body !== d.body)
+      await this.db
+        .update(integrationDeliveries)
+        .set({ body })
+        .where(eq(integrationDeliveries.id, d.id));
+
     const started = Date.now();
     let res: EgressResponse | undefined;
     let error: string | undefined;
@@ -175,9 +192,9 @@ export class DeliveriesService {
       const headers = {
         'content-type': 'application/json',
         'user-agent': 'Basecamp-Webhooks/1',
-        ...signWebhook({ secrets, id: d.id, body: d.body }),
+        ...signWebhook({ secrets, id: d.id, body }),
       };
-      res = await safeRequest(endpoint.url, { method: 'POST', headers, body: d.body }, policy);
+      res = await safeRequest(endpoint.url, { method: 'POST', headers, body }, policy);
       if (res.status < 200 || res.status >= 300) error = `The receiver answered ${res.status}`;
     } catch (e) {
       error = message(e);
