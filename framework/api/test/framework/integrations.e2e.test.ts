@@ -8,6 +8,8 @@ import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { signWebhook, verifyWebhook } from '@hykr/connectors';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DeliveriesService } from '../../dist/features/integrations/deliveries.service.js';
+import { InboundService } from '../../dist/features/integrations/inbound.service.js';
 import {
   addMember,
   asAssistant,
@@ -402,6 +404,31 @@ describe('retries', () => {
   });
 });
 
+describe('the sweeper', () => {
+  it('a due delivery whose job was lost is sent', async () => {
+    const { id, secret } = await endpoint(ana, {
+      url: `${base}/ok/swept`,
+      events: ['visit.created'],
+    });
+    const body = JSON.stringify({ type: 'visit.created', data: { row: { id: 'v' } } });
+    const { rows } = await pool.query(
+      `insert into app.integration_deliveries
+         (tenant_id, endpoint_id, event_id, event_name, resource_type, body, status, next_attempt_at, queues)
+       values ($1, $2, $3, 'visit.created', 'visit', $4, 'pending', now() - interval '2 minutes', $5)
+       returning id`,
+      [anaTenant, id, `evt-${randomUUID()}`, body, process.env.BULL_PREFIX],
+    );
+    const sweeper = server.app?.get(DeliveriesService, { strict: false }) as DeliveriesService;
+    expect(await sweeper.sweep()).toBeGreaterThanOrEqual(1);
+    const r = await eventually(() => at('/ok/swept')[0]);
+    expect(r.headers['webhook-id']).toBe(rows[0].id);
+    expect(verifyWebhook({ secret, headers: r.headers, body: r.body }).ok).toBe(true);
+    await eventually(async () =>
+      (await deliveryRows(id)).find((d) => d.status === 'delivered' && d.attempts === 1),
+    );
+  });
+});
+
 describe('the egress guard at send time', () => {
   it('an address changed behind the API’s back is blocked when sent, for good', async () => {
     const { id } = await endpoint(ana, { url: `${base}/ok/moved`, events: ['task.created'] });
@@ -653,6 +680,23 @@ describe('inbound webhooks', () => {
       15_000,
     );
     expect(handled.flaky).toBe(2);
+  });
+
+  it('a stored event whose job was lost is handled on the next sweep', async () => {
+    const made = await task(ana, { title: 'Swept in' });
+    const { rows } = await pool.query(
+      `insert into app.integration_inbound
+         (tenant_id, connection_id, connector, external_id, type, data, received_at, queues)
+       values ($1, $2, 'standard-webhooks', $3, 'task.complete', $4, now() - interval '2 minutes', $5)
+       returning id`,
+      [anaTenant, conn.id, `lost-${randomUUID()}`, { taskId: made.id }, process.env.BULL_PREFIX],
+    );
+    const sweeper = server.app?.get(InboundService, { strict: false }) as InboundService;
+    expect(await sweeper.sweep()).toBeGreaterThanOrEqual(1);
+    await eventually(async () =>
+      (await inboundRows(conn.id)).find((r) => r.id === rows[0].id && r.status === 'processed'),
+    );
+    expect((await ana.call('GET', `/api/tasks/${made.id}`)).body).toMatchObject({ done: true });
   });
 
   it('a sealed credential copied to another connection does not open there', async () => {
