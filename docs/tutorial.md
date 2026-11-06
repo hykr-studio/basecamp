@@ -280,7 +280,7 @@ pnpm db:migrate      # the framework's migrations, then the application's
 
 The generated file, `application/domain/drizzle/0001_site_visits.sql`, is a plain `CREATE TABLE "app"."visits"` with three foreign keys and two indexes. Commit it together with `drizzle/meta/0001_snapshot.json` and the updated `_journal.json`. The framework's own tables are not in this folder: they ship with `@hykr/db` and `pnpm db:migrate` applies them first.
 
-> **Pitfall: shared databases and drizzle's bookkeeping.** The migrator records each applied application migration in `drizzle.__app_migrations`, with its timestamp. If several branches (or agents) each generate a `0001_…` and apply them to one database, the later merge can skip or collide. On a shared dev database, apply your migration from your own branch only. Expect to regenerate after you rebase onto someone else's migration.
+> **Pitfall: shared databases and drizzle's bookkeeping.** The migrator records each applied application migration in `drizzle.__app_migrations`, with its timestamp. If several branches (or agents) each generate a `0001_…` and apply them to one database, the later merge can skip or collide. On a shared dev database, apply your migration from your own branch only. Expect to regenerate after you rebase onto someone else's migration. `pnpm db:migrate` refuses to run when a migration would be skipped (never applied, but older than the last one applied), and names it: delete it and generate it again, or recreate the database.
 
 ---
 
@@ -1244,7 +1244,7 @@ FROM audit.events WHERE run_id = '<run-id>' ORDER BY at;
 6. **Tests run `dist/`.** Run `pnpm turbo run build --filter=@application/api...` before `vitest run`.
 7. **Templates are versioned forever.** Changing a body means a new `_vN`, then `templates:sync`.
 8. **The scripted model's wording matters.** Keep the start of `help` (`07-off-topic.yaml`). Write your own reply for parked customer requests rather than using `written()`.
-9. **One database, many processes.** `OutboxRelay` relays every unrelayed `app.outbox` row in the database, whatever process wrote it. Do not run a `pnpm dev` worker from another checkout against the same database while you run the API tests. It will steal outbox rows: `framework/api/test/framework/notifications.e2e.test.ts` then fails waiting for a message the other worker sent through the dev whaloc. The same applies to migrations: apply them from one branch only.
+9. **One database, many processes.** `OutboxRelay` relays only the `app.outbox` rows of its own `BULL_PREFIX`, and each test run uses a fresh prefix, so tests and a dev worker don't take each other's rows. Two processes with the same prefix on one database do: two `pnpm dev` workers from different checkouts, both on the default `bull`, run each other's jobs with their own code. Give each checkout its own `BULL_PREFIX`, or better, its own database. Migrations too: apply them from one branch per database.
 10. **A fresh worktree or clone needs `pnpm install` and a `.env`.** Copy `application/.env.example` to `.env` at the repository root. The `basecamp` command loads the nearest `.env` at or above `application/`, and the tests read it with `loadEnv('test', '../..')`.
 11. **Quiet hours move reminders.** `topic: 'reminders'` is rescheduled out of quiet hours. `service` is not. The golden runner disables quiet hours for its business, but your dev business keeps the defaults.
 

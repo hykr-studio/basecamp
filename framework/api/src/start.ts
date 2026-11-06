@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import type { MigrationSet } from '@hykr/db';
 import { type Basecamp, setRuntime } from './runtime.js';
 
 // The server's configuration is read from the environment when a function here runs, not
@@ -87,15 +88,16 @@ export async function runTemplates(app: Basecamp, command: 'sync' | 'check'): Pr
 
 /**
  * Apply the framework's migrations, then the application's (MIGRATE_DATABASE_URL, falling back
- * to DATABASE_URL): `basecamp db migrate`.
+ * to DATABASE_URL): `basecamp db migrate`. `more` are applied last: the framework's e2e setup
+ * passes the fixture's per-feature sets.
  */
-export async function migrate(app: Basecamp) {
+export async function migrate(app: Basecamp, more: MigrationSet[] = []) {
   const { config } = await loadConfig();
   const { runMigrations } = await import('@hykr/db');
-  await runMigrations(
-    process.env.MIGRATE_DATABASE_URL ?? config.databaseUrl,
-    app.definition.migrations ?? [],
-  );
+  await runMigrations(process.env.MIGRATE_DATABASE_URL ?? config.databaseUrl, [
+    ...(app.definition.migrations ?? []),
+    ...more,
+  ]);
 }
 
 /** The assistant's eval suites, against the running API (`basecamp eval`). */
