@@ -19,7 +19,8 @@ export const KpiRowView = defineView({
   name: 'kpi.row',
   description:
     'Up to four numbers side by side, each with a label ("3 overdue"). Prefer `of`: a summary of an entity ({ entity: "<plural>", query: { <filters>, groupBy, sum, … } }), computed for whoever sees it, also on a saved page. Use `items` only for numbers you already have.',
-  surfaces: ['canvas', 'text', 'speech'],
+  // In the chat too: the summarize tool shows its counts as tiles.
+  surfaces: ['inline', 'canvas', 'text', 'speech'],
   props: z
     .object({
       /** Numbers the assistant already has. */
