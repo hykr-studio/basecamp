@@ -721,7 +721,7 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
 
 - **Traits.** `entitySpec({ ..., traits: { <key>: … } })`, and the same on `commandSpec`. A feature
   declares its key on `EntityTraits` or `CommandTraits` in its own file. Its plugin then acts on the
-  specs that carry the key.
+  specs that carry the key (`memory`, section 7.6, is one).
 - **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
   Each key is a list, collected by one registry: `roles` and `capabilities` in `@hykr/contracts`
   (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql` and
@@ -979,7 +979,7 @@ requireCapability(p, 'orders.cost.read', { rule: 'cost_hidden' });   // or a 403
 
 The framework registers five roles (`owner`, `admin`, `ops`, `staff`, `customer`) and five
 capabilities, with the roles that hold them by default (its features add their own, such as
-`models.manage`):
+`models.manage` and the `memory.*` ones):
 
 | Capability | Roles | What it opens |
 |---|---|---|
@@ -989,6 +989,9 @@ capabilities, with the roles that hold them by default (its features add their o
 | `channels.manage` | owner, admin | Setting the business's WhatsApp number |
 | `queues.admin` | owner, admin | Bull Board |
 | `models.manage` | owner, admin | Setting the business's model policy, and seeing what models cost (section 7.5) |
+| `memory.read` | owner, admin, ops, staff | Reading the business's memory, and having it recalled (section 7.6) |
+| `memory.write` | owner, admin, ops, staff | Adding to the business's memory, and changing your own |
+| `memory.manage` | owner, admin | Changing or deleting anyone's memories |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -1166,6 +1169,59 @@ The deployment configures its models; each business chooses among them (`docs/de
   hook needs none of it: `after` gets `turn.model`, and `costOf(turn.model, outcome.usage)` prices it.
 - **Evals per model.** `basecamp eval --live --model <ref>` runs the evals on one registered model,
   before a business allows it.
+
+### 7.6 Memory and recall
+
+The assistant keeps one thread per person across channels, and remembers three more things
+(`docs/decisions/A8.md`):
+
+- **The business's memory**: the framework's `memory` entity (`/api/memories`; tools
+  `list-memories`, `create-memory`, `update-memory`, `delete-memory`; the `memory.list` view).
+  Lasting facts every member shares. Who reaches it are capabilities, not roles: `memory.read`
+  and `memory.write` (owner, admin, ops and staff by default; write means add, and change your
+  own) and `memory.manage` (owner and admin: change anyone's). Give your own roles these with
+  `defineRole({ capabilities })`. The assistant adds memory when asked ("remember that…"); its
+  changes and deletes wait for the person's approval.
+- **Records that are memory**: any entity of yours, with the `memory` trait. `text` is what recall
+  searches and shows, built from the record as the reader may see it; `about` names the record it
+  is memory of. Who recalls a record is whoever may read it (its entity's own access), and the
+  record it is about.
+
+  ```ts
+  // application/domain/src/modules/notes/contracts/note.ts
+  traits: {
+    memory: {
+      text: (n: NoteView) => (n.body.trim() ? `${n.title}: ${n.body}` : n.title),
+      about: (n: NoteView) => (n.meetingId ? { type: 'meeting', id: n.meetingId } : null),
+    },
+  },
+  ```
+
+- **What a person said**: their own messages (never the assistant's replies), on any channel and
+  in any of their threads, in that business only.
+
+**Recall.** Before every chat turn (not back-office drafts), the turn hook `memory.recall` embeds the
+message with the business's embedding model (section 7.5), finds the nearest memories, and loads
+each one again as the person: through its entity's scoped repository and `toRead` (hidden fields
+are gone), the `about` record the same way, and only from entities whose `get` the assistant may
+call. What survives reaches the model as context lines, which it reads as data. `GET
+/api/memory/recall?q=…&about=<type>:<id>&limit=5&kinds=record,message` and the tool
+`recall-memory` do the same on request; an `about` record the caller cannot read is a 404.
+
+**The index.** `app.memory_index` keeps one vector per source and no text. A write hook marks every
+touched record of a trait entity (commands included, from `touched`) in the write's transaction; the
+worker embeds them each second. A message is indexed with the vector its turn's recall made. When a
+business's model policy changes, its vectors are made again with the new model, and a daily job
+(`memory.backfill`) finds records written before the trait. Distance is pgvector's when the database
+has the extension (`framework/db/sql/pre/memory.sql` creates it when offered), otherwise
+`app.memory_cosine` over `real[]`.
+
+**Settings.** The section `memory`: `{ recall: true, conversation: true, limit: 5, minScore: 0.3 }`.
+A business without an embedding model its policy allows gets no recall, and its turns still run.
+
+**Personal data.** "Delete my data" removes the vectors of what the person said (a deleted message
+takes its vector with it); for a person with an account, the business memories they wrote go too,
+and their export lists them.
 
 ---
 
@@ -1421,7 +1477,7 @@ These are not built. Each has a workaround for now.
 | File uploads | MinIO runs in compose, but no code uses it. There is no upload API yet. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, the S3 client, `pdfkit` with `harfbuzzjs` and the Noto fonts, `expo-server-sdk` (in `@hykr/api`), `@mastra/memory` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-notifications`, `expo-device`, `expo-location`, `expo-image-picker` and `expo-document-picker` (in the mobile app). Each feature that uses one adds its code. The Expo modules' config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client. Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, the S3 client, `pdfkit` with `harfbuzzjs` and the Noto fonts, `expo-server-sdk` (in `@hykr/api`), `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.6), the React Query persister (in `@hykr/app`), and `expo-notifications`, `expo-device`, `expo-location`, `expo-image-picker` and `expo-document-picker` (in the mobile app). Each feature that uses one adds its code. The Expo modules' config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client. Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. |
 | Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |
@@ -1430,6 +1486,9 @@ These are not built. Each has a workaround for now.
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
 | Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
+| Memory recall at scale | Recall compares every vector of one business (no approximate index), and the compose and CI images have no pgvector, so it runs on `app.memory_cosine`. Fine for thousands of memories per business; beyond that, install pgvector and add an index. |
+| Memory of the record on screen | A turn's recall does not prefer memory of the record the person is looking at. Ask with `recall-memory` and `about`. |
+| Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it, or the `memory` settings, yet. |
 | Approval tiers | Deciders follow a decision's `approver`, the approval shows `tier` and `amount`, and `undoMs` holds events back. There are no multi-step tiers, no undo action and no rule against approving your own request. |
 | Withdrawing a stored event | Nothing sets `app.domain_events.cancelled_at` yet (there is no undo action). The outbox feed skips such rows, so the undo action only has to set it before `available_at`. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |

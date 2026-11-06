@@ -114,6 +114,12 @@ with `defineCapability({ name: '<area>.<action>', label, roles })` and check it 
 `can(p, name)` from `@hykr/policy`, never by naming a role. `GET /api/me` lists the person's
 capabilities for the apps.
 
+Records can be memory. An entity with `traits: { memory: { text, about } }` is recalled by
+meaning before the assistant's turns (and by `recall-memory`), for whoever may read it and the
+record it is `about`; the sample's notes are memory of their meeting. The business's own memory is
+the framework's `memory` entity, reached by the capabilities `memory.read`, `memory.write` and
+`memory.manage`: give your own roles those (developer guide 7.6).
+
 Approvals take an object form, `{ when, by, channels, minAssurance }`: who decides (the person
 it is for by default; a customer's request goes to `owner` and `ops`), and where (`channels:
 ['app']` for anything irreversible keeps it off WhatsApp buttons).
