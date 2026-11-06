@@ -3,20 +3,15 @@ import { BadRequestException } from '@nestjs/common';
 import {
   and,
   type Column,
-  eq,
   getTableColumns,
   gt,
-  gte,
   ilike,
-  inArray,
-  lt,
-  lte,
-  ne,
   or,
   type SQL,
   sql,
   type Table,
 } from 'drizzle-orm';
+import { escapeLike, filterSql, toColumnValue } from './field-sql.js';
 
 /**
  * Turns a validated ListQuery into SQL pieces. The owner clause is added by the
@@ -47,15 +42,6 @@ function sortExpr(column: Column, dir: 'asc' | 'desc'): SQL | Column {
       );
   }
 }
-
-/** Values arrive as JSON strings; timestamp columns compare against Dates. */
-function toColumnValue(column: Column, value: unknown): unknown {
-  if (typeof value === 'string' && column.columnType === 'PgTimestamp') return new Date(value);
-  if (typeof value === 'string' && column.columnType === 'PgDateString') return value.slice(0, 10);
-  return value;
-}
-
-const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 export type Cursor = { s: string; v: unknown[]; id: string };
 
@@ -95,39 +81,18 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
 
   const where: SQL[] = [];
   for (const f of q.filters) {
-    const c = col(f.field);
-    const v = toColumnValue(c, f.value);
-    switch (f.op) {
-      case 'eq':
-        where.push(v === null ? sql`${c} is null` : eq(c, v));
-        break;
-      case 'ne':
-        where.push(ne(c, v));
-        break;
-      case 'in':
-        where.push(
-          inArray(
-            c,
-            (f.value as unknown[]).map((x) => toColumnValue(c, x)),
-          ),
-        );
-        break;
-      case 'lt':
-        where.push(lt(c, v));
-        break;
-      case 'lte':
-        where.push(lte(c, v));
-        break;
-      case 'gt':
-        where.push(gt(c, v));
-        break;
-      case 'gte':
-        where.push(gte(c, v));
-        break;
-      case 'contains':
-        where.push(ilike(c, `%${escapeLike(String(v))}%`));
-        break;
-    }
+    // Each field type builds its own condition (listFieldSql): built-in or contributed.
+    const type = list.filterable[f.field];
+    if (!type) throw new Error(`"${f.field}" is not filterable`);
+    where.push(
+      filterSql(type, {
+        table,
+        field: f.field,
+        column: columns[f.field],
+        op: f.op,
+        value: f.value,
+      }),
+    );
   }
   if (q.q && list.search?.length) {
     const term = `%${escapeLike(q.q)}%`;

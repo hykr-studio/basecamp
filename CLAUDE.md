@@ -113,9 +113,11 @@ Other gotchas:
 1. **One write path.** Every write, whether from the app, the assistant, WhatsApp, voice or an approval
    replay, goes through `runWrite` in `framework/core/src/write/pipeline.ts`. The steps are validate,
    idempotency (`idempotency-key`), load through scoped repos (another tenant's row is a 404), authorize
-   (`allow` / `deny` / `needs_approval`), then run or park, plus an audit row (`audit.events`) in the same
-   transaction. Events are published after commit. Never write tables directly from a controller or
-   service. Sends from a write go through the outbox (`app.outbox`), never straight to WhatsApp or SMTP.
+   (`allow` / `deny` / `needs_approval`, tightened by write hooks), then run or park, plus an audit row
+   (`audit.events`) and the write's named events (`app.domain_events`, the durable event outbox) in the
+   same transaction. In-process events are published after commit. Never write tables directly from a
+   controller or service. Sends from a write go through the outbox (`app.outbox`), never straight to
+   WhatsApp or SMTP.
 2. **The assistant is a user.** The Mastra agent (`framework/agents`) has no DB access (`agents-not-to-db`).
    Its tools (generated in `framework/core/src/tools`) call the same HTTP API with
    `x-agent-key` / `x-acting-for` headers, so the same guards, scopes, approvals and audit apply. The agent
@@ -159,8 +161,10 @@ Background work writes as `systemPrincipal({ tenantId, job })` from `@hykr/core`
 - Inside a command, pass `via` to every repo call and list every changed record in `touched`.
 - Repo calls inside a command publish no entity events. Publish a `NamedEvent` from `run` if a notification
   should react.
-- Entity `rules` can only deny: a `needsApproval` from a rule is ignored. Use `spec.approval` or a command's
-  `authorize` instead.
+- Entity `rules` park plain CRUD writes only: inside a command a rule's `needsApproval` is ignored and only
+  its `deny` counts. A command parks through its own `authorize`.
+- Every read leaves through `def.toRead(row, p)`, projected for the principal (entity plugins' `project`,
+  then read projectors). Never return a repo row from a controller or service as is.
 - A command's `approval.by` says who decides. Without it, the person decides on their own assistant's request.
 - Return `deny(...)` with a stable `rule` code and a plain `reason` instead of throwing. The caller gets
   403 `{ error: 'forbidden', rule, reason }`. "Not yours" is a 404, never a 403.
@@ -183,8 +187,10 @@ app in `framework/api/test/fixture`. Framework tests must not depend on the samp
 
 Extension points (developer guide, section 5.9): spec `traits`, `contributes` lists collected by
 registries (`createHookRegistry`, in `framework/core/src/hooks.ts` and `framework/api/src/hooks.ts`),
-and settings sections (`defineSettingsSection`). Each is extended by declaration merging. Add a new
-kind in your own file instead of editing a central one. Decisions per unit are in `docs/decisions/`.
+list field types (`defineListFieldType` plus `listFieldSql`), and settings sections
+(`defineSettingsSection`). Each is extended by declaration merging. Add a new kind in your own file
+instead of editing a central one. `registerOp` and the entity registry (`entityDefs()`) refuse a
+duplicate name. Decisions per unit are in `docs/decisions/`.
 
 ## Tooling notes
 

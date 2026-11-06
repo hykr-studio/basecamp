@@ -5,6 +5,7 @@ import { PrincipalResolver } from './http/resolver.js';
 import { TenantConfigService } from './tenants/tenant-config.service.js';
 import { CORE_OPTIONS, type CoreOptions } from './tokens.js';
 import { ApprovalService, setApprovalTtl } from './write/approvals.js';
+import { setEventQueues } from './write/events.js';
 
 /**
  * The framework's shared pieces: the principal guards, approvals, each business's settings,
@@ -16,6 +17,7 @@ import { ApprovalService, setApprovalTtl } from './write/approvals.js';
 export class CoreModule {
   static forRoot(options: CoreOptions): DynamicModule {
     if (options.approvalTtlMs) setApprovalTtl(options.approvalTtlMs);
+    if (options.queuePrefix) setEventQueues(options.queuePrefix);
     return {
       module: CoreModule,
       controllers: [ApprovalsController],

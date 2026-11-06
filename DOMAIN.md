@@ -130,6 +130,9 @@ From the contracts declaration alone:
 - Threads (one saved conversation per person, shared by every channel), voice sessions
   (`/api/voice/*`, LiveKit, the voice worker), and the framework's phrases in `@hykr/i18n`.
 - Businesses, memberships and customers (`/api/me`), and the scope engine behind `access`.
+- The durable event outbox (`app.domain_events`): every entity event, every `NamedEvent` a command
+  returns and every approval request and decision, stored with the write that caused it. And the
+  read path: each record leaves through `toRead(row, p)`, projected for whoever reads it.
 - The WhatsApp channel (`framework/api/src/channels`, `framework/channels`): the webhook, the queues
   (`/admin/queues` in development) and the worker, contacts and linking by code, consent and the
   keywords (STOP, START, HELP, talk to a person, delete my data) in every language, erasure,

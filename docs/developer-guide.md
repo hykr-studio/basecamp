@@ -95,12 +95,14 @@ Every write, from any caller, follows these steps in `runWrite`:
 | Validate | `op.input.parse(rawInput)`, again, even after the controller parsed it | `pipeline.ts` |
 | Idempotency | Same `idempotency-key` and same body returns the stored answer. Same key with a different body is a 409. | `app.idempotency` table |
 | Load | `op.load(tx, p, input)` through scoped repos. A row that is not yours is a 404. | entity repo |
-| Authorize | Returns `allow`, `deny` or `needs_approval` | `def.decide` or your command's `authorize` |
+| Authorize | Returns `allow`, `deny` or `needs_approval`. Then each write hook may refuse or park, never loosen (`strongerDecision`). | `def.decide` or your command's `authorize`, then `writeHooks` |
 | Deny | The transaction rolls back. A `denied` audit row is written. The caller gets 403 `{ error: 'forbidden', rule, reason }`. | |
-| Park | Inserts an `app.approvals` row and a `needs_approval` audit row. Returns `{ status: 'needs_approval', approval }`. | `approvals.ts` |
+| Park | Inserts an `app.approvals` row (deciders from the decision's `approver`, else the rule) and a `needs_approval` audit row with the tier. Returns `{ status: 'needs_approval', approval }`. | `approvals.ts` |
 | Run | `op.run(...)` inside the transaction | your command or the entity repo |
 | Audit | One row per touched record, plus one for a command | `audit.events` |
-| Events | Published after commit by the CQRS handler | `NamedEvent` |
+| Stored events | Each `NamedEvent` (and `approval.requested`) is inserted in `app.domain_events` in the transaction, with the row before and an `available_at` held back by the decision's `undoMs` | `write/events.ts` |
+| Write hooks | `afterRun` for a write that ran or parked, in the transaction. Throwing rolls it all back. | `writeHooks` |
+| Events | Published in-process after commit by the CQRS handler | `NamedEvent` |
 
 Every write answers a `WriteResult` (`framework/contracts/src/framework/write.ts`):
 
@@ -463,9 +465,9 @@ export const Todo = defineEntity(TodoSpec, {
 | `owner` | The owner column. Used for `'own'` access, and set on create. |
 | `customer` | The customer column, for `'customer'` access. Optional. |
 | `access` | Who reaches which rows (see 6.2). Defaults to `DEFAULT_ACCESS`. |
-| `rules` | `EntityRule[]`: domain checks on writes |
+| `rules` | `EntityRule[]`: domain checks on writes. A deny refuses; a `needsApproval` parks a plain CRUD write (inside a command only the deny counts). |
 | `summarize` | `(action, input, row) => string`: the approval card text. The default uses `title`: `Delete "Call the plumber"`. |
-| `events` | Publish `<entity>.created/updated/deleted` after commit. Default `true`. |
+| `events` | Store `<entity>.created/updated/deleted` (with the row before) in the event outbox and publish them after commit. Default `true`. |
 
 An entity rule has this shape:
 
@@ -473,7 +475,7 @@ An entity rule has this shape:
 type EntityRule<T> = (p, action, row, input, ctx: { via: 'crud' | string }) => AuthorizeResult | null;
 ```
 
-Return `deny(rule, reason)` to refuse, or `null` to pass. `ctx.via` is `'crud'` for a plain route, or the command's name when a command calls the repo. The meeting uses that to force closing through its command:
+Return `deny(rule, reason)` to refuse, `needsApproval(rule, reason, details?)` to park a CRUD write, or `null` to pass. `ctx.via` is `'crud'` for a plain route, or the command's name when a command calls the repo. The meeting uses that to force closing through its command:
 
 ```ts
 // application/domain/src/server/meetings/meeting.entity.ts
@@ -484,6 +486,22 @@ Return `deny(rule, reason)` to refuse, or `null` to pass. `ctx.via` is `'crud'` 
 ```
 
 The returned `EntityDef` has a scoped `repo` for use inside commands: `get`, `find`, `list`, `insert`, `update` and `delete`. Every query is limited to the principal's tenant and grants. Someone else's id is a 404. Writes re-parse the input, run the rules, and strip `id`, owner, `createdBy`, `tenantId` and customer from the input.
+
+A row leaves the server only through `def.toRead(row, p)`: the read schema parses it, then it is projected for that principal (fields hidden, never added). `def.readJson(row)` and `def.project(read, p)` are its two halves. Lists, gets, write results, command results, approvals and history titles all go through it.
+
+**Entity plugins** (`EntityPlugin`, contributed as `entityPlugins`) add behaviour to every entity whose spec they apply to (`appliesTo`, usually a trait). Every hook is optional and runs after the entity's own config:
+
+| Hook | Runs | Use it for |
+|---|---|---|
+| `rules` | wherever the entity's rules run | refusals (a frozen version) |
+| `decide` | on CRUD writes, after the rules, before `spec.approval` | park with a tier and approver, or allow with an undo window |
+| `scope` | every scoped query, read and write | narrowing reach (a parent's scope) |
+| `toValues` | insert and update | server-computed columns (a version, a number). The framework's own columns still win. |
+| `toJson` | reads, before the read schema parses | stored types as JSON (money as a number) |
+| `updateWhere` | update and delete | a stale write: no match on a row that is still there is 409 `{ error: 'stale' }` |
+| `project` | `toRead`, after parsing | hiding fields from a principal |
+
+`entityHandlers(def)` serves the entity: it joins `entityDefs()` (`entityDef(name)`, `entityDefForSchema(schema)`), and another entity with the same name or plural throws (serving the same one again is a no-op).
 
 ### 5.4 Commands
 
@@ -549,7 +567,8 @@ Points to keep in mind:
 - Always pass `via` to repo calls. Entity rules see it as `ctx.via`.
 - Every record you change goes into `touched`. Each entry becomes an audit row.
 - `authorize` alone decides whether a command parks. The optional `approval` config (`{ by, channels, minAssurance }`) only says who decides.
-- A domain event is a class that implements `NamedEvent` (`eventName` and `row`). Notifications can schedule on it:
+- The result leaves projected for the caller. A part of `output` that reuses an entity's read schema object (`MeetingView`, `z.array(Todo)`) is read and projected as that entity. For other shapes, pass `present: (value, p) => …` to `defineCommand`.
+- A domain event is a class that implements `NamedEvent` (`eventName` and `row`, optionally `before`, `resourceType` and `resourceId`). It is stored in the event outbox with the write, and notifications can schedule on it:
 
 ```ts
 export class MeetingClosed implements NamedEvent {
@@ -587,7 +606,7 @@ export class DomainModule {}
 | `DELETE /api/<plural>/:id` | delete |
 | `spec.http.method spec.http.path` | the command, 200 |
 
-`entityHandlers` and `commandHandler` also register each op for approval replay. You need both the controller and the handler. A controller without its handler has nothing to run, and a parked op without its handler fails as "can no longer be replayed".
+`entityHandlers` and `commandHandler` also register each op for approval replay (`registerOp`, which refuses another definition with the same name). You need both the controller and the handler. A controller without its handler has nothing to run, and a parked op without its handler fails as "can no longer be replayed".
 
 ### 5.6 The list grammar
 
@@ -595,7 +614,7 @@ export class DomainModule {}
 
 | Field | Meaning |
 |---|---|
-| `filterable` | `{ field: FieldType }`, where the type is one of `'enum'`, `'date'`, `'text'`, `'number'`, `'boolean'`, `'id'` |
+| `filterable` | `{ field: FieldType }`, where the type is one of `'enum'`, `'date'`, `'text'`, `'number'`, `'boolean'`, `'id'`, or a type a feature defined |
 | `sortable` | Fields you may sort by |
 | `defaultSort` | `[[field, 'asc' \| 'desc'], …]` |
 | `search` | Columns matched by `q`, case-insensitive, OR-ed. Without it there is no `q`. |
@@ -623,6 +642,8 @@ JSON:  { done: false, dueOn: { lte: '2026-10-31' }, sort: '-dueOn', limit: 20 }
 - `in` takes a comma list over HTTP.
 - `count: true` adds `total`.
 - Unknown fields or operators are a 400. That is on purpose.
+
+Field types are a registry. A feature adds one in two halves, each in its own file: the grammar in contracts, declared on `ListFieldTypes` (and new operators on `ListFilterOps`) and defined with `defineListFieldType({ name, ops, value, opValue? })`, which every process (server, tools, apps) loads; and the SQL in the server, `listFieldSql` (contributed as `listFieldSql`), `{ name, where({ table, field, column, op, value }) }`. A field of an undefined type fails when its schema is built, and one without SQL fails its request. Neither filters nothing.
 
 The response is `{ items, nextCursor, total? }`. Pagination is keyset: pass `nextCursor` back as `cursor`. A cursor from a different sort is a 400 `cursor_sort_mismatch`. Sorting on a nullable column works only for dates, timestamps and numbers. A nullable text or enum column in `sortable` passes load-time checks, then throws `Sorting on nullable ... is not supported` (`framework/core/src/query/list-grammar.ts`) on the first request that sorts by it, which the client sees as a 500. Keep such columns `notNull()` or out of `sortable`.
 
@@ -669,7 +690,14 @@ and `allow` / `deny` take the same optional `details`:
 The helpers copy only these four fields. Passing an earlier decision as `details`, to keep its tier,
 never changes the new decision, rule or reason.
 
-The write path carries these but does not act on them yet (section 14).
+What the write path does with them:
+- A park's deciders come from `approver` when it names a person or roles, and its channels and assurance
+  when it names them. The approval shows `tier` and `amount`, and the park's audit row records the tier.
+- A write that runs with `undoMs` stores its events with `available_at` that much later, so nothing is
+  passed on during the undo window.
+- An approved replay keeps the details on the allow it becomes.
+- Rules, entity plugins and write hooks combine with `strongerDecision`: deny beats needs_approval beats
+  allow, the highest tier and the longest undo window survive.
 
 ### 5.9 Extension points: traits, contributions and settings sections
 
@@ -682,10 +710,10 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   specs that carry the key.
 - **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
   Each key is a list, collected by one registry: `roles` and `capabilities` in `@hykr/contracts`
-  (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors` and `identityProviders` in
-  `@hykr/core`; `toolContributions` in `@hykr/core/tools`; `deliveryChannels`, `turnHooks`,
-  `inboundHooks`, `queues`, `schedules`, `erasureContributors`, `exportContributors` and
-  `authPlugins` in `@hykr/api`. `@hykr/api` re-exports the core's and its own.
+  (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql` and
+  `identityProviders` in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
+  `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `erasureContributors`,
+  `exportContributors` and `authPlugins` in `@hykr/api`. `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
   - Registries are process-global, so read them per request, not at import.
@@ -701,10 +729,16 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
 
 A framework feature also keeps its phrases, its scripted-model scripts and its fixture tables in files of its own, so parallel work never edits a shared file. One line in a barrel registers each one: `framework/i18n/src/messages/index.ts` (section 9), `framework/agents/src/fake/scripts/index.ts` (section 7.3). The fixture's per-feature migration sets need no line (section 12). These barrels merge with `merge=union` (`.gitattributes`).
 
+The write and read path reads `entityPlugins` (section 5.3), `writeHooks` (each write: `decide` tightens,
+`afterRun` runs in the transaction) and `readProjectors` (every record that leaves, by resource type:
+an entity's name, a command's name, `'approval'`) on every call.
+
 `ModuleDef` (`@hykr/api`) is the shape of one application module, and `DomainEventEnvelope`
-(`@hykr/contracts`) the shape of a stored event. The module system and the event outbox build on them.
-The fixture's `framework/api/test/fixture/src/features/seams/` shows all of these in use, and
-`features/identity/` a role, a capability, an identity provider and an auth plugin.
+(`@hykr/contracts`) the shape of a stored event: `toEnvelope(row)` reads one from `app.domain_events`, and
+`eventFor(event, p)` is how one leaves for a reader (another business's is null, fields are projected).
+Stored events carry the process's queue prefix (`queues`). The fixture's
+`framework/api/test/fixture/src/features/seams/` shows the seams, `features/write-path/` the write path's
+hooks in use, and `features/identity/` a role, a capability, an identity provider and an auth plugin.
 
 ---
 
@@ -781,9 +815,13 @@ When a customer creates a row, the row is owned by the business's default owner 
 1. Write access needs more assurance: deny `needs_assurance`.
 2. No grant, or the row is outside your grants: deny `no_access`.
 3. An agent, and the action is not exposed `'all'`: deny `humans_only`.
-4. Your entity `rules`: the first deny wins.
-5. `spec.approval[action]` parks: `needs_approval`, rule `<name>_<action>_needs_approval`.
-6. Otherwise allow, rule `scoped_access`.
+4. Your entity `rules`, then the entity plugins' rules: the first deny wins; a park waits.
+5. The entity plugins' `decide`: the first deny wins; a park waits.
+6. `spec.approval[action]` parks: `needs_approval`, rule `<name>_<action>_needs_approval`.
+7. A park from 4 to 6 parks (the first one's rule, the highest tier). Otherwise allow, rule `scoped_access`,
+   with any undo window an allowing rule or plugin gave.
+
+Then `runWrite` asks the write hooks, which may only tighten it.
 
 ### 6.4 Roles and capabilities
 
@@ -1211,9 +1249,10 @@ These are not built. Each has a workaround for now.
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
-| Entity rules that park | An entity rule's `needs_approval` is ignored. Only `deny` counts. Use `spec.approval`, or a command whose `authorize` returns `needsApproval`. |
-| Hooks that run | The registries of section 5.9 exist and `contributes` fills them. `roles`, `capabilities`, `identityProviders` and `authPlugins` are read; the others are installed and never called yet. Each consumer lands with its feature. |
-| Approval tiers | A decision's `tier`, `approver`, `amount` and `undoMs` are carried, not acted on. Parking, deciders and the audit trail ignore them, and an approved replay drops them. |
+| Hooks that run | Entity plugins, write hooks, read projectors and list field SQL run; `roles`, `capabilities`, `identityProviders` and `authPlugins` are read. The others in section 5.9 (tool contributions, delivery channels, turn and inbound hooks, queues, schedules, erasure, export) are installed and not called yet. Each consumer lands with its feature. |
+| Approval tiers | Deciders follow a decision's `approver`, the approval shows `tier` and `amount`, and `undoMs` holds events back. There are no multi-step tiers, no undo action and no rule against approving your own request. |
+| Passing stored events on | `app.domain_events` fills with every write's events, but no relay reads it yet: `relayed_at` and `cancelled_at` are never set. In-process subscribers (`EventBus`) work as before. |
+| Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | Application modules | `ModuleDef` is a type only. There is no `defineModule`, and `defineServer` still takes one `domain` and one `module`. |
 | An approval sweeper | Expiry is checked when someone decides. Expired rows stay `pending` in `GET /api/approvals` until then. |
 | Concurrent duplicate requests | Two requests with the same idempotency key at the same moment can both run. Only the first answer is stored. |

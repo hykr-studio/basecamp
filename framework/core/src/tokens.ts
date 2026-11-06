@@ -26,6 +26,11 @@ export interface CoreOptions {
   approvalTtlMs?: number;
   /** How long a business's settings stay cached in this process (TenantConfigService). Default 10 s. */
   tenantConfigTtlMs?: number;
+  /**
+   * This process's queue prefix (BULL_PREFIX), stamped on every stored event so only this
+   * deployment's relay passes it on. Default 'bull'.
+   */
+  queuePrefix?: string;
 }
 
 /** A transaction handle: what every write and every command's repository calls receive. */
