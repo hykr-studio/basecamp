@@ -12,6 +12,14 @@ export { Button } from './components/Button';
 export { ScreenTitle, SectionHeading } from './components/ScreenTitle';
 export { type AppConfig, appConfig, configure } from './config';
 export {
+  RecordDocuments,
+  useDocument,
+  useDocumentKinds,
+  useDocuments,
+  useRenderDocument,
+  useSendDocument,
+} from './features/documents';
+export {
   FileField,
   FileThumbs,
   fileFieldPolicy,
