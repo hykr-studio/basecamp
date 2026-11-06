@@ -4,4 +4,7 @@ export * from './auth.js';
 export * from './channel.js';
 export * from './events.js';
 export * from './roles.js';
+export * from './files.js';
+export * from './numbering.js';
+export * from './push.js';
 export * from './tenancy.js';

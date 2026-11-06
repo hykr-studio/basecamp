@@ -9,6 +9,17 @@ export {
 } from './command/define-command.js';
 export { CoreModule } from './core.module.js';
 export {
+  type ChildEntityConfig,
+  type ChildEntityDef,
+  type ChildLink,
+  type ChildNode,
+  type ChildRepository,
+  type ChildrenResult,
+  childLinkOf,
+  defineChildEntity,
+  insertMany,
+} from './entity/children.js';
+export {
   EntityCommand,
   EntityEvent,
   EntityQuery,
@@ -24,6 +35,7 @@ export {
   type EntityRule,
   type RuleContext,
   subjectOrThrow,
+  tenantOf,
   toJson,
 } from './entity/define-entity.js';
 export { entityHandlers, entityOp } from './entity/handlers.js';
@@ -68,8 +80,15 @@ export {
   type RequestMetaValue,
 } from './http/principal.js';
 export { PrincipalResolver, type Standing } from './http/resolver.js';
-export { fieldPolicyPlugin, fieldPolicyProblems } from './plugins/field-policy.js';
-export { grantsCleanup, holdsGrant, recordGrantKind } from './plugins/grants.js';
+export { nextNumber, numberSeries, type TakenNumber } from './money/numbering.js';
+export {
+  defaultCurrency,
+  NO_CURRENCY,
+  type ResolvedMoney,
+  setDefaultCurrency,
+  tenantMoney,
+} from './money/tenant-money.js';
+export * from './plugins/index.js';
 export {
   type ListFieldFilter,
   type ListFieldSql,
@@ -89,6 +108,7 @@ export {
 export { strongerDecision } from './write/decisions.js';
 export { eventFor, eventQueues, recordEvents, toEnvelope } from './write/events.js';
 export {
+  auditCtx,
   type RunResult,
   runWrite,
   type Touched,

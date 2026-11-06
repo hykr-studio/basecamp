@@ -311,7 +311,10 @@ describe('personal data contributors', () => {
       `select after from audit.events where action = 'channel.contact.erased' and resource_id = $1`,
       [contactId],
     );
-    expect(rows).toEqual([{ after: { contributors: { 'fixture.runtime.erase': 1 } } }]);
+    // The framework's own (files, push) run too: a contact has no files and no devices.
+    expect(rows).toEqual([
+      { after: { contributors: { files: 0, push: 0, 'fixture.runtime.erase': 1 } } },
+    ]);
   });
 
   it('export collects by kind, and refuses two contributors with one kind', async () => {
@@ -319,6 +322,9 @@ describe('personal data contributors', () => {
     const db = server.app?.get(DB, { strict: false });
     const subject = { kind: 'user' as const, userId: ana.id };
     expect(await api.exportPersonalData({ subject, tenantId, db })).toEqual({
+      files: [],
+      // The framework's push feature: Ana registered no device.
+      pushDevices: [],
       fixtureNotes: [{ about: subject }],
     });
     api.exportContributors.register({

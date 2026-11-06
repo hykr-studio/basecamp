@@ -1,7 +1,7 @@
 # The domain is replaceable
 
 Basecamp, the agentic development stack for full-stack applications, ships with a sample
-application: meetings, notes and to-dos, as three modules. The framework (the API pipeline with
+application: meetings, notes, to-dos and orders, as four modules. The framework (the API pipeline with
 its rules, approvals and audit; the assistant with its tools, surfaces, canvas and WhatsApp;
 saved pages; the app shell) lives in `framework/` and is published as `@hykr/*` packages. The
 application lives in `application/`. The framework never imports the application; the
@@ -9,9 +9,11 @@ application hands its modules to the framework in two places:
 
 - the server: `application/api/src/server.ts`, `defineServer({ name, persona, help, channel,
   modules, migrations, contributes })` from `@hykr/api`;
-- the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app modules catalog registry
-  config />` from `@hykr/app`, with the app's modules (`defineAppModule`), and the catalog and
-  registry built from every module's specs and views.
+- the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app modules plugins catalog
+  registry config />` from `@hykr/app`, with the app's modules (`defineAppModule`), the framework
+  plugins it uses (`livePlugin()`, `pushPlugin()`, and `webMcpPlugin()`, which offers each screen's
+  `webmcp` read tools to a browser agent), and the catalog and registry built from every module's
+  specs and views.
 
 Two dependency-cruiser rules, run by `pnpm lint:deps`, keep it that way:
 `framework-never-imports-application` and `application-uses-public-framework-exports` (only
@@ -33,8 +35,8 @@ and registers it.
 
 | Layer | In the module | It must export |
 |---|---|---|
-| Contracts | `contracts/` (isomorphic) | Its `entitySpec`s and `commandSpec`s, and `<name>Spec = moduleSpec({ name, dependsOn, entities, commands })` from `@hykr/contracts`, entities keyed by plural |
-| Database | `db/schema.ts` | Drizzle tables in the `app` schema (`app`, `id`, `tenantColumn()`, `customerColumn()`, `user`, `tableRef` from `@hykr/db`), named after the module (`orders`, `orders_lines`), each with `id`, `tenantColumn()`, an owner column, `customerColumn()` (when customers have rows), `createdBy`, `createdAt`, `updatedAt` |
+| Contracts | `contracts/` (isomorphic) | Its `entitySpec`s and `commandSpec`s, and `<name>Spec = moduleSpec({ name, dependsOn, entities, commands })` from `@hykr/contracts`, entities keyed by plural. A field that keeps files is a `FileRef` or `fileRefs(max)`, listed in the spec's `files` trait with what it accepts |
+| Database | `db/schema.ts` | Drizzle tables in the `app` schema (`app`, `id`, `tenantColumn()`, `customerColumn()`, `user`, `tableRef` from `@hykr/db`), named after the module (`orders`, `orders_lines`), each with `id`, `tenantColumn()`, an owner column, `customerColumn()` (when customers have rows), `createdBy`, `createdAt`, `updatedAt`. A file field's column is `fileColumn(<field>)` or `fileColumns(<field>)` |
 | API | `server/` | A Nest module with one `defineEntity` / `defineCommand` per spec (`entityController` / `entityHandlers` / `commandController`); who sees what in `access` (see below). `server/public.ts`: what other modules may call |
 | Notifications | `notifications/` (isomorphic) | Its templates (`defineTemplate`) and notifications (`defineNotification`) |
 | Views | `views/` (isomorphic) | `<name>Views = { name, views, screens }`, declared with `defineView` / `defineScreen` |
@@ -111,7 +113,7 @@ An entity's `access` says what each role, or each capability, reaches, per read 
 
 The sample modules give the owner and staff their own rows, admin and ops the whole business,
 and a customer their own customer's rows (`application/domain/src/server/access.ts`, shared by
-the three modules). With
+the modules). With
 `customer: (t) => t.customerId`, a customer's assistant creates rows for that customer, owned by
 the business's default owner.
 
@@ -127,6 +129,24 @@ Approvals take an object form, `{ when, by, channels, minAssurance }`: who decid
 it is for by default; a customer's request goes to `owner` and `ops`), and where (`channels:
 ['app']` for anything irreversible keeps it off WhatsApp buttons).
 
+## Money, numbers and lines
+
+The framework has no currency, number format or tax rule of its own; a module declares them
+(the sample's `orders` module does all three, developer guide 5.13):
+
+- **Money** is whole minor units with an ISO 4217 currency (`Money = { minor, currency }`):
+  `minorUnits()` and `currencyColumn()` columns and the spec's `money` trait. A business's
+  currency is its `money.currency` setting, else the deployment's `DEFAULT_CURRENCY`, else `XXX`.
+  Limits and bands a module's rules compare against are named amounts in the same settings.
+- **Number series** (`defineNumberSeries`, contributed as `numberSeries`): the module's format
+  (`ORD/{fy}/{seq:4}`) and reset (none, yearly, or the financial year from `fyStartMonth`);
+  `nextNumber` in a command's `run` keeps them gapless. Numbered records are cancelled, never
+  deleted.
+- **Tax** is the module's function (`defineTaxFunction`); `applyTax` checks its lines and adds them up.
+- **Lines** are a child entity (`traits.parent`, `defineChildEntity`): rows of one parent record,
+  in a tree of any depth, reached exactly when the parent is, and saved whole by a command
+  (`children.replace`) as one write, one approval and one audit statement.
+
 ## What a module adds for WhatsApp: templates and notifications
 
 Outside a customer's 24-hour window WhatsApp delivers only approved templates, so everything a
@@ -139,12 +159,16 @@ module sends on its own initiative is a template, declared in code:
   follows the entity events (`meeting.created`, `meeting.deleted`) and the module's own: a
   command's event implements `NamedEvent` (`eventName`, `row`) to be one. `to` names the
   recipients (a user, a customer, a contact, or everyone with a role); `channels` is the order
-  to try (`['whatsapp', 'email']`, or a delivery channel a feature registers, such as push);
-  `whatsapp` (the template) is needed only when WhatsApp is one of them; `onButton` answers its
-  quick replies (snooze).
+  to try (`['push', 'whatsapp', 'email']`, or a delivery channel a feature registers);
+  `whatsapp` (the template) is needed only when WhatsApp is one of them, `push`
+  (`{ title, body, url? }`) only when push is; `onButton` answers its quick replies (snooze).
 - The framework decides the rest per recipient: consent for the topic, quiet hours and the
   marketing cap (per business), the template in their language or English, and the next
   channel when WhatsApp can't be used or fails for good. No module code sends a message.
+
+Live updates need nothing from a module: every committed event about a record reaches the
+people who may read it (as ids), and the app refetches. A feature with records that are not
+entities contributes a `liveResources` check for its type, or its events are never sent.
 
 ## What a module adds for voice and languages
 
@@ -182,6 +206,11 @@ From the contracts declaration alone:
 
 - Saved canvas pages (`pages`), the canvas tools, and the views `approval.card`, `kpi.row`,
   `page.list` and the screen `page.view`.
+- Files (`/api/files`, `app.files`): uploads to object storage through presigned URLs, files kept
+  on records' file fields and reached only through those records, a photo or document sent on
+  WhatsApp kept for its sender (the assistant puts it on a record), transcription of audio, and
+  `<FileField>` / `<FileThumbs>` in the app (developer guide, section 5.12). The sample's notes
+  keep photos.
 - Threads (one saved conversation per person, shared by every channel), voice sessions
   (`/api/voice/*`, LiveKit, the voice worker), and the framework's phrases in `@hykr/i18n`.
 - Businesses, memberships and customers (`/api/me`), and the scope engine behind `access`.
@@ -199,6 +228,10 @@ From the contracts declaration alone:
   customer; marketing waits for approval) and `request-human`.
 - The streaming chat, and the scripted model's platform scripts (`save this as …`,
   `open my … page`, `talk to the manager`, the back office's draft reply).
+- The models the assistant runs on: the deployment's OpenAI-compatible gateways (`MODEL_PROVIDERS`,
+  OpenRouter in development) and each business's model policy (`GET /api/models`,
+  `PUT /api/models/policy`), which picks every turn's model and fails closed (developer guide,
+  section 7.5). The application only configures them in `.env`.
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

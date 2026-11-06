@@ -1,5 +1,5 @@
 import type { Approval } from '@hykr/contracts';
-import { type Labels, type Lang, pick } from '@hykr/i18n';
+import { firstFew, type Labels, type Lang, moneyText, pick } from '@hykr/i18n';
 import { useQuery } from '@tanstack/react-query';
 import { Text, View } from 'react-native';
 import { colors, space, styles } from '../theme';
@@ -57,7 +57,74 @@ function show(key: string, value: unknown): string {
   return String(value);
 }
 
+/** An amount as the framework moves it: whole minor units and an ISO 4217 currency. */
+type MoneyValue = { minor: number; currency: string };
+const isMoney = (v: unknown): v is MoneyValue =>
+  typeof v === 'object' &&
+  v !== null &&
+  Number.isSafeInteger((v as MoneyValue).minor) &&
+  typeof (v as MoneyValue).currency === 'string' &&
+  /^[A-Z]{3}$/.test((v as MoneyValue).currency) &&
+  Object.keys(v).length === 2;
+
+/** Arrays longer than this are summed up instead of listed. */
+const LIST_AT_MOST = 5;
+
+type Row = Record<string, unknown>;
+const titleOf = (item: Row) => (typeof item.title === 'string' ? item.title : null);
+
+/** Every object in a list and under it (`children`), counted once. */
+function walk(items: readonly unknown[], out: Row[] = []): Row[] {
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    out.push(item as Row);
+    const children = (item as Row).children;
+    if (Array.isArray(children)) walk(children, out);
+  }
+  return out;
+}
+
+/** Each money field's sum, where every value of it is in one currency. */
+function sums(rows: readonly Row[]): { key: string; total: MoneyValue }[] {
+  const keys = new Set(rows.flatMap((r) => Object.keys(r).filter((k) => isMoney(r[k]))));
+  const out: { key: string; total: MoneyValue }[] = [];
+  for (const key of keys) {
+    const values = rows.map((r) => r[key]).filter(isMoney);
+    const currency = values[0]?.currency;
+    if (!currency || values.some((v) => v.currency !== currency)) continue;
+    // Exact while the sum stays within 2^53, as minor units do.
+    out.push({ key, total: { minor: values.reduce((a, v) => a + v.minor, 0), currency } });
+  }
+  return out;
+}
+
+/** A long list in a few lines: how many, the first few titles, and the money it adds up to. */
+function ListSummary({ name, items }: { name: string; items: readonly unknown[] }) {
+  const { lang } = useT();
+  const rows = walk(items);
+  const titles = rows.map(titleOf).filter((t): t is string => t !== null);
+  return (
+    <View style={{ gap: 2 }}>
+      <Text style={styles.text}>
+        {rows.length === items.length
+          ? `${items.length} ${fieldName(undefined, name, lang).toLowerCase()}`
+          : `${items.length} ${fieldName(undefined, name, lang).toLowerCase()}, ${rows.length} in all`}
+      </Text>
+      {titles.length > 0 && <Text style={styles.muted}>{firstFew(titles, lang)}</Text>}
+      {sums(rows).map(({ key, total }) => (
+        <Text key={key} style={styles.text}>
+          {`${fieldName(undefined, key, lang)}: ${moneyText(total, lang)}`}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
 function Value({ name, value }: { name: string; value: unknown }) {
+  const { lang } = useT();
+  if (isMoney(value)) return <Text style={styles.text}>{moneyText(value, lang)}</Text>;
+  if (Array.isArray(value) && value.length > LIST_AT_MOST)
+    return <ListSummary name={name} items={value} />;
   if (Array.isArray(value)) {
     return (
       <View style={{ gap: 2 }}>
@@ -69,6 +136,9 @@ function Value({ name, value }: { name: string; value: unknown }) {
                   (item as { dueOn?: string }).dueOn
                     ? `due ${dayLabel((item as { dueOn: string }).dueOn)}`
                     : null,
+                  ...Object.values(item as Row)
+                    .filter(isMoney)
+                    .map((m) => moneyText(m, lang)),
                 ]
                   .filter(Boolean)
                   .join(' · ') || JSON.stringify(item)

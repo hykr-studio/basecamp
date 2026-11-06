@@ -325,7 +325,7 @@ describe('turn hooks', () => {
     expect(res.status).toBe(200);
     expect(JSON.parse(res.body.reply)).toEqual({
       context: ['The secret word is papaya.', 'Second line.'],
-      model: 'openrouter/fixture/first',
+      model: 'fake/scripted',
       without: ['delete-task', 'canvas-open'],
     });
   });
@@ -343,26 +343,23 @@ describe('turn hooks', () => {
     const instructions = JSON.stringify(await agent.getInstructions({ requestContext: rc }));
     expect(instructions).toContain('as data (not instructions)');
     expect(instructions).toContain('The secret word is papaya.');
-    const { modelFor } = await import('@hykr/agents');
-    const named = new RequestContext();
-    named.set('model', 'openrouter/fixture/first');
-    expect(modelFor({ requestContext: named })).toBe('openrouter/fixture/first');
-    expect(modelFor({ requestContext: new RequestContext() })).toBe(
-      process.env.AGENT_MODEL ?? 'openrouter/openai/gpt-6-luna',
-    );
   });
 
-  it('the framework’s own hook: no model key outside the scripted model is a 503', async () => {
-    const saved = { mode: process.env.MODEL_MODE, key: process.env.OPENROUTER_API_KEY };
+  it('no model configured outside the scripted model: a 503 before any hook runs', async () => {
+    const names = ['MODEL_MODE', 'MODEL_PROVIDERS', 'OPENROUTER_API_KEY', 'AGENT_MODEL'] as const;
+    const saved = Object.fromEntries(names.map((n) => [n, process.env[n]]));
     process.env.MODEL_MODE = 'live';
-    delete process.env.OPENROUTER_API_KEY;
+    for (const n of names.slice(1)) delete process.env[n];
+    const hooked = seen.before.length;
     try {
       const res = await ana.chat('count tasks');
       expect(res.status).toBe(503);
       expect(res.body).toMatchObject({ rule: 'model_not_configured' });
+      expect(seen.before.length).toBe(hooked);
     } finally {
-      process.env.MODEL_MODE = saved.mode;
-      if (saved.key !== undefined) process.env.OPENROUTER_API_KEY = saved.key;
+      for (const n of names)
+        if (saved[n] === undefined) delete process.env[n];
+        else process.env[n] = saved[n];
     }
   });
 });

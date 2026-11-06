@@ -19,7 +19,8 @@ export type InboundMessage = {
     | { kind: 'button'; payload: string; text?: string }
     | { kind: 'list'; rowId: string; title?: string }
     | { kind: 'audio'; mediaId: string; mime: string }
-    | { kind: 'media'; mediaId: string; mime: string; caption?: string };
+    /** A photo, document or video; a document's own file name when it has one. */
+    | { kind: 'media'; mediaId: string; mime: string; caption?: string; filename?: string };
   /** The message being answered, if any. */
   replyTo?: string;
 };

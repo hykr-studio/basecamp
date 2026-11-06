@@ -34,8 +34,17 @@
       "expo-router",
       "expo-secure-store",
       "expo-sqlite",
+      "expo-notifications",
       "@livekit/react-native-expo-plugin",
-      "@config-plugins/react-native-webrtc"
+      "@config-plugins/react-native-webrtc",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Add photos from your library to your records.",
+          "cameraPermission": "Take photos to keep on your records.",
+          "microphonePermission": false
+        }
+      ]
     ],
     "scheme": "agenticstack"
   }

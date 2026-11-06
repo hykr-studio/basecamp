@@ -117,6 +117,11 @@ export interface TurnInfo {
   channel: Channel;
   surfaces: readonly Surface[];
   lang?: Lang;
+  /**
+   * The model the turn runs on ('<provider>/<model>'), once the business's model policy chose it:
+   * after every hook's `before`, so `before` sees it unset and `after` sees it (to price usage).
+   */
+  model?: string;
 }
 
 /** Why a turn does not run. */
@@ -133,9 +138,11 @@ export interface TurnRefusal {
 
 /**
  * A hook's say on a turn before the model runs: refuse it (a credit cap reached), or shape it.
- * `context`: lines the model reads as data for this turn (recalled memory). `model`: the model id
- * to use (the first hook that names one wins). `withoutTools`: tool ids this turn may not use (a
- * feature switched off); a hook can take tools away, never add one.
+ * `context`: lines the model reads as data for this turn (recalled memory). `model`: the model ref
+ * to use ('<provider>/<model>'; the first hook that names one wins), checked against the
+ * business's model policy like any other: one it does not allow refuses the turn.
+ * `withoutTools`: tool ids this turn may not use (a feature switched off); a hook can take tools
+ * away, never add one.
  */
 export type TurnGate =
   | { refuse: TurnRefusal }
@@ -152,8 +159,9 @@ export interface TurnOutcome {
 }
 
 /**
- * Something every assistant turn passes through: caps and metering, memory recall, model policy.
- * ChatService runs the framework's own hook (the model key check) first, then these in order.
+ * Something every assistant turn passes through: caps and metering, memory recall. ChatService
+ * checks that the deployment has a model first, then runs these in order, then has the business's
+ * model policy choose the turn's model (a hook's `model` included).
  */
 export interface TurnHook {
   /** Unique: 'credits'. */

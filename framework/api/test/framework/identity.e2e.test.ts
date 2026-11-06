@@ -92,6 +92,7 @@ describe('roles and capabilities', () => {
         'fixture.reports',
         'members.manage',
         'members.read',
+        'models.manage',
         'queues.admin',
         'records.grant',
       ],

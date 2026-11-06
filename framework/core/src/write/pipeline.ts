@@ -6,7 +6,13 @@ import type {
   Principal,
   WriteResult,
 } from '@hykr/contracts';
-import { type WriteCtx as AuditCtx, type Database, idempotencyKeys, writeAudit } from '@hykr/db';
+import {
+  type WriteCtx as AuditCtx,
+  type Database,
+  idempotencyKeys,
+  writeAudit,
+  writeAuditMany,
+} from '@hykr/db';
 import { subjectKeyOf, subjectOf } from '@hykr/policy';
 import { ConflictException, ForbiddenException, HttpException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
@@ -187,26 +193,32 @@ export async function runWrite<I, L, V>(
       // 5. Do the work. The handler sees tx, principal and loaded rows; never the raw request.
       const out = await op.run({ tx, principal: p, input, loaded });
 
-      // 6. Audit in the same transaction: one row per entity touched, plus one for a command.
-      for (const t of out.touched) {
-        await writeAudit(tx, {
-          ...auditCtx(p, decision, ctx),
+      // 6. Audit in the same transaction: one row per entity touched, plus one for a command,
+      // inserted together (a 200-line write is one statement, not 200).
+      const by = auditCtx(p, decision, ctx);
+      await writeAuditMany(tx, [
+        ...out.touched.map((t) => ({
+          ...by,
           action: `${t.type}.${verbs[t.change]}`,
           resourceType: t.type,
           resourceId: t.id,
           before: t.before ?? null,
           after: t.after ?? null,
-        });
-      }
-      if (op.kind === 'command') {
-        await writeAudit(tx, {
-          ...auditCtx(p, decision, ctx),
-          action: op.name,
-          resourceType: op.resourceType,
-          resourceId,
-          after: { touched: out.touched.map(({ type, id, change }) => ({ type, id, change })) },
-        });
-      }
+        })),
+        ...(op.kind === 'command'
+          ? [
+              {
+                ...by,
+                action: op.name,
+                resourceType: op.resourceType,
+                resourceId,
+                after: {
+                  touched: out.touched.map(({ type, id, change }) => ({ type, id, change })),
+                },
+              },
+            ]
+          : []),
+      ]);
       result = { status: 'done', value: op.present(out.value, p) };
       value = out.value;
       touched = out.touched;

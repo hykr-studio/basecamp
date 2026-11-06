@@ -7,7 +7,7 @@ the same rules, approvals and audit trail as everyone else.
 
 You declare a business entity once. From that declaration it gets a REST API, agent tools,
 app screens and data hooks, approval cards, history, and WhatsApp and voice support, with no
-hand-written plumbing. The template ships with a sample domain (meetings, notes and to-dos)
+hand-written plumbing. The template ships with a sample domain (meetings, notes, to-dos and orders)
 that exercises every part of the stack. Replace it with your own.
 
 ## The idea
