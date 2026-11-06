@@ -35,7 +35,7 @@ export const Comment = z.object({
   /** Only people who may read team-only comments see it (comments.internal). */
   internal: z.boolean(),
   /** Where on the record it is pinned (a version, a point), as the entity's trait allows. */
-  anchor: z.unknown().nullable(),
+  anchor: z.record(z.string(), z.unknown()).nullable(),
   author: z.object({ id: z.string().nullable(), name: z.string().nullable() }),
   createdBy: CreatedBy,
   editedAt: z.iso.datetime().nullable(),
@@ -70,7 +70,7 @@ export const AddCommentInput = z.object({
     .optional()
     .describe('true: only the team sees it, not customers. Only when the user asks.'),
   anchor: z
-    .unknown()
+    .record(z.string(), z.unknown())
     .optional()
     .describe('Where on the record it belongs, when the record type takes one. Usually leave out.'),
 });

@@ -23,8 +23,8 @@ export interface CommentsPolicy {
    */
   approval?: ApprovalRule;
   /**
-   * What an anchor may hold (a version, a point on a drawing), validated on every add. Without
-   * it, a comment here has no anchor.
+   * What an anchor (a JSON object) may hold: a version, a point on a drawing. Validated on every
+   * add. Without it, a comment here has no anchor.
    */
   anchor?: z.ZodType;
 }

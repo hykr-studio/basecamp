@@ -170,7 +170,7 @@ export class CommentsService implements OnModuleInit {
         body: r.body,
         mentions: (r.mentions ?? []) as Mention[],
         internal: r.internal,
-        anchor: r.anchor ?? null,
+        anchor: (r.anchor as Record<string, unknown> | null) ?? null,
         author: { id: r.authorId, name: r.authorId ? (names.get(r.authorId) ?? null) : null },
         createdBy: r.createdBy,
         editedAt: r.editedAt?.toISOString() ?? null,
