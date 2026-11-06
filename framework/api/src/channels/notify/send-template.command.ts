@@ -40,13 +40,16 @@ export const SendTemplate = defineCommand(SendTemplateSpec, {
       return deny('not_sendable', 'Login codes are sent by the app, not by hand');
     const missing = Object.keys(template.params.shape).filter((k) => !input.params[k]?.trim());
     if (missing.length) return deny('missing_params', `Fill in ${missing.join(', ')}`);
+    // Holders of marketing.approve decide a marketing send, never the person who asked. The
+    // decider is this decision's, not the command's: a park for any other reason (an approval
+    // level the application puts sends at) falls through to that level's policy.
     if (template.category === 'marketing')
-      return needsApproval('marketing_send', 'A marketing message needs the owner to approve it');
+      return needsApproval('marketing_send', 'A marketing message needs the owner to approve it', {
+        approver: { by: { capability: ApprovalCapabilities.marketing.name } },
+      });
     return allow('staff_sends_service');
   },
   summarize: (input) => `Send ${input.template} to a customer`,
-  // Holders of marketing.approve decide, never the person who asked.
-  approval: { by: { capability: ApprovalCapabilities.marketing.name } },
   run: async ({ tx, principal, input }) => {
     await tx.insert(schema.outbox).values({
       tenantId: principal.tenantId ?? '',

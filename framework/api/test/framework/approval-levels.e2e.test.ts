@@ -14,8 +14,10 @@ import {
   me,
   Person,
   pool,
+  seedContact,
   server,
   shutdown,
+  stamp,
 } from '../../dist/testing.js';
 import { approvalLevelsApp } from '../fixture/dist/features/approval-levels/index.js';
 
@@ -242,6 +244,66 @@ describe('levels on the payload', () => {
       status: 'needs_approval',
       approval: { level: { name: 'fixture_internal' }, decider: { by: 'requester' } },
     });
+  });
+});
+
+describe("a template send at a level keeps its own decision's decider", () => {
+  const outbox = async (template: string) =>
+    (
+      await pool.query(
+        'select count(*)::int as n from app.outbox where tenant_id = $1 and key = $2',
+        [tenantId, `template:${template}`],
+      )
+    ).rows[0].n as number;
+
+  it('a service send waits for the person it is for, who approves it; their own runs', async () => {
+    await approvalsSettings({});
+    const { customerId } = await seedContact(tenantId, 'Customer Levels', `+9198${stamp % 1e8}`);
+    const service = { customerId, template: 'task_due_v1', params: { title: 'Pay the deposit' } };
+    const before = await outbox('task_due_v1');
+
+    const sent = await asAssistant(`user:${owner.id}`)('POST', '/api/notify/send', service);
+    expect(sent.body).toMatchObject({
+      status: 'needs_approval',
+      approval: {
+        rule: 'send_goes_out',
+        level: { name: 'fixture_outside' },
+        decider: { by: 'requester', userId: owner.id },
+      },
+    });
+    const { id } = sent.body.approval;
+    expect((await look(owner, id)).body).toMatchObject({ canDecide: true });
+    expect((await look(stranger, id)).status).toBe(404);
+    expect((await approve(owner, id)).body).toMatchObject({ status: 'approved' });
+    expect(await outbox('task_due_v1')).toBe(before + 1);
+
+    // The person sending it themselves is the human it needs: it runs.
+    expect((await owner.call('POST', '/api/notify/send', service)).body).toMatchObject({
+      status: 'done',
+    });
+    expect(await outbox('task_due_v1')).toBe(before + 2);
+  });
+
+  it('a marketing send at the same level waits for the holders of marketing.approve', async () => {
+    await approvalsSettings({});
+    const { customerId } = await seedContact(tenantId, 'Buyer Levels', `+9197${stamp % 1e8}`);
+    const sent = await asAssistant(`user:${owner.id}`)('POST', '/api/notify/send', {
+      customerId,
+      template: 'monthly_update_v1',
+      params: { name: 'Asha', news: 'New hours' },
+    });
+    expect(sent.body).toMatchObject({
+      status: 'needs_approval',
+      approval: {
+        rule: 'marketing_send',
+        level: { name: 'fixture_outside' },
+        decider: { by: 'capability', capability: 'marketing.approve' },
+      },
+    });
+    const { id } = sent.body.approval;
+    // The owner holds marketing.approve, but asked: someone else decides.
+    expect(await approve(owner, id)).toMatchObject({ status: 403, body: { rule: 'own_request' } });
+    expect((await approve(admin, id)).body).toMatchObject({ status: 'approved' });
   });
 });
 

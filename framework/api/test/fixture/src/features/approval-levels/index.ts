@@ -1,8 +1,9 @@
 // Approval levels as an application declares them (A5): four levels of its own, a level rule
 // that reads the input, the row and the business's settings (a threshold, and approvers per
-// amount band), a command that sends to someone outside the business, and a field hidden from
-// staff that must stay hidden on approval cards. Only the approval-levels e2e test's server
-// (`approvalLevelsApp`) loads this file; the levels, rule and capability are its own.
+// amount band), a command that sends to someone outside the business, the framework's template
+// send put at a level, and a field hidden from staff that must stay hidden on approval cards.
+// Only the approval-levels e2e test's server (`approvalLevelsApp`) loads this file; the levels,
+// rules and capability are its own.
 import { defineModule, defineServer } from '@hykr/api';
 import {
   type Contributions,
@@ -184,6 +185,16 @@ export const PaymentLevels = defineLevelRule({
   },
 });
 
+/**
+ * A template sent to a customer by hand goes outside too. Its own decision still counts: a
+ * marketing send waits for the holders of marketing.approve, a service send for the person.
+ */
+export const SendsGoOut = defineLevelRule({
+  name: 'fixture.sends',
+  on: ['notify.send'],
+  decide: () => atLevel(OutsideLevel.name, 'send_goes_out', 'It goes to a customer'),
+});
+
 /** Staff never see a payment's note: not in a read, a write result, nor an approval card. */
 export const notesHidden: ReadProjector = {
   name: 'fixture.payment-notes',
@@ -212,7 +223,7 @@ export const paymentsModule = defineModule({
 export const approvalLevelsContributions: Partial<Contributions> = {
   approvalLevels: [LookLevel, InternalLevel, OutsideLevel, FinalLevel],
   capabilities: [ApprovePayments],
-  levelRules: [PaymentLevels],
+  levelRules: [PaymentLevels, SendsGoOut],
   readProjectors: [notesHidden],
 };
 
