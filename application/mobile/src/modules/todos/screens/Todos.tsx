@@ -1,3 +1,4 @@
+import { ClearDoneTodosSpec } from '@application/domain/contracts';
 import {
   Button,
   type Chip,
@@ -13,8 +14,10 @@ import {
   space,
   styles,
   todayLocal,
+  useCommand,
   useEntityList,
   useEntityMutation,
+  useFeature,
   useScreenContext,
 } from '@hykr/app';
 import { useState } from 'react';
@@ -47,6 +50,9 @@ export function Todos() {
   const [dueOn, setDueOn] = useState('');
   const { create } = useEntityMutation('todos');
   const list = useEntityList('todos', chip.query);
+  // Only when the business switched "clear done to-dos" on (Settings → Features).
+  const canClear = useFeature('todos.clear-done');
+  const clear = useCommand(ClearDoneTodosSpec);
   const count = list.items.length;
   const canAdd = title.trim() && (dueOn === '' || isValidDate(dueOn));
 
@@ -85,7 +91,18 @@ export function Todos() {
             </View>
             {create.error && <Text style={styles.error}>{errorMessage(create.error)}</Text>}
           </View>
-          <FilterChips chips={options} selected={chip.label} onSelect={setChip} />
+          <View style={[styles.row, { flexWrap: 'wrap', justifyContent: 'space-between' }]}>
+            <FilterChips chips={options} selected={chip.label} onSelect={setChip} />
+            {canClear && chip.label === 'Done' && count > 0 ? (
+              <Button
+                title="Clear done"
+                icon="trash-2"
+                variant="secondary"
+                busy={clear.isPending}
+                onPress={() => clear.mutate({})}
+              />
+            ) : null}
+          </View>
         </View>
       }
       renderItem={({ item, index }) => (

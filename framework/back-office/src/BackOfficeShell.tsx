@@ -76,7 +76,7 @@ function SignIn({ title, onSignedIn }: { title: string; onSignedIn: (u: SessionU
   );
 }
 
-function NavLink({ href, label }: { href: '/' | '/templates'; label: string }) {
+function NavLink({ href, label }: { href: '/' | '/templates' | '/settings'; label: string }) {
   const path = usePathname();
   const active = href === '/' ? path === '/' || path.startsWith('/conversation') : path === href;
   return (
@@ -112,6 +112,7 @@ function Shell({
         <Text className="mr-4 text-small text-muted">Back office</Text>
         <NavLink href="/" label="Conversations" />
         <NavLink href="/templates" label="Templates" />
+        <NavLink href="/settings" label="Settings" />
         <View className="flex-1" />
         <Text className="hidden text-small text-muted md:flex">
           {user.name} · {me.roles.join(', ')}

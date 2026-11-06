@@ -1,5 +1,5 @@
 import '../../global.css';
-import { AppShell } from '@hykr/app';
+import { AppShell, settingsPlugin } from '@hykr/app';
 import { catalog, registry } from '@/catalog';
 import * as modules from '@/modules';
 import { settings } from '@/settings';
@@ -12,6 +12,9 @@ const config = {
   scheme: 'agenticstack',
 };
 
+/** The business's flags, branding and phrases (A11). Made once, outside render. */
+const plugins = [settingsPlugin()];
+
 export default function RootLayout() {
   return (
     <AppShell
@@ -19,6 +22,7 @@ export default function RootLayout() {
       modules={modules}
       catalog={catalog}
       registry={registry}
+      plugins={plugins}
       config={config}
     />
   );

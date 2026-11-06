@@ -3,16 +3,20 @@ import {
   type ChatRequest,
   type ChatResponse,
   type ChatStreamRequest,
+  type ClientSettings,
   type CommandSpec,
   type EntitySpec,
+  type FeatureState,
   type HandoffThread,
   type HistoryEntry,
   type Inbox,
   type ListInput,
   type Me,
   type Page,
+  type PublicBranding,
   pathParams,
   type TemplateStatus,
+  type TenantDomain,
   type Thread,
   type ThreadMessage,
   toQueryString,
@@ -212,6 +216,21 @@ export function createApiClient(opts: ApiClientOptions) {
           `/api/backoffice/contacts/${encodeURIComponent(contactId)}/consent`,
           input,
         ),
+    },
+    /**
+     * The business's setup (A11). Changes go through `command(SetFeatureSpec | UpdateBrandingSpec
+     * | UpdateWordingSpec | AddDomainSpec | VerifyDomainSpec | RemoveDomainSpec, input)`, custom
+     * fields through `entity(CustomFieldSpec)`.
+     */
+    settings: {
+      /** Flags on, what is off, branding and the business's phrases: what the apps need. */
+      get: () => call<ClientSettings>('GET', '/api/settings'),
+      /** Every declared flag, on or off here, and who switches it. */
+      features: () => call<FeatureState[]>('GET', '/api/features'),
+      /** The business's web addresses (settings managers only). */
+      domains: () => call<TenantDomain[]>('GET', '/api/settings/domains'),
+      /** Branding on a verified custom domain, before signing in (the request's Origin). */
+      publicBranding: () => call<PublicBranding>('GET', '/api/branding/public'),
     },
     /** People only: the agent gets 403. */
     listApprovals: () => call<Approval[]>('GET', '/api/approvals'),

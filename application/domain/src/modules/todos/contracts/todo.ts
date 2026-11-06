@@ -1,4 +1,11 @@
-import { CreatedBy, entitySpec } from '@hykr/contracts';
+import {
+  CreatedBy,
+  CustomFieldsInput,
+  CustomFieldValues,
+  commandSpec,
+  defineFeatureFlag,
+  entitySpec,
+} from '@hykr/contracts';
 import { z } from 'zod';
 
 const title = z.string().min(1).max(200);
@@ -10,6 +17,8 @@ export const Todo = z.object({
   done: z.boolean(),
   dueOn: dueOn.nullable(),
   meetingId: z.string().nullable(),
+  /** The business's own fields (a priority, say), defined in its settings. */
+  custom: CustomFieldValues,
   createdBy: CreatedBy,
   createdAt: z.iso.datetime(),
 });
@@ -19,6 +28,7 @@ export const CreateTodoInput = z.object({
   title,
   dueOn: dueOn.optional(),
   meetingId: z.uuid().optional(),
+  custom: CustomFieldsInput.optional(),
 });
 export type CreateTodoInput = z.infer<typeof CreateTodoInput>;
 
@@ -28,6 +38,7 @@ export const UpdateTodoInput = z
     done: z.boolean().optional(),
     dueOn: dueOn.nullable().optional(),
     meetingId: z.uuid().nullable().optional(),
+    custom: CustomFieldsInput.optional(),
   })
   .refine(
     (v) => Object.values(v).some((x) => x !== undefined),
@@ -47,10 +58,17 @@ export const TodoSpec = entitySpec({
     done: { en: 'Done', hi: 'पूरा', te: 'పూర్తి' },
     dueOn: { en: 'Due', hi: 'आखिरी तारीख', te: 'గడువు' },
     meetingId: { en: 'Meeting', hi: 'मीटिंग', te: 'మీటింగ్' },
+    custom: { en: 'More', hi: 'और', te: 'మరిన్ని' },
     createdBy: { en: 'Created by', hi: 'किसने बनाया', te: 'ఎవరు సృష్టించారు' },
   },
   list: {
-    filterable: { done: 'boolean', dueOn: 'date', meetingId: 'id', title: 'text' },
+    filterable: {
+      done: 'boolean',
+      dueOn: 'date',
+      meetingId: 'id',
+      title: 'text',
+      custom: 'custom',
+    },
     sortable: ['dueOn', 'createdAt', 'title'],
     defaultSort: [['createdAt', 'asc']],
     search: ['title'],
@@ -60,9 +78,40 @@ export const TodoSpec = entitySpec({
       dueOn: '{ "lte": "2026-10-31" }',
       meetingId: '"<meeting id>"',
       title: '{ "contains": "tiles" }',
+      custom: '{ "priority": "high" }',
     },
   },
+  // Each business adds its own fields to to-dos (Settings → Custom fields: a priority, say).
+  traits: { customFields: {} },
   // An agent never deletes without the person.
   approval: { delete: (p) => p.actor.kind === 'agent' },
   views: { list: 'todo.list', item: 'todo.item' },
+});
+
+/** Clear the person's done to-dos in one go: behind a flag the business switches itself. */
+export const ClearDoneTodosSpec = commandSpec({
+  name: 'todo.clearDone',
+  description:
+    "Delete every to-do of the user's that is done, in one step. Only when they ask to clear done to-dos.",
+  input: z.object({}),
+  output: z.object({ cleared: z.number().int() }),
+  http: { method: 'POST', path: '/api/todos/clear-done' },
+  tool: 'clear-done-todos',
+  expose: 'all',
+  approvalNote: 'When the assistant calls it, it waits for the user to approve it.',
+  verb: { do: 'clear done to-dos', did: 'cleared the done to-dos' },
+  touches: ['todo'],
+});
+
+/** The business switches "clear done to-dos" on in its settings; off until it does. */
+export const ClearDoneFlag = defineFeatureFlag({
+  key: 'todos.clear-done',
+  label: { en: 'Clear done to-dos', hi: 'पूरे हुए काम हटाएं', te: 'పూర్తయిన పనులను తొలగించండి' },
+  description: {
+    en: 'A button and an assistant command that delete every done to-do at once.',
+    hi: 'एक बटन और सहायक का आदेश जो सभी पूरे हुए काम एक साथ हटाता है।',
+    te: 'పూర్తయిన అన్ని పనులను ఒకేసారి తొలగించే బటన్ మరియు సహాయక ఆదేశం.',
+  },
+  managedBy: 'tenant',
+  gates: { commands: ['todo.clearDone'] },
 });

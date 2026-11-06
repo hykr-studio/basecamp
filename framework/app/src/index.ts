@@ -12,6 +12,19 @@ export { Button } from './components/Button';
 export { ScreenTitle, SectionHeading } from './components/ScreenTitle';
 export { type AppConfig, appConfig, configure } from './config';
 export {
+  BrandMark,
+  brandTokens,
+  CustomFieldInputs,
+  CustomFieldValues,
+  hideOff,
+  settingsPlugin,
+  useBranding,
+  useClientSettings,
+  useCustomFields,
+  useFeature,
+  useFieldLabel,
+} from './features/settings';
+export {
   ApprovalCard,
   ApprovalItem,
   DecisionScrollView,
@@ -32,7 +45,6 @@ export {
   type WebMcpScreen,
   type WebMcpScreens,
 } from './framework/app-domain';
-
 export { AssistantProvider, useAssistant, useScreenContext } from './framework/assistant-context';
 export {
   bindAll,
@@ -113,7 +125,6 @@ export { NotFoundScreen } from './screens/NotFoundScreen';
 export { PageScreen } from './screens/PageScreen';
 export { PagesScreen } from './screens/PagesScreen';
 export { colors, fonts, listRow, space, styles } from './theme';
-
 export { InlineView } from './views/InlineView';
 export { OpenRow, Rows, ViewCard } from './views/parts';
 export { useAct } from './views/useAct';

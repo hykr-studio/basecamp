@@ -2,6 +2,7 @@ import type { Todo } from '@application/domain/contracts';
 import {
   Button,
   ByAssistant,
+  CustomFieldValues,
   colors,
   entityApi,
   hrefFor,
@@ -151,6 +152,8 @@ export function TodoRow({
             {todo.createdBy === 'assistant' && <ByAssistant />}
           </View>
         )}
+        {/* The business's own fields (Settings → Custom fields), such as a priority. */}
+        <CustomFieldValues entity="todo" values={todo.custom} />
       </View>
       {canDelete && (
         <Button

@@ -1,7 +1,7 @@
 /** The to-dos module, server side: short tasks with a due date, optionally from a meeting. */
 import { defineModule } from '@hykr/api';
 import { todosAgent } from './agent/index.js';
-import { todosSpec } from './contracts/index.js';
+import { ClearDoneFlag, todosSpec } from './contracts/index.js';
 import * as tables from './db/schema.js';
 import { todosNotifications } from './notifications/index.js';
 import { TodosModule } from './server/todos.module.js';
@@ -16,4 +16,5 @@ export const todos = defineModule({
   notifications: todosNotifications.notifications,
   agent: todosAgent,
   tables,
+  contributes: { featureFlags: [ClearDoneFlag] },
 });
