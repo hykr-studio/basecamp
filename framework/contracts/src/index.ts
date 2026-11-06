@@ -6,6 +6,7 @@ export * from './framework/index.js';
 export * from './platform/index.js';
 export * from './platform/live.js';
 export * from './platform/push.js';
+export * from './platform/sla.js';
 export * from './principal.js';
 export * from './roles.js';
 export * from './settings/index.js';

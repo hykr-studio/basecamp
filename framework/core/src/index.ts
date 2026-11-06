@@ -16,6 +16,7 @@ export {
   type ChildRepository,
   type ChildrenResult,
   childLinkOf,
+  childLinksOf,
   defineChildEntity,
   insertMany,
 } from './entity/children.js';
@@ -57,6 +58,7 @@ export {
   projectRead,
   type ReadProjector,
   readProjectors,
+  type StaleRefusal,
   type WriteHook,
   type WriteHookArgs,
   writeHooks,
@@ -86,6 +88,8 @@ export {
   tenantMoney,
 } from './money/tenant-money.js';
 export * from './plugins/index.js';
+export * from './states/index.js';
+export * from './versions/index.js';
 export {
   type ListFieldFilter,
   type ListFieldSql,

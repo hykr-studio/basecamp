@@ -80,7 +80,25 @@ export interface EntityPlugin {
   updateWhere?(row: Values, input: Values | null, target: EntityPluginTarget): SQL | undefined;
   /** The record as this principal may see it: fields removed, never added. */
   project?(read: Values, p: Principal, target: EntityPluginTarget): Values;
+  /**
+   * What a write that parks must find unchanged when it is approved (a version), from the row
+   * it loaded. Kept with the parked operation; undefined: nothing to pin.
+   */
+  onPark?(row: Values, target: EntityPluginTarget): Values | undefined;
+  /**
+   * On the approved replay, the row as it is now against what `onPark` kept: a refusal (409)
+   * when the record moved on since the request was made, or null.
+   */
+  onReplay?(row: Values, pinned: Values, target: EntityPluginTarget): StaleRefusal | null;
+  /**
+   * A write to the children of this record (a tree written through it: `children.insert` and
+   * `children.replace`): refuse it (a frozen record's lines), or null.
+   */
+  childWrite?(parent: Values, target: EntityPluginTarget): AuthorizeResult | null;
 }
+
+/** Why a parked write no longer applies: answered as 409 with this body. */
+export type StaleRefusal = { error: string; message: string };
 
 /** Entity plugins, in the order they run. */
 export const entityPlugins = createHookRegistry<EntityPlugin>('entity plugin', (x) => x.name, {

@@ -14,10 +14,11 @@ export function createDb(url: string) {
   };
 }
 
-// Builders for an application's own tables: the `app` schema, the id column, file and money
-// columns.
+// Builders for an application's own tables: the `app` schema, the id column, file, money and
+// version columns.
 export { fileColumn, fileColumns } from './columns/files.js';
 export { currencyColumn, minorUnits } from './columns/money.js';
+export { revisionColumns, versionColumn } from './columns/versions.js';
 export type { Database, DbOrTx } from './database.js';
 export {
   frameworkMigrations,
