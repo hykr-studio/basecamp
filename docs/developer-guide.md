@@ -646,6 +646,8 @@ Operators by type:
 | `boolean` | `eq`, `ne` |
 | `text` | `eq`, `ne`, `in`, `contains` |
 | `date`, `number` | `eq`, `ne`, `in`, `lt`, `lte`, `gt`, `gte` |
+| `money` | the same, in minor units (section 5.13) |
+| `geo` | `near` (`{ lat, lng, radiusM }`), `within` (`{ south, west, north, east }`) (section 5.14) |
 
 The same filter in its two forms:
 
@@ -659,7 +661,7 @@ JSON:  { done: false, dueOn: { lte: '2026-10-31' }, sort: '-dueOn', limit: 20 }
 - `count: true` adds `total`.
 - Unknown fields or operators are a 400. That is on purpose.
 
-Field types are a registry. A feature adds one in two halves, each in its own file: the grammar in contracts, declared on `ListFieldTypes` (and new operators on `ListFilterOps`) and defined with `defineListFieldType({ name, ops, value, opValue? })`, which every process (server, tools, apps) loads; and the SQL in the server, `listFieldSql` (contributed as `listFieldSql`), `{ name, where({ table, field, column, op, value }) }`. A field of an undefined type fails when its schema is built, and one without SQL fails its request. Neither filters nothing.
+Field types are a registry. A feature adds one in two halves, each in its own file: the grammar in contracts, declared on `ListFieldTypes` (and new operators on `ListFilterOps`) and defined with `defineListFieldType({ name, ops, value, opValue?, summary? })`, which every process (server, tools, apps) loads; and the SQL in the server, `listFieldSql` (contributed as `listFieldSql`), `{ name, where({ table, field, column, op, value }), order? }`. `order({ field, column, dir, filters })` is how a field of the type sorts when it is in `sortable` (a point: by distance to its `near` point); it returns `{ expr, at(value) }`, where `expr` is never null so cursors neither skip nor repeat rows. `summary` says what the type's fields do in a summary (section 5.15). A field of an undefined type fails when its schema is built, and one without SQL fails its request. Neither filters nothing. `toQueryString` sends an operator whose value is an object (`near`) as JSON, which the type reads back.
 
 The response is `{ items, nextCursor, total? }`. Pagination is keyset: pass `nextCursor` back as `cursor`. A cursor from a different sort is a 400 `cursor_sort_mismatch`. Sorting on a nullable column works only for dates, timestamps and numbers. A nullable text or enum column in `sortable` passes load-time checks, then throws `Sorting on nullable ... is not supported` (`framework/core/src/query/list-grammar.ts`) on the first request that sorts by it, which the client sees as a 500. Keep such columns `notNull()` or out of `sortable`.
 
@@ -1082,6 +1084,67 @@ sample's `orders` module uses every part.
   `JSON_BODY_LIMIT` (1 MB), and a tree holds at most 1000 nodes and 8 levels (`maxNodes`,
   `maxDepth` on the trait). The approval card sums up long lists.
 
+### 5.14 Places: points, addresses and geofences
+
+Records can have a place on the map (`docs/decisions/B13B14.md`). The sample's meetings keep one
+and take check-ins there.
+
+- **Columns.** `geoPoint('location')` (`@hykr/db`) is a PostGIS `geography` column read and
+  written as `GeoPoint = { lat, lng }` (`@hykr/contracts`, WGS84 degrees). Index it with
+  `geoIndex('<table>_location_gist', t.location)`. `addressColumn('address')` is a jsonb
+  `Address` (`line1`, `line2?`, `locality?`, `region?`, `postalCode?`, `country?` as ISO
+  3166-1 alpha-2); `addressText(a)` puts it on one line. PostGIS is created by
+  `framework/db/sql/pre/10-postgis.sql` when it is missing (a role that may not create it gets
+  Postgres's error; `init.sql` creates it for Compose).
+- **Lists.** List the point as `location: 'geo'` in `filterable`: `location[near]=lat,lng,metres`
+  (`ST_DWithin`) and `location[within]=south,west,north,east` (a box; one across the antimeridian
+  is refused). With `location` in `sortable`, `sort=location` is nearest first to the `near`
+  point (`-location` farthest first); without a `near` filter it is a 400 `sort_needs_near`.
+- **Geofences.** `withinMeters(tx, at, center, radiusM)` → `{ inside, distanceM }` and
+  `metersBetween(tx, a, b)` (`@hykr/core`) measure with PostGIS on the spheroid, as `near` does.
+  Measure in a command's `load` and decide in `authorize` (the sample's `meeting.check-in`:
+  `no_place`, `imprecise_location`, `outside_geofence`). `distanceMeters(a, b)` (contracts) is a
+  sphere's distance for showing, never for deciding.
+- **The app.** `currentLocation({ accuracy })` asks for permission and returns
+  `{ point, accuracyM, at }`; `addressOf(point)` and `pointOf(text)` use the phone's geocoder
+  (none on the web); `useCurrentLocation()` and `<LocationField>` ("Use my location", the address
+  found, clear) are in `@hykr/app`. Add the `expo-location` plugin to `app.json` and rebuild the
+  dev client. A position is what the device says: keep its accuracy, and refuse a fix less precise
+  than your radius.
+
+### 5.15 Summaries: counts and totals
+
+Every entity whose list has a route has a summary (`docs/decisions/B13B14.md`):
+
+```text
+GET /api/orders/summary?status=open&groupBy=createdAt:month&sum=total&sort=-key&limit=4
+{ groups: [{ key: { createdAt: '2026-11', currency: 'INR' }, count: 3, sum: { total: { minor, currency } } }],
+  totals: [{ key: { currency: 'INR' }, count: 3, sum: { total: … } }], more: false }
+```
+
+- **Grammar** (`summaryInputSchema`, `summaryQuerySchema` in contracts): the list's filters and
+  `q`, `groupBy` (at most two; a date needs a period, `createdAt:day|week|month|quarter|year`),
+  `sum`, `avg`, `min`, `max` (lists of fields, at most six measures), `sort` (`count`, `key` or
+  `sum:total`; `-` for descending) and `limit` (groups, default 50, at most 200). The count is
+  always there. What a field can do comes from its list field type: `enum`, `id`, `boolean` and
+  `text` group by value, `date` by period, `number` and `money` are measured. Only filterable
+  fields are summarized.
+- **Results.** Money is summed per currency (the currency joins each key, and `totals` has one
+  bucket per currency), an average of money is whole minor units, rounded half up. Periods are
+  in the business's time zone (`timeZone` setting); a week is keyed by its Monday. No rows: one
+  zero bucket with the measures `null`. `more` says groups were cut at `limit`.
+- **Scope and hiding.** A summary covers exactly the rows the list would for the reader (the
+  list's own WHERE). A field the reader cannot see (field policy, a plugin's refusal, a read
+  projector) in a filter, a group or a measure is a 403 `field_hidden`. The route follows the
+  list's `expose`.
+- **Clients.** `api.entity(spec).summary(q)` and `api.summary(plural, q)` (`@hykr/api-client`);
+  `useEntitySummary(plural, q)` (`@hykr/app`), refreshed with the entity's lists.
+- **Tiles.** `kpi.row` takes `of: { entity: '<plural>', query, labels? }` instead of `items`:
+  its tiles are computed from the summary wherever it is shown (the chat, a saved page,
+  WhatsApp text and speech), with the reader's session, so a saved page never keeps numbers. The
+  registry checks `of` against the entity's summary grammar. A view of your own can be filled with
+  a summary: `source: { entity, into, by: 'summary' }`.
+
 ---
 
 ## 6. Principals and policy
@@ -1222,7 +1285,7 @@ You do not write tools for entities or commands. `toolsFor` in `framework/core/s
 
 | Spec | Tools |
 |---|---|
-| Entity, action exposed `'all'` | `list-<plural>`, `get-<name>`, `create-<name>`, `update-<name>`, `delete-<name>` |
+| Entity, action exposed `'all'` | `list-<plural>` and `summarize-<plural>` (counts and totals, shown as `kpi.row` tiles), `get-<name>`, `create-<name>`, `update-<name>`, `delete-<name>` |
 | Command with `tool` and `expose: 'all'` | `spec.tool` |
 | Profile `app` only | `canvas-open`, `canvas-compose`, `canvas-patch` |
 
@@ -1637,7 +1700,7 @@ These are not built. Each has a workaround for now.
 | Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `pdfkit` with `harfbuzzjs` and the Noto fonts, `@mastra/memory` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-location` (in the mobile app). Each feature that uses one adds its code. Their Expo config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client (the image picker's is in, for files, and `expo-notifications`', for push). Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `pdfkit` with `harfbuzzjs` and the Noto fonts, `@mastra/memory` (in `@hykr/agents`) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. |
 | Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |
@@ -1658,6 +1721,12 @@ These are not built. Each has a workaround for now.
 | Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
+| Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |
+| A summary's view of hiding | The field check reads one record of the reader's scope through `toRead` and assumes a projector hides a field on every record alike. A projector that hides a field on some records only lets a summary over it through. |
+| A summary's scope without a recorder | `listWhere` reads the list's WHERE by running `repo.list` against a connection that records it (`define-entity.ts` gets a `repo.where` when it is next opened). |
+| Server geocoding, polygons, tracking | Addresses are typed or found by the phone's geocoder; `within` is a box, not a shape; a check-in is one point in time. |
+| Erasing check-in locations | A check-in keeps the person's point until its record is deleted; retention and erasure come with privacy (B18). |
+| A point column narrowed to points | `geoPoint` is plain `geography` (drizzle-kit quotes `geography(Point,4326)` as one name). Write it only through the column (`pointSql`); a read throws on anything but a point. |
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
