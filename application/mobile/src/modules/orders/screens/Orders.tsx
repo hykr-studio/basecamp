@@ -1,8 +1,10 @@
+import { OrderSpec } from '@application/domain/modules/orders/contracts';
 import {
   EmptyState,
   LoadError,
   OpenRow,
   ScreenTitle,
+  StateBadge,
   styles,
   useEntityList,
   useMoneyText,
@@ -31,10 +33,10 @@ export function Orders() {
             <Text style={styles.text}>{item.title}</Text>
             <Text style={styles.text}>{money(item.total)}</Text>
           </View>
-          <Text style={styles.muted}>
-            {item.number}
-            {item.status === 'cancelled' ? ' · cancelled' : ''}
-          </Text>
+          <View style={styles.row}>
+            <Text style={styles.muted}>{item.number}</Text>
+            <StateBadge spec={OrderSpec} row={item} />
+          </View>
         </OpenRow>
       )}
       ListEmptyComponent={

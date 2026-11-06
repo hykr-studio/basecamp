@@ -1,17 +1,36 @@
-import type { HistoryEntry } from '@hykr/contracts';
+import { type HistoryEntry, stateLabel, statesOf } from '@hykr/contracts';
+import type { Lang } from '@hykr/i18n';
 import { useQuery } from '@tanstack/react-query';
 import { Linking, Pressable, Text, View } from 'react-native';
 import { api } from '../api';
 import { appConfig } from '../config';
 import { colors, space, styles } from '../theme';
 import { AssistantMark } from './AssistantMark';
+import { specs } from './hooks';
 import { Icon, type IconName } from './Icon';
+import { useT } from './lang';
 import { verbOf } from './verbs';
 import { inApp, webHref } from './web-link';
 
-function describe(e: HistoryEntry): { text: string; icon: IconName; tone: string } {
+/** "Submitted → Approved": a state change in the words of the record's states. */
+function moveOf(e: HistoryEntry, lang: Lang): string | null {
+  if (!e.transition?.from || e.outcome !== 'committed') return null;
+  const spec = Object.values(specs()).find((x) => x.name === e.resourceType);
+  const trait = spec ? statesOf(spec) : undefined;
+  if (!trait) return null;
+  return `${stateLabel(trait, e.transition.from, lang)} → ${stateLabel(trait, e.transition.to, lang)}`;
+}
+
+function describe(e: HistoryEntry, lang: Lang): { text: string; icon: IconName; tone: string } {
   const verb = verbOf(e.action);
   const who = e.actor === 'assistant' ? 'The assistant' : 'You';
+  const move = moveOf(e, lang);
+  if (move)
+    return {
+      text: `${who} moved it: ${move}${e.approvedByYou ? ', approved by you' : ''}`,
+      icon: 'arrow-right-circle',
+      tone: colors.text,
+    };
   if (e.outcome === 'needs_approval') {
     return {
       text: `${who} asked to ${verb.do} this`,
@@ -36,6 +55,7 @@ function describe(e: HistoryEntry): { text: string; icon: IconName; tone: string
 /** What happened to this record, from the audit trail: who asked, who approved, when. */
 /** `type` is an entity name from the catalog (the domain's or the framework's). */
 export function History({ type, id }: { type: string; id: string }) {
+  const { lang } = useT();
   const q = useQuery({ queryKey: ['history', type, id], queryFn: () => api.history(type, id) });
   // A command (close, move) also records the entity change it made: show the decision once.
   const commandRuns = new Set(
@@ -50,7 +70,7 @@ export function History({ type, id }: { type: string; id: string }) {
   return (
     <View style={{ gap: space.sm }}>
       {entries.map((e) => {
-        const d = describe(e);
+        const d = describe(e, lang);
         return (
           <View
             key={`${e.at}:${e.action}:${e.outcome}:${e.actor}`}
