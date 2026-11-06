@@ -177,6 +177,7 @@ describe('events and subscribers', () => {
   it('a durable feed is polled with this prefix, and the bus goes quiet while it exists', async () => {
     const prefixes: string[] = [];
     const relayed: string[] = [];
+    const reads: unknown[] = [];
     const queued: DomainEventEnvelope[] = [
       {
         id: `feed-${Date.now()}`,
@@ -191,17 +192,22 @@ describe('events and subscribers', () => {
     ];
     api.eventFeeds.register({
       name: 'fixture.feed',
-      pending: async ({ prefix, limit }) => {
+      // A feed reads its store through the worker's services: a plain contribution needs no DI.
+      pending: async ({ prefix, limit }, ctx) => {
         prefixes.push(prefix);
+        reads.push((await ctx.db.execute('select 1 as one')).rows[0]);
         return queued.filter((e) => !relayed.includes(e.id)).slice(0, limit);
       },
-      relayed: async (ids) => {
+      relayed: async (ids, { prefix }, ctx) => {
+        expect(prefix).toBe(process.env.BULL_PREFIX);
+        expect(ctx.db).toBeDefined();
         relayed.push(...ids);
       },
     });
     await eventually(() => seen.events.find((e) => e.id === queued[0].id));
     await eventually(() => relayed.includes(queued[0].id));
     expect(prefixes[0]).toBe(process.env.BULL_PREFIX);
+    expect(reads[0]).toEqual({ one: 1 });
     // The bus is not relayed any more: the feed would carry it.
     const quiet = (await ana.call('POST', '/api/tasks', { title: 'Not from the bus' })).body.value
       .id;

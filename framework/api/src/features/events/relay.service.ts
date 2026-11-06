@@ -8,10 +8,11 @@ import {
   type OnApplicationShutdown,
   type OnModuleInit,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { EventBus } from '@nestjs/cqrs';
 import { config } from '../../config.js';
-import { eventFeeds, subscribers } from '../../hooks.js';
-import { JobsService } from '../../queues/jobs.service.js';
+import { eventFeeds, type ServerContext, subscribers } from '../../hooks.js';
+import { JobsService, serverContext } from '../../queues/jobs.service.js';
 import { envelopeOf } from './envelope.js';
 import { checkSubscribers, EVENTS_QUEUE, subscriberJobId, wants } from './subscriber.js';
 
@@ -83,14 +84,20 @@ const BATCH = 100;
 
 /**
  * The worker's poller: each second, each feed's pending events for this queue prefix go to the
- * relay, then are marked relayed. One tick at a time.
+ * relay, then are marked relayed. One tick at a time. Feeds get the services (`ctx.db`).
  */
 @Injectable()
 export class EventFeedPoller implements OnModuleInit, OnApplicationShutdown {
   private timer: NodeJS.Timeout | undefined;
   private running = false;
+  private readonly ctx: ServerContext;
 
-  constructor(private readonly relay: EventRelay) {}
+  constructor(
+    private readonly relay: EventRelay,
+    @Inject(ModuleRef) ref: ModuleRef,
+  ) {
+    this.ctx = serverContext(ref);
+  }
 
   onModuleInit() {
     this.timer = setInterval(() => void this.tick(), EVERY_MS);
@@ -107,12 +114,13 @@ export class EventFeedPoller implements OnModuleInit, OnApplicationShutdown {
     try {
       for (const feed of eventFeeds.all()) {
         try {
-          const events = await feed.pending({ limit: BATCH, prefix });
+          const events = await feed.pending({ limit: BATCH, prefix }, this.ctx);
           if (!events.length) continue;
           await this.relay.publish(events);
           await feed.relayed(
             events.map((e) => e.id),
             { prefix },
+            this.ctx,
           );
         } catch (e) {
           log.error(`feed ${feed.name}: ${message(e)}`);

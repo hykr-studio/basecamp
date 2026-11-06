@@ -299,8 +299,9 @@ export const subscribers = createHookRegistry<Subscriber>('subscriber', byName, 
 
 /**
  * Where committed events come from: a durable store written in the write's transaction (the
- * event outbox). The worker polls every feed each second. While no feed is registered, the
- * in-process event bus is relayed instead, after commit.
+ * event outbox). The worker polls every feed each second, with its services (`ctx.db`), so a
+ * feed can be a plain contribution. While no feed is registered, the in-process event bus is
+ * relayed instead, after commit.
  */
 export interface EventFeed {
   /** Unique: 'outbox'. */
@@ -310,9 +311,12 @@ export interface EventFeed {
    * write's never) and not yet relayed for this queue prefix. Processes with another prefix share
    * the database: never return their events.
    */
-  pending(a: { limit: number; prefix: string }): Promise<readonly DomainEventEnvelope[]>;
-  /** These are on their subscribers' queues: don't return them again. */
-  relayed(ids: readonly string[], a: { prefix: string }): Promise<void>;
+  pending(
+    a: { limit: number; prefix: string },
+    ctx: ServerContext,
+  ): Promise<readonly DomainEventEnvelope[]>;
+  /** These are on their subscribers' queues: don't return them again. Same prefix guard. */
+  relayed(ids: readonly string[], a: { prefix: string }, ctx: ServerContext): Promise<void>;
 }
 
 /** Event feeds, polled in registration order. */
