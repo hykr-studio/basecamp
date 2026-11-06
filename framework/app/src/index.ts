@@ -21,6 +21,8 @@ export {
   useFiles,
   useFileUpload,
 } from './features/files';
+export * from './features/index';
+export { createInvalidator, liveKeysFor } from './features/live/keys';
 export {
   ApprovalCard,
   ApprovalItem,
