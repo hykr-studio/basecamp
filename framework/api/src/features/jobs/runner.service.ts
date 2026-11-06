@@ -90,6 +90,16 @@ const notFound = () => new NotFoundException({ error: 'not_found', message: 'No 
 const pollEvery = (def: JobDef | undefined) => def?.pollEveryMs ?? POLL_EVERY_MS;
 const later = (ms: number) => new Date(Date.now() + ms);
 
+/**
+ * Not handed over yet: no submission has gone through. The status alone does not tell, since
+ * progress reported while submitting (`ctx.progress`, or a callback that came first) says
+ * `running` already. Such a job is still submitted again: after a throw, or a worker that stopped.
+ */
+const unsubmitted = (row: Pick<JobRow, 'status' | 'submittedAt'>) =>
+  !row.submittedAt && (row.status === 'queued' || row.status === 'running');
+const unsubmittedSql = () =>
+  and(isNull(jobs.submittedAt), inArray(jobs.status, ['queued', 'running']));
+
 /** A stored update without inline file data, once applied: the bytes are in the files now. */
 function withoutData(body: unknown): unknown {
   const update = body as { files?: { data?: string }[] };
@@ -371,12 +381,13 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
   /* ── Submitting ──────────────────────────────────────────────────────────── */
 
   /**
-   * Hand a queued job to its service: leased (no two workers submit it), then `submit` outside
-   * any transaction. A throw is retried with backoff, then fails the job (`submit_failed`).
+   * Hand an unsubmitted job to its service: leased (no two workers submit it), then `submit`
+   * outside any transaction. A throw is retried with backoff, then fails the job
+   * (`submit_failed`), even when it reported progress first.
    */
   async submit(jobId: string): Promise<string> {
     const [row] = await this.db.select().from(jobs).where(eq(jobs.id, jobId));
-    if (row?.status !== 'queued' || row.submittedAt) return 'not queued';
+    if (!row || !unsubmitted(row)) return 'submitted or finished';
     const def = jobDefs.get(row.kind);
     if (!def) {
       await this.finish(
@@ -398,8 +409,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
       .where(
         and(
           eq(jobs.id, jobId),
-          eq(jobs.status, 'queued'),
-          isNull(jobs.submittedAt),
+          unsubmittedSql(),
           or(isNull(jobs.leaseUntil), lt(jobs.leaseUntil, sql`now()`)),
         ),
       )
@@ -864,7 +874,8 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
   /**
    * Every few seconds, in the worker: unfinished jobs past their deadline fail (`timed_out`)
    * and their service is asked to stop; due polls run; updates kept but never queued, and
-   * queued jobs nobody is submitting, are queued again.
+   * unsubmitted jobs nobody is submitting (a lost queue job, a worker that stopped mid-way),
+   * are queued again.
    */
   async tick(): Promise<{ timedOut: number; polled: number; requeued: number }> {
     let timedOut = 0;
@@ -940,8 +951,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
       .from(jobs)
       .where(
         and(
-          eq(jobs.status, 'queued'),
-          isNull(jobs.submittedAt),
+          unsubmittedSql(),
           lt(jobs.createdAt, sql`now() - interval '30 seconds'`),
           or(isNull(jobs.leaseUntil), lt(jobs.leaseUntil, sql`now()`)),
         ),

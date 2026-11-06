@@ -195,7 +195,11 @@ export const ConvertJob = defineJob({
   },
 });
 
-export const ExportInput = z.object({ title });
+export const ExportInput = z.object({
+  title,
+  /** A transient error: the first attempt throws once it has reported progress. */
+  flaky: z.boolean().optional(),
+});
 
 /**
  * Work done here, in the worker, as whoever started it: no service, no callback, no poll. It
@@ -208,8 +212,10 @@ export const ExportJob = defineJob({
   output: z.object({ drawings: z.number().int() }),
   timeoutMs: 60_000,
   callback: false,
+  submitBackoffMs: 200,
   submit: async (ctx) => {
     await ctx.progress(50, 'Writing');
+    if (ctx.job.input.flaky && ctx.job.attempt === 1) throw new Error('The disk was busy');
     const p = await ctx.starter();
     const list = await DrawingDef.repo.list(ctx.db, p, { limit: 100 });
     const rows = list.items.map((d) => `${d.id},${d.title}`);

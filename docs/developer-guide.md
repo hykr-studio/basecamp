@@ -1039,7 +1039,10 @@ run: async ({ tx, principal, loaded }) => ({
   `ctx.progress(percent, message)`. It returns `{ externalId?, update? }`. Work done in `submit` itself
   (an export, an import) returns its finished update, with the files it made as bytes (`files`), and
   can act as whoever started it: `ctx.starter()` (refreshed, as an approval's replay) and `ctx.db`. A
-  throw is retried (`submitAttempts`, `submitBackoffMs`), then the job fails `submit_failed`.
+  throw is retried (`submitAttempts`, `submitBackoffMs`), then the job fails `submit_failed`. A job
+  stays unsubmitted until `submit` returns, even once its progress says `running`: a throw after
+  `ctx.progress`, or a worker that stopped mid-way, is submitted again (the tick picks up the latter
+  once its lease runs out), so `submit` must be safe to run twice.
 - **Callbacks.** The service posts a `JobUpdate` to `POST /api/jobs/:id/callback`, signed
   `x-job-signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`
   (`signJobCallback`). A wrong or stale signature is 401; each post is kept once (a repeat is 200

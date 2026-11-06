@@ -748,6 +748,48 @@ describe('work done in the worker', () => {
     expect(other.output).toEqual({ drawings: 0 });
   });
 
+  it('one that reported progress, then threw, is tried again and succeeds', async () => {
+    const started = await owner.call('POST', '/api/drawings/export', {
+      title: 'flaky',
+      flaky: true,
+    });
+    const id = started.body.value.id as string;
+    const j = await until(id, (x) => x.status === 'succeeded', 15_000);
+    expect(j).toMatchObject({ message: 'Written', progress: 100 });
+    const { rows } = await pool.query('select attempts from app.jobs where id = $1', [id]);
+    expect(rows[0].attempts).toBe(2);
+    // The second attempt's progress was no news: one event for it, one submission audited.
+    expect(await events(id)).toEqual([
+      'job.queued',
+      'job.running',
+      'job.progress',
+      'job.succeeded',
+    ]);
+    expect(await audit(id, 'job.submit')).toHaveLength(1);
+  });
+
+  it('one a stopped worker left running, never submitted, is taken up again by the tick', async () => {
+    const first = (await owner.call('POST', '/api/drawings/export', { title: 'cut' })).body.value;
+    await until(first.id, (x) => x.status === 'succeeded');
+    // As a worker that stopped mid-submission leaves it: it said it runs, its lease ran out.
+    const {
+      rows: [cut],
+    } = await pool.query(
+      `insert into app.jobs (tenant_id, kind, status, progress, message, input, started_for,
+         started_by_kind, started_by_id, principal, attempts, lease_until, deadline_at, created_at)
+       select tenant_id, kind, 'running', 50, 'Writing', input, started_for, started_by_kind,
+         started_by_id, principal, 1, now() - interval '1 second', now() + interval '1 minute',
+         now() - interval '1 minute'
+       from app.jobs where id = $1 returning id`,
+      [first.id],
+    );
+    await runner().tick();
+    const j = await until(cut.id, (x) => x.status === 'succeeded');
+    expect(j.submittedAt).toEqual(expect.any(String));
+    const { rows } = await pool.query('select attempts from app.jobs where id = $1', [cut.id]);
+    expect(rows[0].attempts).toBe(2);
+  });
+
   it('a callback cannot name files: unknown keys are dropped', async () => {
     const id = await running((await drawing('Plan Sneak')).id);
     const stolen = (
