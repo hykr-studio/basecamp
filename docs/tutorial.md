@@ -21,7 +21,7 @@ Every step below comes from an implementation that was built and tested against 
 | Notifications | two templates, two notifications | `application/domain/src/modules/visits/notifications/` |
 | Assistant | scripted-model turns, rules, eval cases | `application/domain/src/modules/visits/agent/` |
 | Module | `visits = defineModule(...)`, one line in each list of modules | `application/domain/src/modules/visits/index.ts`, `modules/index.ts`, `contracts/index.ts`, `views/index.ts` |
-| App | a Visits screen and the inline view components | `application/mobile/src/app/(domain)/visits.tsx`, `application/mobile/src/domain/views/visit.tsx` |
+| App | a `visits` app module: a Visits screen and the inline view components | `application/mobile/src/modules/visits/`, `application/mobile/src/app/visits/index.tsx` |
 | Tests | API e2e test, view test, golden WhatsApp conversation | `application/api/test/domain/visits.e2e.test.ts`, `application/domain/src/modules/visits/views/visits.test.ts`, `application/api/test/whatsapp/conversations/13-site-visit.yaml` |
 
 ---
@@ -46,7 +46,7 @@ A few facts that matter throughout:
 
 - **The API tests run the compiled app.** A test imports `boot` from `@hykr/api/testing` (compiled) and the application's server from `../../dist/server.js`, because Vitest's esbuild emits no decorator metadata. Build before you test.
 - **`MODEL_MODE=fake` runs a scripted model.** It has no network and costs nothing. `application/api/vitest.config.ts` forces it on for tests, along with `WORKER_INLINE=1`, `THROTTLE=off` and a fresh `BULL_PREFIX`.
-- **The framework never imports the application.** The application passes its domain in: `application/api/src/server.ts` hands each layer's `index` to `defineServer({ domain, module, views, notifications, agent, ... })`, and `application/mobile/src/domain/index.ts` builds the app's catalog and registry from the same exports. `pnpm lint:deps` enforces the line with the rule `framework-never-imports-application`. Each step below therefore ends with a one-line change to the layer's `index.ts`.
+- **The framework never imports the application.** The application passes its domain in: `application/api/src/server.ts` hands each layer's `index` to `defineServer({ domain, module, views, notifications, agent, ... })`, and `application/mobile/src/catalog.ts` builds the app's catalog and registry from the same exports. `pnpm lint:deps` enforces the line with the rule `framework-never-imports-application`. Each step below therefore ends with a one-line change to the layer's `index.ts`.
 
 ---
 
@@ -215,11 +215,11 @@ Then add the module's line to the apps' list of specs, `application/domain/src/c
 
 The key must be the plural. `moduleSpec` throws `visits: entity "visit" must be keyed by its plural (visits)` if it is not. It also stamps each spec with the module: `VisitSpec.module` is `'visits'`.
 
-**What you get for free at this step.** `createCatalog(...modules)` (`framework/contracts/src/catalog.ts`) merges every module's specs with the framework's own into a catalog's `entities` and `commands`, and refuses a name, plural, route or tool id another module already has. `defineServer` builds one for the server, and `application/mobile/src/domain/index.ts` builds one for the app. Several things are derived from those lists:
+**What you get for free at this step.** `createCatalog(...modules)` (`framework/contracts/src/catalog.ts`) merges every module's specs with the framework's own into a catalog's `entities` and `commands`, and refuses a name, plural, route or tool id another module already has. `defineServer` builds one for the server, and `application/mobile/src/catalog.ts` builds one for the app. Several things are derived from those lists:
 
 - the agent's tools (`list-visits`, `get-visit`, `create-visit`, `cancel-visit`)
 - the history resource types
-- the app's `useEntityList('visits', …)`, typed through the `Register` declaration in `application/mobile/src/domain/index.ts`
+- the app's `useEntityList('visits', …)`, typed through the `Register` declaration in `application/mobile/src/catalog.ts`
 
 None of it works until the API serves the routes (step 3).
 
@@ -965,7 +965,7 @@ The mobile app derives its data hooks from the same specs, so you need no client
 ### A Visits screen with the confirm command
 
 ```tsx
-// application/mobile/src/app/(domain)/visits.tsx (excerpt)
+// application/mobile/src/modules/visits/screens/Visits.tsx (excerpt)
 import { CancelVisitSpec, ConfirmVisitSpec, type Visit } from '@application/domain/contracts';
 import {
   at, Button, type Chip, DateField, errorMessage, isValidDate, isValidTime, styles, TimeField,
@@ -996,7 +996,7 @@ function Confirm({ visit }: { visit: Visit }) {
   );
 }
 
-export default function Visits() {
+export function Visits() {
   useScreenContext({ screen: 'visits' });
   const [chip, setChip] = useState(chips[0]);
   const list = useEntityList('visits', chip.query);
@@ -1005,23 +1005,37 @@ export default function Visits() {
 ```
 
 - `useCommand(spec)` posts to the spec's route and invalidates every entity query on success.
-- `useEntityList('visits', query)` is typed by the catalog registered in `application/mobile/src/domain/index.ts`. Its query uses the same list grammar as the API.
+- `useEntityList('visits', query)` is typed by the catalog registered in `application/mobile/src/catalog.ts`. Its query uses the same list grammar as the API.
 
-### Nav item, suggestion and inline views
-
-```ts
-// application/mobile/src/domain/index.ts, in defineAppDomain({ nav })
-{ href: '/visits', label: 'Visits', icon: 'map-pin', match: (p) => p.startsWith('/visits') },
-// suggestions:
-{ text: 'my site visits', what: 'lists the site visits' },
-
-// application/mobile/src/domain/bindings.tsx, in bindDomain()
-bindView(VisitListView, VisitListComponent);
-bindView(VisitCardView, VisitCardComponent);
-```
+### The app module: nav item, suggestion, inline views and the route
 
 ```tsx
-// application/mobile/src/domain/views/visit.tsx (excerpt)
+// application/mobile/src/modules/visits/index.tsx
+export const visits = defineAppModule({
+  name: 'visits',
+  nav: [{ href: '/visits', label: 'Visits', icon: 'map-pin', match: (p) => p.startsWith('/visits') }],
+  suggestions: [{ text: 'my site visits', what: 'lists the site visits' }],
+  bind: () => {
+    bindView(VisitListView, VisitListComponent);
+    bindView(VisitCardView, VisitCardComponent);
+  },
+  hrefFor: { visit: () => '/visits' },
+  webmcp: { visits: { reads: ['visits'] } },
+});
+
+// application/mobile/src/modules/index.ts: one line per module
+export { visits } from './visits';
+
+// application/mobile/src/app/visits/index.tsx: Expo Router's route file, one line
+export { Visits as default } from '@/modules/visits/screens/Visits';
+```
+
+The shell merges the modules when it starts. A destination outside `/visits`, a record type or a
+view another module already claims, or a view missing from the registry (`moduleViews`) stops
+the app with an error that names both sides.
+
+```tsx
+// application/mobile/src/modules/visits/views.tsx (excerpt)
 import type { Visit } from '@application/domain/contracts';
 import type { VisitCardView, VisitListView } from '@application/domain/views';
 import { Rows, ViewCard } from '@hykr/app';
@@ -1274,6 +1288,6 @@ FROM audit.events WHERE run_id = '<run-id>' ORDER BY at;
 - [ ] **Views:** `defineView` list and card with `text`, `speak`, `labels.noun` and `labels.empty`. Registered in the module's views and in `application/domain/src/views/index.ts`, with a view test.
 - [ ] **Notifications:** `defineTemplate` (versioned name, en/hi/te, an example) and `defineNotification` (`send.on` or `schedule`, `cancelOn`, `topic`, `to`, `channels`, `dedupe`). Passed to the module's `defineModule({ templates, notifications })`. `pnpm templates:sync` and `pnpm templates:check` pass.
 - [ ] **Assistant:** the module's rules, scripts and eval cases in its `AgentModule`; the persona and the `help` prefix kept in `server.ts` (and `channel.does` extended); the module listed before any module whose script would take its turns. `pnpm eval` (or `basecamp eval --module visits`) passes with the API running.
-- [ ] **App:** a screen in `application/mobile/src/app/(domain)/`, a nav item, and `bindView` for each view. `pnpm turbo run typecheck --filter=@application/mobile` passes.
+- [ ] **App:** an app module in `application/mobile/src/modules/<name>/` (`defineAppModule`: a nav item, `bindView` for each view, `hrefFor`), listed in `src/modules/index.ts`, and a one-line route in `src/app/<name>/`. `pnpm turbo run typecheck --filter=@application/mobile` passes.
 - [ ] **Tests:** an e2e test in `application/api/test/domain/` and a golden YAML in `application/api/test/whatsapp/conversations/`. Both pass with `cd application/api && pnpm vitest run <file>`.
 - [ ] **Repository checks:** `pnpm turbo run build typecheck test`, `pnpm lint` and `pnpm lint:deps` all pass.

@@ -31,7 +31,7 @@ places:
 | Where | What you write | What the framework does with it |
 |---|---|---|
 | `api/src/server.ts` | `defineServer({ name, persona, help, channel, modules, migrations })` | Serves the REST API, runs the write path (rules, approvals, audit), builds the assistant and its tools, sends notifications, runs the WhatsApp channel |
-| `mobile/src/app/_layout.tsx` | `<AppShell app catalog registry config />` | Renders the shell: sign-in, navigation, the assistant thread, approvals, the canvas, saved pages and voice |
+| `mobile/src/app/_layout.tsx` | `<AppShell app modules catalog registry config />` | Renders the shell: sign-in, navigation, the assistant thread, approvals, the canvas, saved pages and voice. `modules` are your app modules (`defineAppModule`) |
 
 Everything else in your application is one of these:
 
@@ -51,7 +51,7 @@ domain/            the domain package: your modules, and what gathers them
   src/db/index.ts      the migrations (drizzle/, one journal)          → @application/domain/db
   src/server/access.ts who reaches which rows, shared by the modules
 api/               server.ts (defineServer), main.ts, worker.ts, e2e tests
-mobile/            Expo app: <AppShell>, your routes and screens, your view components
+mobile/            Expo app: <AppShell>, your app modules (src/modules/<name>/), thin routes in src/app/
 back-office/       Expo web app for staff; usually unchanged
 package.json       the "basecamp" block: where the server and apps are
 ```
@@ -105,7 +105,8 @@ application code; nothing in `node_modules/@hykr` changes.
 ```bash
 rm -rf domain/src/modules/meetings domain/src/modules/notes domain/src/modules/todos \
        domain/src/modules/notifications.test.ts domain/src/views/views.test.ts domain/drizzle \
-       mobile/src/domain "mobile/src/app/(domain)" \
+       mobile/src/modules/meetings mobile/src/modules/notes mobile/src/modules/todos \
+       mobile/src/home mobile/src/app/meetings mobile/src/app/notes mobile/src/app/todos \
        api/test/domain api/test/whatsapp api/test/voice
 ```
 
@@ -116,6 +117,8 @@ Keep these, which you will edit:
 - `domain/src/db/index.ts`
 - `domain/src/server/access.ts`
 - `api/src/server.ts`
+- `mobile/src/modules/index.ts` (the list of app modules), `mobile/src/catalog.ts`,
+  `mobile/src/settings.ts` (step 10)
 - `mobile/src/app/_layout.tsx`
 - `mobile/src/app/pages/*`
 - `mobile/src/app/+not-found.tsx`
@@ -808,26 +811,24 @@ script taking another's eval turn. It lists every problem in one error.
 ## 10. The app
 
 The framework ships the whole shell: sign-in, navigation, the assistant, approvals, the
-canvas, saved pages and voice. Your app adds two things:
+canvas, saved pages and voice. Your app adds three things:
 
-- **your domain:** what the shell needs to know about it;
-- **your screens:** the components for your views and your routes.
+- **what it serves:** the catalog and registry, built from your domain;
+- **its app modules:** one per module of your domain, each with its destinations, its view and
+  screen components and its routes;
+- **its own settings:** the product's name and the screens that belong to no single module.
 
-`mobile/src/domain/index.ts` builds the catalog and registry from your modules, types your
-screens, and describes the app to the shell:
+`mobile/src/catalog.ts` builds the catalog and registry from your modules and types your
+screens:
 
 ```ts
-/** Fixit, in the app: the shell reads only what this file exports. */
+/** What Fixit's app serves: its entities, commands, views and screens, and the framework's. */
 import { moduleSpecs } from '@application/domain/contracts';
 import { moduleViews } from '@application/domain/views';
-import { defineAppDomain } from '@hykr/app';
 import { createCatalog } from '@hykr/contracts';
 import { createUiRegistry } from '@hykr/ui-registry';
-import { bindDomain } from './bindings';
 
-/** Every entity and command this app serves: Fixit's and the framework's. */
 export const catalog = createCatalog(...moduleSpecs);
-/** Every view and screen the assistant may show here. */
 export const registry = createUiRegistry(...moduleViews);
 
 // Types entity names and rows in this app's screens: useEntityList('jobs') is Job[].
@@ -836,49 +837,69 @@ declare module '@hykr/app' {
     catalog: typeof catalog;
   }
 }
+```
 
-export const appDomain = defineAppDomain({
+The `declare module` block makes `useEntityList('jobs')` return typed `Job` rows, and a typo
+like `useEntityList('jbos')` fail to compile.
+
+`mobile/src/settings.ts` is the app's own part. Fixit has no home screen of its own, so `/`
+sends the person to their jobs:
+
+```ts
+import type { AppSettings } from '@hykr/app';
+
+export const settings: AppSettings = {
   title: 'Fixit',
   tagline: 'Repair jobs, with an assistant',
-  nav: [
-    {
-      href: '/',
-      label: 'Jobs',
-      icon: 'tool',
-      match: (p) => p === '/' || p.startsWith('/jobs'),
-    },
-  ],
+  home: { href: '/jobs', label: 'Go to your jobs' },
+};
+```
+
+The jobs module, app side (`mobile/src/modules/jobs/index.tsx`). Its destinations live under
+`/jobs`, `bind` binds a component to each view and screen (`bindView` checks the component's
+props against the view's schema at compile time), and `hrefFor` says where a job opens, so the
+assistant's activity and other modules can link to it:
+
+```tsx
+import { JobCardView, JobDetailScreen, JobListView } from '@application/domain/views';
+import { defineAppModule } from '@hykr/app';
+import { bindScreen, bindView } from '@hykr/ui-registry/react';
+import { JobDetail } from './screens/JobDetail';
+import { JobCardComponent, JobListComponent } from './views';
+
+export { JobStatus } from './JobStatus';
+
+export const jobs = defineAppModule({
+  name: 'jobs',
+  nav: [{ href: '/jobs', label: 'Jobs', icon: 'tool', match: (p) => p.startsWith('/jobs') }],
   suggestions: [
     { text: 'jobs', what: 'your open jobs' },
     { text: 'book Fix the kitchen tap at 12 MG Road tomorrow', what: 'books a job' },
     { text: 'finish Fix the kitchen tap: replaced the washer', what: 'waits for your approval' },
   ],
-  bind: bindDomain,
+  bind: () => {
+    bindView(JobListView, JobListComponent);
+    bindView(JobCardView, JobCardComponent);
+    bindScreen(JobDetailScreen, ({ id }) => <JobDetail id={id} embedded />);
+  },
+  hrefFor: { job: (id) => `/jobs/${id}` },
+  // Read tools a browser agent may call on these screens (WebMCP), by useScreenContext name.
+  webmcp: { jobs: { reads: ['jobs'] }, job: { reads: ['jobs'] } },
 });
 ```
 
-The `declare module` block makes `useEntityList('jobs')` return typed `Job` rows, and a typo
-like `useEntityList('jbos')` fail to compile. Icons are [Feather](https://feathericons.com)
-names.
+List it in `mobile/src/modules/index.ts`, one line per module:
 
-Bind a component to each view and screen. `bindView` checks the component's props against the
-view's schema at compile time. `mobile/src/domain/bindings.tsx`:
-
-```tsx
-import { JobCardView, JobDetailScreen, JobListView } from '@application/domain/views';
-import { bindScreen, bindView } from '@hykr/ui-registry/react';
-import { JobDetail } from './screens/JobDetail';
-import { JobCardComponent, JobListComponent } from './views/job';
-
-/** This app's component for each of Fixit's views and screens (props checked at compile time). */
-export function bindDomain() {
-  bindView(JobListView, JobListComponent);
-  bindView(JobCardView, JobCardComponent);
-  bindScreen(JobDetailScreen, ({ id }) => <JobDetail id={id} embedded />);
-}
+```ts
+export { jobs } from './jobs';
 ```
 
-`mobile/src/domain/views/job.tsx`. This is how `job.list` and `job.card` look in the chat and
+The shell merges the modules when it starts and refuses any collision (two modules with one
+name, one destination or record type claimed twice, a view bound twice). Icons are
+[Feather](https://feathericons.com) names. Other modules import a module only through its
+`index.tsx`.
+
+`mobile/src/modules/jobs/views.tsx`. This is how `job.list` and `job.card` look in the chat and
 on the canvas:
 
 ```tsx
@@ -886,7 +907,7 @@ import type { JobCardView, JobListView } from '@application/domain/views';
 import { OpenRow, Rows, ViewCard, when } from '@hykr/app';
 import { Text } from '@hykr/app/ui';
 import type { ViewProps } from '@hykr/ui-registry/react';
-import { JobStatus } from '../JobStatus';
+import { JobStatus } from './JobStatus';
 
 /** How job.list looks in the chat and on the canvas. */
 export function JobListComponent({ title, items, act, words }: ViewProps<typeof JobListView>) {
@@ -922,7 +943,7 @@ export function JobCardComponent({ item, act }: ViewProps<typeof JobCardView>) {
 }
 ```
 
-One status badge, used everywhere a job's status shows (`mobile/src/domain/JobStatus.tsx`):
+One status badge, used everywhere a job's status shows (`mobile/src/modules/jobs/JobStatus.tsx`):
 
 ```tsx
 import type { JobStatus as Status } from '@application/domain/contracts';
@@ -946,7 +967,7 @@ export function JobStatus({ status }: { status: Status }) {
 ```
 
 The job's screen. The route and the canvas both show it.
-`mobile/src/domain/screens/JobDetail.tsx`:
+`mobile/src/modules/jobs/screens/JobDetail.tsx`:
 
 ```tsx
 import { CompleteJobSpec } from '@application/domain/contracts';
@@ -1013,8 +1034,7 @@ export function JobDetail({ id, embedded = false }: { id: string; embedded?: boo
 can name this job. `useCommand(CompleteJobSpec)` runs the command as the person. Because a
 person is completing it, it runs at once; the same command from the assistant waits for approval.
 
-Your routes live in `mobile/src/app/(domain)/`. The group adds no URL segment, and
-`index.tsx` is the home screen. `mobile/src/app/(domain)/index.tsx`:
+The jobs list, `mobile/src/modules/jobs/screens/Jobs.tsx`:
 
 ```tsx
 import {
@@ -1040,7 +1060,7 @@ import { Text } from '@hykr/app/ui';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, View } from 'react-native';
-import { JobStatus } from '@/domain/JobStatus';
+import { JobStatus } from '../JobStatus';
 
 /** Book a job: what, where, when. */
 function BookJob() {
@@ -1088,8 +1108,8 @@ function BookJob() {
   );
 }
 
-/** The home screen: open jobs, soonest first, and a form to book one. */
-export default function Jobs() {
+/** Open jobs, soonest first, and a form to book one. */
+export function Jobs() {
   useScreenContext({ screen: 'jobs' });
   const list = useEntityList('jobs', {
     status: { in: ['booked', 'in_progress'] },
@@ -1136,16 +1156,34 @@ export default function Jobs() {
 }
 ```
 
-`mobile/src/app/(domain)/jobs/[id].tsx`:
+The module's route components, `mobile/src/modules/jobs/routes.tsx`:
 
 ```tsx
 import { useLocalSearchParams } from 'expo-router';
-import { JobDetail } from '@/domain/screens/JobDetail';
+import { JobDetail } from './screens/JobDetail';
 
-/** /jobs/:id: the job's screen (the canvas shows the same one, bound in domain/bindings.tsx). */
-export default function JobRoute() {
+export { Jobs as JobsRoute } from './screens/Jobs';
+
+/** /jobs/:id: the job's screen (the canvas shows the same one, bound in index.tsx). */
+export function JobRoute() {
   const { id } = useLocalSearchParams<{ id: string }>();
   return <JobDetail id={id} />;
+}
+```
+
+Expo Router builds its routes from the files under `mobile/src/app/`, so each route is a file
+there: one line that re-exports the module's component. A module's routes sit in its own folder,
+`src/app/<module>/`:
+
+```tsx
+// mobile/src/app/jobs/index.tsx
+export { JobsRoute as default } from '@/modules/jobs/routes';
+// mobile/src/app/jobs/[id].tsx
+export { JobRoute as default } from '@/modules/jobs/routes';
+// mobile/src/app/index.tsx: the app's own home, here straight to the jobs
+import { Redirect } from 'expo-router';
+export default function Home() {
+  return <Redirect href="/jobs" />;
 }
 ```
 
@@ -1162,7 +1200,9 @@ export default function Pages() {
 ```
 
 `_layout.tsx`, `pages/[id].tsx` and `+not-found.tsx` stay as the scaffold made them. They
-render the framework's shell and screens. Rename the app in `mobile/app.json` (`name`, `slug`,
+render the framework's shell and screens: `_layout.tsx` passes `settings`, the modules barrel
+(`import * as modules from '@/modules'`), `catalog` and `registry` to `<AppShell>`, and
+`+not-found.tsx` also serves the framework plugins' screens. Rename the app in `mobile/app.json` (`name`, `slug`,
 `scheme`, the iOS `bundleIdentifier` and the Android `package`). If you change `scheme`, change
 it in `_layout.tsx` too.
 
@@ -1312,13 +1352,16 @@ For each module (`domain/src/modules/<name>/`, or `basecamp module add <name>`):
 6. **Assistant** (`agent/`): rules, scripts with verbs of the module's own, eval cases.
 7. **Bundle** (`index.ts`): `defineModule`, and one line in `modules/index.ts`,
    `contracts/index.ts` and `views/index.ts`.
+8. **App half** (`mobile/src/modules/<name>/`): `defineAppModule` (nav, suggestions, bind,
+   hrefFor, webmcp), a component per view and screen, one-line routes in `src/app/<name>/`,
+   and one line in `mobile/src/modules/index.ts`.
 
 Then, once:
 
-8. **`api/src/server.ts`**: `name`, `persona`, `help`, and `channel.does` in each language.
-9. **App** (`mobile/src`): `defineAppDomain` (title, nav, suggestions, bind), a component per
-   view and screen, and routes in `src/app/(domain)`. Rename `app.json`.
-10. **Tests and evals**: an e2e test per rule that matters, and `basecamp eval` (`--module` for one).
+9. **`api/src/server.ts`**: `name`, `persona`, `help`, and `channel.does` in each language.
+10. **App** (`mobile/src`): `settings.ts` (title, tagline, home, and the screens that combine
+    modules) and `catalog.ts`. Rename `app.json`.
+11. **Tests and evals**: an e2e test per rule that matters, and `basecamp eval` (`--module` for one).
 
 ## Things that will trip you up
 

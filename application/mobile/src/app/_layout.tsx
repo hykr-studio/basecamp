@@ -1,6 +1,8 @@
 import '../../global.css';
 import { AppShell } from '@hykr/app';
-import { appDomain, catalog, registry } from '../domain';
+import { catalog, registry } from '@/catalog';
+import * as modules from '@/modules';
+import { settings } from '@/settings';
 
 /** Read here, in the app's own code, where Expo inlines EXPO_PUBLIC_* variables. */
 const config = {
@@ -11,5 +13,13 @@ const config = {
 };
 
 export default function RootLayout() {
-  return <AppShell app={appDomain} catalog={catalog} registry={registry} config={config} />;
+  return (
+    <AppShell
+      app={settings}
+      modules={modules}
+      catalog={catalog}
+      registry={registry}
+      config={config}
+    />
+  );
 }

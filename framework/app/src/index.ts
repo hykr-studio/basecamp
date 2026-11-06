@@ -21,13 +21,30 @@ export {
 export { AssistantActivity } from './framework/AssistantActivity';
 export { ASSISTANT_ICON, AssistantMark, ByAssistant } from './framework/AssistantMark';
 export {
-  type AppDomain,
-  defineAppDomain,
+  type AppModule,
+  type AppPlugin,
+  type AppRoute,
+  type AppSettings,
+  defineAppModule,
+  isAppModule,
   type NavItem,
   type Suggestion,
+  type WebMcpScreen,
+  type WebMcpScreens,
 } from './framework/app-domain';
 
 export { AssistantProvider, useAssistant, useScreenContext } from './framework/assistant-context';
+export {
+  bindAll,
+  type ComposedApp,
+  type ComposedRoute,
+  type ComposedWebMcp,
+  composeApp,
+  FRAMEWORK_NAV,
+  type ModuleList,
+  matchRoute,
+  orderModules,
+} from './framework/compose-app';
 export { DateField, TimeField } from './framework/DateField';
 export {
   at,
@@ -47,11 +64,13 @@ export { Field } from './framework/Field';
 export { type Chip, FilterChips, SearchBox } from './framework/FilterChips';
 export { History } from './framework/History';
 export {
+  type CatalogOf,
   type EntityList,
   type EntityMutations,
   type EntityName,
   entityApi,
   errorMessage,
+  type MergedEntities,
   type Register,
   type RegisteredCatalog,
   specs,
@@ -67,6 +86,13 @@ export { Icon, type IconName } from './framework/Icon';
 export { Loading } from './framework/Loading';
 export { useLang, useT } from './framework/lang';
 export { Markdown } from './framework/Markdown';
+export {
+  filterNav,
+  runSignedIn,
+  SignedIn,
+  useNavFilters,
+  wrapProviders,
+} from './framework/plugins';
 export { ToastProvider, useToast } from './framework/Toast';
 export { TryPrompt } from './framework/TryPrompt';
 export { type Verb, verbOf } from './framework/verbs';
@@ -75,11 +101,13 @@ export { inApp, webHref } from './framework/web-link';
 export { cn } from './lib/utils';
 export {
   type AppRuntime,
-  getAppDomain,
+  getApp,
   getCatalog,
   getRegistry,
   getRuntime,
+  hrefFor,
   setRuntime,
+  webMcpFor,
 } from './runtime';
 export { NotFoundScreen } from './screens/NotFoundScreen';
 export { PageScreen } from './screens/PageScreen';

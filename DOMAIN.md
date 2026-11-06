@@ -9,8 +9,9 @@ application hands its modules to the framework in two places:
 
 - the server: `application/api/src/server.ts`, `defineServer({ name, persona, help, channel,
   modules, migrations, contributes })` from `@hykr/api`;
-- the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app catalog registry config />`
-  from `@hykr/app`, with the catalog and registry built from every module's specs and views.
+- the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app modules catalog registry
+  config />` from `@hykr/app`, with the app's modules (`defineAppModule`), and the catalog and
+  registry built from every module's specs and views.
 
 Two dependency-cruiser rules, run by `pnpm lint:deps`, keep it that way:
 `framework-never-imports-application` and `application-uses-public-framework-exports` (only
@@ -49,8 +50,9 @@ Around the modules, the application keeps:
 | Migrations | `application/domain/drizzle/`, `src/db/index.ts` | One journal for every module, generated from `src/modules/*/db/schema.ts`; `migrations` |
 | Shared server code | `application/domain/src/server/` | What several modules use, such as `BUSINESS_ACCESS` |
 | Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`: what the product is called, who the assistant is, and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools and delivery channels (developer guide, sections 5.9 and 5.10) |
-| App | `application/mobile/src/domain/` | `appDomain = defineAppDomain({ title, tagline, nav, home, suggestions, bind })` from `@hykr/app`; `bind` calls `bindView` / `bindScreen` for the modules' views and screens; `catalog = createCatalog(...moduleSpecs)` and `registry = createUiRegistry(...moduleViews)` |
-| App routes | `application/mobile/src/app/(domain)/` | The modules' screens; the group adds no URL segment. Provide `index.tsx` (the home screen) |
+| App modules | `application/mobile/src/modules/<name>/` and the barrel `src/modules/index.ts` (one line per module) | The app half of each module: `defineAppModule({ name, nav, suggestions, bind, hrefFor, webmcp })` from `@hykr/app`, in `index.tsx`: destinations under `/<name>`; `bind` calls `bindView` / `bindScreen` for the module's views and screens; `hrefFor` says where each of its records opens. Other modules import only that `index.tsx` |
+| App | `application/mobile/src/catalog.ts`, `settings.ts`, `home/` | `catalog = createCatalog(...moduleSpecs)` and `registry = createUiRegistry(...moduleViews)` with the `Register` declaration; `settings: AppSettings` (`title`, `tagline`, `home`, and the nav and suggestions of the screens that combine modules, such as the home screen) |
+| App routes | `application/mobile/src/app/<name>/` and `src/app/index.tsx` | One-line re-exports of each module's route components (Expo Router only knows files); `index.tsx` is the home screen |
 | Tests | `application/api/test/`, `application/domain/src/**/*.test.ts` | The application's own e2e, WhatsApp, voice, view and notification tests |
 
 ### How modules fit together

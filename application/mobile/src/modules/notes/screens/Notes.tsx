@@ -17,7 +17,7 @@ import {
 } from '@hykr/app';
 import { useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
-import { NoteRow } from '@/domain/components/Rows';
+import { NoteRow } from '../components/NoteRow';
 
 function NoteEditor({ note, onDone }: { note?: NoteView; onDone: () => void }) {
   const { create, update } = useEntityMutation('notes');
@@ -69,7 +69,7 @@ function NoteEditor({ note, onDone }: { note?: NoteView; onDone: () => void }) {
 }
 
 /** All notes, newest first, with search. Tap one to edit it. */
-export default function Notes() {
+export function Notes() {
   useScreenContext({ screen: 'notes' });
   const [q, setQ] = useState('');
   const [editing, setEditing] = useState<string | 'new' | null>(null);

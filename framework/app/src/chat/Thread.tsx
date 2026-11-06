@@ -15,7 +15,7 @@ import { AssistantMark } from '../framework/AssistantMark';
 import { clock } from '../framework/dates';
 import { Icon } from '../framework/Icon';
 import { inApp, webHref } from '../framework/web-link';
-import { getAppDomain } from '../runtime';
+import { getApp } from '../runtime';
 import { colors } from '../theme';
 import { MicButton, VoiceBar } from '../voice/VoiceBar';
 import { useVoice } from '../voice/VoiceProvider';
@@ -256,7 +256,7 @@ function Composer({ compact }: { compact: boolean }) {
               ? 'Enter sends; Shift+Enter starts a new line. Press / anywhere to come back here.'
               : undefined
           }
-          placeholder={`e.g. ${getAppDomain().suggestions[0]?.text ?? 'what can you do?'}`}
+          placeholder={`e.g. ${getApp().suggestions[0]?.text ?? 'what can you do?'}`}
           placeholderTextColor={colors.placeholder}
           textAlignVertical="top"
           style={Platform.OS === 'web' ? undefined : { height }}
@@ -287,7 +287,7 @@ function Help({ onPick }: { onPick: (text: string) => void }) {
       <Text variant="muted">
         It acts for you through the same API as this app. Anything risky waits for your approval.
       </Text>
-      {getAppDomain().suggestions.map((c) => (
+      {getApp().suggestions.map((c) => (
         <Pressable
           key={c.text}
           accessibilityRole="button"

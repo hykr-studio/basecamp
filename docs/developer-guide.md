@@ -116,7 +116,7 @@ Every write answers a `WriteResult` (`framework/contracts/src/framework/write.ts
 
 ### The application: the folders you replace
 
-The application is `application/`. Its `package.json` (`@application/app`) holds the `"basecamp"` block (where the compiled server, the watched packages, the apps and the migrations are) and the scripts. The framework never imports any of it. The application is a list of modules, each a folder `application/domain/src/modules/<name>/` with one folder per layer. The application hands them to the framework in two places: the server definition in `application/api/src/server.ts`, and the catalog and registry in `application/mobile/src/domain/index.ts`. The dependency-cruiser rule `framework-never-imports-application` enforces this (`pnpm lint:deps`).
+The application is `application/`. Its `package.json` (`@application/app`) holds the `"basecamp"` block (where the compiled server, the watched packages, the apps and the migrations are) and the scripts. The framework never imports any of it. The application is a list of modules, each a folder `application/domain/src/modules/<name>/` with one folder per layer. The application hands them to the framework in two places: the server definition in `application/api/src/server.ts`, and the app's settings, modules, catalog and registry in `application/mobile/src/app/_layout.tsx`. The dependency-cruiser rule `framework-never-imports-application` enforces this (`pnpm lint:deps`).
 
 In a module (`application/domain/src/modules/<name>/`, for example `todos`):
 
@@ -139,8 +139,9 @@ Around the modules:
 | `application/domain/src/server/access.ts` | `BUSINESS_ACCESS`, shared by the modules | You change who sees what |
 | `application/domain/drizzle/` | Generated SQL migrations and `meta/_journal.json`, one journal for every module, recorded in `drizzle.__app_migrations` | After `pnpm db:generate --name <name>`. Never edit by hand. |
 | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`; `main.ts` and `worker.ts` start it | You change who the assistant is, or what the WhatsApp welcome and HELP say it does (`channel.does`) |
-| `application/mobile/src/domain/` | `catalog = createCatalog(...moduleSpecs)`, `registry = createUiRegistry(...moduleViews)`, `appDomain = defineAppDomain({ tagline, nav, suggestions, bind })`, React components for your views, screens | You draw a view in the app or add nav items |
-| `application/mobile/src/app/(domain)/` | Expo Router routes for your screens. `index.tsx` is the home screen. `_layout.tsx` renders `<AppShell>`. | You add an app screen |
+| `application/mobile/src/modules/<name>/` | The app half of each module: `index.tsx` (`defineAppModule({ name, nav, suggestions, bind, hrefFor, webmcp })` and what other modules may use), `routes.tsx`, `views.tsx`, `screens/`, `components/`. Listed in `src/modules/index.ts`, one line each | You draw a view in the app, add a screen or a nav item |
+| `application/mobile/src/catalog.ts`, `settings.ts`, `home/` | `catalog = createCatalog(...moduleSpecs)`, `registry = createUiRegistry(...moduleViews)` and the `Register` declaration; `settings` (title, tagline, home); the home screen, which combines modules | You change what the app serves or its home screen |
+| `application/mobile/src/app/` | Expo Router route files: one-line re-exports, each module's under `<name>/`. `index.tsx` is the home screen. `_layout.tsx` renders `<AppShell>`. | You add an app screen |
 | `application/api/test/domain/`, `application/api/test/whatsapp/`, `application/domain/src/**/*.test.ts` | Your application's e2e, golden WhatsApp, view and notification tests | Always, with the feature |
 
 ### The framework: the folders you read
@@ -164,7 +165,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/api/src/runtime.ts`, `start.ts` | `defineServer`, `startApi`, `startWorker`, `migrate`, `runTemplates`, `runEval`, `startStudio`. `testing.ts` is `@hykr/api/testing`. `hooks.ts` holds the server's extension points (section 5.9), `module.ts` `defineModule`, and `module-checks.ts` the boot checks across modules (section 5.11). |
 | `framework/api/src/channels/` | WhatsApp webhook, queues, sending, notifications dispatch, template sync, handoff, back office API, erasure |
 | `framework/api/src/modules/` | Chat, threads, history, me, voice, pages |
-| `framework/app/src/` | `AppShell`, `defineAppDomain`, data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; primitives in `@hykr/app/ui` |
+| `framework/app/src/` | `AppShell`, `defineAppModule` and the plugin types (`framework/app-domain.ts`), their merge (`framework/compose-app.ts`) and plugin slots (`framework/plugins.ts`), data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; primitives in `@hykr/app/ui` |
 | `framework/cli/` | The `basecamp` command (`module-add.ts` scaffolds a module, `db-rebase.ts` regenerates migrations after a rebase), plus the `compose.yaml` and `infra/` it starts |
 
 ### Import rules
@@ -848,6 +849,28 @@ export const server = defineServer({ name: 'Meetings', persona, help, channel, m
 - **A framework feature with its own routes** under `/api/<x>` calls `reserveRoutes('<x>')` from
   `@hykr/contracts` in a file `@hykr/api` loads, so no module can claim them.
 
+**The app side.** `<AppShell app modules plugins catalog registry />` merges the application's
+settings, its app modules (`defineAppModule`) and its plugins, in that order, then the framework's
+own (Pages). It refuses every collision when it starts: two modules with one name, a destination
+outside its module's `/<name>`, one href, suggestion, `hrefFor` record type or WebMCP screen
+claimed twice, two plugins or two route shapes with one name, a view or screen bound twice
+(`bindView` / `bindScreen` throw) or bound but not in the registry. Readers: `getApp()`,
+`hrefFor(type, id)` (where a record opens; `AssistantActivity` links with it) and
+`webMcpFor(screen)`. A framework feature plugs in as an `AppPlugin`, with optional slots:
+
+- `Provider`: wraps the app under the shell's providers, signed in or not;
+- `onSignedIn(user)`: runs once per signed-in person, after the shell mounts, and its returned
+  cleanup at sign-out or when the shell installs again (Fast Refresh). Errors are logged, never
+  thrown into the app;
+- `routes`: screens at paths no route file claims, served by `+not-found` (`NotFoundScreen`). A
+  `public` one also renders signed out, alone, without the shell;
+- `nav`: destinations for its routes;
+- `useNav(items)`: a hook that hides or reorders destinations (each carries its `module`), never
+  adds one.
+
+`Register` takes `{ catalog }` or `{ modules }` (isomorphic `ModuleSpec`s, entities merged).
+The tests are in `framework/app/src/framework/*.test.ts` and `framework/ui-registry/src/react.test.ts`.
+
 ---
 
 ## 6. Principals and policy
@@ -1075,11 +1098,15 @@ export const TodoListView = defineView({
 
 Add it to the module's `<name>Views.views`. `createUiRegistry` refuses a spoken list view without `labels.noun` and `labels.empty`, and a view or screen name another module (or the framework) already has.
 
-Bind it to a component in the app, in `bindDomain()` in `application/mobile/src/domain/bindings.tsx`:
+Bind it to a component in the app, in its app module's `bind` (`application/mobile/src/modules/todos/index.ts`):
 
 ```ts
-bindView(TodoListView, TodoListComponent); // bindView from @hykr/ui-registry/react
+bind: () => {
+  bindView(TodoListView, TodoListComponent); // bindView from @hykr/ui-registry/react
+},
 ```
+
+A view has one component: binding it twice throws, naming both modules.
 
 The component gets the props, plus `act(actionName, item)` and `words`:
 
@@ -1331,7 +1358,7 @@ A feature is done when every box is ticked:
 - [ ] `defineEntity` / `defineCommand` with the right `access`, `rules` and `authorize`. Every command passes `via` and lists everything it changes in `touched`.
 - [ ] Nest module with controllers *and* handlers, passed to the module's `defineModule({ server })`.
 - [ ] Every action the agent should not do alone has an approval rule, or is `expose: 'human'`.
-- [ ] Views for list and item, with `text`, `speak` and `labels` in `en`, `hi` and `te`. They are bound in the app (`bindDomain` in `application/mobile/src/domain/bindings.tsx`).
+- [ ] Views for list and item, with `text`, `speak` and `labels` in `en`, `hi` and `te`. They are bound in the app (the app module's `bind`, in `application/mobile/src/modules/<name>/index.tsx`).
 - [ ] Scripts for the fake model, and eval cases for new phrases.
 - [ ] Templates and notifications, if the feature sends anything. `pnpm templates:check` passes.
 - [ ] An e2e test in `application/api/test/domain/` covering: a stranger gets 404, a denied rule gets 403 with its `rule`, and a parked agent write shows up in approvals.
@@ -1366,7 +1393,9 @@ These are not built. Each has a workaround for now.
 | Per-turn agent version | A turn hook can pick the model, but audit rows' `agentVersion` still names `AGENT_MODEL`. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
-| The app half of modules | The app still has one `appDomain` (nav, suggestions, bindings) and routes under `(domain)/`. `basecamp module add` writes a module's app files, but registers them only once `mobile/src/modules/index.ts` exists. Add its nav entry and `bind` to `appDomain` by hand for now. |
+| App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
+| Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter), but no framework feature fills them yet, and WebMCP declarations (`webmcp`) are not registered with the browser. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |
 | Per-module tools for the assistant | The assistant sees every module's tools on every turn. |
 | An approval sweeper | Expiry is checked when someone decides. Expired rows stay `pending` in `GET /api/approvals` until then. |

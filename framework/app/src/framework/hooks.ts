@@ -1,5 +1,12 @@
 import { ApiError, type EntityClient } from '@hykr/api-client';
-import type { Catalog, CommandSpec, ListInput, WriteResult } from '@hykr/contracts';
+import type {
+  Catalog,
+  CommandSpec,
+  EntitySpec,
+  ListInput,
+  ModuleSpec,
+  WriteResult,
+} from '@hykr/contracts';
 import {
   type InfiniteData,
   type UseMutationResult,
@@ -16,17 +23,43 @@ import { useToast } from './Toast';
 
 /**
  * Where an application tells the type system which catalog it runs, so entity names and rows
- * are typed in its screens. Without it, any name is accepted and rows are loosely typed.
+ * are typed in its screens. Without it, any name is accepted and rows are loosely typed. Either
+ * its catalog, or its modules' isomorphic specs (`ModuleSpec`), whose entities are merged:
  *
  *   declare module '@hykr/app' {
- *     interface Register { catalog: typeof catalog }
+ *     interface Register { catalog: typeof catalog }      // or: { modules: typeof modules }
  *   }
  */
 // biome-ignore lint/suspicious/noEmptyInterface: filled in by the application's declaration.
 export interface Register {}
 
+type UnionToIntersection<U> = (U extends unknown ? (u: U) => void : never) extends (
+  i: infer I,
+) => void
+  ? I
+  : never;
+
+/** Every module's entities in one map: the intersection of their `entities`. */
+export type MergedEntities<M extends readonly { entities: Record<string, EntitySpec> }[]> = [
+  M[number],
+] extends [never]
+  ? Record<never, EntitySpec>
+  : UnionToIntersection<M[number]['entities']> extends infer E extends Record<string, EntitySpec>
+    ? E
+    : never;
+
+/**
+ * The catalog type a registration declares: its `catalog`, or a catalog of its `modules`'
+ * merged entities (plus the platform's), or the general Catalog.
+ */
+export type CatalogOf<R> = R extends { catalog: infer C extends Catalog }
+  ? C
+  : R extends { modules: infer M extends readonly ModuleSpec[] }
+    ? Catalog<MergedEntities<M>>
+    : Catalog;
+
 /** The application's catalog type, once registered; the general Catalog until then. */
-export type RegisteredCatalog = Register extends { catalog: infer C extends Catalog } ? C : Catalog;
+export type RegisteredCatalog = CatalogOf<Register>;
 type Entities = RegisteredCatalog['entities'];
 
 /**

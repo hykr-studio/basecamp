@@ -9,7 +9,7 @@ import { clock, dayLabel, OpenRow, Rows, ViewCard, when } from '@hykr/app';
 import { Button, Text } from '@hykr/app/ui';
 import type { ViewProps } from '@hykr/ui-registry/react';
 import { View } from 'react-native';
-import { MeetingStatus } from '../meetings';
+import { MeetingStatus } from './status';
 
 const ymdOf = (iso: string) => new Date(iso).toLocaleDateString('sv');
 
