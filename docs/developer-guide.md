@@ -1090,13 +1090,15 @@ who hears about it are the application's. The sample's `orders` module uses ever
 
 - **States.** `traits.states: { field, initial, states: { <name>: { label?, terminal? } },
   transitions, slas? }`. The field is a text column in the read and update schemas. A transition
-  is `{ name, from, to, label?, expose?, can?, requires?, fields?, guard?, approval?, tier?,
+  is `{ name, from, to, label?, expose?, can?, requires?, fields?, guard?, approval?, level?,
   event? }`: `expose` is `all` (default), `human` or `system` (only the server's own work); `can`
   a capability; `requires` the fields the request must carry (a reason), listed in `fields`, the
   update-schema fields it may set; `guard(row, input, p)` returns `{ rule, reason }` to refuse;
-  `approval` and `tier` say when it waits and at what level. The server checks the machine at
-  start (`checkStates`): an unknown state, a terminal state with a way out or a duplicate SLA name
-  stops it.
+  `approval` says when it waits and who decides (its object form's `level` names the level a
+  park is at); `level` puts the move at one of your approval levels, whose policy decides
+  (section 5.8). A level rule on `<entity>.transition` can read `input.transition` too. The
+  server checks the machine at start (`checkStates`): an unknown state or level, a terminal state
+  with a way out or a duplicate SLA name stops it.
 - **Moving a record.** `POST /api/transitions/<plural>/:id/<transition>` with the transition's
   fields (anything else is a 400), `api.transition(spec, id, name, input)`, the assistant's
   `transition-<plural>` tool, or `useTransition(spec)` and `<TransitionBar>` in the app (with `<StateBadge>`). It is one
