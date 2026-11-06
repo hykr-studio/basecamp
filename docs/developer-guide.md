@@ -715,9 +715,9 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   contributed as `subscribers`. The relay adds one job per event and subscriber (id
   `<subscriber>--<event id>`, so a repeat runs once): `handle` runs on the shared `events` queue,
   `queue` adds the envelope to your own queue. Events come from the registered `eventFeeds` (the
-  durable outbox), polled by the worker with this process's prefix. Until a feed exists, the in-process
-  event bus is relayed after commit. Subscribers get the stored row: pass it through `projectRead`
-  before it leaves the server.
+  durable outbox), polled by the worker each second with this process's prefix and `ctx`; `relayed`
+  marks what went out. Until a feed exists, the in-process event bus is relayed after commit.
+  Subscribers get the stored row: pass it through `projectRead` before it leaves the server.
 - **Turn hooks.** Every chat turn and back-office draft passes `turnHooks` in `ChatService`, after
   the framework's own `model-key` hook. `before` returns `{ refuse: { rule, reason, status?, say? } }`
   or `{ context?, model?, withoutTools? }`; a refusal is `TurnRefused` (403 unless given, nothing saved;
@@ -732,7 +732,8 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   later goes to `NotifyService.fallback(meta)`. An unregistered channel stops the start.
 - **Inbound hooks.** Each WhatsApp message the code did not answer itself (buttons, keywords) passes
   `inboundHooks` before its turn: `{ handled: true }` keeps it out, `{ context }` adds lines the turn
-  reads. A hook that throws is logged and skipped.
+  reads. A hook that throws is logged and skipped. A burst that says "delete my data" passes no hook:
+  the erasure is queued and the rest of the burst is dropped.
 - **Personal data.** "Delete my data" runs `erasureContributors` in its transaction and audits their
   counts. `exportPersonalData({ subject, db })` collects `exportContributors` by kind.
 - **Hooks that need services.** Queue processors and subscriber handlers get `ctx`. A turn, inbound
@@ -1172,7 +1173,7 @@ These are not built. Each has a workaround for now.
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
 | Entity rules that park | An entity rule's `needs_approval` is ignored. Only `deny` counts. Use `spec.approval`, or a command whose `authorize` returns `needsApproval`. |
 | Hooks that run | Queues, schedules, subscribers, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (section 5.10). Entity plugins, write hooks, read projectors, identity providers and auth plugins are installed and not called yet. |
-| A durable event outbox | Subscribers get events from the in-process bus after commit: a crash between commit and relay loses one, and the bus says nothing about the actor (`kind: 'unknown'`). Notifications still schedule from the bus. The outbox registers as an `EventFeed` when it lands, and the bus steps aside. |
+| A durable event outbox | Subscribers get events from the in-process bus after commit. A crash between commit and relay loses one, the envelope's id is a fresh one rather than the stored event's (so the dedupe by event id does not reach the outbox), and the actor is `kind: 'unknown'`. Notifications still schedule from the bus. F5 adds the `outbox` feed when it is integrated after F3 (`framework/api/src/features/events/outbox-feed.ts`, contributed by `eventsFeature`), and the bus steps aside by itself. |
 | Per-turn agent version | A turn hook can pick the model, but audit rows' `agentVersion` still names `AGENT_MODEL`. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Approval tiers | A decision's `tier`, `approver`, `amount` and `undoMs` are carried, not acted on. Parking, deciders and the audit trail ignore them, and an approved replay drops them. |
