@@ -34,12 +34,15 @@ const access: Access = {
 
 describe('the framework roles and capabilities', () => {
   it('give exactly what the hard-coded role checks gave, and the comment capabilities', () => {
+    // Deciding: owner and ops decided the business's requests, owner and admin marketing sends.
     expect(capabilitiesOf(['owner'])).toEqual([
+      'approvals.decide',
       'backoffice.use',
       'channels.manage',
       'comments.internal',
       'comments.moderate',
       'customers.message',
+      'marketing.approve',
       'queues.admin',
     ]);
     expect(capabilitiesOf(['admin'])).toEqual([
@@ -49,9 +52,11 @@ describe('the framework roles and capabilities', () => {
       'comments.moderate',
       'customers.message',
       'history.all',
+      'marketing.approve',
       'queues.admin',
     ]);
     expect(capabilitiesOf(['ops'])).toEqual([
+      'approvals.decide',
       'backoffice.use',
       'comments.internal',
       'customers.message',

@@ -1,4 +1,5 @@
 import { type ChannelAdapter, type OutboundMessage, signApproval } from '@hykr/channels';
+import { rolesWith } from '@hykr/contracts';
 import { type Database, schema } from '@hykr/db';
 import { langOf } from '@hykr/i18n';
 import {
@@ -287,24 +288,34 @@ export class DispatchProcessor extends WorkerHost {
     return `ntf:${def.key}:${button}`;
   }
 
-  /** Everyone in the business holding one of these roles, as people. */
+  /**
+   * Every member of the business whose roles hold the capability, as people, each once, without
+   * the ones it leaves out (the requester of an approval decides nothing of their own).
+   */
   private async expand(tenantId: string, recipients: Recipient[]): Promise<Recipient[]> {
     const out: Recipient[] = [];
+    const seen = new Set<string>();
     for (const r of recipients) {
-      if (!('roles' in r)) {
+      if (!('capability' in r)) {
         out.push(r);
         continue;
       }
+      const roles = rolesWith(r.capability);
+      if (!roles.length) continue;
       const members = await this.db
         .select({ userId: schema.memberships.userId })
         .from(schema.memberships)
         .where(
           and(
             eq(schema.memberships.tenantId, tenantId),
-            arrayOverlaps(schema.memberships.roles, r.roles),
+            arrayOverlaps(schema.memberships.roles, roles),
           ),
         );
-      out.push(...members.map((m) => ({ userId: m.userId })));
+      for (const m of members) {
+        if (r.except?.includes(m.userId) || seen.has(m.userId)) continue;
+        seen.add(m.userId);
+        out.push({ userId: m.userId });
+      }
     }
     return out;
   }

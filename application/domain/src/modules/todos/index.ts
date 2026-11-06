@@ -4,6 +4,7 @@ import { todosAgent } from './agent/index.js';
 import { todosSpec } from './contracts/index.js';
 import * as tables from './db/schema.js';
 import { todosNotifications } from './notifications/index.js';
+import { TodoLevels } from './server/levels.js';
 import { TodosModule } from './server/todos.module.js';
 import { todosViews } from './views/index.js';
 
@@ -16,4 +17,5 @@ export const todos = defineModule({
   notifications: todosNotifications.notifications,
   agent: todosAgent,
   tables,
+  contributes: { levelRules: [TodoLevels] },
 });

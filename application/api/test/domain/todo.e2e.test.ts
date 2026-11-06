@@ -65,6 +65,12 @@ describe('to-dos, end to end', () => {
     const [approval] = (await alice.call('GET', '/api/approvals')).body;
     expect(approval.summary).toBe('Delete "Call the plumber"');
     expect(approval.requestedBy).toBe('agent');
+    // This application's level for a to-do write, and Alice decides her assistant's request.
+    expect(approval).toMatchObject({
+      level: { name: 'internal', rank: 1, label: { en: 'Internal change' } },
+      canDecide: true,
+      decider: { by: 'requester', userId: alice.id },
+    });
 
     expect((await bob.call('POST', `/api/approvals/${approval.id}/approve`)).status).toBe(404);
     const ok = await alice.call('POST', `/api/approvals/${approval.id}/approve`);
@@ -73,7 +79,23 @@ describe('to-dos, end to end', () => {
     expect(await titles(alice)).not.toContain('Call the plumber');
   });
 
-  it('7. list grammar: filter, sort and a second page by cursor', async () => {
+  it('7. a to-do change is internal: it is done at once, and Alice can undo it for a moment', async () => {
+    const made = await alice.call('POST', '/api/todos', { title: 'Book the crane' });
+    expect(made.body).toMatchObject({ status: 'done', undo: { id: expect.any(String) } });
+    const ticked = await alice.call('PATCH', `/api/todos/${made.body.value.id}`, { done: true });
+    expect(ticked.body).toMatchObject({ status: 'done', value: { done: true } });
+    // Bob cannot undo Alice's change; Alice can, once.
+    expect((await bob.call('POST', `/api/undo/${ticked.body.undo.id}`)).status).toBe(404);
+    const undone = await alice.call('POST', `/api/undo/${ticked.body.undo.id}`);
+    expect(undone.body).toMatchObject({ undone: true, action: 'todo.update' });
+    expect((await alice.call('GET', `/api/todos/${made.body.value.id}`)).body.done).toBe(false);
+    expect((await alice.call('POST', `/api/undo/${ticked.body.undo.id}`)).status).toBe(409);
+    // Undoing the create removes it.
+    expect((await alice.call('POST', `/api/undo/${made.body.undo.id}`)).status).toBe(200);
+    expect(await titles(alice)).not.toContain('Book the crane');
+  });
+
+  it('8. list grammar: filter, sort and a second page by cursor', async () => {
     for (const [title, dueOn] of [
       ['Pour slab', '2026-11-03'],
       ['Fix gate', '2026-11-01'],
