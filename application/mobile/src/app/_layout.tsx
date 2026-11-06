@@ -1,5 +1,5 @@
 import '../../global.css';
-import { AppShell } from '@hykr/app';
+import { AppShell, creditsPlugin } from '@hykr/app';
 import { catalog, registry } from '@/catalog';
 import * as modules from '@/modules';
 import { settings } from '@/settings';
@@ -19,6 +19,8 @@ export default function RootLayout() {
       modules={modules}
       catalog={catalog}
       registry={registry}
+      // The business's credits: usage, the pause, buying more (`/credits`).
+      plugins={[creditsPlugin]}
       config={config}
     />
   );

@@ -4,6 +4,7 @@
  * aggregates (../contracts, ../views). Replace these to bring another domain; see DOMAIN.md.
  * One line per module: `basecamp module add <name>` adds its own.
  */
+import { account } from './account/index.js';
 import { meetings } from './meetings/index.js';
 import { notes } from './notes/index.js';
 import { todos } from './todos/index.js';
@@ -12,5 +13,6 @@ export const modules = [
   todos,
   notes,
   meetings,
+  account,
   // basecamp module add: one line per module, above this one.
 ];
