@@ -3,3 +3,4 @@
 export { eventsFeature } from './events/index.js';
 export { filesFeature } from './files/index.js';
 export { modelsFeature } from './models/index.js';
+export { moneyFeature } from './money/index.js';

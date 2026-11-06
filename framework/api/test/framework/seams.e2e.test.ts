@@ -57,7 +57,8 @@ describe('contributions', () => {
       const [contributed] = seamsContributions[key as keyof typeof registries] ?? [];
       expect(registry.get(NAME), key).toBe(contributed);
       // The framework's features register their own too (the channel's queues, the events
-      // queue, the files hooks): the application's is the only fixture one.
+      // queue, the files hooks, money's entity plugins `parent` and `money`): the application's
+      // is the only fixture one.
       expect(registry.all(), key).toContain(contributed);
       const fixtures = (registry.all() as readonly { name: string }[]).filter((x) =>
         x.name.startsWith('fixture.'),

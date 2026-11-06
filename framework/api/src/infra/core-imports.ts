@@ -25,6 +25,8 @@ export const coreImports = () => [
     ],
     // Stored events carry this process's queue prefix: only its relay passes them on.
     queuePrefix: config.queuePrefix,
+    // A business without its own currency counts in the deployment's (DEFAULT_CURRENCY).
+    defaultCurrency: config.defaultCurrency,
   }),
   // Each module's entities and commands, in module order.
   ...runtime().definition.modules.flatMap((m) => (m.server ? [m.server] : [])),

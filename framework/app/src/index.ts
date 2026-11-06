@@ -95,6 +95,7 @@ export { Icon, type IconName } from './framework/Icon';
 export { Loading } from './framework/Loading';
 export { useLang, useT } from './framework/lang';
 export { Markdown } from './framework/Markdown';
+export { useMoneyText } from './framework/money';
 export {
   filterNav,
   runSignedIn,
