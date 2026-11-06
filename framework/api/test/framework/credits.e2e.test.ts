@@ -4,6 +4,7 @@
 // through a provider; and who may see and do what.
 import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
+import { TenantConfigService } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CreditsService } from '../../dist/index.js';
 import {
@@ -187,6 +188,45 @@ describe('metering, by default', () => {
       paused: false,
     });
     expect(status.period.unit).toBe('month');
+  });
+
+  it('usage by meter and day, for the people who manage the credits', async () => {
+    const usage = (await ana.call('GET', '/api/credits/usage')).body;
+    const day = new Date().toISOString().slice(0, 10);
+    expect(usage).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ meter: 'tool_calls', quantity: 1, cost: 100 }),
+        expect.objectContaining({ meter: 'tokens' }),
+      ]),
+    );
+    expect(
+      usage.every((u: { day: string }) => Math.abs(Date.parse(u.day) - Date.parse(day)) <= 864e5),
+    ).toBe(true);
+    expect((await ana.call('GET', '/api/credits/usage?from=nope')).status).toBe(400);
+  });
+
+  it('settings that do not parse: the status is 503, and voice is refused', async () => {
+    const tenantId = tenant[ana.name];
+    await pool.query(
+      `update app.tenants set settings = jsonb_set(settings, '{credits}', '{"allowance": -1}') where id = $1`,
+      [tenantId],
+    );
+    const credits = server.app?.get(CreditsService, { strict: false }) as CreditsService;
+    const config = server.app?.get(TenantConfigService) as TenantConfigService;
+    config.invalidate(tenantId);
+    try {
+      const res = await ana.call('GET', '/api/credits');
+      expect(res.status).toBe(503);
+      expect(res.body.error).toBe('credits_unavailable');
+      expect(await credits.check({ tenantId, meter: 'voice_seconds' })).toMatchObject({
+        rule: 'credits_unavailable',
+      });
+    } finally {
+      await pool.query(`update app.tenants set settings = settings - 'credits' where id = $1`, [
+        tenantId,
+      ]);
+      config.invalidate(tenantId);
+    }
   });
 
   it('a turn without a tool counts its tokens only', async () => {

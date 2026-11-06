@@ -32,6 +32,7 @@ import {
   NotFoundException,
   type OnModuleDestroy,
   type OnModuleInit,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { EventBus } from '@nestjs/cqrs';
@@ -576,7 +577,17 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
 
   /** The business's credits this period. Amounts only with `manage`. */
   async status(tenantId: string, manage: boolean): Promise<CreditsStatus> {
-    const { plan, period, a } = await this.assessment(tenantId);
+    let plan: CreditsPlanResolved;
+    let zone: string;
+    try {
+      ({ plan, zone } = await this.planOf(tenantId));
+    } catch {
+      throw new ServiceUnavailableException({
+        error: UNAVAILABLE.rule,
+        reason: UNAVAILABLE.reason,
+      });
+    }
+    const { period, a } = await this.assessIn(this.db, tenantId, plan, zone);
     const paused =
       plan.override?.mode === 'pause' || (plan.enforce && a.budget?.pause)
         ? refusalFor(a, FrameworkMeters.tokens)
