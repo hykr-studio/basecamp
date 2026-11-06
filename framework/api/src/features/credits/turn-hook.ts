@@ -48,7 +48,8 @@ async function before(svc: CreditsService, turn: TurnInfo): Promise<TurnGate | n
     { meter: FrameworkMeters.toolCalls.name },
   ]);
   const refusal = tokens ?? tools;
-  if (!refusal) return null;
+  // Settings that do not parse: the model policy refuses the turn itself (503), naming why.
+  if (!refusal || refusal.rule === 'credits_unavailable') return null;
   let say = labels('credits.paused');
   if (!can(p, CreditsViewCapability) && turn.channel === 'whatsapp' && p.subject) {
     const contact = await contactOf(svc, p.tenantId, p.subject);

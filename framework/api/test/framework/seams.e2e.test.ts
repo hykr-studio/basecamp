@@ -56,8 +56,10 @@ describe('contributions', () => {
     for (const [key, registry] of Object.entries(registries)) {
       const [contributed] = seamsContributions[key as keyof typeof registries] ?? [];
       expect(registry.get(NAME), key).toBe(contributed);
-      // The framework registers its own queues too (the channel's, the events queue).
-      if (key === 'queues') expect(registry.all(), key).toContain(contributed);
+      // The framework registers its own queues, schedules and turn hooks too (the channel's
+      // queues, the events queue, the credits feature's sweep and turn hook).
+      if (['queues', 'schedules', 'turnHooks'].includes(key))
+        expect(registry.all(), key).toContain(contributed);
       else expect(registry.all(), key).toEqual([contributed]);
     }
     expect(api.runtime().contributions).toEqual(seamsContributions);
@@ -75,7 +77,7 @@ describe('contributions', () => {
     expect(() => api.turnHooks.register({ name: NAME })).toThrow(
       'The turn hook "fixture.seams" is registered twice',
     );
-    expect(api.turnHooks.all()).toHaveLength(1);
+    expect(api.turnHooks.all().filter((h) => h.name === NAME)).toHaveLength(1);
   });
 
   it('a key that nothing collects fails closed, before anything is registered', () => {
