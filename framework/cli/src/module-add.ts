@@ -1,8 +1,9 @@
 // `basecamp module add <name>`: a new application module, both halves, and the lines that
 // register it. The server half goes to <db>/src/modules/<name>/ (contracts, db, server, views,
-// notifications, agent, index.ts); the app half to <app>/src/modules/<name>/ and the route
-// <app>/src/app/<name>/index.tsx. Everything it writes builds as is: one entity with a title,
-// its table, a list view, and empty notifications and agent parts to fill in.
+// notifications, agent, index.ts); the app half to <app>/src/modules/<name>/ (index.tsx,
+// views.tsx, routes.ts, screens/) and the route <app>/src/app/<name>/index.tsx, a one-line
+// re-export. Everything it writes builds as is: one entity with a title, its table, a list view,
+// a list screen, and empty notifications and agent parts to fill in.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 
@@ -151,24 +152,21 @@ export function moduleAdd(input: ModuleAddInput): ModuleAddResult {
     const defineAppModule = appHasDefineAppModule(join(root, app));
     for (const [file, content] of Object.entries(appFiles(n, defineAppModule)))
       write(join(appDir, file), content);
+    // The app's modules barrel: one `export { name } from './name';` line per module.
     const list = join(appDir, 'modules', 'index.ts');
     if (existsSync(list)) {
-      const source = readFileSync(list, 'utf8');
       writeFileSync(
         list,
-        insertEntry(
-          insertSorted(
-            source,
-            `import { ${n.m}App } from './${name}';`,
-            /^import \{ \w+ \} from '\.\/[a-z0-9_]+';$/,
-          ),
-          `${n.m}App,`,
+        insertSorted(
+          readFileSync(list, 'utf8'),
+          `export { ${n.m} } from './${name}';`,
+          /^export \{ \w+ \} from '\.\/[a-z0-9_-]+';$/,
         ),
       );
       result.registered.push(relative(root, list));
     } else
       result.todo.push(
-        `Add ${n.m}App (${relative(root, join(appDir, 'modules', name))}) to the app shell: ${relative(root, list)} does not exist yet.`,
+        `Register ${n.m} (${relative(root, join(appDir, 'modules', name))}) with the app shell: ${relative(root, list)} does not exist yet.`,
       );
   }
   result.todo.push(
@@ -435,6 +433,7 @@ export const ${n.m} = defineModule({
 /** The app half, by path inside the app's src/. */
 function appFiles(n: Names, defineAppModule: boolean): Record<string, string> {
   const views = `${n.domainPackage}/modules/${n.module}/views`;
+  const Screen = pascal(n.plural);
   const nav = `[
     {
       href: '/${n.module}',
@@ -443,8 +442,16 @@ function appFiles(n: Names, defineAppModule: boolean): Record<string, string> {
       match: (path: string) => path.startsWith('/${n.module}'),
     },
   ]`;
+  const body = `{
+  name: '${n.module}',
+  nav: ${nav},
+  suggestions: [],
+  bind: () => {
+    bindView(${n.E}ListView, ${n.E}ListComponent);
+  },
+}`;
   return {
-    [`modules/${n.module}/views/${n.E}List.tsx`]: `import { Rows, ViewCard } from '@hykr/app';
+    [`modules/${n.module}/views.tsx`]: `import { Rows, ViewCard } from '@hykr/app';
 import { Text } from '@hykr/app/ui';
 import type { ViewProps } from '@hykr/ui-registry/react';
 import type { ${n.E}ListView } from '${views}';
@@ -459,37 +466,20 @@ export function ${n.E}ListComponent({ title, items, words }: ViewProps<typeof ${
   );
 }
 `,
-    [`modules/${n.module}/index.ts`]: defineAppModule
-      ? `import { defineAppModule } from '@hykr/app';
-import { bindView } from '@hykr/ui-registry/react';
+    [`modules/${n.module}/index.tsx`]: `/**
+ * The ${words(n.module)} module, app side: its destination and its views' components. Other code
+ * imports this file only, never a file under it.
+ */
+${defineAppModule ? "import { defineAppModule } from '@hykr/app';\n" : ''}import { bindView } from '@hykr/ui-registry/react';
 import { ${n.E}ListView } from '${views}';
-import { ${n.E}ListComponent } from './views/${n.E}List';
+import { ${n.E}ListComponent } from './views';
 
-/** The ${words(n.module)} module in the app: its nav entry and its views' components. */
-export const ${n.m}App = defineAppModule({
-  name: '${n.module}',
-  nav: ${nav},
-  suggestions: [],
-  bind: () => {
-    bindView(${n.E}ListView, ${n.E}ListComponent);
-  },
-});
-`
-      : `import { bindView } from '@hykr/ui-registry/react';
-import { ${n.E}ListView } from '${views}';
-import { ${n.E}ListComponent } from './views/${n.E}List';
-
-/** The ${words(n.module)} module in the app: its nav entry and its views' components. */
-export const ${n.m}App = {
-  name: '${n.module}',
-  nav: ${nav},
-  suggestions: [],
-  bind: () => {
-    bindView(${n.E}ListView, ${n.E}ListComponent);
-  },
-};
+export const ${n.m} = ${defineAppModule ? `defineAppModule(${body})` : body};
 `,
-    [`app/${n.module}/index.tsx`]: `import {
+    [`modules/${n.module}/routes.ts`]: `// The ${words(n.module)} module's route components; src/app/${n.module}/ re-exports them.
+export { ${Screen} as ${Screen}Route } from './screens/${Screen}';
+`,
+    [`modules/${n.module}/screens/${Screen}.tsx`]: `import {
   EmptyState,
   LoadError,
   ScreenTitle,
@@ -500,7 +490,7 @@ export const ${n.m}App = {
 import { FlatList, Text, View } from 'react-native';
 
 /** Every ${n.label}, newest first. */
-export default function ${pascal(n.plural)}Screen() {
+export function ${Screen}() {
   useScreenContext({ screen: '${n.module}' });
   const list = useEntityList('${n.plural}', { sort: '-createdAt' });
   return (
@@ -527,6 +517,8 @@ export default function ${pascal(n.plural)}Screen() {
     />
   );
 }
+`,
+    [`app/${n.module}/index.tsx`]: `export { ${Screen}Route as default } from '@/modules/${n.module}/routes';
 `,
   };
 }

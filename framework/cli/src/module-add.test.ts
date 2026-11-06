@@ -77,31 +77,33 @@ describe('basecamp module add', () => {
     );
   });
 
-  it('writes the app half, and registers it once the app has a modules list', () => {
+  it('writes the app half, and registers it once the app has a modules barrel', () => {
     const first = moduleAdd({ root, db: 'domain', app: 'mobile', name: 'orders' });
-    expect(first.created).toContain('mobile/src/modules/orders/index.ts');
-    expect(first.created).toContain('mobile/src/modules/orders/views/OrderList.tsx');
-    expect(first.created).toContain('mobile/src/app/orders/index.tsx');
-    expect(read('mobile/src/modules/orders/index.ts')).toContain(
+    for (const file of [
+      'modules/orders/index.tsx',
+      'modules/orders/views.tsx',
+      'modules/orders/routes.ts',
+      'modules/orders/screens/Orders.tsx',
+      'app/orders/index.tsx',
+    ])
+      expect(first.created).toContain(`mobile/src/${file}`);
+    expect(read('mobile/src/modules/orders/index.tsx')).toContain(
       "from '@application/domain/modules/orders/views'",
     );
-    expect(first.todo[0]).toMatch(/ordersApp .* does not exist yet/);
+    expect(read('mobile/src/app/orders/index.tsx')).toBe(
+      "export { OrdersRoute as default } from '@/modules/orders/routes';\n",
+    );
+    expect(first.todo[0]).toMatch(/Register orders .* does not exist yet/);
 
     put(
       'mobile/src/modules/index.ts',
-      `export const appModules = [\n  // ${MARKER}: one line per module, above this one.\n];\n`,
-    );
-    put('mobile/src/modules/todos/index.ts', '');
-    writeFileSync(
-      join(root, 'mobile/src/modules/index.ts'),
-      `import { todosApp } from './todos';\n\n${read('mobile/src/modules/index.ts')}`,
+      "// The app modules, one line each.\nexport { todos } from './todos';\n",
     );
     const second = moduleAdd({ root, db: 'domain', app: 'mobile', name: 'invoices' });
     expect(second.registered).toContain('mobile/src/modules/index.ts');
-    expect(read('mobile/src/modules/index.ts')).toContain(
-      `import { invoicesApp } from './invoices';\nimport { todosApp } from './todos';`,
+    expect(read('mobile/src/modules/index.ts')).toBe(
+      "// The app modules, one line each.\nexport { invoices } from './invoices';\nexport { todos } from './todos';\n",
     );
-    expect(read('mobile/src/modules/index.ts')).toContain(`  invoicesApp,\n  // ${MARKER}`);
   });
 
   it('names a second entity table after the module, and creates missing barrels', () => {
