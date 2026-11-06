@@ -1,4 +1,4 @@
-import { slaHook, type SweepResult } from '@hykr/core';
+import { type SweepResult, slaHook } from '@hykr/core';
 import { defineQueue, defineSchedule } from '../../queues/define.js';
 import { defineFeature } from '../feature.js';
 import { SlaController } from './sla.controller.js';

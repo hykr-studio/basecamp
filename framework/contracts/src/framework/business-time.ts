@@ -28,7 +28,8 @@ export function minutesOf(hhmm: string): number {
   if (!m) throw new Error(`"${hhmm}" is not a time of day (HH:MM)`);
   const h = Number(m[1]);
   const min = Number(m[2]);
-  if (min > 59 || h > 24 || (h === 24 && min > 0)) throw new Error(`"${hhmm}" is not a time of day`);
+  if (min > 59 || h > 24 || (h === 24 && min > 0))
+    throw new Error(`"${hhmm}" is not a time of day`);
   return h * 60 + min;
 }
 
@@ -91,7 +92,8 @@ const nextDay = ({ y, m, d }: LocalDay): LocalDay => {
 };
 const iso = ({ y, m, d }: LocalDay) =>
   `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-const weekdayOf = ({ y, m, d }: LocalDay): Weekday => WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+const weekdayOf = ({ y, m, d }: LocalDay): Weekday =>
+  WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
 
 const ALL_DAY: readonly OpenInterval[] = [{ from: '00:00', to: '24:00' }];
 

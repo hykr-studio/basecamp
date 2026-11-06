@@ -145,7 +145,9 @@ describe("the assistant's transitions wait at their level", () => {
       action: 'ticket.transition',
       input: { transition: 'cancel' },
     });
-    expect(parked.body.approval.summary).toBe('Cancel ticket "Old request" (v1, version 1): open → cancelled');
+    expect(parked.body.approval.summary).toBe(
+      'Cancel ticket "Old request" (v1, version 1): open → cancelled',
+    );
     const [asked] = await audit(t.id, 'ticket.transition');
     expect(asked).toMatchObject({ actor_kind: 'agent', outcome: 'needs_approval' });
     expect((await owner.call('GET', `/api/tickets/${t.id}`)).body.status).toBe('open');
@@ -237,10 +239,7 @@ describe('who reaches a transition', () => {
   it("the history shows a state change's from and to", async () => {
     const t = await create(owner, 'Historic');
     await move(owner, t.id, 'start');
-    const history = await owner.call(
-      'GET',
-      `/api/history?resourceType=ticket&resourceId=${t.id}`,
-    );
+    const history = await owner.call('GET', `/api/history?resourceType=ticket&resourceId=${t.id}`);
     const moves = history.body
       .map((e: { transition?: unknown }) => e.transition)
       .filter((x: unknown) => x);

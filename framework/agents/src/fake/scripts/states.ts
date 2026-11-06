@@ -1,7 +1,7 @@
 // State machines (any entity with states):
 //   apply <transition> to <plural> "<title>"   list-<plural> → transition-<plural> (may wait)
 // A refused move (a wrong state, a missing capability) is answered by the engine itself.
-import { call, defineScript, items, type Row, say, sameTitle, written } from '../engine.js';
+import { call, defineScript, items, type Row, sameTitle, say, written } from '../engine.js';
 import { defineScriptSet } from '../script-set.js';
 
 const APPLY = /^apply ([a-z][\w-]*) to ([a-z][\w-]*) ["“](.+?)["”]\.?$/i;
@@ -18,7 +18,8 @@ export const statesScripts = defineScriptSet({
       },
       step: ({ transition, plural, title }, turn) => {
         const moved = turn.result(`transition-${plural}`);
-        if (moved) return [say(written(moved, () => `Done: "${title}" took "${transition}".`, turn))];
+        if (moved)
+          return [say(written(moved, () => `Done: "${title}" took "${transition}".`, turn))];
         const found = turn.result(`list-${plural}`);
         if (!found) return [call(`list-${plural}`, { q: title })];
         const record = items(found).find((r: Row) => sameTitle(String(r.title ?? ''), title));

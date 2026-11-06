@@ -1,4 +1,10 @@
-import { CORE_OPTIONS, type CoreOptions, eventQueues, type SweepResult, sweepSla } from '@hykr/core';
+import {
+  CORE_OPTIONS,
+  type CoreOptions,
+  eventQueues,
+  type SweepResult,
+  sweepSla,
+} from '@hykr/core';
 import { Inject, Injectable } from '@nestjs/common';
 import { EventBus } from '@nestjs/cqrs';
 

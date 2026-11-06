@@ -217,7 +217,12 @@ describe("an order's life", () => {
     number = first.body.value.order.number;
     const second = await save(owner, { orderId, version: 1, title: 'Versioned', items: [] });
     expect(second.body.value.order.version).toBe(2);
-    const stale = await save(owner, { orderId, version: 1, title: 'From an old screen', items: [] });
+    const stale = await save(owner, {
+      orderId,
+      version: 1,
+      title: 'From an old screen',
+      items: [],
+    });
     expect(stale.status).toBe(409);
     expect(stale.body.error).toBe('stale');
     // Back to the full order, from the version read.
@@ -253,25 +258,35 @@ describe("an order's life", () => {
       version: 1,
       total: inr(497_051),
     });
-    expect(res.body.value.items.map((i: Item) => i.title).sort()).toEqual(
-      ['Bathroom', 'Cabinet', 'Kitchen', 'Sink', 'Tiles'],
-    );
+    expect(res.body.value.items.map((i: Item) => i.title).sort()).toEqual([
+      'Bathroom',
+      'Cabinet',
+      'Kitchen',
+      'Sink',
+      'Tiles',
+    ]);
     const v1 = (await owner.call('GET', `/api/orders/${orderId}`)).body;
     expect(v1).toMatchObject({ status: 'superseded', number });
     // Leaving submitted ended v1's clocks.
     const clocks = (await owner.call('GET', `/api/sla/orders/${orderId}`)).body;
     expect(clocks.every((c: { status: string }) => c.status === 'met')).toBe(true);
     // v2 is a draft: it changes, then it is submitted, approved and fulfilled.
-    const changed = await save(owner, { orderId: v2.id, title: 'Versioned', items: rooms.slice(0, 3) });
+    const changed = await save(owner, {
+      orderId: v2.id,
+      title: 'Versioned',
+      items: rooms.slice(0, 3),
+    });
     expect(changed.body.value.order.lineCount).toBe(2);
     expect((await move(owner, v2.id, 'submit')).body.value.status).toBe('submitted');
     const versions = (
       await owner.call('GET', `/api/history/versions?resourceType=order&resourceId=${v2.id}`)
     ).body;
-    expect(versions.map((v: { revision: number; state: string }) => [v.revision, v.state])).toEqual([
-      [1, 'superseded'],
-      [2, 'submitted'],
-    ]);
+    expect(versions.map((v: { revision: number; state: string }) => [v.revision, v.state])).toEqual(
+      [
+        [1, 'superseded'],
+        [2, 'submitted'],
+      ],
+    );
     // Staff reach only their own orders, and may not approve even those; the owner may.
     expect((await move(staff, v2.id, 'approve', {}, inTenant())).status).toBe(404);
     const theirs = (await save(staff, { title: 'Staff own', items: [] }, inTenant())).body.value;
@@ -311,7 +326,7 @@ describe("an order's life", () => {
     });
   });
 
-  it("a decision overdue past its SLA tells the owners; a week later it expires", async () => {
+  it('a decision overdue past its SLA tells the owners; a week later it expires', async () => {
     const order = (await save(owner, { title: 'Waiting long', items: rooms })).body.value.order;
     await move(owner, order.id, 'submit');
     const clocks = (await owner.call('GET', `/api/sla/orders/${order.id}`)).body as {

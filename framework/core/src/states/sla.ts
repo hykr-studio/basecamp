@@ -168,9 +168,7 @@ export const slaHook: WriteHook = {
       if (!def || !trait) continue;
       const before = asRow(t.before);
       const after = asRow(t.after);
-      const tenantId = String(
-        after?.tenantId ?? before?.tenantId ?? ctx.principal.tenantId ?? '',
-      );
+      const tenantId = String(after?.tenantId ?? before?.tenantId ?? ctx.principal.tenantId ?? '');
       if (!tenantId) continue;
       const settings = async () => {
         config ??= await slaConfig(tx, tenantId);
@@ -184,7 +182,8 @@ export const slaHook: WriteHook = {
       if (typeof to !== 'string') continue;
       const from = t.change === 'created' ? undefined : before?.[trait.field];
       if (t.change !== 'created' && (from === undefined || from === to)) continue;
-      if (typeof from === 'string') await end(tx, { tenantId, type: def.name, id: t.id, state: from, at });
+      if (typeof from === 'string')
+        await end(tx, { tenantId, type: def.name, id: t.id, state: from, at });
       await start(tx, { tenantId, def, id: t.id, state: to, at }, settings);
     }
   },
@@ -260,10 +259,7 @@ export async function sweepSla(
         .select()
         .from(def.table as Table)
         .where(
-          and(
-            eq(cols.id as Column, timer.resourceId),
-            eq(cols.tenantId as Column, timer.tenantId),
-          ),
+          and(eq(cols.id as Column, timer.resourceId), eq(cols.tenantId as Column, timer.tenantId)),
         )) as Values[];
       if (!row) return [];
       // It left the state without its write ending the clock (a command that did not list the

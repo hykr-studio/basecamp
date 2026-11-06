@@ -200,7 +200,8 @@ export function checkStates(spec: EntitySpec): void {
       if (trait.states[s]?.terminal)
         problems.push(`the transition "${t.name}" leaves "${s}", a terminal state`);
     for (const f of t.fields ?? [])
-      if (!(f in update)) problems.push(`the transition "${t.name}" sets "${f}", not in the update schema`);
+      if (!(f in update))
+        problems.push(`the transition "${t.name}" sets "${f}", not in the update schema`);
     for (const f of t.requires ?? [])
       if (!(t.fields ?? []).includes(f))
         problems.push(`the transition "${t.name}" requires "${f}": list it in its fields too`);
@@ -228,13 +229,14 @@ export function checkStates(spec: EntitySpec): void {
       const t = transitionNamed(trait, out);
       if (!t) problems.push(`the SLA "${s.name}" escalates by "${out}", not a transition`);
       else if (!startsFrom(t, s.state))
-        problems.push(`the SLA "${s.name}" escalates by "${out}", which does not leave "${s.state}"`);
+        problems.push(
+          `the SLA "${s.name}" escalates by "${out}", which does not leave "${s.state}"`,
+        );
       else if ((t.requires ?? []).length)
         problems.push(`the SLA "${s.name}" escalates by "${out}", which requires fields`);
     }
   }
-  if (problems.length)
-    throw new Error(`${spec.name}'s states: ${problems.join('; ')}`);
+  if (problems.length) throw new Error(`${spec.name}'s states: ${problems.join('; ')}`);
 }
 
 /** The body of POST /api/transitions/:entity/:id/:transition: the transition's own fields. */

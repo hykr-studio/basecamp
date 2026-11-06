@@ -4,8 +4,8 @@ import { CommandHandler, EventBus } from '@nestjs/cqrs';
 import type { z } from 'zod';
 import type { RuleContext } from '../entity/define-entity.js';
 import { CORE_OPTIONS, type CoreOptions, type Tx } from '../tokens.js';
+import { checkPins, type Pins, type PinTarget, pinsOf } from '../versions/pins.js';
 import { registerOp } from '../write/approvals.js';
-import { checkPins, type PinTarget, type Pins, pinsOf } from '../versions/pins.js';
 import { type RunResult, runWrite, type WriteCtx, type WriteOp } from '../write/pipeline.js';
 import { presentOutput } from '../write/present.js';
 
@@ -93,30 +93,32 @@ export function defineCommand<S extends CommandSpec, L, V>(
       const pin = config.pin;
       const load = config.load;
       return {
-      name: spec.name,
-      kind: 'command',
-      resourceType: config.resource.type,
-      resourceId: config.resource.id,
-      input: spec.input as unknown as z.ZodType<z.output<S['input']>>,
-      get args() {
-        return pins ? { pins } : undefined;
-      },
-      load:
-        load && pin
-          ? async (tx, p, input) => {
-              const loaded = await load(tx, p, input);
-              const targets = pin(loaded, input);
-              if (pinned) checkPins(targets, pinned);
-              else pins = pinsOf(targets);
-              return loaded;
-            }
-          : load,
-      authorize: config.authorize,
-      summarize: config.summarize,
-      approval: config.approval,
-      run: (a) => config.run({ ...a, via }),
-      present: (value, p) =>
-        config.present ? config.present(value, p) : presentOutput(spec.output, value, p, spec.name),
+        name: spec.name,
+        kind: 'command',
+        resourceType: config.resource.type,
+        resourceId: config.resource.id,
+        input: spec.input as unknown as z.ZodType<z.output<S['input']>>,
+        get args() {
+          return pins ? { pins } : undefined;
+        },
+        load:
+          load && pin
+            ? async (tx, p, input) => {
+                const loaded = await load(tx, p, input);
+                const targets = pin(loaded, input);
+                if (pinned) checkPins(targets, pinned);
+                else pins = pinsOf(targets);
+                return loaded;
+              }
+            : load,
+        authorize: config.authorize,
+        summarize: config.summarize,
+        approval: config.approval,
+        run: (a) => config.run({ ...a, via }),
+        present: (value, p) =>
+          config.present
+            ? config.present(value, p)
+            : presentOutput(spec.output, value, p, spec.name),
       };
     },
   };

@@ -17,13 +17,13 @@ export {
   type Uploader,
 } from './features/files/public.js';
 export { type LiveResource, liveResources } from './features/live/resources.js';
-export { SlaService } from './features/sla/sla.service.js';
 export {
   ModelPolicyChanged,
   ModelPolicyService,
   ModelRefused,
   SET_MODEL_POLICY,
 } from './features/models/index.js';
+export { SlaService } from './features/sla/sla.service.js';
 export {
   type AgentIdentity,
   type AgentIdentityProvider,

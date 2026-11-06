@@ -68,7 +68,7 @@ describe('versions', () => {
     expect(fresh.body.value).toMatchObject({ title: 'Now', version: 3 });
   });
 
-  it("a parked edit names the version it saw, and fails if the record moved on", async () => {
+  it('a parked edit names the version it saw, and fails if the record moved on', async () => {
     const t = await create(owner, 'Pinned');
     const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
     const parked = await asks('PATCH', `/api/tickets/${t.id}`, { title: 'By the assistant' });
@@ -81,7 +81,7 @@ describe('versions', () => {
     expect((await get(t.id)).title).toBe('By the owner');
   });
 
-  it("a parked edit approved before anything changed runs", async () => {
+  it('a parked edit approved before anything changed runs', async () => {
     const t = await create(owner, 'Still');
     const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
     const parked = await asks('PATCH', `/api/tickets/${t.id}`, { title: 'Changed' });
@@ -90,10 +90,12 @@ describe('versions', () => {
     expect(await get(t.id)).toMatchObject({ title: 'Changed', version: 2 });
   });
 
-  it("a command pins what it loaded: a plan approved after an edit fails", async () => {
+  it('a command pins what it loaded: a plan approved after an edit fails', async () => {
     const t = await create(owner, 'Planned');
     const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
-    const parked = await asks('POST', `/api/tickets/${t.id}/plan`, { steps: [{ ref: 'x', title: 'X' }] });
+    const parked = await asks('POST', `/api/tickets/${t.id}/plan`, {
+      steps: [{ ref: 'x', title: 'X' }],
+    });
     expect(parked.body.status).toBe('needs_approval');
     await owner.call('PATCH', `/api/tickets/${t.id}`, { title: 'Planned again' });
     const approved = await owner.call('POST', `/api/approvals/${parked.body.approval.id}/approve`);

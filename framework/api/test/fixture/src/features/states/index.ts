@@ -72,7 +72,11 @@ export const TicketSpec = entitySpec({
   description: 'Tickets: a title, a state, a resolution once resolved.',
   schemas: {
     read: Ticket,
-    create: z.object({ title, note: z.string().max(500).optional(), status: z.string().optional() }),
+    create: z.object({
+      title,
+      note: z.string().max(500).optional(),
+      status: z.string().optional(),
+    }),
     update: z.object({
       title: title.optional(),
       note: z.string().max(500).nullable().optional(),
@@ -209,7 +213,8 @@ export const PlanTicketSpec = commandSpec({
 
 export const ReviseTicketSpec = commandSpec({
   name: 'ticket.revise',
-  description: 'Make the next revision of a resolved ticket, with its steps; the old one is superseded.',
+  description:
+    'Make the next revision of a resolved ticket, with its steps; the old one is superseded.',
   input: z.object({ ticketId: z.uuid() }),
   output: z.object({ ticket: Ticket, steps: z.array(Step) }),
   http: { method: 'POST', path: '/api/tickets/:ticketId/revise' },
@@ -262,7 +267,10 @@ function tree(steps: readonly StepIn[], under?: string): ChildNode[] {
 
 type TicketRow = typeof tickets.$inferSelect;
 type StepRow = typeof ticketSteps.$inferSelect;
-const shown = (v: { ticket: TicketRow; steps: StepRow[] }, p: Parameters<typeof TicketDef.toRead>[1]) => ({
+const shown = (
+  v: { ticket: TicketRow; steps: StepRow[] },
+  p: Parameters<typeof TicketDef.toRead>[1],
+) => ({
   ticket: TicketDef.toRead(v.ticket, p),
   steps: v.steps.map((s) => StepDef.toRead(s, p)),
 });

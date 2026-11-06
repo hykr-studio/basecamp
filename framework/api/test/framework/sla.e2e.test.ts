@@ -99,7 +99,7 @@ describe('clocks start and stop with the state', () => {
     expect(rows).toHaveLength(0);
   });
 
-  it("deleting the record cancels its clocks", async () => {
+  it('deleting the record cancels its clocks', async () => {
     const t = await create(owner, 'Gone');
     expect((await owner.call('DELETE', `/api/tickets/${t.id}`)).status).toBeLessThan(300);
     const { rows } = await pool.query('select status from app.sla_timers where resource_id = $1', [
@@ -123,7 +123,12 @@ describe('the sweeper', () => {
       [t.id],
     );
     expect(audit).toEqual([
-      { actor_kind: 'system', actor_id: 'sla.escalate', channel: 'background', outcome: 'committed' },
+      {
+        actor_kind: 'system',
+        actor_id: 'sla.escalate',
+        channel: 'background',
+        outcome: 'committed',
+      },
     ]);
     const { rows: events } = await pool.query(
       'select name, row from app.domain_events where resource_id = $1 order by occurred_at',
@@ -197,14 +202,15 @@ describe('who sees the clocks', () => {
   it('lists only the clocks of records the caller reads', async () => {
     const mine = await create(staff, 'Staff timed', inTenant());
     const owners = await create(owner, 'Owner timed');
-    const list = (await staff.call('GET', '/api/sla?status=running&limit=100', undefined, inTenant()))
-      .body as SlaTimer[];
+    const list = (
+      await staff.call('GET', '/api/sla?status=running&limit=100', undefined, inTenant())
+    ).body as SlaTimer[];
     const ids = new Set(list.map((x) => x.resourceId));
     expect(ids.has(mine.id)).toBe(true);
     expect(ids.has(owners.id)).toBe(false);
-    expect((await staff.call('GET', `/api/sla/tickets/${owners.id}`, undefined, inTenant())).status).toBe(
-      404,
-    );
+    expect(
+      (await staff.call('GET', `/api/sla/tickets/${owners.id}`, undefined, inTenant())).status,
+    ).toBe(404);
     const all = (await owner.call('GET', '/api/sla?status=breached&limit=100')).body as SlaTimer[];
     expect(all.length).toBeGreaterThan(0);
     expect(all.every((x) => x.status === 'breached')).toBe(true);

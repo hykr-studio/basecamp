@@ -14,8 +14,8 @@ import {
   isFrozen,
   type Principal,
   SlaSettings,
-  stateLabel,
   type StatesTrait,
+  stateLabel,
   transitionsFrom,
 } from '@hykr/contracts';
 import { describe, expect, it } from 'vitest';
@@ -35,7 +35,13 @@ const machine: StatesTrait = {
   },
   transitions: [
     { name: 'send', from: 'draft', to: 'sent' },
-    { name: 'finish', from: ['draft', 'sent'], to: 'done', requires: ['reason'], fields: ['reason'] },
+    {
+      name: 'finish',
+      from: ['draft', 'sent'],
+      to: 'done',
+      requires: ['reason'],
+      fields: ['reason'],
+    },
   ],
   slas: [{ name: 'unit.reply', state: 'sent', within: '4h', escalate: { roles: ['owner'] } }],
 };
@@ -73,7 +79,7 @@ describe('a state machine', () => {
     expect(canMove(machine, 'done', 'draft')).toBe(false);
   });
 
-  it("names a state by its label, or its name made readable", () => {
+  it('names a state by its label, or its name made readable', () => {
     expect(stateLabel(machine, 'sent', 'en')).toBe('Sent out');
     expect(stateLabel(machine, 'awaiting_reply', 'en')).toBe('Awaiting reply');
   });
@@ -186,9 +192,9 @@ describe('business time', () => {
 
   it('refuses a working week with no open hour, and a backwards interval', () => {
     expect(BusinessHours.safeParse({ week: { mon: [] } }).success).toBe(false);
-    expect(BusinessHours.safeParse({ week: { mon: [{ from: '18:00', to: '09:00' }] } }).success).toBe(
-      false,
-    );
+    expect(
+      BusinessHours.safeParse({ week: { mon: [{ from: '18:00', to: '09:00' }] } }).success,
+    ).toBe(false);
     expect(SlaSettings.safeParse({ within: { 'unit.reply': '3d' } }).success).toBe(false);
     expect(SlaSettings.parse(undefined)).toEqual({ within: {}, off: [] });
   });
@@ -211,7 +217,10 @@ describe('versions', () => {
   it('refuses a change to a frozen record, but not its state or its editable fields', () => {
     const decide = (action: 'update' | 'delete', input: Record<string, unknown> | null) =>
       versionedPlugin.decide?.(p, action, row, input, target) ?? null;
-    expect(decide('update', { title: 'B' })).toMatchObject({ decision: 'deny', rule: 'record_frozen' });
+    expect(decide('update', { title: 'B' })).toMatchObject({
+      decision: 'deny',
+      rule: 'record_frozen',
+    });
     expect(decide('delete', null)).toMatchObject({ rule: 'record_frozen' });
     expect(decide('update', { note: 'ok', title: 'A' })).toBeNull();
     expect(decide('update', { status: 'done', reason: 'Finished' })).toBeNull();
@@ -265,7 +274,9 @@ describe('the states plugin', () => {
     expect(statesPlugin.decide?.(p, 'update', row, { status: 'sent' }, target)).toMatchObject({
       rule: 'state_through_transition',
     });
-    expect(statesPlugin.decide?.(p, 'update', row, { status: 'draft', title: 'B' }, target)).toBeNull();
+    expect(
+      statesPlugin.decide?.(p, 'update', row, { status: 'draft', title: 'B' }, target),
+    ).toBeNull();
   });
 
   it("a command's write moves it only along a declared transition", () => {
@@ -274,7 +285,11 @@ describe('the states plugin', () => {
     expect(write({ status: 'draft' }, { status: 'sent' })).toEqual({ status: 'sent' });
     expect(() => write({ status: 'done' }, { status: 'draft' })).toThrow();
     expect(
-      statesPlugin.toValues?.({ title: 'A' }, { p, action: 'create', row: null, input: {} }, target),
+      statesPlugin.toValues?.(
+        { title: 'A' },
+        { p, action: 'create', row: null, input: {} },
+        target,
+      ),
     ).toEqual({ title: 'A', status: 'draft' });
   });
 });

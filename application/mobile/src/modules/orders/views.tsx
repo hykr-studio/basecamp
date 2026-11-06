@@ -1,4 +1,4 @@
-import { type OrderView, OrderSpec } from '@application/domain/modules/orders/contracts';
+import { OrderSpec, type OrderView } from '@application/domain/modules/orders/contracts';
 import type { OrderCardView, OrderListView } from '@application/domain/modules/orders/views';
 import { OpenRow, Rows, StateBadge, useMoneyText, ViewCard } from '@hykr/app';
 import { Text } from '@hykr/app/ui';

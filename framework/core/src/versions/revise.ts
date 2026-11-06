@@ -11,16 +11,7 @@ import {
   versionedOf,
   versionField,
 } from '@hykr/contracts';
-import {
-  and,
-  type Column,
-  eq,
-  getTableColumns,
-  max,
-  type SQL,
-  sql,
-  type Table,
-} from 'drizzle-orm';
+import { and, type Column, eq, getTableColumns, max, type SQL, sql, type Table } from 'drizzle-orm';
 import { type ChildLink, childLinksOf } from '../entity/children.js';
 import type { AnyEntityDef, RuleContext } from '../entity/define-entity.js';
 import { assertWritable } from '../states/transition.js';
@@ -190,8 +181,7 @@ export async function reviseWithChildren(
     versionField(trait),
   ]);
   const own = typeof opts.values === 'function' ? opts.values(revision) : (opts.values ?? {});
-  for (const [k, v] of Object.entries(own))
-    if (columns[k] && !fixed.has(k)) values[k] = v;
+  for (const [k, v] of Object.entries(own)) if (columns[k] && !fixed.has(k)) values[k] = v;
   const [made] = (await tx
     .insert(def.table as Table)
     .values(values as never)

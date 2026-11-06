@@ -1,10 +1,5 @@
 import type { EntitySpec, RecordVersion, SlaTimer, WriteResult } from '@hykr/contracts';
-import {
-  type UseQueryResult,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query';
+import { type UseQueryResult, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api';
 
 /**
@@ -38,10 +33,7 @@ export function useSlaTimers(plural: string, id: string | undefined): UseQueryRe
 }
 
 /** The revisions of a versioned record's series, oldest first. */
-export function useVersions(
-  type: string,
-  id: string | undefined,
-): UseQueryResult<RecordVersion[]> {
+export function useVersions(type: string, id: string | undefined): UseQueryResult<RecordVersion[]> {
   return useQuery({
     queryKey: ['versions', type, id],
     queryFn: () => api.versions(type, id as string),

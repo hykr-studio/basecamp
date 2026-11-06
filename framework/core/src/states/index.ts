@@ -1,9 +1,9 @@
 // State machines and SLAs (B6), from @hykr/core's index. docs/decisions/B6B4.md.
 export {
-  type SlaConfig,
-  SlaBreached,
-  type SweepResult,
   dueAt,
+  SlaBreached,
+  type SlaConfig,
+  type SweepResult,
   slaConfig,
   slaHook,
   sweepSla,

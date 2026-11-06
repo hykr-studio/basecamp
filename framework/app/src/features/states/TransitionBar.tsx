@@ -95,9 +95,7 @@ export function TransitionBar({
               onPress={() =>
                 run(
                   asking,
-                  Object.fromEntries(
-                    Object.entries(values).filter(([, v]) => v.trim() !== ''),
-                  ),
+                  Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim() !== '')),
                 )
               }
             />

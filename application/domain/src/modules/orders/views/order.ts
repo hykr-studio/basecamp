@@ -65,8 +65,7 @@ export const OrderListView = defineView({
       ? [
           p.title,
           ...p.items.map(
-            (o) =>
-              `• ${o.number} ${o.title}: ${moneyText(o.total, ctx.lang)}${after(o, ctx.lang)}`,
+            (o) => `• ${o.number} ${o.title}: ${moneyText(o.total, ctx.lang)}${after(o, ctx.lang)}`,
           ),
         ]
           .filter(Boolean)
