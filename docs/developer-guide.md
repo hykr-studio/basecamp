@@ -727,7 +727,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql`,
   `identityProviders` and `numberSeries` (section 5.13) in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
-  `eventFeeds`, `erasureContributors`, `exportContributors` and `authPlugins` in `@hykr/api`.
+  `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `fileHolders`
+  (section 5.12) and `jobs` (section 5.14) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -914,6 +915,9 @@ photos: fileColumns('photos'),   // text[]; fileColumn('cover') for one file
   (`/api/files/blob/<signed token>`, relative: the client resolves them).
 - **Server code** stores bytes it has with `FilesService.storeBytes(...)` (`@hykr/api`), a ready file on
   no record, which its uploader (or a system principal, for `uploader: { kind: 'server' }`) attaches.
+- **Files kept on something else.** A feature whose own resource keeps files (a job's results,
+  section 5.14) contributes a `fileHolders` entry `{ type, reaches({ p, resourceId, field, fileId, db }) }`:
+  the files service asks it whenever a file's resource type is no entity.
 - **WhatsApp.** A photo, document or video someone sends is stored as their file by the `files` inbound
   hook (a business turns it off with the `files.keepInboundMedia` setting), the message row becomes
   `media`, and the turn reads a line with the file's id, so the assistant can put it on a record with a
@@ -967,6 +971,74 @@ sample's `orders` module uses every part.
 - **Large writes.** `runWrite` audits a write's rows in one statement, the JSON body limit is
   `JSON_BODY_LIMIT` (1 MB), and a tree holds at most 1000 nodes and 8 levels (`maxNodes`,
   `maxDepth` on the trait). The approval card sums up long lists.
+
+
+### 5.14 Long-running jobs
+
+Work that takes minutes and runs elsewhere (a render, a plan read by a model, an optimiser) or in
+the worker (a large export) is a **job** (`docs/decisions/B11.md`). A module declares each kind
+once and starts one inside a write; the framework submits it, follows it and keeps its results.
+
+```ts
+// server: the kind, contributed by the module (defineModule({ ..., contributes: { jobs: [RenderJob] } }))
+export const RenderJob = defineJob({
+  name: 'drawings.render',                       // '<owner>.<what>'
+  description: 'Renders a drawing on the rendering service.',
+  input: z.object({ drawingId: z.uuid() }),
+  output: z.object({ pages: z.number().int() }),  // checked on success
+  about: { entity: 'drawing', id: (i) => i.drawingId }, // who reaches the record reaches the job
+  timeoutMs: 15 * 60_000,                         // no default: past it, `timed_out`
+  submit: async (ctx) => ({ externalId: await service.start(ctx.job.input, ctx.callback) }),
+  poll: async (ctx) => service.status(ctx.job.externalId),   // optional: the fallback
+  cancel: async (ctx) => service.stop(ctx.job.externalId),   // optional
+  complete: async (ctx) => {                                 // optional: write results back
+    await ctx.write(entityOp(DrawingDef, 'update', { id: ctx.job.input.drawingId }), { pages: ctx.job.output.pages });
+  },
+});
+
+// in a command's run: the job exists exactly when the write commits
+run: async ({ tx, principal, loaded }) => ({
+  value: await startJob(tx, principal, RenderJob, { drawingId: loaded.id }),
+  touched: [],
+}),
+```
+
+- **Starting** is the application's command: its `expose`, `authorize` and `approval` decide who may
+  start a job and whether the assistant's start waits for a person. `startJob` checks the input, that
+  `p` reaches the `about` record (404) and every file `inputFiles(input)` names (`file_unavailable`),
+  audits `job.start` and stores `job.queued`.
+- **Submitting.** The worker calls `submit(ctx)` once per job (leased), with `ctx.callback` (`url`,
+  this job's own `secret`, `header`), `ctx.signal`, `ctx.fileUrl` / `ctx.fileBytes` for input files and
+  `ctx.progress(percent, message)`. It returns `{ externalId?, update? }`; work done in `submit` returns
+  its finished update. A throw is retried (`submitAttempts`, `submitBackoffMs`), then the job fails
+  `submit_failed`.
+- **Callbacks.** The service posts a `JobUpdate` to `POST /api/jobs/:id/callback`, signed
+  `x-job-signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`
+  (`signJobCallback`). A wrong or stale signature is 401; each post is kept once (a repeat is 200
+  `duplicate`) and applied in the worker. A provider that signs its own way gives `callback.verify`,
+  `callback.parse` and `callback.dedupe`; `callback: false` refuses callbacks.
+- **Polling.** With `poll`, the `jobs.tick` schedule asks every `pollEveryMs` (30 s) after the last
+  update. The tick also fails jobs past their deadline and asks their service to stop.
+- **Updates.** `running` with `progress` (0–100, only goes up) and `message`; `succeeded` with
+  `output` and `files` (`{ name, mime, data }` in base64, or `{ name, mime, url }`, fetched by the
+  kind's `download` or by a guarded fetch: https, public addresses only, unless
+  `JOBS_ALLOW_PRIVATE_URLS=1` in development); `failed` with `{ code?, message }`; `cancelled`.
+  The first finishing update wins. Each change is an event: `job.queued`, `job.running`,
+  `job.progress`, `job.succeeded`, `job.failed`, `job.cancelled` (the row is the `JobInfo`).
+- **Results.** Files are stored as server files and kept on the job (`resource_type 'job'`, a
+  `fileHolders` entry), so `GET /api/files/:id` serves them to whoever reaches the job. `complete`
+  runs after the success, at least once, as `systemPrincipal({ job: <kind> })`; `ctx.write` is
+  `runWrite` with an idempotency key per write, and `ctx.copyFile(id)` gives a copy a system write
+  can put on a record.
+- **Reading.** `GET /api/jobs/:id`, `GET /api/jobs?entity=&id=` (a record's) or `GET /api/jobs` (the
+  caller's own), through the read projectors as resource type `job`; the service's id and the secret
+  never leave. People cancel with `POST /api/jobs/:id/cancel`. The assistant has `get-job` and
+  `list-jobs`. In the app: `useJob(id)`, `useJobs({ entity, id })`, `useCancelJob()` and
+  `<JobProgress job />`.
+- **Configuration.** `JOBS_PUBLIC_URL` (where services post; default `BETTER_AUTH_URL`),
+  `JOBS_SECRET` (derived from `BETTER_AUTH_SECRET` when unset), `JOBS_CALLBACK_TOLERANCE_S` (300),
+  `JOBS_ALLOW_PRIVATE_URLS`. The fixture's `features/jobs` and `test/framework/jobs.e2e.test.ts`
+  show a callback job and a polled one against a stand-in service.
 
 ---
 
@@ -1519,6 +1591,11 @@ These are not built. Each has a workaround for now.
 | Storage quotas, malware scanning | Not built. Keep `FILES_MAX_BYTES` and each field's `maxBytes` small. |
 | Files of a deleted business or of rows deleted outside the write path | Their rows go with the business (cascade) or stay attached; their objects stay in the bucket. |
 | Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |
+| Telling someone a job finished | Jobs store `job.succeeded` and `job.failed` events; nothing notifies a person yet. Subscribe to them (section 5.10) or show `<JobProgress>`. |
+| Live job progress | The app polls `GET /api/jobs/:id` every 2 s until the job finishes (no SSE yet). |
+| Retention of finished jobs | Jobs and their result files are kept until "delete my data" (jobs about no record only). |
+| A result file on a record | Result files stay on their job; `complete` puts a copy on a record (`ctx.copyFile`). |
+| Every job of a business | `GET /api/jobs` lists a record's jobs or the caller's own; there is no operations view. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
 | Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `pdfkit` with `harfbuzzjs` and the Noto fonts, `expo-server-sdk` (in `@hykr/api`), `@mastra/memory` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-notifications`, `expo-device` and `expo-location` (in the mobile app). Each feature that uses one adds its code. Their Expo config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client (the image picker's is in, for files). Versions and reasons: `docs/decisions/F6.md`. |
