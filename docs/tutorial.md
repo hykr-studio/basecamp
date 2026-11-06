@@ -415,8 +415,8 @@ export const CancelVisit = defineCommand(CancelVisitSpec, {
       'This visit is confirmed: the team must approve cancelling it',
     );
   },
-  // Who decides when it is parked: the team, never the requester themselves.
-  approval: { by: ['owner', 'admin', 'ops', 'staff'] },
+  // Who decides when it is parked: whoever holds ApproveCancels (below), never the requester.
+  approval: { by: { capability: ApproveCancels.name } },
   summarize: (_input, visit) => `Cancel the site visit "${visit.title}" at ${visit.address}`,
   run: async ({ tx, principal, loaded: visit, via }) => {
     const cancelled = await Visit.repo.update(tx, principal, visit, { status: 'cancelled' }, via);
@@ -439,14 +439,25 @@ Every command write goes through `runWrite` in `framework/core/src/write/pipelin
 6. **Allow.** `run` executes. There is one audit row per `touched` entry, plus one for the command. The caller gets `{ status: 'done', value }`.
 7. **Events.** Each `NamedEvent` is stored in the event outbox (`app.domain_events`) in the same transaction, then published in-process only **after commit**. The worker relays the stored row to event subscribers (`defineSubscriber`, developer guide section 5.10).
 
-Who decides a parked cancel? For a command, `approval` is an `ApproverRule` (`{ by, channels, minAssurance }`). It says **who** decides. Whether the command parks at all is decided only by `authorize`. Without `by`, `decidersFor` in `framework/core/src/write/approvals.ts` behaves like this:
+Who decides a parked cancel? For a command, `approval` is an `ApproverRule` (`{ by, channels, minAssurance, level }`). It says **who** decides. Whether the command parks at all is decided by `authorize` (and the application's approval levels, developer guide 5.8.1). People are chosen by capability, never by role name. The module declares its own, with the roles that hold it by default, and contributes it (`defineModule({ ..., contributes: { capabilities: [ApproveCancels] } })`):
+
+```ts
+/** Approve cancelling a confirmed visit: the whole team, by default. */
+export const ApproveCancels = defineCapability({
+  name: 'visits.cancel.approve',
+  label: { en: 'Approve cancelled visits', hi: 'रद्द विज़िट मंज़ूर करें', te: 'రద్దు చేసిన విజిట్‌లను అనుమతించండి' },
+  roles: ['owner', 'admin', 'ops', 'staff'],
+});
+```
+
+Without `by`, `decidersFor` in `framework/core/src/write/approvals.ts` behaves like this:
 
 | Requester | Who decides by default |
 |---|---|
 | A person with a user id who is not customer-only | The requester (they approve their own assistant's request). |
-| A customer | `['owner', 'ops']` |
+| A customer | Holders of `approvals.decide` (`owner` and `ops` by default) |
 
-Setting `by` sends every parked cancel to the team, including a staff member's own assistant's request.
+Setting `by` sends every parked cancel to the holders of the capability, including a staff member's own assistant's request, and never to the person who asked: their own request is theirs to look at, not to decide.
 
 When the team approves, `ApprovalService.decide` replays the stored op in one transaction:
 
@@ -902,7 +913,7 @@ export const visitScripts = [
 The `list-visits` script is what eval case 17 (`my site visits`) and the app's `my site visits` suggestion rely on.
 
 - **Don't use `written()` for a customer's parked request.** The helper (`framework/agents/src/fake/engine.ts`) answers a parked English write with "I've asked for **your** approval…". That is right for an owner's own assistant, but wrong for a customer whose request goes to the team.
-- **WhatsApp adds the team line.** `InboundProcessor.converse` appends `approval.askedTeam` ("I've asked the team to confirm. I'll tell you here when they do.") to any reply whose approval has no single approver. Your own reply should explain *why* the cancel waits, not repeat that.
+- **WhatsApp adds the team line.** `InboundProcessor.converse` appends `approval.askedTeam` ("I've asked the team to confirm. I'll tell you here when they do.") to any reply whose approval someone other than the person writing decides. Your own reply should explain *why* the cancel waits, not repeat that.
 - **The scripted model reads the system prompt.** It finds the language and surfaces with regexes. `Reply in <Language>.` comes from `framework/agents/src/assistant.ts` and `Surfaces: …` from `buildInstructions` in `framework/agents/src/version.ts`. Your rules can add lines, but if you edit either wording, scripted tests can break silently.
 
 Try it through the chat endpoint (a real response from the scripted model):
@@ -1213,7 +1224,7 @@ steps:
 What the framework did on that path:
 
 - **A new customer.** The first message created a contact, a customer and a `service` consent, then sent the welcome.
-- **The approval request.** The owner's linked number received `approval_request_v1` with signed Approve and Reject buttons. The approval had no single approver, and `channels` allowed WhatsApp.
+- **The approval request.** The owner's linked number received `approval_request_v1` with signed Approve and Reject buttons. The approval was decided by a capability's holders (not the person who asked), and `channels` allowed WhatsApp.
 - **The outcome.** Meera received `approval_outcome_v1` because she was the requesting contact.
 
 ```bash
@@ -1283,7 +1294,7 @@ FROM audit.events WHERE run_id = '<run-id>' ORDER BY at;
 - [ ] **Contracts index:** the entity is in the module's `moduleSpec({ entities })` under its plural, and the commands in `commands`. The module has its line in `application/domain/src/contracts/index.ts`.
 - [ ] **Database:** the table in the module's `db/schema.ts`, named after the module, has `id()`, `tenantColumn()`, an owner column, `customerColumn()`, `createdBy`, `createdAt` and `updatedAt`. The migration was generated with `pnpm db:generate --name <name>` and applied with `pnpm db:migrate`. The SQL, the snapshot and the journal in `application/domain/drizzle/` are committed.
 - [ ] **API entity:** `defineEntity` with `table`, `owner`, `customer`, `access` and `rules` (deny-only, `ctx.via` for command-only fields).
-- [ ] **API commands:** `defineCommand` with `resource`, a scoped `load`, `authorize` (`allow`, `deny`, `needsApproval`), `summarize`, a `run` that passes `via` and returns `touched` and `events`, and `approval: { by }` when the team decides.
+- [ ] **API commands:** `defineCommand` with `resource`, a scoped `load`, `authorize` (`allow`, `deny`, `needsApproval`), `summarize`, a `run` that passes `via` and returns `touched` and `events`, and `approval: { by: { capability } }` when the team decides (a capability the module declares).
 - [ ] **Nest:** a module in the module's `server/` with `entityController`, `entityHandlers`, `commandController` and `commandHandler`, passed to `defineModule({ server })`, and the module listed in `application/domain/src/modules/index.ts`.
 - [ ] **Views:** `defineView` list and card with `text`, `speak`, `labels.noun` and `labels.empty`. Registered in the module's views and in `application/domain/src/views/index.ts`, with a view test.
 - [ ] **Notifications:** `defineTemplate` (versioned name, en/hi/te, an example) and `defineNotification` (`send.on` or `schedule`, `cancelOn`, `topic`, `to`, `channels`, `dedupe`). Passed to the module's `defineModule({ templates, notifications })`. `pnpm templates:sync` and `pnpm templates:check` pass.

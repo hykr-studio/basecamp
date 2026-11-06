@@ -92,3 +92,39 @@ describe('defineNotification', () => {
     expect(defineNotification({ ...base, channels: ['push', 'email'], push }).push).toBe(push);
   });
 });
+
+describe('an approval request', () => {
+  const request = notifications.find((n) => n.key === 'approval.request');
+  const row = (fields: Record<string, unknown>) =>
+    ({
+      id: 'a1',
+      tenantId: 't1',
+      summary: 'Pay the supplier',
+      status: 'pending',
+      ownerId: 'u-asked',
+      approverUserId: null,
+      approverCapability: null,
+      approverChannels: null,
+      requesterContactId: null,
+      ...fields,
+    }) as never;
+
+  it("goes to a capability's holders, never to the requester", () => {
+    const a = row({ approverCapability: 'approvals.decide' });
+    expect(request?.when?.(a)).toBe(true);
+    expect(request?.to(a)).toEqual([{ capability: 'approvals.decide', except: ['u-asked'] }]);
+  });
+
+  it('goes to a named person alone', () => {
+    const a = row({ approverUserId: 'u-named' });
+    expect(request?.when?.(a)).toBe(true);
+    expect(request?.to(a)).toEqual([{ userId: 'u-named' }]);
+  });
+
+  it('not when the requester decides it, nor when it is decided in the app only', () => {
+    expect(request?.when?.(row({ approverUserId: 'u-asked' }))).toBe(false);
+    expect(
+      request?.when?.(row({ approverCapability: 'approvals.decide', approverChannels: ['app'] })),
+    ).toBe(false);
+  });
+});

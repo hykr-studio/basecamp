@@ -7,3 +7,4 @@ export * from './files.js';
 export * from './numbering.js';
 export * from './push.js';
 export * from './tenancy.js';
+export * from './undo.js';

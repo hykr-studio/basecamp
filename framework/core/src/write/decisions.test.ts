@@ -1,8 +1,19 @@
-// Combining decisions (entity rules and plugins, then write hooks): the stricter one wins and
-// what is at stake adds up. Pure: no database.
-import { describe, expect, it } from 'vitest';
-import { allow, deny, needsApproval } from '../authorize.js';
+// Combining decisions (entity rules and plugins, then write hooks, then level rules): the
+// stricter one wins and what is at stake adds up. Pure: no database. The levels are this test's
+// own (the framework declares none).
+import { approvalLevels, defineApprovalLevel } from '@hykr/contracts';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { allow, atLevel, deny, needsApproval } from '../authorize.js';
 import { strongerDecision } from './decisions.js';
+
+const label = { en: 'x', hi: 'x', te: 'x' };
+beforeAll(() => {
+  approvalLevels.register(
+    defineApprovalLevel({ name: 'low', rank: 1, label }),
+    defineApprovalLevel({ name: 'mid', rank: 2, label }),
+    defineApprovalLevel({ name: 'high', rank: 3, label }),
+  );
+});
 
 describe('strongerDecision', () => {
   it('deny beats needs_approval beats allow, whatever the order', () => {
@@ -22,43 +33,67 @@ describe('strongerDecision', () => {
   });
 
   it('on a tie the first keeps its rule and reason', () => {
-    const first = needsApproval('plugin_review', 'Marked for review', { tier: 2 });
+    const first = needsApproval('plugin_review', 'Marked for review', { level: 'mid' });
     const second = needsApproval('chore_update_needs_approval', 'Updates need your approval');
     expect(strongerDecision(first, second)).toEqual({
       decision: 'needs_approval',
       rule: 'plugin_review',
       reason: 'Marked for review',
-      tier: 2,
+      level: 'mid',
     });
   });
 
-  it('the highest tier and the longest undo window survive; an allow never loosens', () => {
-    const undo = allow('undoable', 'Undoable', { tier: 1, undoMs: 30_000 });
+  it('the higher-ranked level and the longest undo window survive; an allow never loosens', () => {
+    const undo = allow('undoable', 'Undoable', { level: 'low', undoMs: 30_000 });
     const park = needsApproval('money', 'Money waits', {
-      tier: 3,
-      amount: 500_00,
-      approver: { roles: ['owner'] },
+      level: 'high',
+      amount: { minor: 500_00, currency: 'EUR' },
+      approver: { by: { capability: 'approvals.decide' } },
     });
     expect(strongerDecision(undo, park)).toEqual({
       decision: 'needs_approval',
       rule: 'money',
       reason: 'Money waits',
-      tier: 3,
+      level: 'high',
       undoMs: 30_000,
-      amount: 500_00,
-      approver: { roles: ['owner'] },
+      amount: { minor: 500_00, currency: 'EUR' },
+      approver: { by: { capability: 'approvals.decide' } },
     });
     // Two allows: the window is the longer one.
     expect(strongerDecision(undo, allow('ok', 'ok', { undoMs: 60_000 }))).toMatchObject({
       decision: 'allow',
       rule: 'undoable',
-      tier: 1,
+      level: 'low',
       undoMs: 60_000,
     });
   });
 
+  it('between two of a kind, the higher level says why; ranks, not names, compare', () => {
+    const plain = allow('scoped_access', 'Works on rows they reach');
+    const levelled = atLevel('mid', 'payment_over_limit', 'Above the limit');
+    expect(strongerDecision(plain, levelled)).toEqual({
+      decision: 'allow',
+      rule: 'payment_over_limit',
+      reason: 'Above the limit',
+      level: 'mid',
+    });
+    // 'high' sorts before 'low' by name, but ranks above it.
+    expect(strongerDecision(atLevel('high', 'h'), atLevel('low', 'l'))?.level).toBe('high');
+    expect(strongerDecision(atLevel('low', 'l'), atLevel('high', 'h'))).toMatchObject({
+      rule: 'h',
+      level: 'high',
+    });
+  });
+
+  it('a level nobody declared ranks above every declared one (fail closed)', () => {
+    expect(strongerDecision(atLevel('high', 'h'), atLevel('typo', 't'))?.level).toBe('typo');
+  });
+
   it('a loser of another kind gives no amount or approver: they describe a different decision', () => {
-    const allowed = allow('ok', 'ok', { amount: 10, approver: { userId: 'x' } });
+    const allowed = allow('ok', 'ok', {
+      amount: { minor: 10, currency: 'EUR' },
+      approver: { by: { userId: 'x' } },
+    });
     const parked = needsApproval('wait', 'Waits');
     const out = strongerDecision(allowed, parked);
     expect(out).toEqual({ decision: 'needs_approval', rule: 'wait', reason: 'Waits' });

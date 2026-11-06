@@ -8,6 +8,8 @@ import {
   type Contributions,
   CreatedBy,
   commandSpec,
+  defineApprovalLevel,
+  defineCapability,
   defineListFieldType,
   entitySpec,
   moduleSpec,
@@ -113,6 +115,20 @@ const guardedOf = (spec: { traits?: { fixtureGuarded?: { hidden: string[]; from:
   spec.traits?.fixtureGuarded;
 const hides = (p: Principal, from: string[]) => (p.roles ?? []).some((r) => from.includes(r));
 
+/** Who reviews chores marked [review]: admins, by default. */
+export const ReviewChores = defineCapability({
+  name: 'fixture.chores.review',
+  label: { en: 'Review chores', hi: 'Review chores', te: 'Review chores' },
+  roles: ['admin'],
+});
+
+/** The level a chore marked [review] parks at (the only level this server declares). */
+export const ChoreReview = defineApprovalLevel({
+  name: 'fixture_review',
+  rank: 2,
+  label: { en: 'Review', hi: 'Review', te: 'Review' },
+});
+
 /** One plugin with every hook, switched on by the `fixtureGuarded` trait. */
 export const guarded: EntityPlugin = {
   name: 'fixture.guarded',
@@ -125,15 +141,12 @@ export const guarded: EntityPlugin = {
   ],
   decide: (_p, action, _row, input) => {
     if (String(input?.title ?? '').includes('[review]'))
-      return needsApproval('chore_review', 'Marked for review: an admin decides', {
-        tier: 2,
-        approver: { roles: ['admin'] },
+      return needsApproval('chore_review', 'Marked for review: a reviewer decides', {
+        level: ChoreReview.name,
+        approver: { by: { capability: ReviewChores.name } },
       });
     if (action === 'update' && input?.done === true)
-      return allow('chore_done_undoable', 'Done can be undone for a minute', {
-        tier: 1,
-        undoMs: 60_000,
-      });
+      return allow('chore_done_undoable', 'Done can be undone for a minute', { undoMs: 60_000 });
     return null;
   },
   // Archived chores are out of reach, for reading and writing alike.
@@ -242,6 +255,8 @@ export const staffView: ReadProjector = {
 };
 
 export const writePathContributions: Partial<Contributions> = {
+  capabilities: [ReviewChores],
+  approvalLevels: [ChoreReview],
   entityPlugins: [guarded],
   writeHooks: [choreGate],
   readProjectors: [staffView],
