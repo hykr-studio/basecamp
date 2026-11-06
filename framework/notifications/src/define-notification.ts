@@ -18,11 +18,27 @@ export type Reader = { lang: Lang; timeZone: string };
 export type Row = Record<string, unknown> & { id: string; tenantId: string };
 
 /**
+ * The channels a notification can name. WhatsApp and email are built in. A feature that
+ * registers a delivery channel (@hykr/api's `deliveryChannels`) adds its name here, and any
+ * content of its own on `NotificationDef`, by declaration merging:
+ *
+ *   declare module '@hykr/notifications' {
+ *     interface NotificationChannels { push: true }
+ *     interface NotificationDef<R extends Row = Row> { push?: { title: (row: R) => string } }
+ *   }
+ */
+export interface NotificationChannels {
+  whatsapp: true;
+  email: true;
+}
+export type NotificationChannel = keyof NotificationChannels & string;
+
+/**
  * Something that should reach a person, and when. Feature code says what; notify() decides
  * how: which channel, which template in which language, whether consent and quiet hours allow
- * it, and what to do when WhatsApp can't deliver. No feature code sends a message itself.
+ * it, and what to do when a channel can't deliver. No feature code sends a message itself.
  */
-export type NotificationDef<R extends Row = Row> = {
+export interface NotificationDef<R extends Row = Row> {
   /** meeting.reminder */
   key: string;
   /** The consent it needs (reminders: on until STOP; marketing: only with an explicit yes). */
@@ -42,8 +58,9 @@ export type NotificationDef<R extends Row = Row> = {
   when?: (row: R) => boolean;
   to: (row: R) => Recipient[];
   /** In order: the next one when one can't be used or fails for good. */
-  channels: ('whatsapp' | 'email')[];
-  whatsapp: {
+  channels: readonly NotificationChannel[];
+  /** The template it goes as on WhatsApp. Required when WhatsApp is one of its channels. */
+  whatsapp?: {
     // biome-ignore lint/suspicious/noExplicitAny: any template's parameters
     template: TemplateDef<any>;
     params: (row: R, reader: Reader) => Record<string, string>;
@@ -64,11 +81,17 @@ export type NotificationDef<R extends Row = Row> = {
   approval?: (row: R) => string;
   /** One per thing: a reschedule replaces the scheduled one with the same key. */
   dedupe: (row: R) => string;
-};
+}
 
 export function defineNotification<R extends Row>(def: NotificationDef<R>): NotificationDef<R> {
   if (!def.channels.length) throw new Error(`Notification ${def.key}: name at least one channel`);
+  if (new Set(def.channels).size !== def.channels.length)
+    throw new Error(`Notification ${def.key}: a channel is named twice`);
+  if (def.channels.includes('whatsapp') && !def.whatsapp)
+    throw new Error(`Notification ${def.key}: WhatsApp is a channel but has no template`);
   if (def.channels.includes('email') && !def.email)
     throw new Error(`Notification ${def.key}: email is a channel but has no subject and body`);
+  if ((def.onButton || def.approval) && !def.whatsapp)
+    throw new Error(`Notification ${def.key}: buttons are WhatsApp quick replies; give a template`);
   return def;
 }

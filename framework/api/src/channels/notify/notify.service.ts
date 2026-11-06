@@ -3,12 +3,19 @@ import { type Database, type DbOrTx, schema } from '@hykr/db';
 import type { Labels } from '@hykr/i18n';
 import type { NotificationDef, Row } from '@hykr/notifications';
 import { InjectQueue } from '@nestjs/bullmq';
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  type OnApplicationBootstrap,
+  type OnModuleInit,
+} from '@nestjs/common';
 import { EventBus } from '@nestjs/cqrs';
 import type { Queue } from 'bullmq';
 import { and, desc, eq } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { config } from '../../config.js';
+import { deliveryChannels, type NotificationMeta } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
 import { runtime } from '../../runtime.js';
 import { QUEUES } from '../queues.js';
@@ -27,9 +34,14 @@ export type DispatchJob = {
   dedupe: string;
   /** When it was scheduled for (a scheduled one checks it is still the latest). */
   scheduledFor?: string;
-  /** Fallback: only these channels, for this one recipient. */
-  only?: { channels: ('whatsapp' | 'email')[]; recipient: Record<string, string> };
+  /** Fallback or retry: only these channels, for this one recipient. */
+  only?: { channels: string[]; recipient: Record<string, string> };
+  /** A retry of a channel that failed for now: how many tries so far. */
+  attempt?: number;
 };
+
+/** The channels the dispatcher itself knows; every other name is a registered delivery channel. */
+export const BUILT_IN_CHANNELS: readonly string[] = ['whatsapp', 'email'];
 
 /** The dispatch job for a notification (BullMQ ids may not contain ':'). */
 export const jobIdOf = (dedupe: string) => dedupe.replaceAll(':', '_');
@@ -45,7 +57,7 @@ const plain = (row: unknown): Row => JSON.parse(JSON.stringify(row)) as Row;
  * notify-dispatch, which decides how.
  */
 @Injectable()
-export class NotifyService implements OnModuleInit {
+export class NotifyService implements OnModuleInit, OnApplicationBootstrap {
   constructor(
     @Inject(DB) private readonly db: Database,
     @Inject(EventBus) private readonly events: EventBus,
@@ -59,6 +71,53 @@ export class NotifyService implements OnModuleInit {
       this.onEvent(event.eventName, plain(event.row)).catch((e) =>
         log.error(`scheduling on ${event.eventName} failed: ${e instanceof Error ? e.message : e}`),
       );
+    });
+  }
+
+  /**
+   * Every channel a notification names is built in or registered: checked once everything has
+   * registered, so a missing feature stops the start instead of a notification going nowhere.
+   */
+  onApplicationBootstrap() {
+    for (const name of deliveryChannels.all().map((c) => c.name))
+      if (BUILT_IN_CHANNELS.includes(name))
+        throw new Error(`The delivery channel "${name}" is built in: pick another name`);
+    for (const def of notifications())
+      for (const channel of def.channels)
+        if (!BUILT_IN_CHANNELS.includes(channel) && !deliveryChannels.has(channel))
+          throw new Error(
+            `Notification ${def.key} goes by ${channel}, which is not a registered delivery channel`,
+          );
+  }
+
+  /**
+   * A channel failed for good after it had accepted the send (WhatsApp says the number is not on
+   * WhatsApp, a push receipt says the token is gone): the notification moves on to the channels
+   * after it, for that one recipient. `ref` (the failed message) keeps the job unique.
+   */
+  async fallback(meta: NotificationMeta, ref: string) {
+    if (!meta.next.length) return;
+    await this.dispatch.add(
+      'fallback',
+      {
+        key: meta.key,
+        tenantId: meta.row.tenantId,
+        row: meta.row,
+        dedupe: meta.dedupe,
+        only: { channels: meta.next, recipient: meta.recipient as Record<string, string> },
+      },
+      { jobId: jobIdOf(`${meta.dedupe}:fallback:${ref}`), attempts: 3 },
+    );
+  }
+
+  /** The same dispatch for one recipient again, later: a channel that failed for now. */
+  async retry(job: DispatchJob, delayMs: number, channel: string) {
+    const who = Object.entries(job.only?.recipient ?? {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join(',');
+    await this.dispatch.add('retry', job, {
+      jobId: jobIdOf(`${job.dedupe}:retry:${channel}:${who}:${job.attempt ?? 0}`),
+      delay: delayMs,
     });
   }
 

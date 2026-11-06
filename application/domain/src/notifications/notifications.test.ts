@@ -25,6 +25,7 @@ describe('the application’s templates and notifications', () => {
 
   it('notifications name only templates that exist', () => {
     const names = new Set(templates.map((t) => t.name));
-    for (const n of notifications) expect(names.has(n.whatsapp.template.name)).toBe(true);
+    for (const n of notifications)
+      if (n.whatsapp) expect(names.has(n.whatsapp.template.name)).toBe(true);
   });
 });

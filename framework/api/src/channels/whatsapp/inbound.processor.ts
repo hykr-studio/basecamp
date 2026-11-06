@@ -18,8 +18,10 @@ import { DelayedError, type Job, type Queue } from 'bullmq';
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { config } from '../../config.js';
+import { type InboundInfo, inboundHooks } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
 import { ChatService } from '../../modules/chat/chat.service.js';
+import { TurnRefused } from '../../modules/chat/turn-hooks.js';
 import { ThreadsService } from '../../modules/threads/threads.service.js';
 import { runtime } from '../../runtime.js';
 import { type Contact, ContactsService } from '../contacts.service.js';
@@ -202,25 +204,25 @@ export class InboundProcessor extends WorkerHost {
 
     // Buttons the code answers, not the agent: Approve / Reject (signed), and a
     // notification's own (snooze, …).
-    let handled = 0;
+    const answered = new Set<InboundMessage>();
     for (const m of burst) {
       if (m.body.kind !== 'button') continue;
       const { payload } = m.body;
       if (isApprovalPayload(payload)) {
         await say(await this.decideByButton(contact, payload, lang, m.providerMessageId));
-        handled++;
+        answered.add(m);
       } else if (payload.startsWith('ntf:') && payload.endsWith(`:${OPT_OUT_BUTTON}`)) {
         // A marketing template's opt-out: no more offers, whichever template carried it.
         await this.setConsent(contact, 'marketing', false, 'button');
         await say(t(lang, 'channel.stoppedOffers'));
-        handled++;
+        answered.add(m);
       } else if (payload.startsWith('ntf:')) {
         const reply = await this.notify.tapped(contact.id, payload, m.replyTo);
         await say(reply ? reply[lang] : t(lang, 'said.failed'));
-        handled++;
+        answered.add(m);
       }
     }
-    if (handled === burst.length) {
+    if (answered.size === burst.length) {
       await this.done(pending.map((e) => e.id));
       return;
     }
@@ -237,9 +239,13 @@ export class InboundProcessor extends WorkerHost {
     });
     for (const { keyword, words } of keywords)
       await this.keyword(keyword, contact, lang, say, business.settings, words);
-    const rest = burst
-      .filter((m) => !keywordOfMessage(m))
-      .flatMap((m) => wordsOf(m) ?? [])
+    // What is left passes the inbound hooks (a photo stored, its file named for the turn).
+    const rest = (
+      await this.throughHooks(
+        burst.filter((m) => !answered.has(m) && !keywordOfMessage(m)),
+        { tenantId, contactId: contact.id, ...(contact.userId ? { userId: contact.userId } : {}) },
+      )
+    )
       .join('\n')
       .trim();
     // Nothing else said, or they asked for their data to go: no turn for the assistant.
@@ -265,6 +271,39 @@ export class InboundProcessor extends WorkerHost {
 
     if (rest) await this.converse(contact, rest, lang, target);
     await this.done(pending.map((e) => e.id));
+  }
+
+  /**
+   * Each message through the inbound hooks, in order: its words and the hooks' context lines,
+   * unless a hook handled it (later hooks don't see it then). A hook that throws is logged and
+   * skipped: retrying the burst would repeat what the code already answered.
+   */
+  private async throughHooks(
+    burst: InboundMessage[],
+    who: Omit<InboundInfo, 'message'>,
+  ): Promise<string[]> {
+    const lines: string[] = [];
+    for (const message of burst) {
+      const context: string[] = [];
+      let handled = false;
+      for (const hook of inboundHooks.all()) {
+        const decision = await hook.onMessage({ ...who, message }).catch((e) => {
+          log.error(`inbound hook ${hook.name} failed: ${e instanceof Error ? e.message : e}`);
+          return null;
+        });
+        if (!decision) continue;
+        if ('handled' in decision) {
+          handled = true;
+          break;
+        }
+        context.push(...decision.context);
+      }
+      if (handled) continue;
+      const words = wordsOf(message);
+      if (words) lines.push(words);
+      lines.push(...context);
+    }
+    return lines;
   }
 
   /** STOP, START, HELP, a person, erasure, linking: each with its confirmation. */
@@ -345,12 +384,23 @@ export class InboundProcessor extends WorkerHost {
     target: { tenantId: string; contactId: string; from: string },
   ) {
     const p = await this.principalOf(contact);
-    const turn = await this.chat.once(p, {
-      message: text,
-      surfaces: ['text'],
-      timeZone: contact.timeZone,
-      lang,
-    });
+    let turn: Awaited<ReturnType<ChatService['once']>>;
+    try {
+      turn = await this.chat.once(p, {
+        message: text,
+        surfaces: ['text'],
+        timeZone: contact.timeZone,
+        lang,
+      });
+    } catch (e) {
+      if (!(e instanceof TurnRefused)) throw e;
+      // A hook refused the turn (a cap reached): an answer, not a failure to retry.
+      const { say } = e.refusal;
+      await this.outbound.queue(target, [
+        { kind: 'text', to: contact.address, text: say ? pick(say, lang) : t(lang, 'said.failed') },
+      ]);
+      return;
+    }
     const rendered = toRenderTurn(turn);
     // What this turn parked, and who decides each: this person here, with buttons; or the
     // business (a customer's request), which they are told has been asked.

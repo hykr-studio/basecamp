@@ -104,12 +104,15 @@ export class TemplateSync {
 
   /**
    * The release check: every template a notification uses is approved, in English at least
-   * (other languages fall back to it). Returns what is not.
+   * (other languages fall back to it). Returns what is not. A notification that never goes by
+   * WhatsApp (push, email only) has no template to check.
    */
   async check(): Promise<string[]> {
     const problems: string[] = [];
     const used = new Set(
-      runtime().notifications.notifications.map((n) => n.whatsapp.template.name),
+      runtime().notifications.notifications.flatMap((n) =>
+        n.whatsapp ? [n.whatsapp.template.name] : [],
+      ),
     );
     for (const name of used)
       if (!(await this.approved(name, 'en'))) problems.push(`${name} is not approved in English`);
