@@ -3,6 +3,7 @@
 import {
   type ApprovalRule,
   AuthorizeResult,
+  type DecisionDetails,
   entitySpec,
   type Principal,
   parksFor,
@@ -103,6 +104,37 @@ describe('decisions carry what is at stake', () => {
     });
     // Without details, a decision is what it was.
     expect(deny('no', 'No')).toEqual({ decision: 'deny', rule: 'no', reason: 'No' });
+  });
+
+  it('details never change the decision, rule or reason (fails closed)', () => {
+    // An earlier decision passed as details, to keep its tier, is a valid DecisionDetails.
+    const earlier: AuthorizeResult = allow('ok', 'ok', { tier: 2, amount: 900 });
+    const refused = deny('credits_cap', 'Cap reached', earlier);
+    expect(refused.decision).toBe('deny');
+    expect(refused).toEqual({
+      decision: 'deny',
+      rule: 'credits_cap',
+      reason: 'Cap reached',
+      tier: 2,
+      amount: 900,
+    });
+    expect(deny('r', 'x', allow('ok')).decision).toBe('deny');
+    expect(deny('r', 'x', allow('ok'))).toEqual({ decision: 'deny', rule: 'r', reason: 'x' });
+    expect(needsApproval('send', 'Sends wait', allow('ok'))).toEqual({
+      decision: 'needs_approval',
+      rule: 'send',
+      reason: 'Sends wait',
+    });
+    expect(allow('note_edit', undefined, deny('blocked', 'No')).decision).toBe('allow');
+    // Keys other than the four details are not copied, whatever the object carries at runtime.
+    const loose = { tier: 1, undoMs: 5_000, decision: 'allow', extra: true } as DecisionDetails;
+    expect(deny('r', 'x', loose)).toEqual({
+      decision: 'deny',
+      rule: 'r',
+      reason: 'x',
+      tier: 1,
+      undoMs: 5_000,
+    });
   });
 
   it('a tier is 0 to 3, and an amount is whole minor units', () => {

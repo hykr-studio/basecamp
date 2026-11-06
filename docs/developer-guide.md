@@ -662,6 +662,9 @@ and `allow` / `deny` take the same optional `details`:
 - `amount`: integer minor units (paise);
 - `undoMs`: the undo window.
 
+The helpers copy only these four fields. Passing an earlier decision as `details`, to keep its tier,
+never changes the new decision, rule or reason.
+
 The write path carries these but does not act on them yet (section 14).
 
 ### 5.9 Extension points: traits, contributions and settings sections
