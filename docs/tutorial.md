@@ -954,7 +954,7 @@ pnpm eval              # basecamp eval assistant, against the running API
 # 19/19 turns passed. Scores and traces are in Studio.
 ```
 
-`pnpm eval --live` (`basecamp eval --live`) runs the same cases against the real model (it needs `OPENROUTER_API_KEY`).
+`pnpm eval --live` (`basecamp eval --live`) runs the same cases against the deployment's default model (`AGENT_MODEL`: it needs `OPENROUTER_API_KEY` for an OpenRouter model, or `MODEL_PROVIDERS`). Add `--model <provider>/<model>` to run them on another configured model.
 
 ---
 

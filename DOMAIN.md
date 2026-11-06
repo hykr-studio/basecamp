@@ -190,6 +190,10 @@ From the contracts declaration alone:
   customer; marketing waits for approval) and `request-human`.
 - The streaming chat, and the scripted model's platform scripts (`save this as …`,
   `open my … page`, `talk to the manager`, the back office's draft reply).
+- The models the assistant runs on: the deployment's OpenAI-compatible gateways (`MODEL_PROVIDERS`,
+  OpenRouter in development) and each business's model policy (`GET /api/models`,
+  `PUT /api/models/policy`), which picks every turn's model and fails closed (developer guide,
+  section 7.5). The application only configures them in `.env`.
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

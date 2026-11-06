@@ -211,7 +211,7 @@ The `.env` stays at the repository root: the `basecamp` command loads the neares
 To run without any model or speech keys, set:
 
 ```bash
-MODEL_MODE=fake     # scripted assistant, no OPENROUTER_API_KEY needed
+MODEL_MODE=fake     # scripted assistant, no model or key needed
 VOICE_MODE=fake     # voice worker takes text in, gives text out
 ```
 
@@ -239,7 +239,7 @@ Things that will trip you up:
 - Most of `pnpm dev` reloads on save. Each framework package runs `tsc -w` into its `dist/`. `basecamp dev` (the application's `dev` script) compiles `application/domain` (every module) and `application/api` the same way, restarts the API and queue worker under `node --watch` when any module they loaded changes, and both Expo apps fast-refresh through Metro. The voice worker runs from its build (`node …/@hykr/voice-worker/dist/main.js dev`) without a watcher. An edit in `framework/*` reaches every app that imports it. `pnpm dev` passes `--concurrency=30` because turbo runs 16 persistent tasks (15 framework watchers and the application's `basecamp dev`) and its default is 10; pass it too when you run `pnpm turbo run dev` yourself.
 - `basecamp dev` also starts the voice worker, which exits at startup if `VOICE_AGENT_KEY` is missing or short, or if `VOICE_MODE=live` has no `SARVAM_API_KEY` (`assertConfig()` in `framework/voice-worker/src/config.ts`). `basecamp dev` reports `voice … exited (1)`, keeps the other processes running, and does not start the worker again. `application/.env.example` ships `VOICE_AGENT_KEY=` empty and `VOICE_MODE=live`. Set `VOICE_AGENT_KEY` and `VOICE_MODE=fake`, then restart `pnpm dev`.
 - Mobile web serves on 8081 and the back office on 8082. If something else holds either port, Expo cannot ask for another one (`basecamp dev` gives it no terminal), so that app exits.
-- With `MODEL_MODE=live` (the default in `.env.example`) and no `OPENROUTER_API_KEY`, chat answers 503 "Set OPENROUTER_API_KEY in .env to use the assistant".
+- With `MODEL_MODE=live` (the default in `.env.example`) and no model configured (no `OPENROUTER_API_KEY` for `AGENT_MODEL`'s OpenRouter model, no `MODEL_PROVIDERS`), chat answers 503 `model_not_configured` "Set MODEL_PROVIDERS (or OPENROUTER_API_KEY in development) in .env to use the assistant". Section 7.5 says how models are configured.
 - Stop the services with `pnpm infra:down` (or `basecamp infra down`). They run as the Compose project `basecamp` from `framework/cli/compose.yaml` (an application can name its own with `"project"` in its `basecamp` block), so a plain `docker compose down` at the root finds nothing.
 - `basecamp` is compiled: in this repository it works only after `pnpm build`, and says so until then. `pnpm infra:up` runs `docker compose` directly and needs no build.
 - `templates:sync`, `templates:check`, `db:migrate` and `eval` load the application's compiled server (`application/api/dist/server.js`, the `server` entry of the `basecamp` block). Build first.
@@ -781,13 +781,19 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   runs on the shared `events` queue; `queue` adds the envelope to your own queue. The envelope has
   the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
   (F3) before it leaves the server. The in-process `EventBus` is not relayed.
-- **Turn hooks.** Every chat turn and back-office draft passes `turnHooks` in `ChatService`, after
-  the framework's own `model-key` hook. `before` returns `{ refuse: { rule, reason, status?, say? } }`
-  or `{ context?, model?, withoutTools? }`; a refusal is `TurnRefused` (403 unless given, nothing saved;
-  on WhatsApp the person hears `say`). `after` sees the reply, the tools called and the token usage.
-- **The agent per turn.** The model (`model` from a hook, else `AGENT_MODEL`), the tools (generated,
-  plus `toolContributions`, minus `withoutTools`) and the instructions (plus the hooks' context lines,
-  as data) are resolved from the request context. A tool id defined twice stops the start.
+- **Turn hooks.** Every chat turn and back-office draft passes `turnHooks` in `ChatService`
+  (`gateTurn`): first a check that the deployment has a model (503 `model_not_configured`), then the
+  hooks, then the business's model policy chooses the turn's model (section 7.5). `before` returns
+  `{ refuse: { rule, reason, status?, say? } }` or `{ context?, model?, withoutTools? }`; a refusal is
+  `TurnRefused` (403 unless given, nothing saved; on WhatsApp the person hears `say`). A hook's
+  `model` is a ref (`<provider>/<model>`) that the policy checks like any other. `after` sees the
+  reply, the tools called, the token usage and `turn.model`, the model the turn ran on.
+- **The agent per turn.** The model (the one the policy chose, `model` in the request context; the
+  scripted one in fake mode), the guardrail (on the same model), the tools (generated, plus
+  `toolContributions`, minus `withoutTools`) and the instructions (plus the hooks' context lines, as
+  data) are resolved from the request context. A business's turn without a chosen model throws
+  (`ModelNotChosen`). The agent version on every audit row is `assistant@<the turn's model>#<prompt
+  hash>`. A tool id defined twice stops the start.
 - **Delivery channels.** A notification's `channels` may name any registered `DeliveryChannel` beside
   `whatsapp` and `email`; add the name to `NotificationChannels` (`@hykr/notifications`) by declaration
   merging. `whatsapp` is required only when WhatsApp is a channel. `sent` ends the fallback order;
@@ -972,7 +978,8 @@ requireCapability(p, 'orders.cost.read', { rule: 'cost_hidden' });   // or a 403
 `GET /api/me` returns the same list, so a client checks `me.capabilities` (the back office does).
 
 The framework registers five roles (`owner`, `admin`, `ops`, `staff`, `customer`) and five
-capabilities, with the roles that hold them by default:
+capabilities, with the roles that hold them by default (its features add their own, such as
+`models.manage`):
 
 | Capability | Roles | What it opens |
 |---|---|---|
@@ -981,6 +988,7 @@ capabilities, with the roles that hold them by default:
 | `history.all` | admin, ops | The whole business's history |
 | `channels.manage` | owner, admin | Setting the business's WhatsApp number |
 | `queues.admin` | owner, admin | Bull Board |
+| `models.manage` | owner, admin | Setting the business's model policy, and seeing what models cost (section 7.5) |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -1123,6 +1131,39 @@ export function TodoListComponent({ title, items, act, words }: ViewProps<typeof
 ```
 
 `act` runs through `useAct`. It calls the entity or the command as the person, shows a toast when a write is parked, and refreshes queries.
+
+### 7.5 Models: the gateway and each business's policy
+
+The deployment configures its models; each business chooses among them (`docs/decisions/A10.md`).
+
+- **`MODEL_PROVIDERS`** (JSON, one line) lists OpenAI-compatible providers: `{ id, baseUrl,
+  apiKeyEnv | apiKey, headers?, region?, models: [{ id, kind?: 'chat' | 'embedding', label?, price?
+  }] }`. A model's ref is `<provider id>/<model id>` (`gateway/large`). `price` is `{ currency,
+  inputPerMillion, outputPerMillion? }` in minor units per million tokens; `costOf(ref, usage)` from
+  `@hykr/agents` prices a call (rounded up). Malformed JSON stops the API and the worker at startup.
+  Production points it at the in-country gateway; `application/.env.example` has an example.
+- **OpenRouter stays for development.** With `OPENROUTER_API_KEY`, the registry adds the provider
+  `openrouter` with the model `AGENT_MODEL` names (`openrouter/<vendor>/<model>`) and any in
+  `OPENROUTER_MODELS`.
+- **Defaults.** `AGENT_MODEL` is the chat model when nothing else names one, `EMBEDDING_MODEL` the
+  embedding model; without them, the first listed. In fake mode the scripted model
+  (`fake/scripted`) and a word-hashing embedding (`fake/embedding`) are the defaults, and every
+  policy allows them.
+- **The policy** is the settings section `models`: `{ allowed, chat?, embedding?, regions }`. It
+  fails closed: with `allowed` empty only the deployment's defaults; with it exactly those; with
+  `regions`, only providers that declare one. A turn's model is the one a hook asks for, else the
+  business's `chat`, else the default, and a model that is unknown, not allowed or outside the
+  regions refuses the turn (403 `model_not_allowed`, 503 `model_unknown`); nothing falls back.
+- **API.** `GET /api/models` (any member): the policy, the models a turn and an embedding would use,
+  and every model with `allowed` (prices only with `models.manage`). `PUT /api/models/policy`
+  (`models.manage`, owners and admins by default, signed in) replaces it through `runWrite` as
+  `models.policy.set`: audited before and after, idempotent, parkable by a write hook. A policy the
+  deployment cannot honour is a 400 listing every problem.
+- **In code.** `ModelPolicyService` (`@hykr/api`): `chatFor(tenantId, requested?)` and
+  `embeddingFor(tenantId)` (an AI SDK embedding model, or `ModelRefused`). Anything that calls a model
+  for a business goes through it.
+- **Evals per model.** `basecamp eval --live --model <ref>` runs the evals on one registered model,
+  before a business allows it.
 
 ---
 
@@ -1378,7 +1419,7 @@ These are not built. Each has a workaround for now.
 | File uploads | MinIO runs in compose, but no code uses it. There is no upload API yet. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, the S3 client, `pdfkit` with `harfbuzzjs` and the Noto fonts, `expo-server-sdk` (in `@hykr/api`), `@mastra/memory` and `@ai-sdk/openai-compatible` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-notifications`, `expo-device`, `expo-location`, `expo-image-picker` and `expo-document-picker` (in the mobile app). Each feature that uses one adds its code. The Expo modules' config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client. Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, the S3 client, `pdfkit` with `harfbuzzjs` and the Noto fonts, `expo-server-sdk` (in `@hykr/api`), `@mastra/memory` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-notifications`, `expo-device`, `expo-location`, `expo-image-picker` and `expo-document-picker` (in the mobile app). Each feature that uses one adds its code. The Expo modules' config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client. Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. |
 | Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |
@@ -1390,7 +1431,9 @@ These are not built. Each has a workaround for now.
 | Approval tiers | Deciders follow a decision's `approver`, the approval shows `tier` and `amount`, and `undoMs` holds events back. There are no multi-step tiers, no undo action and no rule against approving your own request. |
 | Withdrawing a stored event | Nothing sets `app.domain_events.cancelled_at` yet (there is no undo action). The outbox feed skips such rows, so the undo action only has to set it before `available_at`. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
-| Per-turn agent version | A turn hook can pick the model, but audit rows' `agentVersion` still names `AGENT_MODEL`. |
+| A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
+| Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |
+| Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
