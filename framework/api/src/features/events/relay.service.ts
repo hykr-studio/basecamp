@@ -1,5 +1,4 @@
 import { DomainEventEnvelope } from '@hykr/contracts';
-import { isNamedEvent } from '@hykr/core';
 import {
   Inject,
   Injectable,
@@ -9,11 +8,9 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { EventBus } from '@nestjs/cqrs';
 import { config } from '../../config.js';
 import { eventFeeds, type ServerContext, subscribers } from '../../hooks.js';
 import { JobsService, serverContext } from '../../queues/jobs.service.js';
-import { envelopeOf } from './envelope.js';
 import { checkSubscribers, EVENTS_QUEUE, subscriberJobId, wants } from './subscriber.js';
 
 const log = new Logger('Events');
@@ -49,33 +46,6 @@ export class EventRelay implements OnApplicationBootstrap {
         });
       }
     }
-  }
-}
-
-/**
- * Until a durable feed is registered, events published on the in-process bus after commit are
- * relayed from here, in whichever process wrote them (the API, or the worker for an approval
- * replay). It steps aside as soon as a feed exists, so no event is relayed twice.
- */
-@Injectable()
-export class EventBusBridge implements OnModuleInit {
-  constructor(
-    @Inject(EventBus) private readonly bus: EventBus,
-    private readonly relay: EventRelay,
-  ) {}
-
-  onModuleInit() {
-    this.bus.subscribe((e) => {
-      if (eventFeeds.all().length || !isNamedEvent(e) || !subscribers.all().length) return;
-      const envelope = envelopeOf(e);
-      if (!envelope) {
-        log.warn(`${e.eventName}: the row has no tenantId, so no subscriber gets it`);
-        return;
-      }
-      this.relay
-        .publish([envelope])
-        .catch((err) => log.error(`relaying ${e.eventName} failed: ${message(err)}`));
-    });
   }
 }
 

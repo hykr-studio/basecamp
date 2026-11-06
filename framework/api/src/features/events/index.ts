@@ -2,7 +2,8 @@ import { DomainEventEnvelope } from '@hykr/contracts';
 import { subscribers } from '../../hooks.js';
 import { defineQueue } from '../../queues/define.js';
 import { defineFeature } from '../feature.js';
-import { EventBusBridge, EventFeedPoller, EventRelay } from './relay.service.js';
+import { outboxFeed } from './outbox-feed.js';
+import { EventFeedPoller, EventRelay } from './relay.service.js';
 import { EVENTS_QUEUE } from './subscriber.js';
 
 /**
@@ -19,11 +20,11 @@ export const EventsQueue = defineQueue<DomainEventEnvelope, string | undefined>(
   },
 });
 
-/** Committed events → subscribers' queues: the relay, the bus bridge, the feed poller. */
+/** Stored events → subscribers' queues: the outbox feed, the worker's poller, the relay. */
 export const eventsFeature = defineFeature({
   name: 'events',
-  providers: [EventRelay, EventBusBridge],
+  providers: [EventRelay],
   processors: [EventFeedPoller],
   exports: [EventRelay],
-  contributes: { queues: [EventsQueue] },
+  contributes: { queues: [EventsQueue], eventFeeds: [outboxFeed] },
 });

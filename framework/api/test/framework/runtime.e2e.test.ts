@@ -5,8 +5,10 @@ import type { DomainEventEnvelope } from '@hykr/contracts';
 import { RequestContext } from '@mastra/core/request-context';
 import type { Queue } from 'bullmq';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { outboxFeed } from '../../dist/features/events/outbox-feed.js';
 import { EventRelay } from '../../dist/features/events/relay.service.js';
 import * as api from '../../dist/index.js';
+import { DB } from '../../dist/infra/db.module.js';
 import { ChatService } from '../../dist/modules/chat/chat.service.js';
 import { JOBS } from '../../dist/queues/define.js';
 import {
@@ -167,14 +169,69 @@ describe('events and subscribers', () => {
     ).toThrow('is not an event name');
   });
 
-  it('an event without a business is never relayed', () => {
-    expect(api.envelopeOf({ eventName: 'task.created', row: { id: 'x' } })).toBeUndefined();
+  it('a write’s stored event reaches the subscriber once, with its id and actor', async () => {
+    const id = (await ana.call('POST', '/api/tasks', { title: 'Stored once' })).body.value.id;
+    const [stored] = (
+      await pool.query(
+        `select id, actor_kind, actor_id, queues from app.domain_events
+         where resource_id = $1 and name = 'task.created'`,
+        [id],
+      )
+    ).rows;
+    expect(stored).toMatchObject({ actor_kind: 'user', actor_id: ana.id });
+    expect(stored.queues).toBe(process.env.BULL_PREFIX);
+    const got = await eventually(() =>
+      seen.events.find((e) => e.name === 'task.created' && e.resourceId === id),
+    );
+    expect(got).toMatchObject({ id: stored.id, actor: { kind: 'user', id: ana.id } });
+    const relayed = await eventually(async () => {
+      const r = await pool.query('select relayed_at from app.domain_events where id = $1', [
+        stored.id,
+      ]);
+      return r.rows[0]?.relayed_at ?? undefined;
+    });
+    expect(relayed).toBeInstanceOf(Date);
+    await wait(1500);
     expect(
-      api.envelopeOf({ eventName: 'task.created', row: { id: 'x', tenantId: 't1' } }),
-    ).toMatchObject({ tenantId: 't1', resourceType: 'task', resourceId: 'x' });
+      seen.events.filter((e) => e.name === 'task.created' && e.resourceId === id),
+    ).toHaveLength(1);
   });
 
-  it('a durable feed is polled with this prefix, and the bus goes quiet while it exists', async () => {
+  it('another prefix’s, a future and a withdrawn stored event are never returned', async () => {
+    const now = Date.now();
+    const ids = {
+      other: `evt-other-${now}`,
+      later: `evt-later-${now}`,
+      cancelled: `evt-cancelled-${now}`,
+    };
+    const insert = (id: string, queues: string, availableAt: string, cancelledAt: string | null) =>
+      pool.query(
+        `insert into app.domain_events (id, tenant_id, name, resource_type, resource_id, row,
+           actor_kind, actor_id, occurred_at, available_at, queues, cancelled_at)
+         values ($1, $2, 'task.hidden', 'task', null, '{}'::jsonb, 'user', $3, now(), $4, $5, $6)`,
+        [id, anaTenant, ana.id, availableAt, queues, cancelledAt],
+      );
+    const prefix = String(process.env.BULL_PREFIX);
+    await insert(ids.other, `${prefix}-other`, new Date(now).toISOString(), null);
+    await insert(ids.later, prefix, new Date(now + 3_600_000).toISOString(), null);
+    await insert(ids.cancelled, prefix, new Date(now).toISOString(), new Date(now).toISOString());
+    const ctx = { db: server.app?.get(DB, { strict: false }) } as never;
+    const pending = await outboxFeed.pending({ limit: 10_000, prefix }, ctx);
+    for (const id of Object.values(ids)) expect(pending.map((e) => e.id)).not.toContain(id);
+    // Marking them relayed under this prefix leaves the other prefix's row alone.
+    await outboxFeed.relayed([ids.other], { prefix }, ctx);
+    await wait(1500);
+    const rows = (
+      await pool.query('select id, relayed_at from app.domain_events where id = any($1)', [
+        Object.values(ids),
+      ])
+    ).rows;
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.relayed_at === null)).toBe(true);
+    expect(seen.events.filter((e) => Object.values(ids).includes(e.id))).toEqual([]);
+  });
+
+  it('another feed is polled beside the outbox, with this prefix and the worker’s ctx', async () => {
     const prefixes: string[] = [];
     const relayed: string[] = [];
     const reads: unknown[] = [];
@@ -208,11 +265,18 @@ describe('events and subscribers', () => {
     await eventually(() => relayed.includes(queued[0].id));
     expect(prefixes[0]).toBe(process.env.BULL_PREFIX);
     expect(reads[0]).toEqual({ one: 1 });
-    // The bus is not relayed any more: the feed would carry it.
-    const quiet = (await ana.call('POST', '/api/tasks', { title: 'Not from the bus' })).body.value
-      .id;
+    // The outbox is still polled: a task reaches the subscriber, once, with its stored id.
+    const task = (await ana.call('POST', '/api/tasks', { title: 'From the outbox' })).body.value.id;
+    const got = await eventually(() => seen.events.find((e) => e.resourceId === task));
+    const [stored] = (
+      await pool.query(
+        `select id from app.domain_events where resource_id = $1 and name = 'task.created'`,
+        [task],
+      )
+    ).rows;
+    expect(got.id).toBe(stored.id);
     await wait(1500);
-    expect(seen.events.find((e) => e.resourceId === quiet)).toBeUndefined();
+    expect(seen.events.filter((e) => e.resourceId === task)).toHaveLength(1);
   });
 });
 

@@ -2,7 +2,6 @@
 // starts the API, the queue worker or the templates CLI with it. Nothing exported here reads the
 // environment when it loads.
 
-export { envelopeOf } from './features/events/envelope.js';
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
 export {

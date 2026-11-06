@@ -273,7 +273,7 @@ export const schedules = createHookRegistry<ScheduleDef>('schedule', byName, {
  * Something that reacts to committed events, in the worker (`defineSubscriber` checks it). The
  * relay adds one job per event and subscriber, with the id `<subscriber>--<event id>`, so an
  * event relayed twice runs once. The envelope carries the stored row unfiltered: anything that
- * sends it outside (webhooks, live updates) must pass it through `projectRead` first.
+ * sends it outside (webhooks, live updates) must pass it through `eventFor(event, p)` first.
  */
 export interface Subscriber {
   /** Unique, prefixed by its owner: 'resume.approvals'. */
@@ -298,10 +298,10 @@ export const subscribers = createHookRegistry<Subscriber>('subscriber', byName, 
 });
 
 /**
- * Where committed events come from: a durable store written in the write's transaction (the
- * event outbox). The worker polls every feed each second, with its services (`ctx.db`), so a
- * feed can be a plain contribution. While no feed is registered, the in-process event bus is
- * relayed instead, after commit.
+ * Where committed events come from: a durable store written in the write's transaction. The
+ * framework's `outbox` feed reads `app.domain_events`; a feature may add another. The worker
+ * polls every feed each second, with its services (`ctx.db`), so a feed can be a plain
+ * contribution.
  */
 export interface EventFeed {
   /** Unique: 'outbox'. */
