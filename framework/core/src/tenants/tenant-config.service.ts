@@ -1,4 +1,11 @@
-import { featureEnabled, parseTenantSettings, type TenantConfig } from '@hykr/contracts';
+import {
+  featureEnabled,
+  parseTenantSettings,
+  type SettingsKey,
+  settingsSections,
+  type TenantConfig,
+  type TenantSettingsSections,
+} from '@hykr/contracts';
 import { type Database, schema } from '@hykr/db';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
@@ -54,18 +61,54 @@ export class TenantConfigService {
     return info !== null && featureEnabled(info.settings, key);
   }
 
+  /**
+   * One settings section of the business, defaults applied. When another part of its settings
+   * does not parse, this section is parsed alone, so one feature's broken section does not take
+   * another feature down with it. This section not parsing throws.
+   */
+  async section<K extends SettingsKey>(
+    tenantId: string,
+    key: K,
+  ): Promise<TenantSettingsSections[K]> {
+    const hit = this.fresh(tenantId);
+    if (hit) return hit.settings[key];
+    const row = await this.row(tenantId);
+    if (!row) return parseTenantSettings(undefined)[key];
+    try {
+      return this.remember(tenantId, row).settings[key];
+    } catch (e) {
+      const section = settingsSections.get(key);
+      if (!section) throw e;
+      const stored = isObject(row.settings) ? row.settings[key] : undefined;
+      return section.schema.parse(stored) as TenantSettingsSections[K];
+    }
+  }
+
   /** The business from the cache or the database; null when there is no such business. */
   private async load(tenantId: string): Promise<TenantInfo | null> {
+    const hit = this.fresh(tenantId);
+    if (hit) return hit;
+    const row = await this.row(tenantId);
+    return row ? this.remember(tenantId, row) : null;
+  }
+
+  private fresh(tenantId: string): TenantInfo | undefined {
     const hit = this.cache.get(tenantId);
-    if (hit && Date.now() - hit.at < this.ttlMs) return hit.info;
+    return hit && Date.now() - hit.at < this.ttlMs ? hit.info : undefined;
+  }
+
+  /** The stored row, as it is. An unknown business is dropped from the cache. */
+  private async row(tenantId: string): Promise<{ name: string; settings: unknown } | null> {
     const [row] = await this.db
       .select({ name: schema.tenants.name, settings: schema.tenants.settings })
       .from(schema.tenants)
       .where(eq(schema.tenants.id, tenantId));
-    if (!row) {
-      this.cache.delete(tenantId);
-      return null;
-    }
+    if (!row) this.cache.delete(tenantId);
+    return row ?? null;
+  }
+
+  /** Parse and cache a stored row; settings that do not parse throw and are not cached. */
+  private remember(tenantId: string, row: { name: string; settings: unknown }): TenantInfo {
     const info = { name: row.name, settings: parseTenantSettings(row.settings) };
     this.cache.set(tenantId, { at: Date.now(), info });
     return info;
@@ -77,3 +120,6 @@ export class TenantConfigService {
     else this.cache.delete(tenantId);
   }
 }
+
+const isObject = (v: unknown): v is Record<string, unknown> =>
+  v !== null && typeof v === 'object' && !Array.isArray(v);

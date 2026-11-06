@@ -244,20 +244,52 @@ describe("a business's own roles", () => {
     expect((await ana.call('GET', '/api/me')).body.capabilities).toContain('members.manage');
   });
 
-  it('settings that do not parse leave the roles but no capability (fail closed)', async () => {
+  it('a roles section that does not parse leaves the roles but no capability (fail closed)', async () => {
     const config = server.app?.get(TenantConfigService) as TenantConfigService;
     await pool.query(
-      `update app.tenants set settings = '{"marketingPerWeek": "lots"}' where id = $1`,
+      `update app.tenants set settings = '{"roles": {"defined": "every"}}' where id = $1`,
       [strangerTenant],
     );
     config.invalidate(strangerTenant);
-    expect((await stranger.call('GET', '/api/me')).body).toMatchObject({
-      roles: ['owner', 'admin'],
-      capabilities: [],
-    });
-    await pool.query(`update app.tenants set settings = '{}' where id = $1`, [strangerTenant]);
-    config.invalidate(strangerTenant);
+    try {
+      expect((await stranger.call('GET', '/api/me')).body).toMatchObject({
+        roles: ['owner', 'admin'],
+        capabilities: [],
+      });
+      expect((await stranger.call('GET', '/api/members/roles')).status).toBe(403);
+    } finally {
+      await pool.query(`update app.tenants set settings = '{}' where id = $1`, [strangerTenant]);
+      config.invalidate(strangerTenant);
+    }
     expect((await stranger.call('GET', '/api/me')).body.capabilities).toContain('members.manage');
+  });
+
+  it('another section that does not parse leaves the capabilities, so it can be repaired', async () => {
+    const config = server.app?.get(TenantConfigService) as TenantConfigService;
+    expect((await stranger.call('GET', '/api/me')).body.capabilities).toContain('history.all');
+    await pool.query(
+      `update app.tenants set settings = '{"marketingPerWeek": "lots", "roles": {"edits": {"admin": {"capabilities": ["members.read"]}}}}' where id = $1`,
+      [strangerTenant],
+    );
+    config.invalidate(strangerTenant);
+    try {
+      await expect(config.get(strangerTenant)).rejects.toThrow();
+      expect((await config.section(strangerTenant, 'roles')).edits).toHaveProperty('admin');
+      // The roles section still parses, its edits included: the owner's capabilities stay,
+      // and the admin's edit took `history.all` (which only the admin held) away.
+      const now = (await stranger.call('GET', '/api/me')).body;
+      expect(now.roles).toEqual(['owner', 'admin']);
+      expect(now.capabilities).toContain('members.manage');
+      expect(now.capabilities).not.toContain('history.all');
+      const roles = (await stranger.call('GET', '/api/members/roles')).body.roles;
+      expect(roles.find((r: { name: string }) => r.name === 'admin')).toMatchObject({
+        capabilities: ['members.read'],
+        edited: true,
+      });
+    } finally {
+      await pool.query(`update app.tenants set settings = '{}' where id = $1`, [strangerTenant]);
+      config.invalidate(strangerTenant);
+    }
   });
 
   it("another business never sees or changes this one's roles and members", async () => {

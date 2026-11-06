@@ -5,9 +5,9 @@ import {
   givenRoles,
   type Principal,
   parseSubjectKey,
+  type RolesSettings,
   type Subject,
   standingIn,
-  type TenantConfig,
 } from '@hykr/contracts';
 import { contactById, ensureDefaultTenant, membershipOf, userExists } from '@hykr/db';
 import {
@@ -49,15 +49,15 @@ const warned = new Set<string>();
  * (with the application's overrides and the business's edits) and the business's own. A name
  * it does not have grants nothing, and is logged once.
  */
-function standingOf(values: readonly string[], settings: TenantConfig | null) {
-  const { roles, capabilities, unknown } = standingIn(values, settings ?? undefined);
+function standingOf(values: readonly string[], section: RolesSettings | null) {
+  const { roles, capabilities, unknown } = standingIn(values, section ? { roles: section } : {});
   for (const r of unknown)
     if (!warned.has(r)) {
       warned.add(r);
       logger.warn(`Role "${r}" is in a membership but nobody declared it: it grants nothing`);
     }
-  // Settings that do not parse may hide an edit that took capabilities away: allow none.
-  return { roles, capabilities: settings ? capabilities : [] };
+  // A roles section that does not parse may hide an edit that took capabilities away: allow none.
+  return { roles, capabilities: section ? capabilities : [] };
 }
 
 /**
@@ -78,15 +78,16 @@ export class PrincipalResolver {
   }
 
   /**
-   * A business's settings, for its roles. Settings that do not parse are null: the declared
-   * roles still reach their rows, but nobody holds a capability there until they are fixed
-   * (fail closed: a business's edit may have taken some away).
+   * A business's roles section. It is read alone, so another broken section (a feature's) leaves
+   * the capabilities in place and its owner can still repair it. A roles section that does not
+   * parse is null: the declared roles still reach their rows, but nobody holds a capability
+   * there until it is fixed (fail closed: a business's edit may have taken some away).
    */
-  private async settingsOf(tenantId: string): Promise<TenantConfig | null> {
+  private async rolesOf(tenantId: string): Promise<RolesSettings | null> {
     try {
-      return (await this.tenants.get(tenantId)).settings;
+      return await this.tenants.section(tenantId, 'roles');
     } catch (e) {
-      logger.error(`Settings of business ${tenantId} do not parse; no capabilities there: ${e}`);
+      logger.error(`Roles of business ${tenantId} do not parse; no capabilities there: ${e}`);
       return null;
     }
   }
@@ -111,7 +112,7 @@ export class PrincipalResolver {
     return {
       subject: { kind: 'user', userId },
       tenantId: membership.tenantId,
-      ...standingOf(membership.roles, await this.settingsOf(membership.tenantId)),
+      ...standingOf(membership.roles, await this.rolesOf(membership.tenantId)),
       ...(membership.customerId ? { customerId: membership.customerId } : {}),
       assurance: this.assurance(opts.channel),
     };
@@ -143,7 +144,7 @@ export class PrincipalResolver {
       subject: { kind: 'contact', contactId },
       tenantId: contact.tenantId,
       // The roles the application gives a contact (the framework's: customer).
-      ...standingOf(givenRoles('contact'), await this.settingsOf(contact.tenantId)),
+      ...standingOf(givenRoles('contact'), await this.rolesOf(contact.tenantId)),
       ...(contact.customerId ? { customerId: contact.customerId } : {}),
       assurance: 'whatsapp_number',
     };

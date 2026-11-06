@@ -141,9 +141,10 @@ export class MembersController extends Writes {
   @Get('roles')
   async roles(@CurrentPrincipal() p: Principal): Promise<BusinessRoles> {
     requireCapability(p, READ, refuse('members_read', "Only the business's team sees its roles"));
-    const { settings } = await this.tenants.get(p.tenantId ?? '');
+    // The roles section alone: another feature's broken section does not hide the roles.
+    const section = await this.tenants.section(p.tenantId ?? '', 'roles');
     return {
-      roles: rolesOfBusiness(settings),
+      roles: rolesOfBusiness({ roles: section }),
       capabilities: capabilities.all().map((c) => ({
         name: c.name,
         label: c.label,
