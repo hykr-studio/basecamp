@@ -43,7 +43,9 @@ export {
   writeHooks,
 } from './hooks.js';
 export { ApprovalsController } from './http/approvals.controller.js';
+export { requireCapability } from './http/capability.js';
 export { commandController, entityController } from './http/controller-factory.js';
+export { agentKeyProvider, identifyAgent, RUN_ID } from './http/identity.js';
 export {
   type ApiRequest,
   ChatAccessGuard,
@@ -57,6 +59,8 @@ export {
 } from './http/principal.js';
 export { PrincipalResolver, type Standing } from './http/resolver.js';
 export { buildListSql, decodeCursor, encodeCursor } from './query/list-grammar.js';
+export { type SystemPrincipalOptions, systemPrincipal } from './system.js';
+export { TenantConfigService, type TenantInfo } from './tenants/tenant-config.service.js';
 export { type AgentKey, CORE_OPTIONS, type Conn, type CoreOptions, type Tx } from './tokens.js';
 export { ApprovalEvent, ApprovalService, registerOp, toApproval } from './write/approvals.js';
 export {

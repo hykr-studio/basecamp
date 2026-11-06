@@ -40,7 +40,8 @@ export const approvals = app.table(
     summary: text('summary'),
     /** The parked operation: { op, args, principal }, replayed as-is on approval. */
     payload: jsonb('payload'),
-    requestedBy: text('requested_by', { enum: ['user', 'agent'] })
+    /** The requester's actor kind (Principal.actor.kind in @hykr/contracts). */
+    requestedBy: text('requested_by', { enum: ['user', 'agent', 'system', 'guest'] })
       .notNull()
       .default('agent'),
     runId: text('run_id'),
@@ -158,7 +159,10 @@ export const threadMessages = app.table(
     text: text('text').notNull().default(''),
     /** UI message parts after the text: tool calls with their inputs and outputs. */
     parts: jsonb('parts').notNull().default([]),
-    channel: text('channel', { enum: ['app', 'voice', 'whatsapp'] })
+    /** Channel in @hykr/contracts: a turn's channel, kept as text. */
+    channel: text('channel', {
+      enum: ['app', 'voice', 'whatsapp', 'mcp', 'webmcp', 'api', 'background', 'share'],
+    })
       .notNull()
       .default('app'),
     lang: text('lang', { enum: ['en', 'hi', 'te'] }),

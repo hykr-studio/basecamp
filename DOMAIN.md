@@ -51,8 +51,9 @@ Then:
 ## Who sees what: businesses, roles and customers
 
 Every row belongs to a business (a tenant) and is read and written only inside it. A person can
-hold several roles in a business: `owner`, `admin`, `ops`, `staff`, `customer`. An entity's
-`access` says what each role reaches, per read and write:
+hold several roles in a business. The framework registers `owner`, `admin`, `ops`, `staff` and
+`customer`; a domain adds its own with `contributes: { roles, capabilities }` (developer guide
+6.4). An entity's `access` says what each role reaches, per read and write:
 
 - `own`: rows the person owns; `customer`: rows of the customer they are; `tenant`: every row
   in the business.
@@ -63,6 +64,11 @@ The sample domain gives the owner and staff their own rows, admin and ops the wh
 and a customer their own customer's rows (`application/domain/src/server/access.ts`). With
 `customer: (t) => t.customerId`, a customer's assistant creates rows for that customer, owned by
 the business's default owner.
+
+Anything else a role may do (a screen, a feature, a hidden field) is a capability: declare it
+with `defineCapability({ name: '<area>.<action>', label, roles })` and check it with
+`can(p, name)` from `@hykr/policy`, never by naming a role. `GET /api/me` lists the person's
+capabilities for the apps.
 
 Approvals take an object form, `{ when, by, channels, minAssurance }`: who decides (the person
 it is for by default; a customer's request goes to `owner` and `ops`), and where (`channels:

@@ -4,6 +4,7 @@ import {
   useFonts,
 } from '@expo-google-fonts/schibsted-grotesk';
 import { type ApiClient, ApiError } from '@hykr/api-client';
+import { FrameworkCapabilities } from '@hykr/contracts';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Link, Slot, usePathname } from 'expo-router';
 import { useState } from 'react';
@@ -21,7 +22,8 @@ const queryClient = new QueryClient({
   },
 });
 
-const STAFF = ['owner', 'admin', 'ops', 'staff'];
+/** The server says what the person's roles allow here; the back office needs this one. */
+const BACK_OFFICE = FrameworkCapabilities.backOffice.name;
 type Me = Awaited<ReturnType<ApiClient['me']>>;
 
 function SignIn({ title, onSignedIn }: { title: string; onSignedIn: (u: SessionUser) => void }) {
@@ -137,7 +139,7 @@ function Gate({ title }: { title: string }) {
       </View>
     );
   if (!user) return <SignIn title={title} onSignedIn={() => session.refetch()} />;
-  if (!me.data?.roles.some((r) => STAFF.includes(r)))
+  if (!me.data?.capabilities.includes(BACK_OFFICE))
     return (
       <View className="flex-1 items-center justify-center gap-3 bg-bg px-4">
         <Text className="text-heading font-heading text-text">This is for the business's team</Text>

@@ -1,5 +1,5 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { Channel, type Principal } from '@hykr/contracts';
+import { randomUUID } from 'node:crypto';
+import type { Principal } from '@hykr/contracts';
 import {
   type CanActivate,
   createParamDecorator,
@@ -12,13 +12,17 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request, Response } from 'express';
+import type { AgentIdentity, AgentIdentityProvider } from '../hooks.js';
 import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
+import { agentKeyProvider, identifyAgent } from './identity.js';
 import { PrincipalResolver } from './resolver.js';
 
 export type ApiRequest = Request & {
   /** Set by Better Auth's guard when the request carries a valid session. */
   session?: { user: { id: string; name?: string } } | null;
   principal?: Principal;
+  /** The agent credential PrincipalGuard recognised (any identity provider's), if any. */
+  agent?: AgentIdentity;
   requestId?: string;
 };
 
@@ -29,8 +33,6 @@ export const header = (req: Request, name: string) => {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 };
 
-const sha256 = (value: string) => createHash('sha256').update(value).digest();
-
 const RELAY_ALLOWED = 'core:relay-allowed';
 /**
  * The routes a relay agent (the voice worker) may call: starting a turn for its person, and
@@ -39,21 +41,24 @@ const RELAY_ALLOWED = 'core:relay-allowed';
  */
 export const RelayAllowed = () => SetMetadata(RELAY_ALLOWED, true);
 
-/** A run id names a trace and audit rows: short, and safe to log. */
-const RUN_ID = /^[A-Za-z0-9_-]{1,64}$/;
-
 /**
- * Turns every request into exactly one principal before the handler runs: a signed-in
- * person, or the agent acting for one. Anything else is a 401.
- * Pair it with @OptionalAuth() so Better Auth attaches a session when there is one.
+ * Turns every request into exactly one principal before the handler runs: an agent that an
+ * identity provider recognises (the agent key first, then the contributed `identityProviders`),
+ * acting for someone, or else a signed-in person. Anything else is a 401. It never makes a
+ * system or guest principal: those are the server's own (`systemPrincipal`) or a share
+ * guard's. Pair it with @OptionalAuth() so Better Auth attaches a session when there is one.
  */
 @Injectable()
 export class PrincipalGuard implements CanActivate {
+  private readonly keyed: AgentIdentityProvider;
+
   constructor(
     @Inject(CORE_OPTIONS) private readonly options: CoreOptions,
     private readonly reflector: Reflector,
     private readonly resolver: PrincipalResolver,
-  ) {}
+  ) {
+    this.keyed = agentKeyProvider(options.agents);
+  }
 
   async canActivate(context: ExecutionContext) {
     const http = context.switchToHttp();
@@ -63,60 +68,60 @@ export class PrincipalGuard implements CanActivate {
     req.requestId = header(req, 'x-request-id') ?? randomUUID();
     res.setHeader('x-request-id', req.requestId);
 
-    const agentKey = header(req, 'x-agent-key');
-    req.principal = agentKey
-      ? await this.agentPrincipal(req, agentKey)
-      : await this.userPrincipal(req);
-    if (req.principal.actor.kind === 'agent') {
-      const agent = this.options.agents.find((a) => a.id === req.principal?.actor.id);
+    const identity = await identifyAgent(
+      { method: req.method, path: req.path, headers: req.headers },
+      this.keyed,
+      this.options.agents.map((a) => a.id),
+    );
+    if (identity) {
+      req.agent = identity;
+      req.principal = await this.agentPrincipal(req, identity);
       const allowed = this.reflector.getAllAndOverride<boolean>(RELAY_ALLOWED, [
         context.getHandler(),
         context.getClass(),
       ]);
-      if (agent?.relay && !allowed) throw new ForbiddenException('A relay can only start turns');
+      if (identity.relay && !allowed) throw new ForbiddenException('A relay can only start turns');
+    } else {
+      req.principal = await this.userPrincipal(req);
     }
     return true;
   }
 
-  private async agentPrincipal(req: ApiRequest, agentKey: string): Promise<Principal> {
-    // Hash both sides: equal lengths for timingSafeEqual, and nothing leaks the key's length.
-    // A presented key that is wrong never falls back to the session. The key identifies the
-    // agent; the claimed x-agent-id must match it.
-    const presented = sha256(agentKey);
-    const agent = this.options.agents.find(
-      (a) => a.key.length > 0 && timingSafeEqual(presented, sha256(a.key)),
-    );
-    if (!agent) throw new UnauthorizedException('invalid agent key');
-    if (header(req, 'x-agent-id') !== agent.id) {
-      throw new UnauthorizedException('unknown agent');
-    }
-    const actingFor = header(req, 'x-acting-for');
-    const runId = header(req, 'x-run-id');
-    if (!actingFor || !runId) {
-      throw new UnauthorizedException('agent requests need x-acting-for and x-run-id');
-    }
-    if (!RUN_ID.test(runId)) throw new UnauthorizedException('x-run-id is not a run id');
-    // A relay's channel is fixed by its key; the assistant forwards the channel of the turn
-    // it is running (checked against the known channels, never free text).
-    const forwarded = Channel.safeParse(header(req, 'x-channel'));
-    const channel = agent.channel ?? (forwarded.success ? forwarded.data : undefined);
+  /** The agent, acting for whom it names, in a business that person belongs to: the server's facts. */
+  private async agentPrincipal(req: ApiRequest, identity: AgentIdentity): Promise<Principal> {
+    // A credential that fixes the business wins; a header naming another one is refused.
+    const asked = header(req, 'x-tenant-id');
+    if (identity.tenantId && asked && asked !== identity.tenantId)
+      throw new ForbiddenException({ error: 'forbidden', rule: 'tenant_mismatch' });
+    const { userId, contactId } = identity.actingFor;
+    const named = userId
+      ? ({ kind: 'user', userId } as const)
+      : ({ kind: 'contact', contactId: contactId ?? '' } as const);
+    const channel = identity.channel;
+    const fixed = identity.tenantId ?? asked;
     // Whom it acts for, in which business (one they belong to), with what roles: the server's.
+    // A linked WhatsApp contact comes back as its person.
     const standing = await this.resolver
-      .forActingFor(actingFor, { tenantId: header(req, 'x-tenant-id'), channel })
+      .forSubject(named, { tenantId: fixed, channel })
       .catch((e) => {
         if (e instanceof UnauthorizedException)
           throw new UnauthorizedException('x-acting-for names nobody we know');
         throw e;
       });
-    const subject = standing.subject;
+    // Whatever the subject (a contact of another business, a linked contact's person), the
+    // principal acts in the business the credential or header fixed, or not at all.
+    if (fixed && standing.tenantId !== fixed)
+      throw new ForbiddenException({ error: 'forbidden', rule: 'tenant_mismatch' });
     return {
-      actor: { kind: 'agent', id: agent.id, role: 'agent' },
+      actor: { kind: 'agent', id: identity.agentId },
       actingFor:
-        subject.kind === 'user' ? { userId: subject.userId } : { contactId: subject.contactId },
+        standing.subject.kind === 'user'
+          ? { userId: standing.subject.userId }
+          : { contactId: standing.subject.contactId },
       ...standing,
-      runId,
-      agentVersion: header(req, 'x-agent-version'),
-      scopes: [],
+      runId: identity.runId,
+      agentVersion: identity.agentVersion,
+      scopes: [...(identity.scopes ?? [])],
       ...(channel ? { channel } : {}),
     };
   }
@@ -128,7 +133,7 @@ export class PrincipalGuard implements CanActivate {
       tenantId: header(req, 'x-tenant-id'),
       name: req.session?.user?.name,
     });
-    return { actor: { kind: 'user', id, role: 'owner' }, ...standing, scopes: [] };
+    return { actor: { kind: 'user', id }, ...standing, scopes: [] };
   }
 }
 
@@ -139,13 +144,11 @@ export class PrincipalGuard implements CanActivate {
  */
 @Injectable()
 export class ChatAccessGuard implements CanActivate {
-  constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {}
-
   canActivate(context: ExecutionContext) {
-    const p = context.switchToHttp().getRequest<ApiRequest>().principal;
+    const req = context.switchToHttp().getRequest<ApiRequest>();
+    const p = req.principal;
     if (p?.actor.kind === 'user') return true;
-    const agent = this.options.agents.find((a) => a.id === p?.actor.id);
-    if (p?.actor.kind === 'agent' && agent?.relay && p.actingFor?.userId) return true;
+    if (p?.actor.kind === 'agent' && req.agent?.relay && p.actingFor?.userId) return true;
     throw new ForbiddenException('Only people, or a relay acting for one, can start a turn');
   }
 }
