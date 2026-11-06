@@ -2,6 +2,7 @@ export * from './app.js';
 export * from './audit.js';
 export * from './auth.js';
 export * from './channel.js';
+export * from './documents.js';
 export * from './events.js';
 export * from './files.js';
 export * from './numbering.js';

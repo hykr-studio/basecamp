@@ -4,6 +4,10 @@ import {
   type ChatResponse,
   type ChatStreamRequest,
   type CommandSpec,
+  type DocumentChannel,
+  type DocumentInfo,
+  type DocumentKindInfo,
+  type DocumentRecipient,
   type EntitySpec,
   type FileInfo,
   type FileTarget,
@@ -17,6 +21,9 @@ import {
   type PresignFileInput,
   type PresignFileResult,
   pathParams,
+  type RenderDocumentInput,
+  RenderDocumentSpec,
+  SendDocumentSpec,
   type TemplateStatus,
   type Thread,
   type ThreadMessage,
@@ -232,11 +239,43 @@ export function createApiClient(opts: ApiClientOptions) {
     },
   };
 
+  const documentUrl = (id: string) => `/api/documents/${encodeURIComponent(id)}`;
+  const withDocumentUrl = (d: DocumentInfo): DocumentInfo =>
+    d.url ? { ...d, url: absolute(d.url) } : d;
+
+  const documents = {
+    /** Make a new version of a record's document; it starts `pending` (made in the background). */
+    render: (input: RenderDocumentInput, key = newKey()) => command(RenderDocumentSpec, input, key),
+    /** Send a document by WhatsApp or email (the assistant's send to others waits for approval). */
+    send: (documentId: string, to: DocumentRecipient, channel?: DocumentChannel, key = newKey()) =>
+      command(SendDocumentSpec, { documentId, to, ...(channel ? { channel } : {}) }, key),
+    /** One document, with its sends and, for people once it is made, a short-lived URL. */
+    get: async (id: string) => withDocumentUrl(await call<DocumentInfo>('GET', documentUrl(id))),
+    /** A record's documents the caller reaches, newest first. */
+    list: async (entity: string, id: string) =>
+      (
+        await call<{ items: DocumentInfo[] }>(
+          'GET',
+          `/api/documents?entity=${encodeURIComponent(entity)}&id=${encodeURIComponent(id)}`,
+        )
+      ).items,
+    /** The kinds of document an entity has (every kind without one). */
+    kinds: async (entity?: string) =>
+      (
+        await call<{ items: DocumentKindInfo[] }>(
+          'GET',
+          `/api/documents/kinds${entity ? `?entity=${encodeURIComponent(entity)}` : ''}`,
+        )
+      ).items,
+  };
+
   return {
     entity,
     command,
     /** Files: uploads, and files reached through the records they are on. */
     files,
+    /** Documents (PDFs) of records: make, read, send. */
+    documents,
     /** Who is signed in, in which business, with which roles. */
     me: () => call<Me>('GET', '/api/me'),
     /** The back office: conversations staff have taken from the assistant (staff only). */
