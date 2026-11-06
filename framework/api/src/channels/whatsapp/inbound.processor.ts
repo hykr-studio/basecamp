@@ -237,8 +237,16 @@ export class InboundProcessor extends WorkerHost {
       const keyword = keywordOfMessage(m);
       return keyword ? [{ keyword, words: wordsOf(m) ?? '' }] : [];
     });
+    const erasing = keywords.some((k) => k.keyword === 'delete_my_data');
     for (const { keyword, words } of keywords)
       await this.keyword(keyword, contact, lang, say, business.settings, words);
+    // They asked for their data to go, and the erasure is queued: the rest of the burst is
+    // dropped before any hook sees it (a stored photo would outlive the erasure), and the
+    // assistant takes no turn.
+    if (erasing) {
+      await this.done(pending.map((e) => e.id));
+      return;
+    }
     // What is left passes the inbound hooks (a photo stored, its file named for the turn).
     const rest = (
       await this.throughHooks(
@@ -248,8 +256,8 @@ export class InboundProcessor extends WorkerHost {
     )
       .join('\n')
       .trim();
-    // Nothing else said, or they asked for their data to go: no turn for the assistant.
-    if (keywords.length && (!rest || keywords.some((k) => k.keyword === 'delete_my_data'))) {
+    // Nothing else said: no turn for the assistant.
+    if (keywords.length && !rest) {
       await this.done(pending.map((e) => e.id));
       return;
     }

@@ -143,36 +143,44 @@ describe('delivery channels', () => {
 
 describe('inbound hooks', () => {
   let n = 0;
-  const image = (from: string, caption?: string) => {
-    const id = `m-dlv-${Date.now()}-${n++}`;
-    return {
-      mediaId: `media-${id}`,
-      raw: JSON.stringify({
-        object: 'whatsapp_business_account',
-        entry: [
-          {
-            changes: [
-              {
-                field: 'messages',
-                value: {
-                  metadata: { phone_number_id: NUMBER },
-                  contacts: [{ wa_id: from, profile: { name: 'Lakshmi' } }],
-                  messages: [
-                    {
-                      from,
-                      id,
-                      timestamp: String(Math.floor(Date.now() / 1000)),
-                      type: 'image',
-                      image: { id: `media-${id}`, mime_type: 'image/jpeg', caption },
-                    },
-                  ],
-                },
+  /** One webhook delivery from one sender: its messages are one burst. */
+  const webhook = (from: string, messages: object[]) =>
+    JSON.stringify({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                metadata: { phone_number_id: NUMBER },
+                contacts: [{ wa_id: from, profile: { name: 'Lakshmi' } }],
+                messages,
               },
-            ],
-          },
-        ],
+            },
+          ],
+        },
+      ],
+    });
+  const message = (from: string, body: object) => ({
+    from,
+    id: `m-dlv-${Date.now()}-${n++}`,
+    timestamp: String(Math.floor(Date.now() / 1000)),
+    ...body,
+  });
+  const photo = (from: string, caption?: string) => {
+    const mediaId = `media-dlv-${Date.now()}-${n++}`;
+    return {
+      mediaId,
+      message: message(from, {
+        type: 'image',
+        image: { id: mediaId, mime_type: 'image/jpeg', caption },
       }),
     };
+  };
+  const image = (from: string, caption?: string) => {
+    const { mediaId, message } = photo(from, caption);
+    return { mediaId, raw: webhook(from, [message]) };
   };
   const post = (raw: string) =>
     fetch(`${server.base}/webhooks/whatsapp`, {
@@ -215,6 +223,34 @@ describe('inbound hooks', () => {
       [from],
     );
     expect(rows[0].n).toBe(0);
+  });
+
+  it('a burst that asks for erasure passes no hook: a photo sent with it is never kept', async () => {
+    const from = phone();
+    const { mediaId, message: picture } = photo(from);
+    const ask = message(from, { type: 'text', text: { body: 'DELETE MY DATA' } });
+    expect((await post(webhook(from, [picture, ask]))).status).toBe(200);
+    // Erased, and told so.
+    await eventually(() =>
+      toNumber(from).find(
+        (s) => s.text?.body === 'Your data here has been deleted. Thank you for talking to us.',
+      ),
+    );
+    const { rows } = await pool.query(
+      `select count(*)::int as n from channel.contacts where address = $1`,
+      [from],
+    );
+    expect(rows[0].n).toBe(0);
+    // The burst is done before the hooks: nothing stored the photo, before or after.
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(
+      seen.inbound.some(
+        (i) =>
+          i.message.from === from ||
+          (i.message.body.kind === 'media' && i.message.body.mediaId === mediaId),
+      ),
+    ).toBe(false);
+    expect(toNumber(from).some((s) => s.text?.body.includes('Got your photo'))).toBe(false);
   });
 });
 
