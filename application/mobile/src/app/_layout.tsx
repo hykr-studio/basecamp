@@ -1,5 +1,5 @@
 import '../../global.css';
-import { AppShell } from '@hykr/app';
+import { AppShell, webMcpPlugin } from '@hykr/app';
 import { catalog, registry } from '@/catalog';
 import * as modules from '@/modules';
 import { settings } from '@/settings';
@@ -12,11 +12,18 @@ const config = {
   scheme: 'agenticstack',
 };
 
+/**
+ * Framework features the app uses. WebMCP: each screen's read tools (the modules' `webmcp`),
+ * offered to the browser's agent where the browser supports it.
+ */
+const plugins = [webMcpPlugin()];
+
 export default function RootLayout() {
   return (
     <AppShell
       app={settings}
       modules={modules}
+      plugins={plugins}
       catalog={catalog}
       registry={registry}
       config={config}

@@ -9,9 +9,10 @@ application hands its modules to the framework in two places:
 
 - the server: `application/api/src/server.ts`, `defineServer({ name, persona, help, channel,
   modules, migrations, contributes })` from `@hykr/api`;
-- the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app modules catalog registry
-  config />` from `@hykr/app`, with the app's modules (`defineAppModule`), and the catalog and
-  registry built from every module's specs and views.
+- the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app modules plugins catalog
+  registry config />` from `@hykr/app`, with the app's modules (`defineAppModule`), the framework
+  features it uses (`plugins`: `webMcpPlugin()` offers each screen's `webmcp` read tools to a
+  browser agent), and the catalog and registry built from every module's specs and views.
 
 Two dependency-cruiser rules, run by `pnpm lint:deps`, keep it that way:
 `framework-never-imports-application` and `application-uses-public-framework-exports` (only

@@ -108,7 +108,7 @@ Other gotchas:
   `framework/`. Pre-existing wording is listed in `scripts/boundary-allow.txt`.
 - `framework/` never imports `application/`. The application passes its modules in at exactly two points:
   - the server: `application/api/src/server.ts`, through `defineServer({ name, persona, help, channel, modules, migrations, contributes })`, started by `startApi` / `startWorker`. Each module is `defineModule({ ...moduleSpec, server, views, screens, templates, notifications, agent, tables, contributes })`;
-  - the app: `application/mobile/src/app/_layout.tsx`, through `<AppShell app modules catalog registry config />`.
+  - the app: `application/mobile/src/app/_layout.tsx`, through `<AppShell app modules plugins catalog registry config />` (`plugins`: framework features such as `webMcpPlugin()`).
     Each app module (`defineAppModule` in `application/mobile/src/modules/<name>/index.tsx`) brings its
     nav, suggestions, `bind`, `hrefFor` and `webmcp`; its routes are one-line files in `src/app/<name>/`.
 - `application/` imports `@hykr/*` by package name and public subpath only. No relative paths into
