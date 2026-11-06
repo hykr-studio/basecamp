@@ -16,9 +16,12 @@ type ToolContext = {
  */
 export type ApiFor = (ctx?: ToolContext) => ReturnType<typeof createApiClient>;
 
-/** `apiFor` for one assistant: its version goes on every call, so audit rows name it. */
+/**
+ * `apiFor` for one assistant: its version for this turn (the turn's model is part of it) goes on
+ * every call, so audit rows name it.
+ */
 export const createApiFor =
-  (version: () => string): ApiFor =>
+  (version: (ctx?: ToolContext) => string): ApiFor =>
   (ctx) => {
     // Whom it acts for ("user:<id>" / "contact:<id>"), in which business; Studio and evals give
     // a bare user id, which the API also accepts.
@@ -44,7 +47,7 @@ export const createApiFor =
         'x-acting-for': actingFor,
         ...(tenantId ? { 'x-tenant-id': tenantId } : {}),
         'x-run-id': runId,
-        'x-agent-version': version(),
+        'x-agent-version': version(ctx),
         // The turn's channel (app, voice, whatsapp), so every audit row says how it came in.
         ...(channel ? { 'x-channel': channel } : {}),
       }),

@@ -5,6 +5,12 @@
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
 export {
+  ModelPolicyChanged,
+  ModelPolicyService,
+  ModelRefused,
+  SET_MODEL_POLICY,
+} from './features/models/index.js';
+export {
   type AgentIdentity,
   type AgentIdentityProvider,
   type AuthPlugin,
@@ -51,7 +57,7 @@ export {
   writeHooks,
 } from './hooks.js';
 export { defineModule, type ModuleDef } from './module.js';
-export { TurnRefused } from './modules/chat/turn-hooks.js';
+export { type ModelGate, TurnRefused } from './modules/chat/turn-hooks.js';
 export { eraseWithContributors, exportPersonalData } from './privacy/contributors.js';
 export { defineQueue, defineSchedule, JOBS, registerQueue } from './queues/define.js';
 export {
