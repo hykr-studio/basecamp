@@ -224,7 +224,7 @@ export interface AuthPlugin {
   trustedOrigins?: readonly string[];
 }
 
-/** Auth plugins, in registration order. Nothing adds them to Better Auth yet. */
+/** Auth plugins, in registration order: added to Better Auth when it is built (infra/auth.ts). */
 export const authPlugins = createHookRegistry<AuthPlugin>('auth plugin', byName, {
   collects: 'authPlugins',
 });

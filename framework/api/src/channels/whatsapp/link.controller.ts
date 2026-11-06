@@ -1,6 +1,7 @@
-import type { Principal } from '@hykr/contracts';
+import { FrameworkCapabilities, type Principal } from '@hykr/contracts';
 import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@hykr/core';
 import { type Database, schema } from '@hykr/db';
+import { can } from '@hykr/policy';
 import {
   BadRequestException,
   Body,
@@ -104,11 +105,12 @@ export class WhatsAppLinkController {
 
   /**
    * Make a WhatsApp Business number this business's (the configured one by default): messages
-   * to it are this business's conversations. Owners and admins only.
+   * to it are this business's conversations. Only roles with `channels.manage` (owners and
+   * admins by default).
    */
   @Post('number')
   async claim(@CurrentPrincipal() p: Principal, @Body() body: NumberDto) {
-    if (!(p.roles ?? []).some((r) => r === 'owner' || r === 'admin'))
+    if (!can(p, FrameworkCapabilities.channelSetup))
       throw new ForbiddenException('Only an owner or admin can set the business number');
     // The configured number is a development convenience; production names the number.
     const phoneNumberId =

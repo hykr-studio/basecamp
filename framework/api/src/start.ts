@@ -15,7 +15,9 @@ export async function startApi(app: Basecamp) {
   const { AppModule } = await import('./app.module.js');
   // Better Auth reads the raw body; the auth module adds parsing back for other routes.
   const nest = await NestFactory.create(AppModule, { bodyParser: false });
-  nest.enableCors({ origin: config.webOrigins, credentials: true });
+  // WEB_ORIGINS and the origins the application's auth plugins trust.
+  const { corsOrigins } = await import('./infra/auth.js');
+  nest.enableCors({ origin: corsOrigins(), credentials: true });
   const { mountBullBoard } = await import('./channels/admin/bull-board.js');
   mountBullBoard(nest);
   nest.enableShutdownHooks();

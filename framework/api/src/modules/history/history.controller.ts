@@ -1,6 +1,7 @@
-import { HistoryEntry, type Principal } from '@hykr/contracts';
+import { FrameworkCapabilities, HistoryEntry, type Principal } from '@hykr/contracts';
 import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@hykr/core';
 import { type Database, events } from '@hykr/db';
+import { can } from '@hykr/policy';
 import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
 import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 import { and, asc, desc, eq, gt, inArray, or } from 'drizzle-orm';
@@ -52,8 +53,9 @@ export class HistoryController {
   @Get()
   async list(@CurrentPrincipal() p: Principal, @Query() q: HistoryQuery): Promise<HistoryEntry[]> {
     const me = p.actor.id;
-    // In this business: what you (or the assistant for you) did; ops see the whole business's.
-    const everyone = (p.roles ?? []).some((r) => r === 'ops' || r === 'admin');
+    // In this business: what you (or the assistant for you) did; `history.all` (ops and admins
+    // by default) sees the whole business's.
+    const everyone = can(p, FrameworkCapabilities.wholeHistory);
     const one = q.resourceType && q.resourceId;
     const scope = and(
       eq(events.tenantId, p.tenantId ?? ''),
