@@ -13,7 +13,7 @@ import { Button } from '../../components/Button';
 import { errorMessage } from '../../framework/hooks';
 import { useT } from '../../framework/lang';
 import { colors, space, styles } from '../../theme';
-import { useCapabilities, useTransition } from './hooks';
+import { useActingPrincipal, useTransition } from './hooks';
 
 /** camelCase → "Cancel reason", for a field without a label. */
 const humanize = (key: string) => {
@@ -27,8 +27,9 @@ const humanize = (key: string) => {
 /**
  * The moves a person can make on a record from where it stands: one button per transition out
  * of its state that people may ask for (not the server's own, nor one needing a capability they
- * lack). A move that takes fields (a reason) asks for them first. A move that waits for approval
- * says so. The server checks everything again.
+ * lack). A move its guard refuses is greyed, with the reason. A move that takes fields (a
+ * reason) asks for them first. A move that waits for approval says so. The server checks
+ * everything again.
  */
 export function TransitionBar({
   spec,
@@ -38,7 +39,8 @@ export function TransitionBar({
   row: Readonly<Record<string, unknown>> & { id: string };
 }) {
   const { lang } = useT();
-  const held = useCapabilities();
+  const me = useActingPrincipal();
+  const held = me?.capabilities;
   const move = useTransition(spec);
   const [asking, setAsking] = useState<TransitionDecl | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -68,6 +70,9 @@ export function TransitionBar({
     );
   };
   const missing = (t: TransitionDecl) => (t.requires ?? []).some((f) => !values[f]?.trim());
+  // The guard, on the record as it is (fields asked for later are checked by the server).
+  const refusedBy = (t: TransitionDecl) => (me && t.guard ? t.guard(row, {}, me) : null);
+  const refusals = offered.map(refusedBy).filter((r): r is NonNullable<typeof r> => r !== null);
   return (
     <View style={{ gap: space.sm }}>
       {asking ? (
@@ -109,12 +114,16 @@ export function TransitionBar({
               key={t.name}
               title={transitionLabel(t, lang)}
               variant={i === 0 ? 'primary' : 'secondary'}
+              disabled={refusedBy(t) !== null}
               busy={move.isPending && move.variables?.transition === t.name}
               onPress={() => (t.fields?.length ? setAsking(t) : run(t))}
             />
           ))}
         </View>
       )}
+      {!asking && refusals.length ? (
+        <Text style={styles.muted}>{[...new Set(refusals.map((r) => r.reason))].join(' ')}</Text>
+      ) : null}
       {waiting ? (
         <Text style={[styles.text, { color: colors.approvalText }]}>
           Waiting for approval: {waiting}

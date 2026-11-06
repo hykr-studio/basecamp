@@ -1,4 +1,11 @@
-import type { EntitySpec, RecordVersion, SlaTimer, WriteResult } from '@hykr/contracts';
+import type {
+  EntitySpec,
+  Principal,
+  RecordVersion,
+  SlaStatus,
+  SlaTimer,
+  WriteResult,
+} from '@hykr/contracts';
 import { type UseQueryResult, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api';
 
@@ -41,8 +48,34 @@ export function useVersions(type: string, id: string | undefined): UseQueryResul
   });
 }
 
-/** What the signed-in person may do here (capabilities), to offer only the moves they may make. */
-export function useCapabilities(): readonly string[] | undefined {
-  return useQuery({ queryKey: ['me'], queryFn: () => api.me(), staleTime: 5 * 60_000 }).data
-    ?.capabilities;
+/**
+ * The signed-in person as a transition's checks see them (their roles and capabilities in this
+ * business), to offer only the moves they may make; undefined until it loads. The server checks
+ * again: this only greys buttons.
+ */
+export function useActingPrincipal(): Principal | undefined {
+  const me = useQuery({ queryKey: ['me'], queryFn: () => api.me(), staleTime: 5 * 60_000 }).data;
+  return me
+    ? {
+        actor: { kind: 'user', id: me.userId },
+        subject: { kind: 'user', userId: me.userId },
+        tenantId: me.tenantId,
+        ...(me.customerId ? { customerId: me.customerId } : {}),
+        roles: me.roles,
+        capabilities: me.capabilities,
+        assurance: 'session',
+        scopes: [],
+      }
+    : undefined;
+}
+
+/** The business's SLA clocks in one status (breached by default) on records the person reads. */
+export function useSlaList(
+  q: { status?: SlaStatus; resourceType?: string; limit?: number } = {},
+): UseQueryResult<SlaTimer[]> {
+  return useQuery({
+    queryKey: ['sla', 'list', q],
+    queryFn: () => api.sla.list(q),
+    refetchInterval: 60_000,
+  });
 }

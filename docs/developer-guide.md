@@ -1012,7 +1012,7 @@ who hears about it are the application's. The sample's `orders` module uses ever
   stops it.
 - **Moving a record.** `POST /api/transitions/<plural>/:id/<transition>` with the transition's
   fields (anything else is a 400), `api.transition(spec, id, name, input)`, the assistant's
-  `transition-<plural>` tool, or `useTransition(spec)` and `<TransitionBar>` in the app. It is one
+  `transition-<plural>` tool, or `useTransition(spec)` and `<TransitionBar>` in the app (with `<StateBadge>`). It is one
   write, `<entity>.transition`: loaded and locked, refused as 404 when the caller may not write
   the record, checked (`not_from_state`, `system_only`, `humans_only`, `transition_not_allowed`,
   `transition_requires`, the guard's rule), parked when its approval says so, audited, and it
@@ -1031,7 +1031,7 @@ who hears about it are the application's. The sample's `orders` module uses ever
   settings (`week`, `holidays`, in its `timeZone`) decide what `hours: 'business'` counts; its
   `sla` settings override a duration by name (`within: { 'orders.decision': '36h' }`) or switch
   one off (`off`). `GET /api/sla/<plural>/:id` and `GET /api/sla?status=breached` read clocks on
-  records the caller reads; `<SlaBadge>` shows them.
+  records the caller reads; `<SlaBadge>` shows a record's, `<OverdueList>` the late ones (Today).
 - **Versions.** `traits.versioned: { field?, frozenWhen?, editableWhenFrozen?, revisions? }` and
   a `versionColumn()` (`@hykr/db`). Every update bumps the version; an update carrying `version`
   (put it in the update schema) or a write whose row moved since it was loaded answers 409
