@@ -93,5 +93,7 @@ export const TenantSettings = z.object({
   timeZone: z.string().default('Asia/Kolkata'),
   /** Marketing messages per customer per week, at most. */
   marketingPerWeek: z.number().int().min(0).default(1),
+  /** Features switched on for this business, by key. A key that is absent is off. */
+  features: z.record(z.string(), z.boolean()).default({}),
 });
 export type TenantSettings = z.infer<typeof TenantSettings>;

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Assurance, Principal, TenantRole } from '../principal.js';
 import type { Channel } from '../voice.js';
 import type { ListConfig } from './list.js';
+import type { CommandTraits, EntityTraits } from './traits.js';
 
 /**
  * Specs are the db-free half of an entity or command: names, schemas, list grammar and
@@ -30,22 +31,40 @@ export type ApproverRule = {
 };
 
 /**
- * When an action waits for approval: always, never, when a check on the requester says so,
- * or the object form, which also says who decides it.
+ * What an approval check sees besides the requester: the action ('create'), its validated input
+ * and the row it changes. Either is null when it is not known: a tool's description is written
+ * before any call, and a create has no row.
+ */
+export type ApprovalContext = {
+  action: string;
+  input: Record<string, unknown> | null;
+  row: Record<string, unknown> | null;
+};
+
+/** Does this action wait, for this requester and this payload? */
+export type ApprovalCheck = (p: Principal, ctx: ApprovalContext) => boolean;
+
+/**
+ * When an action waits for approval: always, never, when a check on the requester and the
+ * payload says so, or the object form, which also says who decides it.
  */
 export type ApprovalRule =
   | 'always'
   | 'never'
-  | ((p: Principal) => boolean)
-  | (ApproverRule & { when?: 'always' | ((p: Principal) => boolean) });
+  | ApprovalCheck
+  | (ApproverRule & { when?: 'always' | ApprovalCheck });
 
-/** Does this rule park the action for this principal? */
-export function parksFor(rule: ApprovalRule | undefined, p: Principal): boolean {
+/** Does this rule park the action for this principal and payload? */
+export function parksFor(
+  rule: ApprovalRule | undefined,
+  p: Principal,
+  ctx: ApprovalContext,
+): boolean {
   if (!rule || rule === 'never') return false;
   if (rule === 'always') return true;
-  if (typeof rule === 'function') return rule(p);
+  if (typeof rule === 'function') return rule(p, ctx);
   const when = rule.when ?? 'always';
-  return when === 'always' || when(p);
+  return when === 'always' || when(p, ctx);
 }
 
 /** Who decides, from a rule (the object form; the others use the defaults). */
@@ -78,6 +97,8 @@ export interface EntitySpec<
    * `list`, one record as `item`. Names only, so contracts stays free of the registry.
    */
   views?: { list?: string; item?: string };
+  /** Behaviour it opts into (see traits.ts): each feature's plugin acts on its own key. */
+  traits?: Partial<EntityTraits>;
 }
 
 export function entitySpec<R extends z.ZodObject, C extends z.ZodObject, U extends z.ZodObject>(
@@ -122,6 +143,8 @@ export interface CommandSpec<I extends z.ZodObject = z.ZodObject, O extends z.Zo
   verb?: { do: string; did: string };
   /** The entities (by name) it changes, so clients refresh exactly those after it runs. */
   touches?: string[];
+  /** Behaviour it opts into (see traits.ts). */
+  traits?: Partial<CommandTraits>;
 }
 
 export function commandSpec<I extends z.ZodObject, O extends z.ZodType>(
