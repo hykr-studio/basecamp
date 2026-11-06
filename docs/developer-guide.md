@@ -995,6 +995,58 @@ sample's `orders` module uses every part.
   `JSON_BODY_LIMIT` (1 MB), and a tree holds at most 1000 nodes and 8 levels (`maxNodes`,
   `maxDepth` on the trait). The approval card sums up long lists.
 
+### 5.14 States, SLAs, versions and revisions
+
+A record's life is declared on its spec; the framework enforces it on every write
+(`docs/decisions/B6B4.md`). Which states exist, who may move a record, how long it may wait and
+who hears about it are the application's. The sample's `orders` module uses every part.
+
+- **States.** `traits.states: { field, initial, states: { <name>: { label?, terminal? } },
+  transitions, slas? }`. The field is a text column in the read and update schemas. A transition
+  is `{ name, from, to, label?, expose?, can?, requires?, fields?, guard?, approval?, tier?,
+  event? }`: `expose` is `all` (default), `human` or `system` (only the server's own work); `can`
+  a capability; `requires` the fields the request must carry (a reason), listed in `fields`, the
+  update-schema fields it may set; `guard(row, input, p)` returns `{ rule, reason }` to refuse;
+  `approval` and `tier` say when it waits and at what level. The server checks the machine at
+  start (`checkStates`): an unknown state, a terminal state with a way out or a duplicate SLA name
+  stops it.
+- **Moving a record.** `POST /api/transitions/<plural>/:id/<transition>` with the transition's
+  fields (anything else is a 400), `api.transition(spec, id, name, input)`, the assistant's
+  `transition-<plural>` tool, or `useTransition(spec)` and `<TransitionBar>` in the app. It is one
+  write, `<entity>.transition`: loaded and locked, refused as 404 when the caller may not write
+  the record, checked (`not_from_state`, `system_only`, `humans_only`, `transition_not_allowed`,
+  `transition_requires`, the guard's rule), parked when its approval says so, audited, and it
+  stores `<entity>.<transition>` (or the transition's `event`) with the row before and after.
+  Plain CRUD never moves the field (`state_through_transition`), and a create starts in the
+  initial state (`state_initial`). Inside a command, `transition(tx, p, def, row, name, { via })`
+  makes the same move (who may run it and whether it waits are the command's `authorize`); list
+  its `touched` and `events` in your result. Entity rules see `via: '<entity>.transition'`.
+- **SLAs.** `slas: [{ name, state, within: '24h', hours?: 'business', escalate?: { roles?,
+  transition? } }]`. Entering the state starts a clock (`app.sla_timers`) in the write's
+  transaction; leaving it ends it (`met`, or `breached` when it was late). The `sla.sweep` queue
+  (every minute) breaches clocks that ran out: it stores `<entity>.sla.breached` (the row with
+  `sla: { name, state, startedAt, dueAt, escalate }`) for your notification to send to
+  `escalate.roles`, then runs `escalate.transition` as `systemPrincipal({ job: 'sla.escalate' })`.
+  A refused escalation is kept on the clock (`escalationError`). A business's `businessHours`
+  settings (`week`, `holidays`, in its `timeZone`) decide what `hours: 'business'` counts; its
+  `sla` settings override a duration by name (`within: { 'orders.decision': '36h' }`) or switch
+  one off (`off`). `GET /api/sla/<plural>/:id` and `GET /api/sla?status=breached` read clocks on
+  records the caller reads; `<SlaBadge>` shows them.
+- **Versions.** `traits.versioned: { field?, frozenWhen?, editableWhenFrozen?, revisions? }` and
+  a `versionColumn()` (`@hykr/db`). Every update bumps the version; an update carrying `version`
+  (put it in the update schema) or a write whose row moved since it was loaded answers 409
+  `{ error: 'stale' }`. A parked write keeps the version it loaded (`onPark`), and its approval
+  fails if the record changed since (`onReplay`). A command does the same for what its
+  `pin(loaded)` returns. A record matching `frozenWhen` refuses deletes and changes but its state
+  field, its transitions' fields and `editableWhenFrozen` (`record_frozen`); its children refuse
+  tree writes and are not reachable one by one.
+- **Revisions.** With `revisions: {}` and `...revisionColumns()` (`seriesId`, `revision`), call
+  `reviseWithChildren(tx, p, def, row, { via, values })` in a command: it copies the record (in
+  its initial state, version 1, the next revision number of its series) and every child tree
+  under it, audited, then you freeze the old one (a `system` transition such as `supersede`).
+  `GET /api/history/versions?resourceType&resourceId` lists a series as the caller may read it
+  (`<VersionList>`); `diffFields` and `diffLists` compare two revisions.
+
 ---
 
 ## 6. Principals and policy
@@ -1409,6 +1461,12 @@ On an entity, set `expose: { delete: 'human' }`. On a command, set `expose: 'hum
 **…enforce a business rule ("a closed meeting cannot reopen")?**
 Add an entity `rule` that returns `deny(rule, reason)`. It runs on every path, including inside commands. Use `ctx.via` to allow a path only through one command.
 
+**…give a record stages (draft, submitted, approved) and a deadline on one?**
+Declare `traits.states` with its transitions and SLAs, and the SLA's breach notification on `<entity>.sla.breached`; freeze the stages that are final with `traits.versioned.frozenWhen`. Section 5.14.
+
+**…stop two people overwriting each other's edit?**
+Give the entity `traits.versioned` and a `versionColumn()`, put `version` in its update schema, and send the version you read: an older one answers 409. Section 5.14.
+
 **…let ops and admins see the whole business?**
 Give the entity `access` with `'tenant'` for those roles, like `BUSINESS_ACCESS`.
 
@@ -1562,6 +1620,12 @@ These are not built. Each has a workaround for now.
 | Bulk writes for plain entities | Only children of a parent are inserted in bulk (`children.insert`/`replace`); `insertMany` for any other entity is one insert per row. There is no bulk update. |
 | Line-level tools | The assistant saves a whole tree in one call (the sample's `save-order`); there are no tools to add or move one line. |
 | Several currencies in one record | A record and its children have one currency, and there are no exchange rates. |
+| Business-editable workflows | States, transitions and SLAs are declared by modules. A business can change an SLA's duration or switch it off (`sla` settings) but cannot add a state or a transition. |
+| Editing `businessHours` and `sla` settings | Nothing in the API changes them yet: set them in `app.tenants.settings` with SQL. Half days and per-branch calendars are not supported. |
+| Escalations that ask a person | An SLA's escalation transition runs as the system principal, which cannot park; one that would wait is refused and kept on the clock. Notify the roles instead. |
+| `If-Match` on HTTP writes | Send the version in the body (`version`, when the update schema has it). |
+| A per-field approval pin | A parked write fails on approval when the record's version changed at all, even for a field it does not touch. |
+| Revisions without copying | A revision is a copy (its own id). There is no snapshot of one record in place. |
 | Approval tiers | Deciders follow a decision's `approver`, the approval shows `tier` and `amount`, and `undoMs` holds events back. There are no multi-step tiers, no undo action and no rule against approving your own request. |
 | Withdrawing a stored event | Nothing sets `app.domain_events.cancelled_at` yet (there is no undo action). The outbox feed skips such rows, so the undo action only has to set it before `available_at`. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |

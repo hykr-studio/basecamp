@@ -186,6 +186,10 @@ role `own`, `customer` or `tenant` per read and write (the sample is in
 - Fields a command writes must be in the entity's update schema. Otherwise `repo.update` drops them silently
   or the command returns a bare 500. Guard such fields with a rule that checks `ctx.via`.
 - Inside a command, pass `via` to every repo call and list every changed record in `touched`.
+- A spec with `traits.states` changes its state field only through a transition (`<entity>.transition`,
+  or `transition()` inside a command, whose `touched` must carry the row before and after for SLA clocks).
+  Entity rules must let `via: '<entity>.transition'` through. A `traits.versioned` record in a
+  `frozenWhen` state refuses every other change (`record_frozen`), and its children's tree writes.
 - Repo calls inside a command publish no entity events. Publish a `NamedEvent` from `run` if a notification
   should react.
 - Entity `rules` park plain CRUD writes only: inside a command a rule's `needsApproval` is ignored and only
