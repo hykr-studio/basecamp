@@ -5,6 +5,7 @@ import {
   customValueProblems,
   defineFeatureFlag,
   entitySpec,
+  featureFlagProblems,
   gatedOff,
   listInputSchema,
   listQuerySchema,
@@ -43,6 +44,27 @@ describe('feature flags', () => {
     expect(() => defineFeatureFlag({ key: 'stock.x', label, gates: { nav: ['stock'] } })).toThrow(
       /no href/,
     );
+  });
+
+  it('a flag that names something the application does not have is a problem at start', () => {
+    const targets = {
+      modules: ['stock'],
+      entities: ['item'],
+      commands: ['stock.bulk'],
+      tools: ['export-stock'],
+    };
+    expect(featureFlagProblems([a, b], targets)).toEqual([]);
+    const typo = defineFeatureFlag({
+      key: 'stock.typo',
+      label: { en: 'x', hi: 'x', te: 'x' },
+      gates: { modules: ['stok'], entities: ['itme'], commands: ['stock.bluk'], tools: ['nope'] },
+    });
+    expect(featureFlagProblems([typo], targets)).toEqual([
+      'The feature flag stock.typo gates modules "stok", which is not there',
+      'The feature flag stock.typo gates entities "itme", which is not there',
+      'The feature flag stock.typo gates commands "stock.bluk", which is not there',
+      'The feature flag stock.typo gates tools "nope", which is not there',
+    ]);
   });
 });
 

@@ -556,6 +556,35 @@ describe('custom domains', () => {
     ).toBe(400);
   });
 
+  it('a pending claim squats nothing: the first business to verify holds the address', async () => {
+    const contested = `https://a11-contested-${stamp}.example.com`;
+    const early = await other.call('POST', '/api/settings/domains', { origin: contested });
+    expect(early.status).toBe(200);
+    const mine = await owner.call('POST', '/api/settings/domains', { origin: contested });
+    expect(mine.status).toBe(200);
+    expect((await owner.call('POST', '/api/settings/domains', { origin: contested })).status).toBe(
+      409,
+    );
+    const { record } = mine.body.value;
+    dns.set(record.name, [[record.value]]);
+    const verified = await owner.call(
+      'POST',
+      `/api/settings/domains/${mine.body.value.id}/verify`,
+      {},
+    );
+    expect(verified.body.value).toMatchObject({ verified: true });
+    const late = await other.call(
+      'POST',
+      `/api/settings/domains/${early.body.value.id}/verify`,
+      {},
+    );
+    expect(late.status).toBe(409);
+    expect(late.body).toMatchObject({ error: 'domain_taken' });
+    expect(await customDomainsAuth.originAllowed?.(contested)).toBe(true);
+    const brand = await fetch(`${server.base}/api/branding/public?origin=${contested}`);
+    expect(await brand.json()).toMatchObject({ name: 'Acme' });
+  });
+
   it('a removed address is no longer trusted', async () => {
     expect((await owner.call('DELETE', `/api/settings/domains/${id}`, {})).status).toBe(200);
     expect(await customDomainsAuth.originAllowed?.(origin)).toBe(false);

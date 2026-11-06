@@ -53,6 +53,8 @@ function routeTargets(catalog: Catalog): Map<string, RouteTarget> {
 /** Unique indexes of the framework's own tables, by name. */
 const CONFLICTS: Record<string, string> = {
   custom_fields_tenant_entity_key_idx: 'This entity already has a custom field with that key',
+  tenant_domains_verified_origin_idx: 'Another business has verified this address',
+  tenant_domains_tenant_origin_idx: 'This address is already registered',
 };
 
 /**

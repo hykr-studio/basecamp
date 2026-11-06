@@ -16,6 +16,7 @@ import {
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { defineFeature } from '../feature.js';
+import { FeatureFlagsCheck } from './check.js';
 import { settingsCommandDefs } from './commands.js';
 import { CustomFieldDef } from './custom-fields.entity.js';
 import { customDomainsAuth } from './domains.js';
@@ -48,6 +49,7 @@ export const settingsFeature = defineFeature({
   ],
   providers: [
     FeatureGates,
+    FeatureFlagsCheck,
     FeatureFlagsService,
     SharedRecordsConfig,
     SettingsTurnHook,

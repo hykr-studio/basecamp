@@ -60,6 +60,34 @@ export function defineFeatureFlag(def: FeatureFlagDef): FeatureFlagDef {
   return def;
 }
 
+/** What a flag may name: everything the application has, by kind. */
+export interface FlagTargets {
+  modules: Iterable<string>;
+  entities: Iterable<string>;
+  commands: Iterable<string>;
+  tools: Iterable<string>;
+}
+
+/**
+ * A flag that names a module, entity, command or tool the application does not have would gate
+ * nothing (a typo would leave the feature on for everyone): each one is a problem, and the API
+ * refuses to start.
+ */
+export function featureFlagProblems(
+  flags: readonly FeatureFlagDef[],
+  targets: FlagTargets,
+): string[] {
+  const problems: string[] = [];
+  for (const kind of ['modules', 'entities', 'commands', 'tools'] as const) {
+    const known = new Set(targets[kind]);
+    for (const flag of flags)
+      for (const name of flag.gates?.[kind] ?? [])
+        if (!known.has(name))
+          problems.push(`The feature flag ${flag.key} gates ${kind} "${name}", which is not there`);
+  }
+  return problems;
+}
+
 /** Everything that is off for one business: what its switched-off flags gate, merged. */
 export const GatedOff = z.object({
   modules: z.array(z.string()),

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { boolean, index, integer, jsonb, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { app, id } from './base.js';
@@ -46,7 +47,8 @@ export const customFields = app.table(
 
 /**
  * A web address a business serves its app on (A11, white label). Trusted for CORS and sign-in
- * only once `verifiedAt` is set: the business published the token in DNS. One origin, one business.
+ * only once `verifiedAt` is set: the business published the token in DNS. Several businesses may
+ * claim an origin; the first to verify it holds it, so a pending claim cannot squat a domain.
  */
 export const tenantDomains = app.table(
   'tenant_domains',
@@ -64,7 +66,10 @@ export const tenantDomains = app.table(
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex('tenant_domains_origin_idx').on(table.origin),
+    uniqueIndex('tenant_domains_verified_origin_idx')
+      .on(table.origin)
+      .where(sql`${table.verifiedAt} is not null`),
+    uniqueIndex('tenant_domains_tenant_origin_idx').on(table.tenantId, table.origin),
     index('tenant_domains_tenant_idx').on(table.tenantId),
   ],
 );

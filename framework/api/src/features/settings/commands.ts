@@ -23,7 +23,7 @@ import { allow, defineCommand, deny, type NamedEvent, type Tx } from '@hykr/core
 import { schema } from '@hykr/db';
 import { can } from '@hykr/policy';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, or, sql } from 'drizzle-orm';
 import { runtime } from '../../runtime.js';
 import { txtHolds } from './domains.js';
 
@@ -223,10 +223,17 @@ async function ownDomain(tx: Tx, p: Principal, id: string) {
 export const AddDomain = defineCommand(AddDomainSpec, {
   resource: { type: 'tenantDomain', id: () => null },
   load: async (tx, p, input) => {
+    // Taken: verified by any business, or already claimed by this one. Another business's
+    // pending claim does not block it: the first to verify holds the origin.
     const [taken] = await tx
       .select({ id: domains.id })
       .from(domains)
-      .where(eq(domains.origin, input.origin))
+      .where(
+        and(
+          eq(domains.origin, input.origin),
+          or(isNotNull(domains.verifiedAt), eq(domains.tenantId, tenantOf(p))),
+        ),
+      )
       .limit(1);
     return { tenantId: tenantOf(p), taken: !!taken };
   },
@@ -263,6 +270,16 @@ export const VerifyDomain = defineCommand(VerifyDomainSpec, {
   summarize: (_input, row) => `Verify the address ${row.origin}`,
   run: async ({ tx, loaded: row }) => {
     if (row.verifiedAt) return { value: domainView(row), touched: [] };
+    const [holder] = await tx
+      .select({ id: domains.id })
+      .from(domains)
+      .where(and(eq(domains.origin, row.origin), isNotNull(domains.verifiedAt)))
+      .limit(1);
+    if (holder)
+      throw new ConflictException({
+        error: 'domain_taken',
+        message: 'Another business has verified this address',
+      });
     const name = domainRecordName(row.origin);
     if (!(await txtHolds(name, row.token)))
       throw new BadRequestException({
