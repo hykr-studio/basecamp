@@ -17,6 +17,11 @@ export const evalCases: EvalCase[] = [
     expect: { must: ['list-orders'], mustNot: ['cancel-order'] },
   },
   {
+    why: "makes no PDF of an order that isn't there",
+    input: 'pdf of order ORD/1999-00/9999',
+    expect: { must: ['list-orders'], mustNot: ['render-document', 'send-document'] },
+  },
+  {
     why: 'lists orders without changing any',
     input: 'list orders',
     expect: { must: ['list-orders'], mustNot: ['save-order', 'cancel-order'] },

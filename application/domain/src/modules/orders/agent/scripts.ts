@@ -6,11 +6,17 @@ import { moneyText } from '@hykr/i18n';
  *   order <title>: <qty> <item> at <price> [+<rate>%], …     list-orders → save-order (waits)
  *   list orders                                               list-orders
  *   cancel order <number>                                     list-orders → cancel-order (waits)
+ *   pdf of order <number>                                     list-orders → render-document
+ *   send order <number> to me                                 … → render-document → send-document
+ *   email order <number> to <address>                         … → send-document (waits)
+ * A PDF is made in the turn's language.
  * Prices are decimals in the business's currency; a rate is the line's tax percentage.
  */
 const first = (text: string) => text.split('\n')[0]?.trim() ?? '';
 const ORDER = /^order\s+(.+?):\s*(.+)$/i;
 const CANCEL = /^cancel order\s+(\S+)$/i;
+const PDF = /^pdf of order\s+(\S+)$/i;
+const SEND = /^(?:send order\s+(\S+)\s+to me|email order\s+(\S+)\s+to\s+(\S+@\S+))$/i;
 const ITEM = /^(\d+)\s+(.+?)\s+at\s+(\d+(?:\.\d{1,3})?)(?:\s*\+\s*(\d+(?:\.\d{1,2})?)%)?$/i;
 
 type Line = { title: string; quantity: number; unitPrice: string; taxRateBp?: number };
@@ -33,6 +39,13 @@ function parse(text: string): { title: string; lines: Line[] } | undefined {
 }
 
 type Saved = { order: { number: string; total: { minor: number; currency: string } } };
+
+const notThere = (turn: { lang: 'en' | 'hi' | 'te' }, number: string) =>
+  sayIn(turn, {
+    en: `There is no order ${number}.`,
+    hi: `ऑर्डर ${number} नहीं मिला।`,
+    te: `ఆర్డర్ ${number} లేదు.`,
+  });
 
 export const ordersScripts = [
   defineScript({
@@ -82,6 +95,55 @@ export const ordersScripts = [
           }),
         ];
       return [call('cancel-order', { orderId: order.id })];
+    },
+  }),
+  defineScript({
+    name: 'order-pdf',
+    match: (text) => PDF.exec(first(text))?.[1],
+    step: (number, turn) => {
+      const found = turn.result('list-orders');
+      if (!found) return [call('list-orders', { number })];
+      const [order] = items(found) as unknown as { id: string }[];
+      if (!order) return [notThere(turn, number)];
+      const made = turn.result('render-document');
+      if (!made)
+        return [
+          call('render-document', { document: 'orders.order', id: order.id, lang: turn.lang }),
+        ];
+      return [
+        say(written(made, (v) => `Making ${(v as unknown as { name: string }).name}.`, turn)),
+      ];
+    },
+  }),
+  defineScript({
+    name: 'order-send',
+    match: (text) => {
+      const m = SEND.exec(first(text));
+      if (!m) return undefined;
+      return m[1] ? { number: m[1] } : { number: m[2], email: m[3] };
+    },
+    step: ({ number, email }: { number: string; email?: string }, turn) => {
+      const found = turn.result('list-orders');
+      if (!found) return [call('list-orders', { number })];
+      const [order] = items(found) as unknown as { id: string }[];
+      if (!order) return [notThere(turn, number)];
+      const made = turn.result('render-document');
+      if (!made)
+        return [
+          call('render-document', { document: 'orders.order', id: order.id, lang: turn.lang }),
+        ];
+      const sent = turn.result('send-document');
+      const doc = (made.result as { value?: { id: string } }).value;
+      if (!sent && doc)
+        return [
+          call('send-document', {
+            documentId: doc.id,
+            ...(email ? { to: { email }, channel: 'email' } : { to: { self: true } }),
+          }),
+        ];
+      return [
+        say(written(sent ?? made, () => `Sending order ${number} to ${email ?? 'you'}.`, turn)),
+      ];
     },
   }),
   defineScript({
