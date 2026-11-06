@@ -148,5 +148,8 @@ export const integrationInbound = app.table(
   (table) => [
     uniqueIndex('integration_inbound_event_idx').on(table.connectionId, table.externalId),
     index('integration_inbound_log_idx').on(table.tenantId, table.connectionId, table.receivedAt),
+    index('integration_inbound_pending_idx')
+      .on(table.queues, table.receivedAt)
+      .where(sql`${table.status} = 'pending'`),
   ],
 );

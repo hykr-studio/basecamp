@@ -19,8 +19,8 @@ export const DeliverQueue = defineQueue<DeliverJob, string | number>({
   name: DELIVER_QUEUE,
   concurrency: 10,
   process: async (job, ctx) => {
-    const deliveries = ctx.get(DeliveriesService);
-    return job.name === SWEEP ? deliveries.sweep() : deliveries.attempt(job.data);
+    if (job.name !== SWEEP) return ctx.get(DeliveriesService).attempt(job.data);
+    return (await ctx.get(DeliveriesService).sweep()) + (await ctx.get(InboundService).sweep());
   },
 });
 
@@ -36,7 +36,7 @@ export const InboundQueue = defineQueue<InboundJob, string>({
       .process(job.data.inboundId, job.attemptsMade + 1 >= (job.opts.attempts ?? 1)),
 });
 
-/** Every minute: deliveries whose job was lost get one again. */
+/** Every minute: deliveries and inbound events whose job was lost get one again. */
 export const SweepSchedule = defineSchedule({ name: SWEEP, queue: DELIVER_QUEUE, every: 60_000 });
 
 /** Committed events about entities → one delivery per matching endpoint. */

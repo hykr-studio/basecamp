@@ -153,6 +153,33 @@ export class InboundService implements OnApplicationBootstrap {
     return { stored };
   }
 
+  /**
+   * With the deliveries' sweep, every minute: stored events of this queue prefix still pending a
+   * minute after they came in get their job again (the job id is the same, so one that is only
+   * waiting is not added twice). A redelivery of a stored event is ignored, so this is what
+   * recovers one whose job was never added.
+   */
+  async sweep(): Promise<number> {
+    const due = await this.db
+      .select({ id: integrationInbound.id })
+      .from(integrationInbound)
+      .where(
+        and(
+          eq(integrationInbound.queues, config.queuePrefix),
+          eq(integrationInbound.status, 'pending'),
+          sql`${integrationInbound.receivedAt} < now() - interval '1 minute'`,
+        ),
+      )
+      .limit(500);
+    for (const { id } of due)
+      await this.jobs.add<InboundJob>(
+        INBOUND_QUEUE,
+        { inboundId: id },
+        { name: 'inbound', jobId: `inbound--${id}` },
+      );
+    return due.length;
+  }
+
   /** GET: a connector's subscription check, or 403. */
   async challenge(connectorName: string, connectionId: string, req: InboundRequest) {
     const { inbound, credentials } = await this.open(connectorName, connectionId);
