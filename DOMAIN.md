@@ -1,16 +1,16 @@
 # The domain is replaceable
 
 Basecamp, the agentic development stack for full-stack applications, ships with a sample
-application: meetings, notes and to-dos. The framework (the API pipeline with its rules,
-approvals and audit; the assistant with its tools, surfaces, canvas and WhatsApp; saved pages;
-the app shell) lives in `framework/` and is published as `@hykr/*` packages. The application
-lives in `application/`. The framework never imports the application; the application hands
-its domain to the framework in two places:
+application: meetings, notes and to-dos, as three modules. The framework (the API pipeline with
+its rules, approvals and audit; the assistant with its tools, surfaces, canvas and WhatsApp;
+saved pages; the app shell) lives in `framework/` and is published as `@hykr/*` packages. The
+application lives in `application/`. The framework never imports the application; the
+application hands its modules to the framework in two places:
 
-- the server: `application/api/src/server.ts`, `defineServer({ domain, module, views,
-  notifications, agent, channel, migrations, contributes })` from `@hykr/api`;
+- the server: `application/api/src/server.ts`, `defineServer({ name, persona, help, channel,
+  modules, migrations, contributes })` from `@hykr/api`;
 - the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app catalog registry config />`
-  from `@hykr/app`.
+  from `@hykr/app`, with the catalog and registry built from every module's specs and views.
 
 Two dependency-cruiser rules, run by `pnpm lint:deps`, keep it that way:
 `framework-never-imports-application` and `application-uses-public-framework-exports` (only
@@ -22,29 +22,70 @@ New here? Read the [developer guide](docs/developer-guide.md), then build a feat
 `npm create @hykr/basecamp <folder>`: you get a copy of `application/` on the published
 packages.
 
-To bring another domain, replace these folders. Nothing in `framework/` changes.
+## Modules
 
-| Layer | Delete and replace | It must export |
+An application is a list of modules. A module is a folder,
+`application/domain/src/modules/<name>/`, that teams can build in parallel. Its name is lower
+case (`orders`); it prefixes the module's tables, and every spec it declares is stamped with it
+(`spec.module`, `catalog.moduleOf`). `basecamp module add <name>` writes a new one, both halves,
+and registers it.
+
+| Layer | In the module | It must export |
 |---|---|---|
-| Contracts | `application/domain/src/contracts/` | `domain = defineDomain({ name, entities, commands })`, with entities keyed by plural (`entitySpec`) and commands (`commandSpec`) |
-| Database | `application/domain/src/db/schema.ts` and `application/domain/drizzle/` | Drizzle tables in the `app` schema (`app`, `id`, `tenantColumn()`, `customerColumn()` and `user` come from `@hykr/db`), each with `id`, `tenantColumn()`, an owner column, `customerColumn()` (when customers have rows), `createdBy`, `createdAt`, `updatedAt`; and the migrations generated from them |
-| API | `application/domain/src/server/` | `DomainModule`: one `defineEntity` / `defineCommand` per spec, each in a Nest module with `entityController` / `entityHandlers` / `commandController`; who sees what in `access` (see below) |
-| Notifications | `application/domain/src/notifications/` | `domainTemplates` (`defineTemplate`) and `domainNotifications` (`defineNotification`): the WhatsApp templates and the reminders the domain sends |
-| Views | `application/domain/src/views/` | `uiDomain = { views, screens }`, declared with `defineView` / `defineScreen` |
-| Assistant | `application/domain/src/agent/` | `agentDomain: AgentDomain` (`@hykr/agents/script`): persona, domain rules, the scripted model's scripts and help, eval cases (and spoken `voiceEvalCases`) and setup |
-| Server | `application/api/src/server.ts` | `server = defineServer({ ... })`, with the pieces above and `channel.does`: what the assistant helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind (developer guide, section 5.9) |
-| App | `application/mobile/src/domain/` | `appDomain = defineAppDomain({ title, tagline, nav, home, suggestions, bind })` from `@hykr/app`; `bind` calls `bindView` / `bindScreen` for the domain's views and screens; `catalog` and `registry` built with `createCatalog` / `createUiRegistry` |
-| App routes | `application/mobile/src/app/(domain)/` | The domain's screens; the group adds no URL segment. Provide `index.tsx` (the home screen) |
-| Tests | `application/api/test/`, `application/domain/src/**/*.test.ts` | The domain's own e2e, WhatsApp, voice, view and notification tests |
+| Contracts | `contracts/` (isomorphic) | Its `entitySpec`s and `commandSpec`s, and `<name>Spec = moduleSpec({ name, dependsOn, entities, commands })` from `@hykr/contracts`, entities keyed by plural |
+| Database | `db/schema.ts` | Drizzle tables in the `app` schema (`app`, `id`, `tenantColumn()`, `customerColumn()`, `user`, `tableRef` from `@hykr/db`), named after the module (`orders`, `orders_lines`), each with `id`, `tenantColumn()`, an owner column, `customerColumn()` (when customers have rows), `createdBy`, `createdAt`, `updatedAt` |
+| API | `server/` | A Nest module with one `defineEntity` / `defineCommand` per spec (`entityController` / `entityHandlers` / `commandController`); who sees what in `access` (see below). `server/public.ts`: what other modules may call |
+| Notifications | `notifications/` (isomorphic) | Its templates (`defineTemplate`) and notifications (`defineNotification`) |
+| Views | `views/` (isomorphic) | `<name>Views = { name, views, screens }`, declared with `defineView` / `defineScreen` |
+| Assistant | `agent/` | An `AgentModule` (`@hykr/agents/script`): its rules, the scripted model's scripts, eval cases (and spoken `voiceEvalCases`) and setup |
+| Bundle | `index.ts` (server only) | `<name> = defineModule({ ...<name>Spec, server, views, screens, templates, notifications, agent, tables })` from `@hykr/api` |
 
-Then:
+Around the modules, the application keeps:
+
+| Layer | Path | It must export |
+|---|---|---|
+| Modules list | `application/domain/src/modules/index.ts` | `modules`, in dependency order (a module after the modules it depends on), one line per module |
+| Aggregates for the apps | `application/domain/src/contracts/index.ts`, `src/views/index.ts` | Every module's specs and views (`moduleSpecs`, `moduleViews`), one line per module. The apps import `@application/domain/contracts` and `/views`, or one module's `@application/domain/modules/<name>/contracts` and `/views` |
+| Migrations | `application/domain/drizzle/`, `src/db/index.ts` | One journal for every module, generated from `src/modules/*/db/schema.ts`; `migrations` |
+| Shared server code | `application/domain/src/server/` | What several modules use, such as `BUSINESS_ACCESS` |
+| Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`: what the product is called, who the assistant is, and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind (developer guide, section 5.9) |
+| App | `application/mobile/src/domain/` | `appDomain = defineAppDomain({ title, tagline, nav, home, suggestions, bind })` from `@hykr/app`; `bind` calls `bindView` / `bindScreen` for the modules' views and screens; `catalog = createCatalog(...moduleSpecs)` and `registry = createUiRegistry(...moduleViews)` |
+| App routes | `application/mobile/src/app/(domain)/` | The modules' screens; the group adds no URL segment. Provide `index.tsx` (the home screen) |
+| Tests | `application/api/test/`, `application/domain/src/**/*.test.ts` | The application's own e2e, WhatsApp, voice, view and notification tests |
+
+### How modules fit together
+
+- **Dependencies.** A module lists the modules it builds on in `dependsOn`, and the modules list
+  puts it after them. It imports another module only through that module's `contracts/` or its
+  `server/public.ts` (`meetings` closes a meeting by writing a note and to-dos through
+  `notes/server/public.ts` and `todos/server/public.ts`, in its own transaction). The
+  dependency-cruiser rules `module-imports-public-parts`, `module-<name>-imports-its-dependencies`
+  and `no-module-cycles` enforce it.
+- **A foreign key down the graph.** A lower module's table that points at a higher module's
+  (a note's `meeting_id`) names the table instead of importing it: `tableRef('meetings').id`.
+- **No collisions.** `defineServer` merges the modules and checks, at boot, that no two of them
+  (or a module and the framework) declare the same entity name or plural, command, tool id,
+  route (`/api/approvals` and the framework's other routes are reserved), approval op, view,
+  screen, template, notification key or table. It also checks what one part names in another
+  (a spec's views, a view's actions, a notification's events) and that no module's script takes
+  another module's eval turn. Every problem is listed in one error.
+- **One assistant.** The application gives the persona and the help line; each module adds its
+  rules and scripts, in module order (an earlier module's script matches first).
+- **Evals per module.** `basecamp eval --module <name>` runs one module's evals, with a fresh user
+  and that module's setup; without `--module`, every module's.
+- **One journal.** `basecamp db generate --name <name>` writes the migration for every module's
+  tables. After a rebase, `basecamp db rebase` drops your branch's migrations and generates them
+  again on top of the base's.
+
+To bring another domain, replace the modules. Nothing in `framework/` changes. Then:
 
 1. `pnpm db:generate --name <domain>` (or `basecamp db generate`) and `pnpm db:migrate` for
    the new tables: the framework's migrations run first, then the application's.
 2. `pnpm templates:sync` sends the new templates for review; `pnpm templates:check` passes once
    every template a notification uses is approved in English.
 3. `pnpm turbo run build typecheck test`, `pnpm lint`, `pnpm lint:deps`, and with the API
-   running, `basecamp eval`, `basecamp eval voice` and `basecamp eval whatsapp`.
+   running, `basecamp eval`, `basecamp eval voice` and `basecamp eval whatsapp` (each with
+   `--module <name>` for one module).
 
 ## Who sees what: businesses, roles and customers
 
@@ -57,8 +98,9 @@ hold several roles in a business: `owner`, `admin`, `ops`, `staff`, `customer`. 
 - A write may need `minAssurance: 'session'`: a WhatsApp number alone (`whatsapp_number`) is
   refused with `needs_assurance`.
 
-The sample domain gives the owner and staff their own rows, admin and ops the whole business,
-and a customer their own customer's rows (`application/domain/src/server/access.ts`). With
+The sample modules give the owner and staff their own rows, admin and ops the whole business,
+and a customer their own customer's rows (`application/domain/src/server/access.ts`, shared by
+the three modules). With
 `customer: (t) => t.customerId`, a customer's assistant creates rows for that customer, owned by
 the business's default owner.
 
@@ -66,27 +108,27 @@ Approvals take an object form, `{ when, by, channels, minAssurance }`: who decid
 it is for by default; a customer's request goes to `owner` and `ops`), and where (`channels:
 ['app']` for anything irreversible keeps it off WhatsApp buttons).
 
-## What a domain adds for WhatsApp: templates and notifications
+## What a module adds for WhatsApp: templates and notifications
 
 Outside a customer's 24-hour window WhatsApp delivers only approved templates, so everything a
-domain sends on its own initiative is a template, declared in code:
+module sends on its own initiative is a template, declared in code:
 
 - **`defineTemplate`:** a versioned name (`meeting_reminder_v1`), a category, named parameters
   with an example each, the body in every language, at most three quick replies. An approved
   template is never edited: changing the words fails `templates:sync` with "bump the version".
 - **`defineNotification`:** what reaches whom, and when. `schedule: { on, at, cancelOn }`
-  follows the entity events (`meeting.created`, `meeting.deleted`) and the domain's own: a
+  follows the entity events (`meeting.created`, `meeting.deleted`) and the module's own: a
   command's event implements `NamedEvent` (`eventName`, `row`) to be one. `to` names the
   recipients (a user, a customer, a contact, or everyone with a role); `channels` is the order
   to try (`['whatsapp', 'email']`); `onButton` answers its quick replies (snooze).
 - The framework decides the rest per recipient: consent for the topic, quiet hours and the
   marketing cap (per business), the template in their language or English, and the next
-  channel when WhatsApp can't be used or fails for good. No domain code sends a message.
+  channel when WhatsApp can't be used or fails for good. No module code sends a message.
 
-## What a domain adds for voice and languages
+## What a module adds for voice and languages
 
 Voice is a framework channel (the worker in `framework/voice-worker` calls `/api/chat` like the
-app). The product speaks English, Hindi and Telugu (`@hykr/i18n`); a domain brings its own
+app). The product speaks English, Hindi and Telugu (`@hykr/i18n`); a module brings its own
 words, each as `Labels` (`{ en, hi, te }`, so a missing translation does not compile):
 
 - **Views:** `labels: { title, empty, noun }`. A list view that can be spoken must have
@@ -94,7 +136,7 @@ words, each as `Labels` (`{ en, hi, te }`, so a missing translation does not com
   short spoken form, usually `spokenList(...)`. Components get `words` (title and empty line
   in the person's language) from the renderer.
 - **Entities:** `fieldLabels`: what the approval preview calls each field, in the person's language.
-- **Scripted model:** the domain's verbs in each language (`verbs(...)`, before or after the
+- **Scripted model:** the module's verbs in each language (`verbs(...)`, before or after the
   title), answers through `sayIn(turn, { en, hi, te })`, and `written(..., turn)` for writes.
 - **Evals:** `voiceEvalCases`, scored on the tools, the answer's language and its length.
   `eval:whatsapp` replays the Hindi and Telugu ones as typed WhatsApp messages.

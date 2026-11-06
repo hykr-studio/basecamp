@@ -24,33 +24,43 @@ The tests and evals in step 11 passed on it, and the screenshots at the end come
 ## How an application fits the framework
 
 The framework is the `@hykr/*` packages. Your application is a small pnpm workspace that
-depends on them and never reaches inside them. You hand your domain to the framework in exactly
-two places:
+depends on them and never reaches inside them. It is made of modules, one folder each, so
+several people can build different parts at once. You hand them to the framework in exactly two
+places:
 
 | Where | What you write | What the framework does with it |
 |---|---|---|
-| `api/src/server.ts` | `defineServer({ domain, module, views, notifications, agent, channel, migrations })` | Serves the REST API, runs the write path (rules, approvals, audit), builds the assistant and its tools, sends notifications, runs the WhatsApp channel |
+| `api/src/server.ts` | `defineServer({ name, persona, help, channel, modules, migrations })` | Serves the REST API, runs the write path (rules, approvals, audit), builds the assistant and its tools, sends notifications, runs the WhatsApp channel |
 | `mobile/src/app/_layout.tsx` | `<AppShell app catalog registry config />` | Renders the shell: sign-in, navigation, the assistant thread, approvals, the canvas, saved pages and voice |
 
 Everything else in your application is one of these:
 
 ```
-domain/            the domain (one package, several entry points)
-  src/contracts/     entity and command specs (Zod)                  → @application/domain/contracts
-  src/db/            Drizzle tables, and drizzle/ migrations          → @application/domain/db
-  src/server/        Nest module: defineEntity / defineCommand        → @application/domain/server
-  src/views/         what tool results look like (defineView)         → @application/domain/views
-  src/notifications/ WhatsApp templates and reminders                 → @application/domain/notifications
-  src/agent/         persona, rules, scripted-model scripts, evals    → @application/domain/agent
+domain/            the domain package: your modules, and what gathers them
+  src/modules/<name>/  one module (this guide builds `jobs`):
+    contracts/         entity and command specs (Zod), moduleSpec    → @application/domain/modules/<name>/contracts
+    db/schema.ts       Drizzle tables, named after the module
+    server/            Nest module: defineEntity / defineCommand; public.ts for other modules
+    views/             what tool results look like (defineView)        → @application/domain/modules/<name>/views
+    notifications/     WhatsApp templates and reminders
+    agent/             rules, scripted-model scripts, evals
+    index.ts           defineModule: the module, server side
+  src/modules/index.ts the list of modules, in dependency order        → @application/domain/modules
+  src/contracts/       every module's specs, for the app               → @application/domain/contracts
+  src/views/           every module's views, for the app               → @application/domain/views
+  src/db/index.ts      the migrations (drizzle/, one journal)          → @application/domain/db
+  src/server/access.ts who reaches which rows, shared by the modules
 api/               server.ts (defineServer), main.ts, worker.ts, e2e tests
 mobile/            Expo app: <AppShell>, your routes and screens, your view components
 back-office/       Expo web app for staff; usually unchanged
 package.json       the "basecamp" block: where the server and apps are
 ```
 
-`contracts` and `views` are read by both the server and the app, so they import nothing from
-the server side. `pnpm lint:deps` in the Basecamp repository enforces that; it's worth keeping
-the same discipline in your own application.
+A module's `contracts`, `views` and `notifications` are read by both the server and the app, so
+they import nothing from the server side. A module reaches another only through its
+`contracts/` or its `server/public.ts`, and only one it lists in `dependsOn`. `pnpm lint:deps`
+in the Basecamp repository enforces both; it's worth keeping the same discipline in your own
+application. `basecamp module add <name>` writes a new module, both halves, and registers it.
 
 ## 0. Before you start
 
@@ -87,35 +97,38 @@ pnpm exec basecamp dev                  # API :3000, app :8081, back office :808
 
 Sign up at http://localhost:8081, then stop it (Ctrl-C).
 
-## 2. Remove the sample domain
+## 2. Remove the sample modules
 
-Delete the sample's domain, its screens and its tests. Everything you delete here is
+Delete the sample's three modules, their screens and their tests. Everything you delete here is
 application code; nothing in `node_modules/@hykr` changes.
 
 ```bash
-rm -rf domain/src/contracts/*.ts domain/src/views/*.ts domain/src/agent/*.ts \
-       domain/src/notifications/*.ts domain/src/server/meetings domain/src/server/notes \
-       domain/src/server/todos domain/drizzle \
+rm -rf domain/src/modules/meetings domain/src/modules/notes domain/src/modules/todos \
+       domain/src/modules/notifications.test.ts domain/src/views/views.test.ts domain/drizzle \
        mobile/src/domain "mobile/src/app/(domain)" \
        api/test/domain api/test/whatsapp api/test/voice
 ```
 
 Keep these, which you will edit:
 
-- `domain/src/db/schema.ts`
+- `domain/src/modules/index.ts`, `domain/src/contracts/index.ts`, `domain/src/views/index.ts`
+  (the lists of modules: step 9)
 - `domain/src/db/index.ts`
-- `domain/src/server/index.ts`
 - `domain/src/server/access.ts`
 - `api/src/server.ts`
 - `mobile/src/app/_layout.tsx`
 - `mobile/src/app/pages/*`
 - `mobile/src/app/+not-found.tsx`
 
+> **A shortcut:** `pnpm exec basecamp module add jobs` writes every file of a `jobs` module with
+> one placeholder entity, and registers it. This guide writes each file by hand instead, so you
+> see what each one is for.
+
 ## 3. Contracts: declare the entity and the command
 
 The spec is the single declaration everything else is generated from. Write it once, in Zod.
 
-`domain/src/contracts/job.ts`:
+`domain/src/modules/jobs/contracts/job.ts`:
 
 ```ts
 import { CreatedBy, commandSpec, entitySpec } from '@hykr/contracts';
@@ -209,37 +222,38 @@ What each part does:
 - **`commandSpec`.** A named operation beyond plain create, update and delete. It gets a route
   (`POST /api/jobs/:jobId/complete`), a tool (`complete-job`) and a verb for history ("completed").
 
-`domain/src/contracts/index.ts` turns the specs into the domain:
+`domain/src/modules/jobs/contracts/index.ts` turns the specs into the module's isomorphic half:
 
 ```ts
-/**
- * Fixit's domain: repair jobs. The framework reads only `domain`; the server, the views and
- * the app import the specs from here.
- */
-import { defineDomain } from '@hykr/contracts';
+/** The jobs module's specs: read by the server, the views and the app. */
+import { moduleSpec } from '@hykr/contracts';
 import { CompleteJobSpec, JobSpec } from './job.js';
 
 export * from './job.js';
 
-export const domain = defineDomain({
-  name: 'Fixit',
+export const jobsSpec = moduleSpec({
+  name: 'jobs',
+  // The modules it builds on: none yet.
+  dependsOn: [],
   entities: { jobs: JobSpec },
   commands: [CompleteJobSpec],
 });
 ```
 
 Entities are keyed by plural (`jobs`). That plural is the route (`/api/jobs`), the query-cache
-key, and the name your app uses (`useEntityList('jobs')`).
+key, and the name your app uses (`useEntityList('jobs')`). `moduleSpec` stamps every spec with
+the module's name (`JobSpec.module` is `'jobs'`), and the module's name prefixes its tables.
 
 ## 4. The table and its migration
 
-`domain/src/db/schema.ts`:
+`domain/src/modules/jobs/db/schema.ts`:
 
 ```ts
 /**
- * Fixit's tables. Each needs an id, a tenant and an owner column (customerColumn() too, for
- * records customers have), and created_by/created_at/updated_at: the framework's scoping,
- * provenance and list grammar rely on them.
+ * The jobs module's tables, named after it (jobs, or jobs_<x>). Each needs an id, a tenant and
+ * an owner column (customerColumn() too, for records customers have), and
+ * created_by/created_at/updated_at: the framework's scoping, provenance and list grammar rely on
+ * them.
  */
 import { app, customerColumn, id, tenantColumn, user } from '@hykr/db';
 import { index, text, timestamp } from 'drizzle-orm/pg-core';
@@ -293,7 +307,8 @@ pnpm exec basecamp db generate --name jobs   # → domain/drizzle/0000_jobs.sql
 pnpm exec basecamp db migrate                # the framework's migrations, then yours
 ```
 
-The migration contains only your table. The framework's tables (users, businesses, approvals,
+The migration contains only your tables: `drizzle.config.ts` reads every module's
+`db/schema.ts` into one journal. The framework's tables (users, businesses, approvals,
 channels) ship with `@hykr/db` and run first; the two sets are recorded separately
 (`drizzle.__framework_migrations` and `drizzle.__app_migrations`).
 
@@ -303,13 +318,13 @@ channels) ship with `@hykr/db` and run first; the two sets are recorded separate
 every assistant tool call goes through the same write path: validate, idempotency, load,
 authorize, run or park for approval, and audit.
 
-`domain/src/server/jobs/job.entity.ts`:
+`domain/src/modules/jobs/server/job.entity.ts`:
 
 ```ts
 import { defineEntity, deny } from '@hykr/core';
-import { JobSpec } from '../../contracts/index.js';
-import { jobs } from '../../db/schema.js';
-import { BUSINESS_ACCESS } from '../access.js';
+import { BUSINESS_ACCESS } from '../../../server/access.js';
+import { JobSpec } from '../contracts/index.js';
+import { jobs } from '../db/schema.js';
 
 /** Jobs: CRUD from the spec, plus the business's rules. */
 export const Job = defineEntity(JobSpec, {
@@ -340,11 +355,11 @@ export const Job = defineEntity(JobSpec, {
 > (`ctx.via === 'job.complete'`). Leave them out and the command fails with a 500 when it runs.
 > The sample's meetings do the same with `status: 'closed'`.
 
-`domain/src/server/jobs/complete-job.command.ts`:
+`domain/src/modules/jobs/server/complete-job.command.ts`:
 
 ```ts
 import { allow, defineCommand, deny, type NamedEvent, needsApproval } from '@hykr/core';
-import { CompleteJobSpec } from '../../contracts/index.js';
+import { CompleteJobSpec } from '../contracts/index.js';
 import { Job } from './job.entity.js';
 
 /** job.completed: a NamedEvent, so a notification can follow it. */
@@ -390,7 +405,7 @@ A command declares five things:
 
 `JobCompleted` is a `NamedEvent`, so notifications can follow it (step 7 cancels the reminder on it).
 
-`domain/src/server/jobs/jobs.module.ts` and `domain/src/server/index.ts`:
+`domain/src/modules/jobs/server/jobs.module.ts`:
 
 ```ts
 import { commandController, commandHandler, entityController, entityHandlers } from '@hykr/core';
@@ -405,17 +420,10 @@ import { Job } from './job.entity.js';
 export class JobsModule {}
 ```
 
-```ts
-/**
- * Fixit's API: each entity and command declared once (defineEntity / defineCommand); the
- * framework generates routes, handlers, agent tools and audit.
- */
-import { Module } from '@nestjs/common';
-import { JobsModule } from './jobs/jobs.module.js';
-
-@Module({ imports: [JobsModule] })
-export class DomainModule {}
-```
+Another module that builds on jobs (an `invoices` module with `dependsOn: ['jobs']`) would use
+only what `domain/src/modules/jobs/server/public.ts` exports, for example `export { Job } from
+'./job.entity.js'`: the entity's repo runs the framework's checks inside the caller's
+transaction.
 
 `domain/src/server/access.ts` (kept from the scaffold) says who reaches which rows:
 
@@ -434,7 +442,7 @@ channel renders the view its own way:
 
 Views are declared here, once, and bound to components in the app (step 9).
 
-`domain/src/views/job.ts`:
+`domain/src/modules/jobs/views/job.ts`:
 
 ```ts
 import { pick, spokenWhen, whenText } from '@hykr/i18n';
@@ -486,7 +494,7 @@ export const JobCardView = defineView({
 });
 ```
 
-`domain/src/views/screens.ts` declares a screen the assistant can open on the canvas
+`domain/src/modules/jobs/views/screens.ts` declares a screen the assistant can open on the canvas
 (`act('open', job)` opens it):
 
 ```ts
@@ -502,22 +510,26 @@ export const JobDetailScreen = defineScreen({
 });
 ```
 
-`domain/src/views/index.ts`:
+`domain/src/modules/jobs/views/index.ts`:
 
 ```ts
-/** Fixit's views and screens: what the assistant may show for jobs. */
-import type { ScreenDef, ViewDef } from '@hykr/ui-registry';
+/** The jobs module's views and screens: what the assistant may show for jobs. */
+import type { ScreenDef, UiPart, ViewDef } from '@hykr/ui-registry';
 import { JobCardView, JobListView } from './job.js';
 import { JobDetailScreen } from './screens.js';
 
 export * from './job.js';
 export * from './screens.js';
 
-export const uiDomain = {
+export const jobsViews: UiPart = {
+  name: 'jobs',
   views: [JobListView, JobCardView] as unknown as readonly ViewDef[],
   screens: [JobDetailScreen] as unknown as readonly ScreenDef[],
 };
 ```
+
+View and screen names are unique across modules: a second `job.list` anywhere stops the server
+from starting.
 
 ## 7. Notifications: a reminder before each job
 
@@ -527,10 +539,10 @@ your app sends on its own initiative is a template, declared in code:
 - **`defineTemplate`:** the words, in every language.
 - **`defineNotification`:** when the message goes, to whom, and over which channels.
 
-`domain/src/notifications/index.ts`:
+`domain/src/modules/jobs/notifications/index.ts`:
 
 ```ts
-/** Fixit's templates and notifications: a reminder before each job. */
+/** The jobs module's templates and notifications: a reminder before each job. */
 import { pick, spokenWhen } from '@hykr/i18n';
 import { defineNotification, defineTemplate, type Row } from '@hykr/notifications';
 import { z } from 'zod';
@@ -580,11 +592,10 @@ export const JobReminderNotification = defineNotification<JobRow>({
   dedupe: (j) => `job.reminder:${j.id}`,
 });
 
-export const domainTemplates = [JobReminder];
-// biome-ignore lint/suspicious/noExplicitAny: notifications over different rows
-export const domainNotifications: ReturnType<typeof defineNotification<any>>[] = [
-  JobReminderNotification,
-];
+export const jobsNotifications = {
+  templates: [JobReminder],
+  notifications: [JobReminderNotification],
+};
 ```
 
 The framework handles the rest: consent, quiet hours, the person's language, falling back to
@@ -594,44 +605,41 @@ locally).
 ## 8. The assistant: persona, rules, scripts and evals
 
 The assistant's tools come from your specs: `list-jobs`, `get-job`, `create-job`, `update-job`,
-`delete-job` and `complete-job`. What you add is who the assistant is, the rules of your
-business, and, for the scripted model, how it answers.
+`delete-job` and `complete-job`. What you add is who the assistant is (once, for the whole
+application: step 9), each module's rules, and, for the scripted model, how it answers.
 
-`domain/src/agent/index.ts`:
+`domain/src/modules/jobs/agent/index.ts`:
 
 ```ts
-/** What Fixit's assistant knows beyond its tools: who it is, the rules, scripts and evals. */
-import type { AgentDomain } from '@hykr/agents/script';
+/** What the jobs module teaches the assistant beyond its tools: rules, scripts and evals. */
+import type { AgentModule } from '@hykr/agents/script';
 import { evalCases } from './evals.js';
-import { domainScripts } from './scripts.js';
+import { jobsScripts } from './scripts.js';
 
-export const agentDomain: AgentDomain = {
-  persona:
-    'You are the assistant of a small repair business. You help book repair jobs, find them, and record them as done.',
+export const jobsAgent: AgentModule = {
   rules: [
     'When the user says a job is finished, draft a complete-job call with a one or two sentence summary of what was done, then tell them to approve it.',
     'Book jobs at the time the user gives; if they give none, ask for it.',
   ],
-  help: 'I can book, list and complete repair jobs.',
-  scripts: domainScripts,
+  scripts: jobsScripts,
   evalCases,
 };
 ```
 
 The scripted model (`MODEL_MODE=fake`) runs the real agent loop: real tools, real API calls,
 real approvals. Only the "thinking" is a script. That makes tests and evals free and
-deterministic. `domain/src/agent/scripts.ts`:
+deterministic. `domain/src/modules/jobs/agent/scripts.ts`:
 
 ```ts
 /**
- * The scripted model's knowledge of Fixit (MODEL_MODE=fake: tests, CI and demos without a key):
+ * The scripted model's knowledge of jobs (MODEL_MODE=fake: tests, CI and demos without a key):
  *   jobs                      list-jobs
  *   book <title> at <address> tomorrow   create-job (tomorrow at 10:00)
  *   finish <title>: <summary> list-jobs → complete-job (waits for approval)
  */
 import { call, defineScript, items, sameTitle, say, sayIn, written } from '@hykr/agents/script';
 
-export const domainScripts = [
+export const jobsScripts = [
   defineScript({
     name: 'list',
     match: (text) => (/^jobs\??$/i.test(text.trim()) ? true : undefined),
@@ -684,8 +692,9 @@ export const domainScripts = [
 
 `written(...)` words the outcome: what was done, or that it waits for approval.
 
-The eval is one conversation, scored turn by turn: the right tools in order, none of the
-forbidden ones, and the reply's words. `domain/src/agent/evals.ts`:
+The eval is one conversation per module, scored turn by turn: the right tools in order, none of
+the forbidden ones, and the reply's words. `basecamp eval --module jobs` runs it with a fresh
+user (and the module's `evalSetup`, when it has one). `domain/src/modules/jobs/agent/evals.ts`:
 
 ```ts
 import type { EvalCase } from '@hykr/agents/script';
@@ -710,30 +719,75 @@ export const evalCases: EvalCase[] = [
 ];
 ```
 
-## 9. The server definition
+## 9. The module and the server definition
 
-`api/src/server.ts` is where the server meets your domain. Only `channel.does` changes from
-the scaffold: it's the sentence the WhatsApp welcome and HELP use for what the assistant does.
+`domain/src/modules/jobs/index.ts` bundles the module's layers, server side:
 
 ```ts
-// Fixit, as the server runs it: the domain's entities and commands, the Nest module
-// that serves them, its views, its notifications and its assistant. `basecamp dev` and
-// `basecamp start` run the API and the worker from this file.
+/** The jobs module: repair jobs, booked, reminded and completed. */
+import { defineModule } from '@hykr/api';
+import { jobsAgent } from './agent/index.js';
+import { jobsSpec } from './contracts/index.js';
+import * as tables from './db/schema.js';
+import { jobsNotifications } from './notifications/index.js';
+import { JobsModule } from './server/jobs.module.js';
+import { jobsViews } from './views/index.js';
 
-import { agentDomain } from '@application/domain/agent';
-import { domain } from '@application/domain/contracts';
+export const jobs = defineModule({
+  ...jobsSpec,
+  server: JobsModule,
+  views: jobsViews.views,
+  screens: jobsViews.screens,
+  templates: jobsNotifications.templates,
+  notifications: jobsNotifications.notifications,
+  agent: jobsAgent,
+  tables,
+});
+```
+
+Then list it, one line per module, in the three lists the scaffold kept. A module comes after
+the modules it depends on. In `domain/src/modules/index.ts`:
+
+```ts
+import { jobs } from './jobs/index.js';
+
+export const modules = [
+  jobs,
+  // basecamp module add: one line per module, above this one.
+];
+```
+
+In `domain/src/contracts/index.ts` (and the same in `domain/src/views/index.ts`, with
+`jobsViews` and `moduleViews`):
+
+```ts
+import { jobsSpec } from '../modules/jobs/contracts/index.js';
+
+export * from '../modules/jobs/contracts/index.js';
+
+export const moduleSpecs = [
+  jobsSpec,
+  // basecamp module add: one line per module, above this one.
+] as const;
+```
+
+`api/src/server.ts` is where the server meets your modules. It names the product, says who the
+assistant is, and gives `channel.does`: the sentence the WhatsApp welcome and HELP use for what
+the assistant does.
+
+```ts
+// Fixit, as the server runs it: its modules, who the assistant is, and the migrations.
+// `basecamp dev` and `basecamp start` run the API and the worker from this file.
+
 import { migrations } from '@application/domain/db';
-import { domainNotifications, domainTemplates } from '@application/domain/notifications';
-import { DomainModule } from '@application/domain/server';
-import { uiDomain } from '@application/domain/views';
+import { modules } from '@application/domain/modules';
 import { defineServer } from '@hykr/api';
 
 export const server = defineServer({
-  domain,
-  module: DomainModule,
-  views: uiDomain,
-  notifications: { templates: domainTemplates, notifications: domainNotifications },
-  agent: agentDomain,
+  name: 'Fixit',
+  persona:
+    'You are the assistant of a small repair business. You help book repair jobs, find them, and record them as done.',
+  help: 'I can book, list and complete repair jobs.',
   // On WhatsApp, in the welcome and in HELP.
   channel: {
     does: {
@@ -742,9 +796,14 @@ export const server = defineServer({
       te: 'నేను మీ రిపేర్ పనులను బుక్ చేయగలను, వాటి సమయం చెప్పగలను, పూర్తయినట్లు నమోదు చేయగలను.',
     },
   },
+  modules,
   migrations: [migrations],
 });
 ```
+
+`defineServer` checks, before anything serves, that the modules fit together: no entity, route,
+tool, view, template or table declared twice, nothing named that isn't there, and no module's
+script taking another's eval turn. It lists every problem in one error.
 
 ## 10. The app
 
@@ -754,22 +813,22 @@ canvas, saved pages and voice. Your app adds two things:
 - **your domain:** what the shell needs to know about it;
 - **your screens:** the components for your views and your routes.
 
-`mobile/src/domain/index.ts` builds the catalog and registry from your domain, types your
+`mobile/src/domain/index.ts` builds the catalog and registry from your modules, types your
 screens, and describes the app to the shell:
 
 ```ts
 /** Fixit, in the app: the shell reads only what this file exports. */
-import { domain } from '@application/domain/contracts';
-import { uiDomain } from '@application/domain/views';
+import { moduleSpecs } from '@application/domain/contracts';
+import { moduleViews } from '@application/domain/views';
 import { defineAppDomain } from '@hykr/app';
 import { createCatalog } from '@hykr/contracts';
 import { createUiRegistry } from '@hykr/ui-registry';
 import { bindDomain } from './bindings';
 
 /** Every entity and command this app serves: Fixit's and the framework's. */
-export const catalog = createCatalog(domain);
+export const catalog = createCatalog(...moduleSpecs);
 /** Every view and screen the assistant may show here. */
-export const registry = createUiRegistry(uiDomain);
+export const registry = createUiRegistry(...moduleViews);
 
 // Types entity names and rows in this app's screens: useEntityList('jobs') is Job[].
 declare module '@hykr/app' {
@@ -1237,22 +1296,29 @@ You also have, without writing them:
 
 ## Checklist for your own domain
 
-1. **Contracts** (`domain/src/contracts`): an `entitySpec` per entity, a `commandSpec` per
-   named operation, and `defineDomain` with entities keyed by plural.
-2. **Table** (`domain/src/db/schema.ts`) with the framework's columns. Then
+For each module (`domain/src/modules/<name>/`, or `basecamp module add <name>`):
+
+1. **Contracts** (`contracts/`): an `entitySpec` per entity, a `commandSpec` per named
+   operation, and `moduleSpec` with entities keyed by plural and the modules it `dependsOn`.
+2. **Table** (`db/schema.ts`), named after the module, with the framework's columns. Then
    `basecamp db generate --name …` and `basecamp db migrate`.
-3. **Server** (`domain/src/server`): `defineEntity` with `access` and `rules`, `defineCommand`,
-   and a Nest module in `DomainModule`. Fields a command writes go in the update schema, with a
-   `via` rule.
-4. **Views** (`domain/src/views`): `defineView` per entity's list and item (`text` and `speak`
-   for channels without a screen), and `defineScreen` for anything `open` shows.
-5. **Notifications** (`domain/src/notifications`): `defineTemplate` and `defineNotification`.
-   Then `basecamp templates sync`.
-6. **Assistant** (`domain/src/agent`): persona, rules, help, scripts, eval cases.
-7. **`api/src/server.ts`**: `channel.does` in each language.
-8. **App** (`mobile/src`): `defineAppDomain` (title, nav, suggestions, bind), a component per
+3. **Server** (`server/`): `defineEntity` with `access` and `rules`, `defineCommand`, and the
+   module's Nest module. Fields a command writes go in the update schema, with a `via` rule.
+   What other modules may use goes in `server/public.ts`.
+4. **Views** (`views/`): `defineView` per entity's list and item (`text` and `speak` for
+   channels without a screen), and `defineScreen` for anything `open` shows.
+5. **Notifications** (`notifications/`): `defineTemplate` and `defineNotification`. Then
+   `basecamp templates sync`.
+6. **Assistant** (`agent/`): rules, scripts with verbs of the module's own, eval cases.
+7. **Bundle** (`index.ts`): `defineModule`, and one line in `modules/index.ts`,
+   `contracts/index.ts` and `views/index.ts`.
+
+Then, once:
+
+8. **`api/src/server.ts`**: `name`, `persona`, `help`, and `channel.does` in each language.
+9. **App** (`mobile/src`): `defineAppDomain` (title, nav, suggestions, bind), a component per
    view and screen, and routes in `src/app/(domain)`. Rename `app.json`.
-9. **Tests and evals**: an e2e test per rule that matters, and `basecamp eval`.
+10. **Tests and evals**: an e2e test per rule that matters, and `basecamp eval` (`--module` for one).
 
 ## Things that will trip you up
 
@@ -1263,10 +1329,13 @@ You also have, without writing them:
   fails with a bare 500 rather than a clear error.
 - **A refused write answers 403 with the rule's message in `reason`,** for example "Finish a job
   with complete-job…". The rule's code (`use_complete_job`) is in the audit row's `rule` column.
-- **The scaffold starts from the sample domain,** so step 2 is a deletion. Do it before you
+- **The scaffold starts from the sample modules,** so step 2 is a deletion. Do it before you
   start, not as you go, or the sample's types mix with yours.
-- **`uiDomain` needs a cast** (`as unknown as readonly ViewDef[]`): each view is typed by its
-  own props, and the list holds views of different shapes.
+- **A module's views need a cast** (`as unknown as readonly ViewDef[]`): each view is typed by
+  its own props, and the list holds views of different shapes.
+- **Two modules can't share a verb in the scripted model.** The first module's script that
+  matches takes the turn, so `defineServer` refuses to start when one module's script would take
+  another module's eval turn. Give each module verbs of its own ("book …", "invoice …").
 - **The mobile app lists native modules it doesn't import itself** (LiveKit, WebRTC, speech,
   SQLite, secure store) and their plugins in `app.json`. The framework's voice and storage need
   them, and Expo needs native modules installed in the app. Keep them.
