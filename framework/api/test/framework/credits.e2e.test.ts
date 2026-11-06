@@ -221,6 +221,11 @@ describe('metering, by default', () => {
       expect(await credits.check({ tenantId, meter: 'voice_seconds' })).toMatchObject({
         rule: 'credits_unavailable',
       });
+      // What is never paused still goes: a utility message, a reply.
+      expect(await credits.check({ tenantId, meter: 'messages', variant: 'utility' })).toBeNull();
+      expect(await credits.check({ tenantId, meter: 'messages' })).toBeNull();
+      // A bad purchase body is a 400, before anything runs.
+      expect((await ana.call('POST', '/api/credits/purchases', { amount: -5 })).status).toBe(400);
     } finally {
       await pool.query(`update app.tenants set settings = settings - 'credits' where id = $1`, [
         tenantId,
@@ -608,6 +613,31 @@ describe('limits', () => {
       expect(rows).toEqual([{ max: '20', tenant_id: tenant[mia.name] }]);
     },
   );
+});
+
+describe('alerts a plan makes due', () => {
+  it('a lower allowance alerts without new use; the sweep announces nothing twice', async () => {
+    const zed = new Person('Zed Credits');
+    await zed.signUp();
+    tenant[zed.name] = (await me(zed)).tenantId;
+    expect((await addTask(zed)).status).toBe(200);
+    const spent = (await zed.call('GET', '/api/credits')).body.spent as number;
+    expect(spent).toBeGreaterThan(0);
+    // On credits with exactly what it spent: used up, though nothing new was used.
+    expect((await setPlan(zed, { enforce: true, allowance: spent })).status).toBe(200);
+    await eventually(async () => ((await alertsOf(zed)).length === 2 ? true : undefined));
+    expect(await alertsOf(zed)).toEqual(['credits/alert', 'credits/pause']);
+    const credits = server.app?.get(CreditsService, { strict: false }) as CreditsService;
+    expect(await credits.sweep()).toBeGreaterThan(0);
+    const { rows } = await pool.query(
+      `select count(*)::int as n from app.domain_events where tenant_id = $1 and name = 'credits.threshold'`,
+      [tenant[zed.name]],
+    );
+    expect(rows[0].n).toBe(2);
+    // A bigger allowance re-arms both levels.
+    await setPlan(zed, { enforce: true, allowance: spent * 10 });
+    await eventually(async () => ((await alertsOf(zed)).length === 0 ? true : undefined));
+  });
 });
 
 describe('the operator’s override', () => {

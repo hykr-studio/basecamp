@@ -1,6 +1,7 @@
 import {
   CreditAlertsInput,
   type CreditPurchase,
+  CreditPurchaseInput,
   CreditsManageCapability,
   type CreditsStatus,
   CreditsViewCapability,
@@ -119,7 +120,7 @@ export class CreditsController {
       this.core.db,
       { principal: p, requestId: meta.requestId, idempotencyKey: meta.idempotencyKey },
       buyCredits(),
-      body ?? {},
+      parseOr400(CreditPurchaseInput, body, 'invalid_purchase'),
     );
     if (result.status === 'done') {
       const id = (result.value as CreditPurchase).id;

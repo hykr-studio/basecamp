@@ -280,7 +280,11 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       ({ plan, zone } = await this.planOf(tenantId));
     } catch (e) {
       log.warn(`Settings of business ${tenantId} do not parse: ${reasonOf(e)}`);
-      return defs.map(() => UNAVAILABLE);
+      // Fail closed, except for what is never paused (a reply, a code, an approval request).
+      const fallback = this.fallbackPlan().plan;
+      return defs.map((d) =>
+        !d.def || (d.def.pausable && !d.def.pausable(d.variant, fallback)) ? null : UNAVAILABLE,
+      );
     }
     // Nothing caps these uses: no need to read the counters.
     const free = (d: (typeof defs)[number]) =>
