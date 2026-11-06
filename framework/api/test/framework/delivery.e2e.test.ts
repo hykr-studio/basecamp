@@ -311,9 +311,10 @@ describe('personal data contributors', () => {
       `select after from audit.events where action = 'channel.contact.erased' and resource_id = $1`,
       [contactId],
     );
-    // The framework's own (files, jobs) run too.
+    // The framework's own (files, jobs, push) run too: a contact has no files, no jobs and no
+    // devices.
     expect(rows).toEqual([
-      { after: { contributors: { files: 0, jobs: 0, 'fixture.runtime.erase': 1 } } },
+      { after: { contributors: { files: 0, jobs: 0, push: 0, 'fixture.runtime.erase': 1 } } },
     ]);
   });
 
@@ -324,6 +325,8 @@ describe('personal data contributors', () => {
     expect(await api.exportPersonalData({ subject, tenantId, db })).toEqual({
       files: [],
       jobs: [],
+      // The framework's push feature: Ana registered no device.
+      pushDevices: [],
       fixtureNotes: [{ about: subject }],
     });
     api.exportContributors.register({

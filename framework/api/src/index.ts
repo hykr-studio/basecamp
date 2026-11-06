@@ -18,6 +18,7 @@ export {
   StorageUnavailable,
   type Uploader,
 } from './features/files/public.js';
+export { type LiveResource, liveResources } from './features/live/resources.js';
 export {
   type CompleteContext,
   callbackSecret,

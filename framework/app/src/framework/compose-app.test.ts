@@ -163,6 +163,26 @@ describe('composeApp', () => {
     expect(() => compose([unknown])).toThrow('reads "invoices", which is no entity');
   });
 
+  it('refuses a WebMCP screen that reads an entity whose list and get are closed to agents', () => {
+    const peopleOnly = createCatalog(
+      defineDomain({
+        name: 'Fixture',
+        entities: {
+          orders: spec('order'),
+          visits: {
+            ...spec('visit'),
+            expose: { list: 'human', get: 'internal', create: 'all', update: 'all', delete: 'all' },
+          },
+        },
+        commands: [],
+      }),
+    );
+    const reader = defineAppModule({ name: 'visits', webmcp: { visits: { reads: ['visits'] } } });
+    expect(() => composeApp({ app, modules: [reader], catalog: peopleOnly })).toThrow(
+      'WebMCP screen visits reads "visits", whose list and get are not open to agents',
+    );
+  });
+
   it('collects plugins from the shell, then from modules, and refuses a name twice', () => {
     const mine = defineAppModule({ name: 'visits', plugins: [{ name: 'calendar' }] });
     expect(compose([mine], [{ name: 'push' }]).plugins.map((p) => p.name)).toEqual([
