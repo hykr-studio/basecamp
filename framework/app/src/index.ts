@@ -12,6 +12,16 @@ export { Button } from './components/Button';
 export { ScreenTitle, SectionHeading } from './components/ScreenTitle';
 export { type AppConfig, appConfig, configure } from './config';
 export {
+  FileField,
+  FileThumbs,
+  fileFieldPolicy,
+  type PickedFile,
+  pickDocuments,
+  pickPhotos,
+  useFiles,
+  useFileUpload,
+} from './features/files';
+export {
   ApprovalCard,
   ApprovalItem,
   DecisionScrollView,
@@ -32,7 +42,6 @@ export {
   type WebMcpScreen,
   type WebMcpScreens,
 } from './framework/app-domain';
-
 export { AssistantProvider, useAssistant, useScreenContext } from './framework/assistant-context';
 export {
   bindAll,
@@ -61,16 +70,6 @@ export {
 } from './framework/dates';
 export { EmptyState, LoadError } from './framework/EmptyState';
 export { Field } from './framework/Field';
-export {
-  FileField,
-  FileThumbs,
-  fileFieldPolicy,
-  type PickedFile,
-  pickDocuments,
-  pickPhotos,
-  useFiles,
-  useFileUpload,
-} from './features/files';
 export { type Chip, FilterChips, SearchBox } from './framework/FilterChips';
 export { History } from './framework/History';
 export {
