@@ -26,7 +26,7 @@ export const jobsErasure: ErasureContributor = {
     const now = new Date();
     await tx
       .update(jobs)
-      .set({ input: {}, output: null, message: null, error: null })
+      .set({ input: {}, output: null, message: null, error: null, principal: null })
       .where(inArray(jobs.id, ids));
     await tx
       .update(jobs)

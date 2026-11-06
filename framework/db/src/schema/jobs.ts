@@ -40,6 +40,11 @@ export const jobs = app.table(
     startedByKind: text('started_by_kind').notNull(),
     startedById: text('started_by_id').notNull(),
     requestId: text('request_id'),
+    /**
+     * The starter's principal as it was, so work done in the worker can act as them again
+     * (refreshed: still in the business, today's roles). Never shown.
+     */
+    principal: jsonb('principal'),
     /** Submissions tried so far. */
     attempts: integer('attempts').notNull().default(0),
     /** A submission or a poll in progress holds the job until then. */

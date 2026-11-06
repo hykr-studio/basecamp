@@ -5,7 +5,9 @@
 //   inline and by URL (fetched with its own `download`), `cancel`, and a `complete` that puts a
 //   copy of the first page on the drawing with its page count;
 // - `fixture.convert` is about no record and takes no callbacks: the worker polls it. Its input
-//   may name a file, which its starter must reach.
+//   may name a file, which its starter must reach;
+// - `fixture.export` has no service: its `submit` does the work in the worker, as its starter,
+//   reports progress and returns its file as bytes.
 // Starting either is a command: the assistant's render waits for the person's approval. Staff
 // never see what a render cost (a read projector on jobs).
 import { call, defineScript, say, written } from '@hykr/agents/script';
@@ -193,6 +195,37 @@ export const ConvertJob = defineJob({
   },
 });
 
+export const ExportInput = z.object({ title });
+
+/**
+ * Work done here, in the worker, as whoever started it: no service, no callback, no poll. It
+ * reports progress, counts the drawings its starter can read, and makes a file.
+ */
+export const ExportJob = defineJob({
+  name: 'fixture.export',
+  description: 'Exports the drawings its starter can read as a CSV file.',
+  input: ExportInput,
+  output: z.object({ drawings: z.number().int() }),
+  timeoutMs: 60_000,
+  callback: false,
+  submit: async (ctx) => {
+    await ctx.progress(50, 'Writing');
+    const p = await ctx.starter();
+    const list = await DrawingDef.repo.list(ctx.db, p, { limit: 100 });
+    const rows = list.items.map((d) => `${d.id},${d.title}`);
+    return {
+      update: { status: 'succeeded', output: { drawings: rows.length }, message: 'Written' },
+      files: [
+        {
+          name: `${ctx.job.input.title}.csv`,
+          mime: 'text/csv',
+          bytes: Buffer.from(['id,title', ...rows].join('\n')),
+        },
+      ],
+    };
+  },
+});
+
 /* ── Starting them: commands ───────────────────────────────────────────────── */
 
 export const RenderDrawingSpec = commandSpec({
@@ -253,16 +286,41 @@ export const ConvertText = defineCommand(ConvertTextSpec, {
   present: (job, p) => presentJob(job, p),
 });
 
+export const ExportDrawingsSpec = commandSpec({
+  name: 'drawing.export',
+  description: 'Export the drawings as a CSV file.',
+  input: ExportInput,
+  output: JobInfo,
+  http: { method: 'POST', path: '/api/drawings/export' },
+  tool: 'export-drawings',
+  expose: 'human',
+  verb: { do: 'export', did: 'exported' },
+  touches: [],
+});
+
+export const ExportDrawings = defineCommand(ExportDrawingsSpec, {
+  resource: { type: 'drawing', id: () => null },
+  authorize: () => allow('fixture.export'),
+  summarize: (input) => `Export "${input.title}"`,
+  run: async ({ tx, principal, input }) => ({
+    value: await startJob(tx, principal, ExportJob, input),
+    touched: [],
+  }),
+  present: (job, p) => presentJob(job, p),
+});
+
 @Module({
   controllers: [
     entityController(DrawingDef),
     commandController(RenderDrawing),
     commandController(ConvertText),
+    commandController(ExportDrawings),
   ],
   providers: [
     ...entityHandlers(DrawingDef),
     commandHandler(RenderDrawing),
     commandHandler(ConvertText),
+    commandHandler(ExportDrawings),
   ],
 })
 export class DrawingsModule {}
@@ -303,12 +361,12 @@ export const drawingsModule = defineModule({
     name: 'drawings',
     dependsOn: [],
     entities: { drawings: DrawingSpec },
-    commands: [RenderDrawingSpec, ConvertTextSpec],
+    commands: [RenderDrawingSpec, ConvertTextSpec, ExportDrawingsSpec],
   }),
   server: DrawingsModule,
   agent: { scripts: drawingScripts },
   tables: { drawings },
-  contributes: { jobs: [RenderJob, ConvertJob] },
+  contributes: { jobs: [RenderJob, ConvertJob, ExportJob] },
 });
 
 export const jobsContributions: Partial<Contributions> = { readProjectors: [hideJobCost] };

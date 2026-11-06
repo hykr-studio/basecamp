@@ -13,6 +13,7 @@ import {
   CORE_OPTIONS,
   type CoreOptions,
   entityDef,
+  PrincipalResolver,
   recordEvents,
   runWrite,
   systemPrincipal,
@@ -99,6 +100,13 @@ function withoutData(body: unknown): unknown {
   };
 }
 
+/** Where a stored submit update names the files the submission made (callbacks never can). */
+const MADE = 'madeFiles';
+const madeIn = (body: unknown): string[] => {
+  const ids = (body as Record<string, unknown> | null)?.[MADE];
+  return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : [];
+};
+
 /** What a callback answers: its status and body. */
 export interface CallbackAnswer {
   status: number;
@@ -155,6 +163,13 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
   /** The server's own work on this job: actor `system`, the kind as its id, the job as its run. */
   private system(row: JobRow): Principal {
     return systemPrincipal({ tenantId: row.tenantId, job: row.kind, runId: row.id });
+  }
+
+  /** Whoever started the job, as they stand now; the job's system principal for the server's. */
+  private async starter(row: JobRow): Promise<Principal> {
+    const stored = row.principal as Principal | null;
+    if (!stored || stored.actor.kind === 'system') return this.system(row);
+    return this.ref.get(PrincipalResolver, { strict: false }).refresh(stored);
   }
 
   private audit(
@@ -347,6 +362,8 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
       signal,
       fileUrl: async (id) => this.files().urlFor(await inputFile(id)),
       fileBytes: async (id) => this.files().bytesOf(await inputFile(id)),
+      starter: () => this.starter(row),
+      db: this.db,
       get: (token) => this.ref.get(token, { strict: false }),
     };
   }
@@ -478,7 +495,31 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
         );
         return 'bad update';
       }
-      await this.store(after.row, 'submit', 'submit', update.data);
+      // Files made here, as bytes: stored now, named to the update (never by a callback).
+      const made: string[] = [];
+      if (result.files?.length) {
+        if (update.data.status !== 'succeeded') {
+          await this.finish(
+            jobId,
+            'failed',
+            { code: 'bad_update', message: 'Result files come with a succeeded update' },
+            { action: 'job.failed' },
+          );
+          return 'bad update';
+        }
+        try {
+          for (const file of result.files) made.push(await this.keep(after.row, file));
+        } catch (e) {
+          await this.finish(
+            jobId,
+            'failed',
+            { code: 'result_unavailable', message: brief(e) },
+            { action: 'job.failed' },
+          );
+          return 'result unavailable';
+        }
+      }
+      await this.store(after.row, 'submit', 'submit', update.data, made);
     }
     return 'submitted';
   }
@@ -491,6 +532,8 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
     source: 'callback' | 'poll' | 'submit',
     dedupe: string,
     update: JobUpdate,
+    /** Files a submission made and stored already (only the runner names these). */
+    made: readonly string[] = [],
   ): Promise<{ id: string } | undefined> {
     const [stored] = await this.db
       .insert(jobUpdates)
@@ -500,7 +543,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
         source,
         dedupe,
         status: update.status,
-        body: update,
+        body: made.length ? { ...update, [MADE]: made } : update,
       })
       .onConflictDoNothing()
       .returning({ id: jobUpdates.id });
@@ -598,7 +641,11 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
     if (!row) return 'no job';
     let outcome: string;
     try {
-      outcome = await this.apply(row, JobUpdate.parse(stored.body));
+      outcome = await this.apply(
+        row,
+        JobUpdate.parse(stored.body),
+        stored.source === 'submit' ? madeIn(stored.body) : [],
+      );
     } catch (e) {
       if (!(e instanceof ResultRefused) && !last) throw e;
       outcome = `failed: ${brief(e)}`;
@@ -618,7 +665,11 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
   }
 
   /** Apply one update to a job. The first finishing update wins; later ones are ignored. */
-  private async apply(row: JobRow, update: JobUpdate): Promise<string> {
+  private async apply(
+    row: JobRow,
+    update: JobUpdate,
+    made: readonly string[] = [],
+  ): Promise<string> {
     if (isJobFinished(row.status)) return 'ignored: finished';
     switch (update.status) {
       case 'running':
@@ -642,7 +693,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
           ? 'applied'
           : 'ignored: finished';
       case 'succeeded':
-        return this.succeed(row, update);
+        return this.succeed(row, update, made);
     }
   }
 
@@ -703,11 +754,36 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
     });
   }
 
+  /** Store one result file as a server file on no record yet. Refusals are for good. */
+  private async keep(row: JobRow, file: { name: string; mime: string; bytes: Buffer }) {
+    try {
+      const kept = await this.files().storeBytes({
+        tenantId: row.tenantId,
+        uploader: { kind: 'server' },
+        source: 'server',
+        name: file.name,
+        mime: file.mime,
+        bytes: file.bytes,
+        audit: { actorKind: 'system', actorId: row.kind, channel: 'background' },
+      });
+      return kept.id;
+    } catch (e) {
+      // Too large, or not what it says it is: no retry makes it fit.
+      if (e instanceof HttpException && [413, 422].includes(e.getStatus()))
+        throw new ResultRefused(`${file.name}: ${brief(e)}`);
+      throw e;
+    }
+  }
+
   /**
    * Success: the output is checked (`bad_output` fails it), the files are fetched and stored as
    * server files, then, in one transaction, the job succeeds and its files are kept on it.
    */
-  private async succeed(row: JobRow, update: Extract<JobUpdate, { status: 'succeeded' }>) {
+  private async succeed(
+    row: JobRow,
+    update: Extract<JobUpdate, { status: 'succeeded' }>,
+    made: readonly string[],
+  ) {
     const def = jobDefs.get(row.kind);
     const fail = async (code: string, message: string) =>
       (await this.finish(row.id, 'failed', { code, message }, { action: 'job.failed' }))
@@ -722,29 +798,12 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
     }
     const list = update.files ?? [];
     const max = def.maxFiles ?? MAX_FILES;
-    if (list.length > max) return fail('too_many_files', `At most ${max} result files`);
+    if (list.length + made.length > max)
+      return fail('too_many_files', `At most ${max} result files`);
 
-    const stored: string[] = [];
-    for (const file of list) {
-      const bytes = await this.bytesOf(row, def, file);
-      try {
-        const kept = await this.files().storeBytes({
-          tenantId: row.tenantId,
-          uploader: { kind: 'server' },
-          source: 'server',
-          name: file.name,
-          mime: file.mime,
-          bytes,
-          audit: { actorKind: 'system', actorId: row.kind, channel: 'background' },
-        });
-        stored.push(kept.id);
-      } catch (e) {
-        // Too large, or not what it says it is: no retry makes it fit.
-        if (e instanceof HttpException && [413, 422].includes(e.getStatus()))
-          throw new ResultRefused(`${file.name}: ${brief(e)}`);
-        throw e;
-      }
-    }
+    const stored: string[] = [...made];
+    for (const file of list)
+      stored.push(await this.keep(row, { ...file, bytes: await this.bytesOf(row, def, file) }));
 
     return this.db.transaction(async (tx) => {
       const [current] = await tx.select().from(jobs).where(eq(jobs.id, row.id)).for('update');
@@ -780,6 +839,9 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
               eq(files.tenantId, done.tenantId),
               isNull(files.resourceId),
               eq(files.status, 'ready'),
+              eq(files.source, 'server'),
+              isNull(files.ownerId),
+              isNull(files.contactId),
             ),
           );
       const p = this.system(done);

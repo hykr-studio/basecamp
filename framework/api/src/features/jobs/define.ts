@@ -42,6 +42,12 @@ export interface JobContext<I = unknown> {
   fileUrl(id: string): Promise<string>;
   /** The bytes of one of the job's input files (`inputFiles`). */
   fileBytes(id: string): Promise<Buffer>;
+  /**
+   * Whoever started the job, as they stand now (still in the business, today's roles), to read
+   * or write as them in work done here; the job's system principal when the server started it.
+   */
+  starter(): Promise<Principal>;
+  db: Database;
   /** A provider from any loaded module (an HTTP client, a credentials service). */
   get<T>(token: Type<T> | string | symbol): T;
 }
@@ -67,6 +73,11 @@ export interface SubmitResult {
   externalId?: string;
   /** Work done in `submit` itself returns its finished update. */
   update?: JobUpdate;
+  /**
+   * With a `succeeded` update: result files made here, as bytes (an export, a report), kept on
+   * the job beside any the update names.
+   */
+  files?: readonly { name: string; mime: string; bytes: Buffer }[];
 }
 
 /** What `complete` gets: the finished job, and how to write results back as the server. */

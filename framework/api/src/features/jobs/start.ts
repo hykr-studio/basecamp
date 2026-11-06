@@ -85,6 +85,7 @@ export async function startJob<I>(
       startedByKind: p.actor.kind,
       startedById: p.actor.id,
       requestId,
+      principal: p,
       deadlineAt: new Date(Date.now() + def.timeoutMs),
     })
     .returning();

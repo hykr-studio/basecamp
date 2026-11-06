@@ -716,6 +716,49 @@ describe('a polled job about no record', () => {
   });
 });
 
+describe('work done in the worker', () => {
+  it('reports progress, reads as its starter, and keeps the file it made', async () => {
+    const started = await owner.call('POST', '/api/drawings/export', { title: 'all' });
+    const id = started.body.value.id as string;
+    const j = await until(id, (x) => x.status === 'succeeded');
+    expect(j).toMatchObject({ message: 'Written', progress: 100, about: null });
+    expect(j.output.drawings).toBeGreaterThan(0);
+    expect(await events(id)).toEqual([
+      'job.queued',
+      'job.running',
+      'job.progress',
+      'job.succeeded',
+    ]);
+    const file = await owner.call('GET', `/api/files/${j.files[0]}`);
+    expect(file.body).toMatchObject({ name: 'all.csv', mime: 'text/csv' });
+    const text = await (await fetch(`${server.base}${file.body.url}`)).text();
+    expect(text).toContain('Plan A');
+    // Only the runner names files a submission made: the stored update keeps their ids.
+    const kept = await pool.query('select body from app.job_updates where job_id = $1', [id]);
+    expect(kept.rows[0].body.madeFiles).toEqual(j.files);
+
+    // Another business's export reads only its own drawings.
+    const theirs = await stranger.call('POST', '/api/drawings/export', { title: 'mine' });
+    const other = await eventually(async () => {
+      const x = (await job(stranger, theirs.body.value.id)).body;
+      return x.status === 'succeeded' ? x : undefined;
+    });
+    expect(other.output).toEqual({ drawings: 0 });
+  });
+
+  it('a callback cannot name files: unknown keys are dropped', async () => {
+    const id = await running((await drawing('Plan Sneak')).id);
+    const stolen = (
+      await pool.query(
+        "select id from app.files where source = 'server' and resource_id is null limit 1",
+      )
+    ).rows[0]?.id;
+    await post(id, { status: 'succeeded', output: { pages: 0 }, madeFiles: [stolen ?? 'x'] });
+    const j = await until(id, (x) => x.status === 'succeeded');
+    expect(j.files).toEqual([]);
+  });
+});
+
 describe('deadlines and cancelling', () => {
   it('a job past its deadline fails as timed out, and its service is told to stop', async () => {
     const id = await running((await drawing('Plan Late')).id);
