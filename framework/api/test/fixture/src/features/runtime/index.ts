@@ -8,6 +8,7 @@ import { call, defineScript, type Outcome, say, written } from '@hykr/agents/scr
 import {
   type DeliveryChannel,
   type DeliveryRequest,
+  defineModule,
   defineQueue,
   defineSchedule,
   defineServer,
@@ -21,7 +22,12 @@ import {
   type TurnInfo,
   type TurnOutcome,
 } from '@hykr/api';
-import type { Contributions, DomainEventEnvelope, Subject } from '@hykr/contracts';
+import {
+  type Contributions,
+  type DomainEventEnvelope,
+  moduleSpec,
+  type Subject,
+} from '@hykr/contracts';
 import { CORE_OPTIONS, type CoreOptions } from '@hykr/core';
 import { safely, type ToolContribution } from '@hykr/core/tools';
 import { defineNotification, type Row } from '@hykr/notifications';
@@ -29,11 +35,8 @@ import { createTool } from '@mastra/core/tools';
 import { Inject, Injectable, Module, type OnModuleInit } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { fixtureAgent } from '../../agent.js';
 import { TaskSpec } from '../../contracts.js';
 import { fixture } from '../../index.js';
-import { fixtureNotifications } from '../../notifications.js';
-import { FixtureModule } from '../../server.js';
 
 declare module '@hykr/notifications' {
   interface NotificationChannels {
@@ -298,7 +301,7 @@ export class MediaHook implements InboundHook, OnModuleInit {
   }
 }
 
-@Module({ imports: [FixtureModule], providers: [MediaHook] })
+@Module({ providers: [MediaHook] })
 export class RuntimeFixtureModule {}
 
 /* ── Personal data ─────────────────────────────────────────────────────────── */
@@ -330,14 +333,17 @@ export const runtimeContributions: Partial<Contributions> = {
   exportContributors: [ExportNotes],
 };
 
+/** The pieces a module carries: the inbound hook's provider, the notification and the scripts. */
+export const runtimeModule = defineModule({
+  ...moduleSpec({ name: 'runtime', dependsOn: ['tasks'], entities: {}, commands: [] }),
+  server: RuntimeFixtureModule,
+  notifications: [PagedNotification],
+  agent: { scripts: runtimeScripts },
+});
+
 /** The fixture, with everything above. */
 export const runtimeApp = defineServer({
   ...fixture.definition,
-  module: RuntimeFixtureModule,
-  notifications: {
-    templates: fixtureNotifications.templates,
-    notifications: [...fixtureNotifications.notifications, PagedNotification],
-  },
-  agent: { ...fixtureAgent, scripts: [...runtimeScripts, ...fixtureAgent.scripts] },
+  modules: [...fixture.definition.modules, runtimeModule],
   contributes: runtimeContributions,
 });

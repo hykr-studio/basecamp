@@ -1,15 +1,16 @@
 // The core write and read path's extension points in use (F3): an entity plugin with every
 // hook, a write hook, a contributed list field type, and a command whose result reuses the
-// entity's read schema. The `chore` entity is served over the fixture's tasks table, and only
-// by the write-path test's server (`writePath`); the other tests never load this file.
-import { defineServer } from '@hykr/api';
+// entity's read schema. The `chore` entity is served over the fixture's tasks table, by a
+// `chores` module that only the write-path test's server (`writePath`) adds; the other tests
+// never load this file.
+import { defineModule, defineServer } from '@hykr/api';
 import {
   type Contributions,
   CreatedBy,
   commandSpec,
-  defineDomain,
   defineListFieldType,
   entitySpec,
+  moduleSpec,
   type Principal,
 } from '@hykr/contracts';
 import {
@@ -31,10 +32,8 @@ import type { Access } from '@hykr/policy';
 import { Module } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { fixtureDomain } from '../../contracts.js';
 import { fixture } from '../../index.js';
 import { tasks } from '../../schema.js';
-import { FixtureModule } from '../../server.js';
 
 declare module '@hykr/contracts' {
   interface EntityTraits {
@@ -222,7 +221,6 @@ export const RenameChore = defineCommand(RenameChoreSpec, {
 });
 
 @Module({
-  imports: [FixtureModule],
   controllers: [entityController(ChoreDef), commandController(RenameChore)],
   providers: [...entityHandlers(ChoreDef), commandHandler(RenameChore)],
 })
@@ -258,14 +256,20 @@ export const writePathContributions: Partial<Contributions> = {
   ],
 };
 
+/** Chores, as a module over the tasks module's table: it declares no table of its own. */
+export const choresModule = defineModule({
+  ...moduleSpec({
+    name: 'chores',
+    dependsOn: ['tasks'],
+    entities: { chores: ChoreSpec },
+    commands: [RenameChoreSpec],
+  }),
+  server: WritePathModule,
+});
+
 /** The fixture plus chores, served with the plugin, the hook and the field type. */
 export const writePath = defineServer({
   ...fixture.definition,
-  domain: defineDomain({
-    name: fixtureDomain.name,
-    entities: { ...fixtureDomain.entities, chores: ChoreSpec },
-    commands: [...fixtureDomain.commands, RenameChoreSpec],
-  }),
-  module: WritePathModule,
+  modules: [...fixture.definition.modules, choresModule],
   contributes: writePathContributions,
 });
