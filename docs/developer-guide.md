@@ -793,6 +793,18 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   merging. `whatsapp` is required only when WhatsApp is a channel. `sent` ends the fallback order;
   `unavailable` or a final failure moves on; a failure for now retries that channel. A failure found
   later goes to `NotifyService.fallback(meta)`. An unregistered channel stops the start.
+- **Push.** `push` is the framework's own delivery channel (`features/push`, decisions in
+  `docs/decisions/A9B15.md`). A notification that lists it needs `push: { title, body, url? }`. The
+  app's `pushPlugin()` registers the device's Expo token (`POST /api/push/tokens`) for the person and
+  business. Push reaches only devices registered in the notification's business. No device, or Expo
+  refusing every device, moves on at once; a receipt error on every device (polled each minute by the
+  `push.receipts` schedule) moves on later through `NotifyService.fallback`. A gone device is forgotten.
+- **Live updates.** `GET /api/live` (server-sent events, people only) sends `{ name, type, id }` for
+  each committed event about a record the person may read now: an entity's record through its scoped
+  read (as `GET`), any other type through a contributed `liveResources` check (`approval` is the
+  framework's). The `live.relay` subscriber publishes events on Redis per business, ids only. A record
+  that is gone reaches only streams already told about it and the person who changed it. The app's
+  `livePlugin()` invalidates the matching queries, and everything after a reconnect.
 - **Inbound hooks.** Each WhatsApp message the code did not answer itself (buttons, keywords) passes
   `inboundHooks` before its turn: `{ handled: true }` keeps it out, `{ context }` adds lines the turn
   reads. A hook that throws is logged and skipped. A burst that says "delete my data" passes no hook:
@@ -1169,9 +1181,10 @@ export const MeetingReminder = defineTemplate({
 | `send` | `{ on: [events] }`: send now |
 | `when` | `(row) => boolean`: checked at send time |
 | `to` | `(row) => [{ userId } \| { customerId } \| { contactId } \| { roles }]` |
-| `channels` | Fallback order, e.g. `['whatsapp', 'email']`, or a registered delivery channel (section 5.10) |
+| `channels` | Fallback order, e.g. `['push', 'whatsapp', 'email']`; also any registered delivery channel (section 5.10) |
 | `whatsapp` | `{ template, params(row, reader) }`. Required when `'whatsapp'` is a channel (and for `onButton`, `approval`). |
 | `email` | `{ subject, body }`. Required when `'email'` is in `channels`. |
+| `push` | `{ title(row, reader), body(row, reader), url?(row) }`: what the phone shows, and the app path a tap opens. Required when `'push'` is in `channels`. |
 | `onButton` | `{ [buttonId]: (row) => { reschedule?: Date; reply?: Labels } \| undefined }` |
 | `approval` | `(row) => approvalId`: the quick replies `approve` and `reject` decide that approval |
 | `dedupe` | Required. `(row) => string`: one pending schedule per key |
@@ -1378,7 +1391,7 @@ These are not built. Each has a workaround for now.
 | File uploads | MinIO runs in compose, but no code uses it. There is no upload API yet. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, the S3 client, `pdfkit` with `harfbuzzjs` and the Noto fonts, `expo-server-sdk` (in `@hykr/api`), `@mastra/memory` and `@ai-sdk/openai-compatible` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-notifications`, `expo-device`, `expo-location`, `expo-image-picker` and `expo-document-picker` (in the mobile app). Each feature that uses one adds its code. The Expo modules' config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client. Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, the S3 client, `pdfkit` with `harfbuzzjs` and the Noto fonts, `@mastra/memory` and `@ai-sdk/openai-compatible` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-location`, `expo-image-picker` and `expo-document-picker` (in the mobile app). Each feature that uses one adds its code. Their config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client (`expo-notifications` is in, for push). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. |
 | Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |
@@ -1395,7 +1408,13 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter), but no framework feature fills them yet, and WebMCP declarations (`webmcp`) are not registered with the browser. |
+| Plugin slots in use | `livePlugin()` and `pushPlugin()` use the provider and sign-in slots. Routes, nav and nav filters have no framework feature yet, and WebMCP declarations (`webmcp`) are not registered with the browser. |
+| Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
+| Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
+| Push through FCM or APNs directly | Push goes through Expo's push service only. |
+| Live deletions for everyone | A deleted record reaches only streams already told about it and the person who deleted it; others see it go at their next refetch (focus, reconnect, their own write). |
+| Live back office | The back office still polls its inbox (10 s) and an open conversation (5 s): inbound messages and handoffs write no outbox events. |
+| Missed live events | A reconnect refetches every query; `Last-Event-ID` replay is not supported. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |
 | Per-module tools for the assistant | The assistant sees every module's tools on every turn. |
 | An approval sweeper | Expiry is checked when someone decides. Expired rows stay `pending` in `GET /api/approvals` until then. |

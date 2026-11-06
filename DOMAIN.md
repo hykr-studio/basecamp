@@ -9,9 +9,10 @@ application hands its modules to the framework in two places:
 
 - the server: `application/api/src/server.ts`, `defineServer({ name, persona, help, channel,
   modules, migrations, contributes })` from `@hykr/api`;
-- the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app modules catalog registry
-  config />` from `@hykr/app`, with the app's modules (`defineAppModule`), and the catalog and
-  registry built from every module's specs and views.
+- the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app modules plugins catalog
+  registry config />` from `@hykr/app`, with the app's modules (`defineAppModule`), the framework
+  plugins it uses (`livePlugin()`, `pushPlugin()`), and the catalog and registry built from every
+  module's specs and views.
 
 Two dependency-cruiser rules, run by `pnpm lint:deps`, keep it that way:
 `framework-never-imports-application` and `application-uses-public-framework-exports` (only
@@ -130,12 +131,16 @@ module sends on its own initiative is a template, declared in code:
   follows the entity events (`meeting.created`, `meeting.deleted`) and the module's own: a
   command's event implements `NamedEvent` (`eventName`, `row`) to be one. `to` names the
   recipients (a user, a customer, a contact, or everyone with a role); `channels` is the order
-  to try (`['whatsapp', 'email']`, or a delivery channel a feature registers, such as push);
-  `whatsapp` (the template) is needed only when WhatsApp is one of them; `onButton` answers its
-  quick replies (snooze).
+  to try (`['push', 'whatsapp', 'email']`, or a delivery channel a feature registers);
+  `whatsapp` (the template) is needed only when WhatsApp is one of them, `push`
+  (`{ title, body, url? }`) only when push is; `onButton` answers its quick replies (snooze).
 - The framework decides the rest per recipient: consent for the topic, quiet hours and the
   marketing cap (per business), the template in their language or English, and the next
   channel when WhatsApp can't be used or fails for good. No module code sends a message.
+
+Live updates need nothing from a module: every committed event about a record reaches the
+people who may read it (as ids), and the app refetches. A feature with records that are not
+entities contributes a `liveResources` check for its type, or its events are never sent.
 
 ## What a module adds for voice and languages
 

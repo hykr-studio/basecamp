@@ -1201,7 +1201,8 @@ export default function Pages() {
 
 `_layout.tsx`, `pages/[id].tsx` and `+not-found.tsx` stay as the scaffold made them. They
 render the framework's shell and screens: `_layout.tsx` passes `settings`, the modules barrel
-(`import * as modules from '@/modules'`), `catalog` and `registry` to `<AppShell>`, and
+(`import * as modules from '@/modules'`), `catalog`, `registry` and the framework plugins
+(`livePlugin()` for live updates, `pushPlugin()` for push notifications) to `<AppShell>`, and
 `+not-found.tsx` also serves the framework plugins' screens. Rename the app in `mobile/app.json` (`name`, `slug`,
 `scheme`, the iOS `bundleIdentifier` and the Android `package`). If you change `scheme`, change
 it in `_layout.tsx` too.
