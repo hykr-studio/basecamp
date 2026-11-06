@@ -9,6 +9,7 @@ import { SavedPageSpec } from './page.js';
 
 export * from './backoffice.js';
 export * from './handoff.js';
+export * from './members.js';
 export * from './notify.js';
 export * from './page.js';
 

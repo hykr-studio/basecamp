@@ -90,17 +90,23 @@ describe('roles and capabilities', () => {
         'channels.manage',
         'customers.message',
         'fixture.reports',
+        'members.manage',
+        'members.read',
         'queues.admin',
+        'records.grant',
       ],
     });
     expect((await inAna(ops)('GET', '/api/me')).body.capabilities).toEqual([
       'backoffice.use',
       'customers.message',
       'history.all',
+      'members.read',
+      'records.grant',
     ]);
     expect((await inAna(staffer)('GET', '/api/me')).body.capabilities).toEqual([
       'backoffice.use',
       'customers.message',
+      'members.read',
     ]);
     // A role the application added, with the capability it names.
     expect((await inAna(auditor)('GET', '/api/me')).body).toMatchObject({

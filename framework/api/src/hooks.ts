@@ -21,6 +21,8 @@ export {
   type AgentIdentityProvider,
   type EntityPlugin,
   entityPlugins,
+  type GrantKind,
+  grantKinds,
   identityProviders,
   projectRead,
   type ReadProjector,
