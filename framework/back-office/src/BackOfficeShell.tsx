@@ -24,6 +24,8 @@ const queryClient = new QueryClient({
 
 /** The server says what the person's roles allow here; the back office needs this one. */
 const BACK_OFFICE = FrameworkCapabilities.backOffice.name;
+/** And the Members screen this one. */
+const READ_MEMBERS = FrameworkCapabilities.readMembers.name;
 type Me = Awaited<ReturnType<ApiClient['me']>>;
 
 function SignIn({ title, onSignedIn }: { title: string; onSignedIn: (u: SessionUser) => void }) {
@@ -76,7 +78,7 @@ function SignIn({ title, onSignedIn }: { title: string; onSignedIn: (u: SessionU
   );
 }
 
-function NavLink({ href, label }: { href: '/' | '/templates'; label: string }) {
+function NavLink({ href, label }: { href: '/' | '/templates' | '/members'; label: string }) {
   const path = usePathname();
   const active = href === '/' ? path === '/' || path.startsWith('/conversation') : path === href;
   return (
@@ -112,6 +114,9 @@ function Shell({
         <Text className="mr-4 text-small text-muted">Back office</Text>
         <NavLink href="/" label="Conversations" />
         <NavLink href="/templates" label="Templates" />
+        {me.capabilities.includes(READ_MEMBERS) ? (
+          <NavLink href="/members" label="Members" />
+        ) : null}
         <View className="flex-1" />
         <Text className="hidden text-small text-muted md:flex">
           {user.name} · {me.roles.join(', ')}
@@ -119,6 +124,41 @@ function Shell({
         <Button label="Sign out" tone="quiet" onPress={onSignOut} />
       </View>
       <Slot />
+    </View>
+  );
+}
+
+/** Join a business with the code from an invitation (sent to this account's email). */
+function JoinWithCode({ onJoined }: { onJoined: () => void }) {
+  const [code, setCode] = useState('');
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const join = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.members.acceptInvite(code.trim());
+      queryClient.clear();
+      onJoined();
+    } catch (e) {
+      setError(reasonOf(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <View className="w-full max-w-sm gap-2">
+      <TextInput
+        accessibilityLabel="Invitation code"
+        placeholder="Invitation code"
+        autoCapitalize="none"
+        value={code}
+        onChangeText={setCode}
+        onSubmitEditing={join}
+        className="min-h-10 rounded-control border border-border bg-card px-3 text-body text-text"
+      />
+      <ErrorLine message={error} />
+      <Button label="Join" tone="primary" disabled={!code.trim()} busy={busy} onPress={join} />
     </View>
   );
 }
@@ -144,8 +184,10 @@ function Gate({ title }: { title: string }) {
       <View className="flex-1 items-center justify-center gap-3 bg-bg px-4">
         <Text className="text-heading font-heading text-text">This is for the business's team</Text>
         <Text className="max-w-sm text-center text-body text-muted">
-          {user.email} is not staff in this business. Ask the owner to add you.
+          {user.email} is not staff in this business. Ask the owner to add you, or enter the
+          invitation code they gave you.
         </Text>
+        <JoinWithCode onJoined={() => me.refetch()} />
         <Button label="Sign out" onPress={signOut} />
       </View>
     );
