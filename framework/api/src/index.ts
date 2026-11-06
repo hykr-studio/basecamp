@@ -4,6 +4,17 @@
 
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
+export { IntegrationsCapability } from './features/integrations/capability.js';
+export { openConnection } from './features/integrations/manage.service.js';
+export {
+  type ConnectorHandler,
+  type ConnectorHandlerContext,
+  connectorHandlers,
+  connectors,
+  defineConnectorHandler,
+  type InboundEventRecord,
+} from './features/integrations/registry.js';
+export { outboundPolicy } from './features/integrations/settings.js';
 export {
   type AgentIdentity,
   type AgentIdentityProvider,
