@@ -1161,7 +1161,9 @@ The deployment configures its models; each business chooses among them (`docs/de
   deployment cannot honour is a 400 listing every problem.
 - **In code.** `ModelPolicyService` (`@hykr/api`): `chatFor(tenantId, requested?)` and
   `embeddingFor(tenantId)` (an AI SDK embedding model, or `ModelRefused`). Anything that calls a model
-  for a business goes through it.
+  for a business goes through it. Another feature reaches it with `ctx.get(ModelPolicyService)` in a
+  job or subscriber, or `ModuleRef.get(ModelPolicyService, { strict: false })` in a provider. A turn
+  hook needs none of it: `after` gets `turn.model`, and `costOf(turn.model, outcome.usage)` prices it.
 - **Evals per model.** `basecamp eval --live --model <ref>` runs the evals on one registered model,
   before a business allows it.
 
