@@ -429,11 +429,11 @@ Every command write goes through `runWrite` in `framework/core/src/write/pipelin
 
 1. **Validate.** The input is parsed again with the full `spec.input`.
 2. **Idempotency.** An `idempotency-key` header is honoured.
-3. **Load and authorize.** `load` and `authorize` run inside one transaction.
+3. **Load and authorize.** `load` and `authorize` run inside one transaction. Write hooks (`writeHooks`) may then refuse or park, never loosen.
 4. **Deny.** The transaction rolls back. An `outcome: 'denied'` audit row is written and the caller gets `403 { error: 'forbidden', rule, reason }`.
 5. **Needs approval.** An `app.approvals` row is written, with an audit row with `outcome: 'needs_approval'`. The caller gets `{ status: 'needs_approval', approval }`.
 6. **Allow.** `run` executes. There is one audit row per `touched` entry, plus one for the command. The caller gets `{ status: 'done', value }`.
-7. **Events.** They are published only **after commit**.
+7. **Events.** Each `NamedEvent` is stored in the event outbox (`app.domain_events`) in the same transaction, then published in-process only **after commit**.
 
 Who decides a parked cancel? For a command, `approval` is an `ApproverRule` (`{ by, channels, minAssurance }`). It says **who** decides. Whether the command parks at all is decided only by `authorize`. Without `by`, `decidersFor` in `framework/core/src/write/approvals.ts` behaves like this:
 
@@ -1238,7 +1238,7 @@ FROM audit.events WHERE run_id = '<run-id>' ORDER BY at;
 
 1. **Fields a command sets must be in the update schema.** Otherwise `repo.update` drops them silently. Guard them with a rule that checks `ctx.via` (step 1 and step 3).
 2. **`BUSINESS_ACCESS` gives staff only their own rows.** A customer's records are owned by the default owner. If staff must act on them, give the entity its own `Access` with `'tenant'` for team roles.
-3. **Entity rules can only deny.** A rule that returns `needsApproval` is ignored. For conditional approval, use a command's `authorize`. `spec.approval` covers the unconditional or principal-based cases (`approval: { delete: (p) => p.actor.kind === 'agent' }`).
+3. **Entity rules park plain writes only.** A rule's `needsApproval` parks a CRUD write. Inside a command it is ignored (only its `deny` counts): the command's `authorize` decides whether the command parks. `spec.approval` covers the unconditional or principal-based cases (`approval: { delete: (p) => p.actor.kind === 'agent' }`).
 4. **A command's `approval` is who decides, not whether.** Without `by`, a person decides their own assistant's request. Set `by` when the team must decide.
 5. **Repo calls inside a command publish no entity events.** Publish a `NamedEvent` from `run` for notifications to react to.
 6. **Tests run `dist/`.** Run `pnpm turbo run build --filter=@application/api...` before `vitest run`.
