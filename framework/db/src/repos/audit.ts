@@ -3,7 +3,7 @@ import { events } from '../schema/audit.js';
 
 /** Who is writing, carried into every audit row. */
 export type WriteCtx = {
-  actorKind: 'user' | 'agent' | 'contact' | 'system';
+  actorKind: 'user' | 'agent' | 'contact' | 'system' | 'guest';
   actorId: string;
   actingFor?: string | null;
   /** The business it happened in, and whom for: a person ('user') or a contact ('contact'). */
@@ -13,7 +13,7 @@ export type WriteCtx = {
   requestId?: string | null;
   approvedBy?: string | null;
   agentVersion?: string | null;
-  /** How the turn reached the assistant: app, voice or whatsapp. */
+  /** How the call reached the server: app, voice, whatsapp, mcp, background… */
   channel?: string | null;
   rule?: string | null;
   reason?: string | null;

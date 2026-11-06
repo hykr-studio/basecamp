@@ -1,23 +1,31 @@
 import { z } from 'zod';
 import { Channel } from './voice.js';
 
-/** @deprecated The actor's role is replaced by the tenant roles below; kept for old payloads. */
-export const Role = z.enum(['admin', 'ops', 'owner', 'operator', 'builder', 'agent']);
+/** A role's name: lower case, letters, digits and underscores ('owner', 'site_lead'). */
+export const ROLE_NAME = /^[a-z][a-z0-9_]{0,31}$/;
 
 /**
- * What someone may do in a business (a tenant). A person can hold several: the business
- * owner, ops (sees and decides for the whole tenant), staff, and customer (their own records).
+ * A role someone holds in a business (a tenant): a name from the role registry (`roles` in
+ * roles.ts). A person can hold several. A name nobody registered grants nothing.
  */
-export const TenantRole = z.enum(['owner', 'admin', 'ops', 'staff', 'customer']);
+export const TenantRole = z.string().regex(ROLE_NAME);
 export type TenantRole = z.infer<typeof TenantRole>;
 
 /**
- * How sure we are who this is: a signed-in session, or only a WhatsApp number (WhatsApp vouches
- * for the number, nothing more). Ordered: anything needing 'session' refuses 'whatsapp_number'.
+ * Who makes the call: a person, an agent acting for one, the server's own background work
+ * (`systemPrincipal()` in @hykr/core, never from a request), or a guest holding a share link.
  */
-export const Assurance = z.enum(['whatsapp_number', 'session']);
+export const ActorKind = z.enum(['user', 'agent', 'system', 'guest']);
+export type ActorKind = z.infer<typeof ActorKind>;
+
+/**
+ * How sure we are who this is, weakest first: only a WhatsApp number (WhatsApp vouches for
+ * the number, nothing more), a one-time code they just entered, or a signed-in session.
+ * Anything needing 'session' refuses the other two.
+ */
+export const Assurance = z.enum(['whatsapp_number', 'otp', 'session']);
 export type Assurance = z.infer<typeof Assurance>;
-export const ASSURANCE_ORDER: readonly Assurance[] = ['whatsapp_number', 'session'];
+export const ASSURANCE_ORDER: readonly Assurance[] = ['whatsapp_number', 'otp', 'session'];
 export const atLeast = (have: Assurance | undefined, need: Assurance) =>
   ASSURANCE_ORDER.indexOf(have ?? 'whatsapp_number') >= ASSURANCE_ORDER.indexOf(need);
 
@@ -29,7 +37,12 @@ export const Subject = z.discriminatedUnion('kind', [
 export type Subject = z.infer<typeof Subject>;
 
 export const Principal = z.object({
-  actor: z.object({ kind: z.enum(['user', 'agent']), id: z.string(), role: Role }),
+  actor: z.object({
+    kind: ActorKind,
+    id: z.string(),
+    /** Unused. Only an old line in the WhatsApp inbound processor still sets it (decisions F4). */
+    role: z.string().optional(),
+  }),
   /** Whom the agent acts for; userId for a person, contactId for a contact without an account. */
   actingFor: z
     .object({ userId: z.string().optional(), contactId: z.string().optional() })
@@ -41,6 +54,12 @@ export const Principal = z.object({
   subject: Subject.optional(),
   tenantId: z.string().optional(),
   roles: z.array(TenantRole).optional(),
+  /**
+   * What its roles allow in this business, by capability name ('backoffice.use'). Worked out
+   * by the server when it resolves the request (or given to `systemPrincipal`), never sent by
+   * a client. Absent: nothing. Check it with `can(p, capability)` from @hykr/policy.
+   */
+  capabilities: z.array(z.string()).optional(),
   /** The customer record this principal is, when they act as a customer. */
   customerId: z.string().optional(),
   assurance: Assurance.optional(),
@@ -49,7 +68,7 @@ export const Principal = z.object({
   scopes: z.array(z.string()),
   /** Set when a person approved this parked operation; it is being replayed for them. */
   approvedBy: z.string().optional(),
-  /** How the turn reached the assistant (app, voice, whatsapp), carried into every audit row. */
+  /** How the call reached the server (app, voice, whatsapp, mcp…), carried into every audit row. */
   channel: Channel.optional(),
 });
 export type Principal = z.infer<typeof Principal>;
@@ -72,6 +91,8 @@ export const Me = z.object({
   userId: z.string(),
   tenantId: z.string(),
   roles: z.array(TenantRole),
+  /** What those roles allow here, by name: what a client checks before showing a feature. */
+  capabilities: z.array(z.string()),
   customerId: z.string().nullable(),
 });
 export type Me = z.infer<typeof Me>;
@@ -97,3 +118,12 @@ export const TenantSettings = z.object({
   features: z.record(z.string(), z.boolean()).default({}),
 });
 export type TenantSettings = z.infer<typeof TenantSettings>;
+
+/**
+ * Is this feature switched on in these settings? Only `true` is on: a key that is absent, or
+ * any other value, is off. `TenantConfigService.isEnabled` in @hykr/core reads it per business.
+ */
+export const featureEnabled = (
+  settings: { features?: Readonly<Record<string, unknown>> } | undefined,
+  key: string,
+): boolean => settings?.features?.[key] === true;

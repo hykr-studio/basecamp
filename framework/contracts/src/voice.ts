@@ -5,9 +5,26 @@ import { z } from 'zod';
 export const Lang = z.enum(LANGS);
 export type Lang = z.infer<typeof Lang>;
 
-/** How a turn reached the assistant. Set by who called (never by the request body). */
-export const Channel = z.enum(['app', 'voice', 'whatsapp']);
+/**
+ * How a call reached the server. Set by who called (never by the request body): the app,
+ * voice and WhatsApp (the assistant's turns), an MCP client, a page's WebMCP tools, a direct
+ * API client, the server's own background work, or a share link.
+ */
+export const Channel = z.enum([
+  'app',
+  'voice',
+  'whatsapp',
+  'mcp',
+  'webmcp',
+  'api',
+  'background',
+  'share',
+]);
 export type Channel = z.infer<typeof Channel>;
+
+/** The channels an assistant turn runs on: the only ones the assistant may forward (x-channel). */
+export const TURN_CHANNELS = ['app', 'voice', 'whatsapp'] as const satisfies readonly Channel[];
+export type TurnChannel = (typeof TURN_CHANNELS)[number];
 
 /** A voice session's language: detected per turn ('auto'), or pinned. */
 export const VoiceLang = z.enum(['auto', 'en-IN', 'hi-IN', 'te-IN']);

@@ -18,7 +18,7 @@ export const Approval = z.object({
   /** The parked input, so the person can read exactly what will run (e.g. a drafted close). */
   input: z.unknown(),
   /** Who asked: the person, or the assistant acting for them. */
-  requestedBy: z.enum(['user', 'agent']),
+  requestedBy: z.enum(['user', 'agent', 'system', 'guest']),
   expiresAt: z.iso.datetime(),
   /** Set when an approved replay was refused, e.g. the meeting was closed meanwhile. */
   failureReason: z.string().nullable(),

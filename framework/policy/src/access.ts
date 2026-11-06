@@ -1,4 +1,4 @@
-import { type Assurance, atLeast, type Principal, type TenantRole } from '@hykr/contracts';
+import { type Assurance, atLeast, type Principal } from '@hykr/contracts';
 import { subjectOf } from './subject.js';
 
 /**
@@ -8,7 +8,8 @@ import { subjectOf } from './subject.js';
  */
 export type Grant = 'own' | 'customer' | 'tenant';
 export type AccessRule = Grant | { grant: Grant; minAssurance?: Assurance };
-export type RoleAccess = Partial<Record<TenantRole, AccessRule>>;
+/** Per role name (a registered role, see `roles` in @hykr/contracts): what it reaches. */
+export type RoleAccess = Readonly<Record<string, AccessRule>>;
 
 /** An entity's access: who reads which rows, who writes which. */
 export type Access = { read: RoleAccess; write: RoleAccess };
@@ -28,15 +29,19 @@ export type AccessDecision =
 /**
  * What this principal's roles allow, for reading or writing. A grant only counts if the
  * principal has what it needs: 'own' a person with an account, 'customer' a customer record.
+ * The server's own background work (`systemPrincipal()`, never from a request) reaches every
+ * row of its one business; entity rules, approvals and audit still apply to it.
  * Pure: reads roles, subject, customer and assurance; never addresses or phone numbers.
  */
 export function accessFor(p: Principal, access: Access, op: 'read' | 'write'): AccessDecision {
+  if (p.actor.kind === 'system')
+    return p.tenantId ? { kind: 'grants', grants: ['tenant'] } : { kind: 'none' };
   const rules = access[op];
   const subject = subjectOf(p);
   const grants = new Set<Grant>();
   let need: Assurance | undefined;
   for (const role of p.roles ?? []) {
-    const rule = rules[role];
+    const rule = Object.hasOwn(rules, role) ? rules[role] : undefined;
     if (!rule) continue;
     const { grant, minAssurance } = typeof rule === 'string' ? { grant: rule } : rule;
     if (grant === 'own' && subject?.kind !== 'user') continue;
