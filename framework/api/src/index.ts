@@ -48,6 +48,8 @@ export {
   identityProviders,
   inboundHooks,
   type Jobs,
+  type LevelRule,
+  levelRules,
   type NotificationMeta,
   projectRead,
   type QueueDef,

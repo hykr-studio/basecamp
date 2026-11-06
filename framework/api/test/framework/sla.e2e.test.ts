@@ -145,7 +145,7 @@ describe('the sweeper', () => {
     expect((await timer(t.id, 'fixture.tickets.respond')).endedAt).not.toBeNull();
   });
 
-  it('a breach with roles carries them on its event, for the notification', async () => {
+  it('a breach carries who should hear about it on its event, for the notification', async () => {
     const t = await create(owner, 'Unanswered');
     const respond = await timer(t.id, 'fixture.tickets.respond');
     // Its escalation's clock (1 hour) would run out first and move it on: later, for this one.
@@ -161,7 +161,7 @@ describe('the sweeper', () => {
     const names = rows.map((r) => r.row.sla.name).sort();
     expect(names).toContain('fixture.tickets.respond');
     const respondEvent = rows.find((r) => r.row.sla.name === 'fixture.tickets.respond');
-    expect(respondEvent.row.sla.escalate).toEqual({ roles: ['owner'] });
+    expect(respondEvent.row.sla.escalate).toEqual({ notify: ['fixture.tickets.close'] });
     expect(respondEvent.row.title).toBe('Unanswered');
   });
 

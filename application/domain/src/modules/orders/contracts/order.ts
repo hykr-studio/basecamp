@@ -107,7 +107,6 @@ export const ORDER_STATES: StatesTrait = {
       to: 'submitted',
       label: label('Submit', 'भेजें', 'సమర్పించు'),
       approval: agentAsks,
-      tier: 2,
     },
     {
       name: 'approve',
@@ -115,8 +114,16 @@ export const ORDER_STATES: StatesTrait = {
       to: 'approved',
       label: label('Approve', 'मंज़ूर करें', 'ఆమోదించు'),
       can: 'orders.approve',
-      approval: { when: agentAsks, by: ['owner'], channels: ['app'], minAssurance: 'session' },
-      tier: 3,
+      // The assistant's approve waits for the person it acts for (who may approve orders), in
+      // the app, signed in, at the application's `irreversible` level: an approved order is
+      // the contract.
+      approval: {
+        when: agentAsks,
+        by: 'requester',
+        channels: ['app'],
+        minAssurance: 'session',
+        level: 'irreversible',
+      },
     },
     {
       name: 'fulfil',
@@ -132,7 +139,6 @@ export const ORDER_STATES: StatesTrait = {
       label: label('Cancel', 'रद्द करें', 'రద్దు చేయి'),
       fields: ['cancelReason'],
       approval: agentAsks,
-      tier: 2,
     },
     // The server's own moves: the expiry SLA, and order.revise freezing the old revision.
     { name: 'expire', from: 'submitted', to: 'expired', expose: 'system' },
@@ -144,7 +150,8 @@ export const ORDER_STATES: StatesTrait = {
       state: 'submitted',
       within: '24h',
       hours: 'business',
-      escalate: { roles: ['owner'] },
+      // Whoever may approve orders hears that one is waiting.
+      escalate: { notify: ['orders.approve'] },
     },
     {
       name: 'orders.expiry',

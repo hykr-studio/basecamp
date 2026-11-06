@@ -5,7 +5,6 @@
 // docs/decisions/B6B4.md.
 import { type Labels, type Lang, pick } from '@hykr/i18n';
 import { z } from 'zod';
-import type { Tier } from '../authorize.js';
 import { reserveRoutes } from '../catalog.js';
 import type { Principal } from '../principal.js';
 import type { ApprovalRule, EntitySpec } from './spec.js';
@@ -67,16 +66,23 @@ export interface TransitionDecl {
   ) => GuardRefusal | null;
   /** When it waits for someone to approve it, and who decides (the object form). */
   approval?: ApprovalRule;
-  /** What is at stake when it waits: the approval level it parks at. */
-  tier?: Tier;
+  /**
+   * What is at stake: one of the application's approval levels (`defineApprovalLevel`). Its
+   * policy, with the business's settings, says whether the move waits and for whom, and a park
+   * names it. Without it, only `approval` makes the move wait.
+   */
+  level?: string;
   /** The event it stores. Default: '<entity>.<name>'. */
   event?: string;
 }
 
 /** What an SLA does when its time is up. */
 export interface SlaEscalation {
-  /** Who should hear about it: carried on the breach event for the application's notification. */
-  roles?: readonly string[];
+  /**
+   * Who should hear about it: holders of these capabilities, carried on the breach event for the
+   * application's notification (`{ capability }` recipients).
+   */
+  notify?: readonly string[];
   /** A transition out of the SLA's state, run by the server itself. */
   transition?: string;
 }

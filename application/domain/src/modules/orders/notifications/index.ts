@@ -12,7 +12,7 @@ type BreachedOrder = Row & {
   title: string;
   total: number;
   currency: string;
-  sla: { id: string; name: string; dueAt: string; escalate: { roles?: string[] } | null };
+  sla: { id: string; name: string; dueAt: string; escalate: { notify?: string[] } | null };
 };
 
 const WAITING: Labels = {
@@ -31,14 +31,14 @@ const total = (o: BreachedOrder, lang: Parameters<typeof moneyText>[1]) =>
 
 /**
  * A submitted order nobody decided within its `orders.decision` SLA (24 business hours): to the
- * roles the SLA escalates to, on their phone, else by email.
+ * people the SLA escalates to (whoever may approve orders), on their phone, else by email.
  */
 export const OrderDecisionOverdue = defineNotification<BreachedOrder>({
   key: 'order.decision-overdue',
   topic: 'service',
   send: { on: ['order.sla.breached'] },
   when: (o) => o.sla?.name === 'orders.decision',
-  to: (o) => [{ roles: [...(o.sla.escalate?.roles ?? ['owner'])] }],
+  to: (o) => (o.sla.escalate?.notify ?? ['orders.approve']).map((capability) => ({ capability })),
   channels: ['push', 'email'],
   push: {
     title: (o, r) => `${o.number} ${pick(WAITING, r.lang)}`,

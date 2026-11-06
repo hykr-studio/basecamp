@@ -192,7 +192,7 @@ export const slaHook: WriteHook = {
 /**
  * '<entity>.sla.breached': an SLA ran out while its record was still in the state. The row is
  * the record as stored, with `sla` (the SLA's name, state, start, due time and escalation, whose
- * `roles` an application's notification sends to).
+ * `notify`: the capabilities whose holders an application's notification tells).
  */
 export class SlaBreached implements NamedEvent {
   readonly eventName: string;
@@ -271,7 +271,10 @@ export async function sweepSla(
       }
       const system: Principal = systemPrincipal({ tenantId: timer.tenantId, job: 'sla.escalate' });
       const requestId = `sla:${timer.id}`;
-      const escalate = (timer.escalate ?? null) as { roles?: string[]; transition?: string } | null;
+      const escalate = (timer.escalate ?? null) as {
+        notify?: string[];
+        transition?: string;
+      } | null;
       const breach = new SlaBreached(def.name, {
         ...row,
         sla: {

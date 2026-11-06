@@ -24,9 +24,16 @@ export const approvals = app.table(
     /** Who asked, when they have an account; a contact's request names the contact instead. */
     ownerId: text('owner_id').references(() => user.id),
     requesterContactId: text('requester_contact_id'),
-    /** Who decides: one person (their own assistant's request), or anyone with these roles. */
+    /**
+     * Who decides: one person (the requester, for their own assistant's request, or a person
+     * the policy names), or anyone holding `approverCapability`, never the requester.
+     */
     approverUserId: text('approver_user_id'),
+    /** No longer written (decisions A5): deciders are chosen by capability. */
     approverRoles: text('approver_roles').array().notNull().default(sql`'{}'::text[]`),
+    approverCapability: text('approver_capability'),
+    /** The application's approval level it parked at ('internal'), when one was named. */
+    level: text('level'),
     /** Where it may be decided (null: anywhere the decider may act). */
     approverChannels: text('approver_channels').array(),
     minAssurance: text('min_assurance'),

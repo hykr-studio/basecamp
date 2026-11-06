@@ -135,16 +135,16 @@ describe('a record moves only by its transitions', () => {
 });
 
 describe("the assistant's transitions wait at their level", () => {
-  it('parks a cancel at level 2 for the person, audits it, and runs it on approval', async () => {
+  it('parks a cancel for the person, audits it, and runs it on approval', async () => {
     const t = await create(owner, 'Old request');
     const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
     const parked = await asks('POST', `/api/transitions/tickets/${t.id}/cancel`, {});
     expect(parked.body.status).toBe('needs_approval');
     expect(parked.body.approval).toMatchObject({
-      tier: 2,
       action: 'ticket.transition',
       input: { transition: 'cancel' },
     });
+    expect(parked.body.approval.level ?? null).toBeNull();
     expect(parked.body.approval.summary).toBe(
       'Cancel ticket "Old request" (v1, version 1): open → cancelled',
     );
@@ -160,16 +160,25 @@ describe("the assistant's transitions wait at their level", () => {
     expect(e.row.status).toBe('cancelled');
   });
 
-  it('parks a close at level 3 for an owner', async () => {
+  it('parks a close at its level, for whoever may close tickets, in the app', async () => {
     const t = await create(owner, 'To close');
     await move(owner, t.id, 'resolve', { resolution: 'Yes' });
     const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
     const parked = await asks('POST', `/api/transitions/tickets/${t.id}/close`, {});
-    expect(parked.body.approval).toMatchObject({ tier: 3 });
-    const { rows } = await pool.query('select approver_roles from app.approvals where id = $1', [
-      parked.body.approval.id,
-    ]);
-    expect(rows[0].approver_roles).toEqual(['owner']);
+    expect(parked.body.approval.level).toMatchObject({ name: 'fixture_tickets_final', rank: 3 });
+    const { rows } = await pool.query(
+      'select level, approver_capability, approver_channels from app.approvals where id = $1',
+      [parked.body.approval.id],
+    );
+    expect(rows[0]).toEqual({
+      level: 'fixture_tickets_final',
+      approver_capability: 'fixture.tickets.close',
+      approver_channels: ['app'],
+    });
+    // A person's own close at that level runs (its policy waits only for others).
+    const theirs = await create(owner, 'Closed by hand');
+    await move(owner, theirs.id, 'resolve', { resolution: 'Yes' });
+    expect((await move(owner, theirs.id, 'close')).body.value.status).toBe('closed');
   });
 
   it('a transition approved after the record moved on fails with the reason', async () => {

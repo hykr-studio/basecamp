@@ -7,6 +7,7 @@ import {
   type Contributions,
   CreatedBy,
   commandSpec,
+  defineApprovalLevel,
   defineCapability,
   defineRole,
   entitySpec,
@@ -123,15 +124,14 @@ export const TicketSpec = entitySpec({
           from: 'resolved',
           to: 'closed',
           can: 'fixture.tickets.close',
-          approval: { when: (p) => p.actor.kind === 'agent', by: ['owner'] },
-          tier: 3,
+          // Its level's policy: the assistant's close waits, for whoever may close tickets.
+          level: 'fixture_tickets_final',
         },
         {
           name: 'cancel',
           from: ['open', 'active'],
           to: 'cancelled',
           approval: (p) => p.actor.kind === 'agent',
-          tier: 2,
           event: 'ticket.dropped',
         },
         { name: 'escalate', from: 'open', to: 'escalated', expose: 'system', guard: held },
@@ -143,7 +143,7 @@ export const TicketSpec = entitySpec({
           state: 'open',
           within: '2h',
           hours: 'business',
-          escalate: { roles: ['owner'] },
+          escalate: { notify: ['fixture.tickets.close'] },
         },
         {
           name: 'fixture.tickets.escalate',
@@ -282,7 +282,7 @@ export const PlanTicket = defineCommand(PlanTicketSpec, {
   pin: (ticket) => [{ def: TicketDef, row: ticket }],
   authorize: (p) =>
     p.actor.kind === 'agent'
-      ? needsApproval('agent_plans', 'A plan by the assistant waits for you', { tier: 2 })
+      ? needsApproval('agent_plans', 'A plan by the assistant waits for you')
       : allow('person_plans'),
   summarize: (input, ticket) => `Plan "${ticket.title}": ${input.steps.length} steps`,
   run: async ({ tx, principal, input, loaded, via }) => {
@@ -304,7 +304,7 @@ export const ReviseTicket = defineCommand(ReviseTicketSpec, {
     if (ticket.status !== 'resolved')
       return deny('revise_resolved_only', 'Only a resolved ticket is revised');
     return p.actor.kind === 'agent'
-      ? needsApproval('agent_revises', 'A revision by the assistant waits for you', { tier: 2 })
+      ? needsApproval('agent_revises', 'A revision by the assistant waits for you')
       : allow('person_revises');
   },
   summarize: (_input, ticket) => `Revise "${ticket.title}" (v${ticket.revision})`,
@@ -358,6 +358,20 @@ export const notesHidden: ReadProjector = {
   },
 };
 
+/**
+ * The tickets' one approval level: a move at it runs for a person, and waits when anyone else
+ * asks (the assistant), for whoever may close tickets (never the requester), in the app.
+ */
+export const FinalLevel = defineApprovalLevel({
+  name: 'fixture_tickets_final',
+  rank: 3,
+  label: label('Final'),
+  policy: {
+    parks: (p) => p.actor.kind !== 'user',
+    approver: { by: { capability: 'fixture.tickets.close' }, channels: ['app'] },
+  },
+});
+
 /** Reads every ticket, writes none. */
 export const Viewer = defineRole({ name: 'fixture_viewer', label: label('Viewer') });
 
@@ -375,6 +389,7 @@ export const statesContributions: Partial<Contributions> = {
     }),
   ],
   roles: [Viewer],
+  approvalLevels: [FinalLevel],
   readProjectors: [notesHidden],
 };
 

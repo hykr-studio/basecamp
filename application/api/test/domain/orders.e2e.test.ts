@@ -305,22 +305,23 @@ describe("an order's life", () => {
     expect((await move(owner, v2.id, 'fulfil')).body.value.status).toBe('fulfilled');
   });
 
-  it("the assistant's submit waits for the person, its approve for an owner in the app", async () => {
+  it("the assistant's submit waits for the person; its approve too, in the app, at the irreversible level", async () => {
     const draft = (await save(owner, { title: 'Asked to move', items: rooms })).body.value.order;
     const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
     const submit = await asks('POST', `/api/transitions/orders/${draft.id}/submit`, {});
-    expect(submit.body.approval).toMatchObject({ tier: 2, input: { transition: 'submit' } });
+    expect(submit.body.approval).toMatchObject({ input: { transition: 'submit' } });
     expect(
       (await owner.call('POST', `/api/approvals/${submit.body.approval.id}/approve`)).body.status,
     ).toBe('approved');
     const approve = await asks('POST', `/api/transitions/orders/${draft.id}/approve`, {});
-    expect(approve.body.approval).toMatchObject({ tier: 3 });
+    expect(approve.body.approval.level).toMatchObject({ name: 'irreversible' });
     const { rows } = await pool.query(
-      'select approver_roles, approver_channels, min_assurance from app.approvals where id = $1',
+      'select approver_user_id, approver_channels, min_assurance from app.approvals where id = $1',
       [approve.body.approval.id],
     );
+    // The person it is for may approve orders: they decide, in the app, signed in.
     expect(rows[0]).toEqual({
-      approver_roles: ['owner'],
+      approver_user_id: owner.id,
       approver_channels: ['app'],
       min_assurance: 'session',
     });
@@ -403,7 +404,7 @@ describe('who decides, and who sees the cost', () => {
     const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
     const parked = await asks('POST', '/api/orders/save', { title: 'Asked', items: rooms });
     expect(parked.body.status).toBe('needs_approval');
-    expect(parked.body.approval).toMatchObject({ tier: 2, amount: 497_051 });
+    expect(parked.body.approval).toMatchObject({ amount: inr(497_051) });
     expect(parked.body.approval.summary).toContain('5 items');
     const approved = await owner.call('POST', `/api/approvals/${parked.body.approval.id}/approve`);
     expect(approved.body.status).toBe('approved');
@@ -418,7 +419,11 @@ describe('who decides, and who sees the cost', () => {
     const big = [{ ref: 'a', title: 'Marble', quantity: 100, unitPrice: '500' }];
     const parked = await save(staff, { title: 'Big', items: big }, inTenant());
     expect(parked.body.status).toBe('needs_approval');
-    expect(parked.body.approval).toMatchObject({ tier: 3, rule: 'order_over_limit' });
+    expect(parked.body.approval).toMatchObject({
+      level: { name: 'irreversible' },
+      amount: inr(5_000_000),
+      rule: 'order_over_limit',
+    });
     // Staff cannot decide it; the owner can.
     const byStaff = await staff.call(
       'POST',

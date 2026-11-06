@@ -43,7 +43,9 @@ const machine: StatesTrait = {
       fields: ['reason'],
     },
   ],
-  slas: [{ name: 'unit.reply', state: 'sent', within: '4h', escalate: { roles: ['owner'] } }],
+  slas: [
+    { name: 'unit.reply', state: 'sent', within: '4h', escalate: { notify: ['unit.decide'] } },
+  ],
 };
 
 const specWith = (states: StatesTrait, versioned?: object) =>

@@ -13,7 +13,9 @@ function moves(spec: EntitySpec): string {
     .map((t) => {
       const from = typeof t.from === 'string' ? t.from : t.from.join(' or ');
       const notes = [
-        t.approval !== undefined && t.approval !== 'never' ? 'may wait for approval' : '',
+        (t.approval !== undefined && t.approval !== 'never') || t.level !== undefined
+          ? 'may wait for approval'
+          : '',
         t.requires?.length ? `needs ${t.requires.join(', ')}` : '',
       ].filter(Boolean);
       return `${t.name} (${from} → ${t.to}${notes.length ? `; ${notes.join('; ')}` : ''})`;

@@ -42,9 +42,7 @@ export const ReviseOrder = defineCommand(ReviseOrderSpec, {
           : `This order is ${order.status}: it can't be revised`,
       );
     return p.actor.kind === 'agent'
-      ? needsApproval('agent_revises_order', 'Revising an order for you needs your approval', {
-          tier: 2,
-        })
+      ? needsApproval('agent_revises_order', 'Revising an order for you needs your approval')
       : allow('person_revises_order');
   },
   summarize: (_input, order) => `Revise order ${order.number} (v${order.revision})`,

@@ -19,7 +19,7 @@ import { can } from '@hykr/policy';
 import { NotFoundException } from '@nestjs/common';
 import { and, type Column, eq, getTableColumns, sql, type Table } from 'drizzle-orm';
 import { z } from 'zod';
-import { allow, deny, needsApproval, RuleDenied } from '../authorize.js';
+import { allow, atLevel, deny, needsApproval, RuleDenied } from '../authorize.js';
 import type { NamedEvent } from '../entity/cqrs-classes.js';
 import { type AnyEntityDef, type RuleContext, tenantOf } from '../entity/define-entity.js';
 import { entityDefs } from '../entity/registry.js';
@@ -233,7 +233,8 @@ async function lock(tx: Tx, p: Principal, def: AnyEntityDef, id: string) {
  * transition tool: `<entity>.transition`, with `{ id, transition }` (and, once parked, the pins
  * of the record) as its args and the transition's fields as its input. It loads and locks the
  * record (404 if not theirs), checks they may write it, then the transition's checks and its
- * approval (parks at its tier, decided by its approval rule's deciders), and moves it.
+ * approval (parks at its level, decided by its approval rule's deciders, or by the level's
+ * policy), and moves it.
  */
 export function transitionOp(
   def: AnyEntityDef,
@@ -278,9 +279,12 @@ export function transitionOp(
         return needsApproval(
           `${def.name}_${decl.name}_needs_approval`,
           `"${transitionLabel(decl, 'en')}" on a ${label} waits for approval`,
-          decl.tier !== undefined ? { tier: decl.tier } : undefined,
+          decl.level !== undefined ? { level: decl.level } : undefined,
         );
-      return allow(`${def.name}_${decl.name}`, `${transitionLabel(decl, 'en')} a ${label}`);
+      const rule = `${def.name}_${decl.name}`;
+      const reason = `${transitionLabel(decl, 'en')} a ${label}`;
+      // At a level, the level's policy (and the business's settings) says whether it waits.
+      return decl.level !== undefined ? atLevel(decl.level, rule, reason) : allow(rule, reason);
     },
     summarize(_input, row) {
       const decl = t as TransitionDecl;

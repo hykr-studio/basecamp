@@ -1,3 +1,4 @@
+export * from './approvals.js';
 export * from './authorize.js';
 export * from './catalog.js';
 export * from './channel-rules.js';

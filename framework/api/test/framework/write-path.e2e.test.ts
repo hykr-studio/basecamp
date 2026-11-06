@@ -110,38 +110,51 @@ describe('entity plugins', () => {
     );
   });
 
-  it("a plugin's decision parks with a tier and a named approver role; the park is audited", async () => {
+  it("a plugin's decision parks at a level, decided by a capability; the park is audited", async () => {
     const made = await chore(owner, { title: 'Photos' });
     const id = made.body.value.id;
     const res = await owner.call('PATCH', `/api/chores/${id}`, { title: '[review] Send photos' });
+    const level = { name: 'fixture_review', rank: 2, label: { en: 'Review' } };
     expect(res.body).toMatchObject({
       status: 'needs_approval',
-      approval: { rule: 'chore_review', tier: 2 },
+      approval: { rule: 'chore_review', level, canDecide: false },
     });
     const approvalId = res.body.approval.id;
     const { rows } = await pool.query(
-      'select approver_user_id, approver_roles from app.approvals where id = $1',
+      'select approver_user_id, approver_capability, level from app.approvals where id = $1',
       [approvalId],
     );
-    expect(rows[0]).toEqual({ approver_user_id: null, approver_roles: ['admin'] });
+    expect(rows[0]).toEqual({
+      approver_user_id: null,
+      approver_capability: 'fixture.chores.review',
+      level: 'fixture_review',
+    });
     expect(await audit(id)).toContainEqual(
       expect.objectContaining({
         action: 'chore.update',
         outcome: 'needs_approval',
-        after: expect.objectContaining({ approvalId, tier: 2 }),
+        after: expect.objectContaining({ approvalId, level: 'fixture_review' }),
       }),
     );
-    // The named role decides; the requester may not.
-    expect((await owner.call('GET', `/api/approvals/${approvalId}`)).status).toBe(404);
+    // The capability's holders decide; the requester may look, never decide.
+    const own = await owner.call('GET', `/api/approvals/${approvalId}`);
+    expect(own.body).toMatchObject({ canDecide: false, decider: { by: 'capability' } });
+    const ownTry = await owner.call('POST', `/api/approvals/${approvalId}/approve`);
+    expect(ownTry.status).toBe(403);
+    expect(ownTry.body).toMatchObject({ rule: 'own_request' });
     const seen = await admin.call('GET', `/api/approvals/${approvalId}`, undefined, inTenant());
-    expect(seen.body).toMatchObject({ tier: 2, input: { title: '[review] Send photos' } });
+    expect(seen.body).toMatchObject({
+      level,
+      canDecide: true,
+      input: { title: '[review] Send photos' },
+    });
     const approved = await admin.call(
       'POST',
       `/api/approvals/${approvalId}/approve`,
       undefined,
       inTenant(),
     );
-    expect(approved.body).toMatchObject({ status: 'approved', tier: 2 });
+    expect(approved.body).toMatchObject({ status: 'approved', level });
     expect((await owner.call('GET', `/api/chores/${id}`)).body.title).toBe('[review] Send photos');
   });
 
@@ -414,9 +427,10 @@ describe('the durable event outbox', () => {
     expect(stored).toEqual([{ queues: process.env.BULL_PREFIX }]);
   });
 
-  it("holds back a tier 1 write's events for its undo window", async () => {
+  it('holds back the events of a write with an undo window, and answers with its undo', async () => {
     const made = await chore(owner, { title: 'Undoable' });
-    await owner.call('PATCH', `/api/chores/${made.body.value.id}`, { done: true });
+    const done = await owner.call('PATCH', `/api/chores/${made.body.value.id}`, { done: true });
+    expect(done.body).toMatchObject({ status: 'done', undo: { id: expect.any(String) } });
     const updated = (await eventsOf(made.body.value.id)).find((e) => e.name === 'chore.updated');
     expect(updated?.availableAt).toBeDefined();
     const held = Date.parse(updated?.availableAt ?? '') - Date.parse(updated?.occurredAt ?? '');

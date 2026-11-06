@@ -1,3 +1,4 @@
+export * from './approvals.js';
 export * from './business-hours.js';
 export * from './files.js';
 export * from './models.js';
