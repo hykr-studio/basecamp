@@ -1021,8 +1021,12 @@ does not change a business's setup.
   `POST /api/settings/domains { origin }` returns a token; the business publishes it as a TXT record
   at `_basecamp-verify.<host>`, then `POST /api/settings/domains/:id/verify`. Only a verified origin
   is trusted, for CORS (`AuthPlugin.originAllowed`) and Better Auth (a dynamic `trustedOrigins`), and
-  `GET /api/branding/public` (no session) serves its branding to the sign-in screen. One origin
-  belongs to one business (409).
+  `GET /api/branding/public?origin=` (no session; `api.settings.publicBranding(origin)`) returns its
+  name, logo and colours, which the back office's sign-in shows; the app's sign-in does not ask yet
+  (section 14). One origin belongs to one business (409). Anyone can ask about an origin, so each
+  process holds a copy of every verified origin (loaded at most every 30 seconds, and again after a
+  domain changes here) and never looks up anything that is not an exact https origin: a question
+  costs no query and keeps nothing.
 - **Shared records.** An entity opts in with the trait `shared: {}`, `...SharedFields` in its read
   schema, `...SharedFromInput` in create, `sharedId: sharedFromColumn()` with a unique index on
   `(tenant_id, shared_id)`, and `defineSharedEntity(spec, config)` instead of `defineEntity`. Rows of
@@ -1042,9 +1046,11 @@ does not change a business's setup.
 - **The apps.** `<AppShell plugins={[settingsPlugin()]} />` (`@hykr/app`) applies the business's
   colours to the theme, its phrases, and hides what is off; `useFeature`, `useBranding`,
   `<BrandMark>`, `useCustomFields(entity)`, `<CustomFieldValues>` and `<CustomFieldInputs>` are for
-  screens. The back office's `SettingsScreen` edits branding, flags, custom fields and web addresses.
-  The sample's to-dos show a business's `priority` field and the business-managed flag
-  `todos.clear-done`. Tests: `framework/api/test/framework/settings{,.e2e}.test.ts` on the fixture's
+  screens. The shell's rail and phone bar still show the product's `title` (section 14), so a
+  screen shows the business's logo and name with `<BrandMark>`: the sample's Today does. The back
+  office's header shows them, its sign-in shows a verified domain's, and its `SettingsScreen` edits
+  branding, flags, custom fields and web addresses. The sample's to-dos show a business's
+  `priority` field and the business-managed flag `todos.clear-done`. Tests: `framework/api/test/framework/settings{,.e2e}.test.ts` on the fixture's
   `features/settings/`, and `application/api/test/domain/todo-settings.e2e.test.ts`.
 
 ---
@@ -1636,7 +1642,8 @@ These are not built. Each has a workaround for now.
 | A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
 | Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |
 | Platform-managed flags from a screen | `managedBy: 'platform'` flags are switched with `FeatureFlagsService.set` in server code; no operator screen or route exists yet. |
-| Custom domains end to end | Verification, CORS, Better Auth's origin check and the public branding work. Sessions and cookies are not per domain, and TLS certificates are issued outside the framework. |
+| Custom domains end to end | Verification, CORS, Better Auth's origin check and `GET /api/branding/public` work, and the back office's sign-in shows a verified domain's branding. The app's sign-in (`framework/app/src/screens/SignIn.tsx`, rendered by `AppShell`) does not call `api.settings.publicBranding(window.location.origin)` yet, so the app on a business's domain signs in under the product's name and colours. Sessions and cookies are not per domain, and TLS certificates are issued outside the framework. |
+| The business's brand in the app shell | The settings plugin applies a business's colours, but `AppShell` (a hot file: B9, then B12) still prints the product's `app.title` and `tagline` in the rail and the phone's top bar. Its next owner replaces them with `<BrandMark fallback={app.title}>` (or adds an `AppPlugin` header slot the settings plugin fills) and has the sign-in ask for the domain's public branding. Until then a screen shows the logo and name itself (the sample's Today). |
 | A logo upload | `branding.logoUrl` is an https URL; there is no upload for it yet. |
 | Shared records that follow their source | An override is a full copy: later changes to the platform's row do not reach it. Only the platform business (`PLATFORM_TENANT_ID`) publishes shared rows. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |

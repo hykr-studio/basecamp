@@ -132,7 +132,9 @@ setup, changed by people with `settings.manage` (owners and admins) through the 
   fields a business defines (`/api/custom-fields`: text, number, yes/no, date, one of a list),
   checked on every write and filterable in lists.
 - **White label.** Its name, logo and colours (`branding`), and its own web addresses, trusted once
-  verified by a DNS TXT record.
+  verified by a DNS TXT record. The settings plugin applies the colours; a screen shows the logo
+  and name with `<BrandMark>` (the sample's Today does), since the shell still shows the product's
+  title.
 - **Shared records.** An entity defined with `defineSharedEntity` (trait `shared`) shows every
   business the rows of the platform's business (`PLATFORM_TENANT_ID`), read-only, and a business
   overrides one with its own copy. What is shared is the application's data.
