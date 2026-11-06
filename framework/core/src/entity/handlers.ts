@@ -78,8 +78,9 @@ function assertExposed(def: AnyEntityDef, action: 'list' | 'get', p: Principal) 
 }
 
 /**
- * The CQRS handlers for one entity: list, summary, get, create, update, delete. List them in the business module's providers. This
- * serves the entity: it joins `entityDefs()` and its writes can be replayed after approval.
+ * The CQRS handlers for one entity: list, summary, get, create, update and delete. List them in
+ * the business module's providers. This serves the entity: it joins `entityDefs()` and its
+ * writes can be replayed after approval.
  */
 export function entityHandlers(def: AnyEntityDef): Type[] {
   const { cqrs } = def;
