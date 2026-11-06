@@ -104,6 +104,8 @@ export async function runEval(
   suite: 'assistant' | 'voice' | 'whatsapp',
 ): Promise<boolean> {
   setRuntime(app);
+  // The features' contributions (their tools among them) for the agents built here.
+  (await import('./features/install.js')).installFeatures();
   const evals = await import('@hykr/agents/evals');
   const run = {
     assistant: evals.evalAssistant,
@@ -119,6 +121,7 @@ export async function runEval(
  */
 export async function startStudio(app: Basecamp, dir: string, options: { dev?: boolean } = {}) {
   setRuntime(app);
+  (await import('./features/install.js')).installFeatures();
   const { startStudio } = await import('@hykr/agents/studio');
   return startStudio(app.agents, { dir, dev: options.dev });
 }

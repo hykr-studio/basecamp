@@ -21,7 +21,6 @@ import { NotifyService } from './notify/notify.service.js';
 import { OutboxRelay } from './notify/outbox.relay.js';
 import { SendTemplate } from './notify/send-template.command.js';
 import { OutboundService } from './outbound.service.js';
-import { queueImports } from './queues.js';
 import { TemplatesProcessor } from './templates/templates.processor.js';
 import { TenantsService } from './tenants.service.js';
 import { REDIS, whatsappProvider } from './whatsapp/adapter.provider.js';
@@ -57,7 +56,8 @@ export class ChannelsModule implements OnApplicationShutdown {
     ];
     return {
       module: ChannelsModule,
-      imports: [...queueImports, ChatModule, ThreadsModule],
+      // The queues come from QueuesModule (global), which the app and the worker import.
+      imports: [ChatModule, ThreadsModule],
       controllers: [
         WhatsAppWebhookController,
         WhatsAppLinkController,
@@ -85,7 +85,6 @@ export class ChannelsModule implements OnApplicationShutdown {
         ...(opts.processors ? processors : []),
       ],
       exports: [
-        ...queueImports,
         ContactsService,
         OutboundService,
         TenantsService,

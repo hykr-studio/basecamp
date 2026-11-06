@@ -7,9 +7,9 @@ import type { INestApplication } from '@nestjs/common';
 import { fromNodeHeaders } from 'better-auth/node';
 import type { Queue } from 'bullmq';
 import type { NextFunction, Request, Response } from 'express';
+import { queues } from '../../hooks.js';
 import { auth } from '../../infra/auth.js';
 import { sharedDb } from '../../infra/db.js';
-import { QUEUES } from '../queues.js';
 
 const PATH = '/admin/queues';
 
@@ -23,9 +23,10 @@ export function mountBullBoard(app: INestApplication) {
   const adapter = new ExpressAdapter();
   adapter.setBasePath(PATH);
   createBullBoard({
-    queues: Object.values(QUEUES).map(
-      (name) => new BullMQAdapter(app.get<Queue>(getQueueToken(name))),
-    ),
+    // Every registered queue: the channel's, the features' and the application's.
+    queues: queues
+      .all()
+      .map((q) => new BullMQAdapter(app.get<Queue>(getQueueToken(q.name), { strict: false }))),
     serverAdapter: adapter,
   });
   const onlyAdmins = async (req: Request, res: Response, next: NextFunction) => {
