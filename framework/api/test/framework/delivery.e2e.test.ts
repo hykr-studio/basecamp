@@ -311,7 +311,7 @@ describe('personal data contributors', () => {
       `select after from audit.events where action = 'channel.contact.erased' and resource_id = $1`,
       [contactId],
     );
-    expect(rows).toEqual([{ after: { contributors: { 'fixture.runtime.erase': 1 } } }]);
+    expect(rows).toEqual([{ after: { contributors: { memory: 0, 'fixture.runtime.erase': 1 } } }]);
   });
 
   it('export collects by kind, and refuses two contributors with one kind', async () => {
