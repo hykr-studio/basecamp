@@ -534,9 +534,18 @@ describe('the write path attaches and lets go', () => {
     await pool.query(`update app.files set created_at = now() - interval '2 days' where id = $1`, [
       stale.body.file.id,
     ]);
+    // Uploaded and confirmed, but never put on a record within the grace period.
+    const unused = await photo(owner, 'unused.png');
+    const fresh = await photo(owner, 'fresh.png');
+    await pool.query(
+      `update app.files set created_at = now() - interval '400 hours' where id = $1`,
+      [unused.id],
+    );
     const swept = await service().sweep();
-    expect(swept.deleted).toBeGreaterThanOrEqual(3);
-    for (const f of [a.id, b.id, stale.body.file.id]) expect(await fileRow(f)).toBeUndefined();
+    expect(swept.deleted).toBeGreaterThanOrEqual(4);
+    for (const f of [a.id, b.id, stale.body.file.id, unused.id])
+      expect(await fileRow(f)).toBeUndefined();
+    expect(await fileRow(fresh.id)).toMatchObject({ status: 'ready' });
     for (const key of keys) expect(await service().storage.head(key)).toBeNull();
     expect((await audit(a.id)).at(-1)).toMatchObject({
       action: 'file.swept',

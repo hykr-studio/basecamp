@@ -1,4 +1,4 @@
-import { ByAssistant, Loading, Markdown, useEntity } from '@hykr/app';
+import { ByAssistant, FileThumbs, Loading, Markdown, useEntity } from '@hykr/app';
 import { Text } from '@hykr/app/ui';
 import { View } from 'react-native';
 
@@ -15,6 +15,7 @@ export function NoteDetail({ id }: { id: string }) {
       ) : (
         <Text variant="muted">No text yet.</Text>
       )}
+      <FileThumbs ids={note.data.photos} />
     </View>
   );
 }

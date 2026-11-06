@@ -587,19 +587,19 @@ export class FilesService implements OnApplicationBootstrap {
   /* ── Sweeper ─────────────────────────────────────────────────────────────── */
 
   /**
-   * Deletes what nobody can reach any more: uploads never confirmed (a day old), files taken
-   * off their record (after the grace period) and erased files (at once). The rows go first, in
+   * Deletes what nobody can reach any more: uploads never confirmed (a day old), files never put
+   * on a record and files taken off their record (after the grace period), and erased files (at
+   * once). The rows go first, in
    * one transaction with their audit rows, then the objects: a file put back on its record
    * meanwhile is never half deleted, and an object whose delete fails is only logged (nothing
    * names it any more).
    */
   async sweep(batch = 200): Promise<{ deleted: number }> {
+    const grace = sql`now() - make_interval(hours => ${this.config.detachedGraceH})`;
     const due: SQL = or(
       and(eq(files.status, 'pending'), lt(files.createdAt, sql`now() - interval '1 day'`)),
-      and(
-        eq(files.status, 'detached'),
-        lt(files.detachedAt, sql`now() - make_interval(hours => ${this.config.detachedGraceH})`),
-      ),
+      and(eq(files.status, 'ready'), isNull(files.resourceId), lt(files.createdAt, grace)),
+      and(eq(files.status, 'detached'), lt(files.detachedAt, grace)),
       eq(files.status, 'erased'),
     ) as SQL;
     let deleted = 0;

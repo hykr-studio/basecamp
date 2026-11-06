@@ -61,6 +61,16 @@ export {
 } from './framework/dates';
 export { EmptyState, LoadError } from './framework/EmptyState';
 export { Field } from './framework/Field';
+export {
+  FileField,
+  FileThumbs,
+  fileFieldPolicy,
+  type PickedFile,
+  pickDocuments,
+  pickPhotos,
+  useFiles,
+  useFileUpload,
+} from './features/files';
 export { type Chip, FilterChips, SearchBox } from './framework/FilterChips';
 export { History } from './framework/History';
 export {

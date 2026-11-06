@@ -1,5 +1,5 @@
 import type { NoteView } from '@application/domain/contracts';
-import { ByAssistant, Markdown, space, styles } from '@hykr/app';
+import { ByAssistant, Icon, Markdown, space, styles } from '@hykr/app';
 import { Pressable, Text, View } from 'react-native';
 
 /** A note in a list: its title and the first lines; `onPress` makes it editable. */
@@ -19,6 +19,14 @@ export function NoteRow({
         <Markdown text={note.body} lines={full ? undefined : 3} />
       ) : (
         <Text style={styles.muted}>No text yet.</Text>
+      )}
+      {note.photos.length > 0 && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}>
+          <Icon name="image" size={14} />
+          <Text style={styles.muted}>
+            {note.photos.length === 1 ? '1 photo' : `${note.photos.length} photos`}
+          </Text>
+        </View>
       )}
       {note.createdBy === 'assistant' && <ByAssistant />}
     </View>

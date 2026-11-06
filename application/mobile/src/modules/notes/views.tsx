@@ -1,5 +1,5 @@
 import type { NoteCardView, NoteListView } from '@application/domain/views';
-import { ByAssistant, Markdown, OpenRow, Rows, ViewCard } from '@hykr/app';
+import { ByAssistant, FileThumbs, Markdown, OpenRow, Rows, ViewCard } from '@hykr/app';
 import { Text } from '@hykr/app/ui';
 import type { ViewProps } from '@hykr/ui-registry/react';
 
@@ -27,6 +27,7 @@ export function NoteCardComponent({ item, act }: ViewProps<typeof NoteCardView>)
       ) : (
         <Text variant="muted">No text yet.</Text>
       )}
+      <FileThumbs ids={item.photos} />
       {item.createdBy === 'assistant' && <ByAssistant />}
       <OpenRow label={`Open note ${item.title}`} onPress={() => act('open', item)}>
         <Text className="font-semibold text-primary">Open the note</Text>
