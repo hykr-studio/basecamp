@@ -26,6 +26,11 @@ describe('mentionQuery and pickMention', () => {
     expect(mentionQuery('me@home')).toBeNull();
     expect(mentionQuery('Ask @ol\nnext')).toBeNull();
     expect(mentionQuery('Ask @ol and more', 7)).toEqual({ start: 4, q: 'ol' });
+    // A picked name is done: what follows it is not a search.
+    const picked = [{ label: 'Olga Rao' }];
+    expect(mentionQuery('Ask @Olga Rao ', undefined, picked)).toBeNull();
+    expect(mentionQuery('Ask @Olga Rao to check', undefined, picked)).toBeNull();
+    expect(mentionQuery('Ask @Olga R', undefined, picked)).toEqual({ start: 4, q: 'Olga R' });
   });
 
   it('replaces the typed word with the picked name', () => {

@@ -137,7 +137,7 @@ export function Comments({
   const [picked, setPicked] = useState<Mention[]>([]);
   const [internal, setInternal] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const typing = mentionQuery(text, cursor ?? text.length);
+  const typing = mentionQuery(text, cursor ?? text.length, picked);
   const suggestions = useMentionable(entity, id, typing?.q ?? null, internal);
 
   const choose = (m: Mention) => {

@@ -2,7 +2,6 @@
 // starts the API, the queue worker or the templates CLI with it. Nothing exported here reads the
 // environment when it loads.
 
-export { CommentsService } from './features/comments/comments.service.js';
 export {
   type MentionContext,
   type MentionKind,
@@ -22,7 +21,6 @@ export {
   StorageUnavailable,
   type Uploader,
 } from './features/files/public.js';
-export { InboxService } from './features/inbox/inbox.service.js';
 export { type LiveResource, liveResources } from './features/live/resources.js';
 export {
   ModelPolicyChanged,

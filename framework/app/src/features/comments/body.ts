@@ -23,16 +23,19 @@ export function bodyParts(body: string): BodyPart[] {
 /**
  * The word being typed after @, before the cursor: `{ start, q }` where `start` is the @'s
  * index. An @ counts at the start or after a space or line break, and the word has no line
- * break and at most 40 characters.
+ * break and at most 40 characters. A name already picked (`@Olga Rao ` and what follows) is not
+ * being typed any more.
  */
 export function mentionQuery(
   text: string,
   cursor = text.length,
+  picked: readonly { label: string }[] = [],
 ): { start: number; q: string } | null {
   const before = text.slice(0, cursor);
   const m = /(^|\s)@([^\s@][^\n@]{0,39})?$/.exec(before);
   if (!m) return null;
   const q = m[2] ?? '';
+  if (picked.some((p) => q === p.label || q.startsWith(`${p.label} `))) return null;
   return { start: before.length - q.length - 1, q };
 }
 
