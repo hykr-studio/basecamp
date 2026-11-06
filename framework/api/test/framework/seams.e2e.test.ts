@@ -10,6 +10,7 @@ import {
   type Principal,
   parseTenantSettings,
 } from '@hykr/contracts';
+import { TenantConfigService } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { TenantsService } from '../../dist/channels/tenants.service.js';
@@ -140,6 +141,8 @@ describe('tenant settings', () => {
       tenantId,
       { fixtureSeams: { limit: 7 } },
     ]);
+    // Settings are cached per process (F4): a change made outside the service invalidates it.
+    server.app?.get(TenantConfigService).invalidate(tenantId);
     expect((await tenants?.get(tenantId))?.settings.fixtureSeams).toEqual({ limit: 7 });
   });
 

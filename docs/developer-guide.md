@@ -46,7 +46,7 @@ flowchart LR
   D[application/api/src/server.ts<br/>defineServer: domain, module,<br/>views, notifications, agent]
 
   subgraph API["@hykr/api startApi : NestJS :3000"]
-    G[PrincipalGuard<br/>session or agent key]
+    G[PrincipalGuard<br/>session or agent identity]
     C[Generated controllers<br/>entityController / commandController]
     CH[ChatService<br/>/api/chat]
     RW[runWrite<br/>validate, idempotency, load,<br/>authorize, park or run, audit]
@@ -81,7 +81,7 @@ flowchart LR
 Read the diagram like this:
 
 - The API and the queue worker are `@hykr/api`. The application starts them with its own definition: `application/api/src/main.ts` calls `startApi(server)` and `worker.ts` calls `startWorker(server)`, where `server = defineServer({ ... })`. `basecamp dev` and `basecamp start api|worker` run the same thing.
-- People call the API with a Better Auth session cookie. `PrincipalGuard` turns the request into a `Principal`: who is acting, for whom, in which business, with which roles.
+- People call the API with a Better Auth session cookie. `PrincipalGuard` turns the request into a `Principal`: who is acting, for whom, in which business, with which roles and capabilities.
 - The assistant runs inside the API process (`ChatService` calls Mastra), but its tools go back out over HTTP to the same API, with agent headers. That round trip is on purpose: the assistant passes through every guard, rule and audit row.
 - WhatsApp messages arrive at `POST /webhooks/whatsapp`. They are stored, queued, and processed by the queue worker (`startWorker`), which runs a chat turn and queues the reply.
 - The voice worker is a *relay*: it may only start chat turns (`@RelayAllowed()` routes) for the person in the call.
@@ -95,12 +95,14 @@ Every write, from any caller, follows these steps in `runWrite`:
 | Validate | `op.input.parse(rawInput)`, again, even after the controller parsed it | `pipeline.ts` |
 | Idempotency | Same `idempotency-key` and same body returns the stored answer. Same key with a different body is a 409. | `app.idempotency` table |
 | Load | `op.load(tx, p, input)` through scoped repos. A row that is not yours is a 404. | entity repo |
-| Authorize | Returns `allow`, `deny` or `needs_approval` | `def.decide` or your command's `authorize` |
+| Authorize | Returns `allow`, `deny` or `needs_approval`. Then each write hook may refuse or park, never loosen (`strongerDecision`). | `def.decide` or your command's `authorize`, then `writeHooks` |
 | Deny | The transaction rolls back. A `denied` audit row is written. The caller gets 403 `{ error: 'forbidden', rule, reason }`. | |
-| Park | Inserts an `app.approvals` row and a `needs_approval` audit row. Returns `{ status: 'needs_approval', approval }`. | `approvals.ts` |
+| Park | Inserts an `app.approvals` row (deciders from the decision's `approver`, else the rule) and a `needs_approval` audit row with the tier. Returns `{ status: 'needs_approval', approval }`. | `approvals.ts` |
 | Run | `op.run(...)` inside the transaction | your command or the entity repo |
 | Audit | One row per touched record, plus one for a command | `audit.events` |
-| Events | Published after commit by the CQRS handler | `NamedEvent` |
+| Stored events | Each `NamedEvent` (and `approval.requested`) is inserted in `app.domain_events` in the transaction, with the row before and an `available_at` held back by the decision's `undoMs` | `write/events.ts` |
+| Write hooks | `afterRun` for a write that ran or parked, in the transaction. Throwing rolls it all back. | `writeHooks` |
+| Events | Published in-process after commit by the CQRS handler | `NamedEvent` |
 
 Every write answers a `WriteResult` (`framework/contracts/src/framework/write.ts`):
 
@@ -237,7 +239,7 @@ Things that will trip you up:
 | API | http://localhost:3000 | `GET /health`; `GET /me` shows the principal the API sees for you |
 | Mobile app (web) | http://localhost:8081 | The product |
 | Back office | http://localhost:8082 | Staff inbox for WhatsApp handoffs |
-| Bull Board | http://localhost:3000/admin/queues | Queues. Sign in to the app as an owner or admin first. Not mounted in production. |
+| Bull Board | http://localhost:3000/admin/queues | Queues. Sign in to the app first, with a role that has `queues.admin` (owner or admin). Not mounted in production. |
 | whaloc | http://localhost:8080 | WhatsApp Cloud API emulator with a chat UI |
 | Mailpit | http://localhost:8025 | Email sent by notifications |
 | pgAdmin | http://localhost:5050 | `admin@example.com` / `admin`; server `app` (host `postgres`, user `app`) is preregistered |
@@ -439,6 +441,10 @@ pnpm db:migrate                         # the framework's migrations, then the a
 
 `application/domain/drizzle.config.ts` manages only your tables in the `app` schema, and records what ran in `drizzle.__app_migrations`. The framework's tables (`public`, `app`, `audit`, `channel`) ship with `@hykr/db` (`framework/db/drizzle`, recorded in `drizzle.__framework_migrations`) and are applied first. Mastra owns `mastra` and `mastra_obs`.
 
+What drizzle-kit does not generate (extensions, triggers, functions, CHECK constraints) goes in SQL hook files next to the migrations: `application/domain/sql/pre/*.sql` runs before your migrations, `sql/post/*.sql` after them (the framework's are in `framework/db/sql`). They run on every migrate, in name order, one transaction per file, so each must be idempotent: `IF NOT EXISTS`, `CREATE OR REPLACE`, `DROP TRIGGER IF EXISTS` then `CREATE TRIGGER`. Use one file per feature.
+
+`pnpm db:migrate` holds a Postgres advisory lock, so two migrates on one database wait for each other. It refuses to start when a migration was never applied but is older than the last one applied: drizzle would skip it without a word. That happens when a branch generated before another was merged. Regenerate the migration (delete it and generate again) or recreate the database.
+
 ### 5.3 defineEntity
 
 `defineEntity` (`framework/core/src/entity/define-entity.ts`) joins the spec to its table:
@@ -459,9 +465,9 @@ export const Todo = defineEntity(TodoSpec, {
 | `owner` | The owner column. Used for `'own'` access, and set on create. |
 | `customer` | The customer column, for `'customer'` access. Optional. |
 | `access` | Who reaches which rows (see 6.2). Defaults to `DEFAULT_ACCESS`. |
-| `rules` | `EntityRule[]`: domain checks on writes |
+| `rules` | `EntityRule[]`: domain checks on writes. A deny refuses; a `needsApproval` parks a plain CRUD write (inside a command only the deny counts). |
 | `summarize` | `(action, input, row) => string`: the approval card text. The default uses `title`: `Delete "Call the plumber"`. |
-| `events` | Publish `<entity>.created/updated/deleted` after commit. Default `true`. |
+| `events` | Store `<entity>.created/updated/deleted` (with the row before) in the event outbox and publish them after commit. Default `true`. |
 
 An entity rule has this shape:
 
@@ -469,7 +475,7 @@ An entity rule has this shape:
 type EntityRule<T> = (p, action, row, input, ctx: { via: 'crud' | string }) => AuthorizeResult | null;
 ```
 
-Return `deny(rule, reason)` to refuse, or `null` to pass. `ctx.via` is `'crud'` for a plain route, or the command's name when a command calls the repo. The meeting uses that to force closing through its command:
+Return `deny(rule, reason)` to refuse, `needsApproval(rule, reason, details?)` to park a CRUD write, or `null` to pass. `ctx.via` is `'crud'` for a plain route, or the command's name when a command calls the repo. The meeting uses that to force closing through its command:
 
 ```ts
 // application/domain/src/server/meetings/meeting.entity.ts
@@ -480,6 +486,22 @@ Return `deny(rule, reason)` to refuse, or `null` to pass. `ctx.via` is `'crud'` 
 ```
 
 The returned `EntityDef` has a scoped `repo` for use inside commands: `get`, `find`, `list`, `insert`, `update` and `delete`. Every query is limited to the principal's tenant and grants. Someone else's id is a 404. Writes re-parse the input, run the rules, and strip `id`, owner, `createdBy`, `tenantId` and customer from the input.
+
+A row leaves the server only through `def.toRead(row, p)`: the read schema parses it, then it is projected for that principal (fields hidden, never added). `def.readJson(row)` and `def.project(read, p)` are its two halves. Lists, gets, write results, command results, approvals and history titles all go through it.
+
+**Entity plugins** (`EntityPlugin`, contributed as `entityPlugins`) add behaviour to every entity whose spec they apply to (`appliesTo`, usually a trait). Every hook is optional and runs after the entity's own config:
+
+| Hook | Runs | Use it for |
+|---|---|---|
+| `rules` | wherever the entity's rules run | refusals (a frozen version) |
+| `decide` | on CRUD writes, after the rules, before `spec.approval` | park with a tier and approver, or allow with an undo window |
+| `scope` | every scoped query, read and write | narrowing reach (a parent's scope) |
+| `toValues` | insert and update | server-computed columns (a version, a number). The framework's own columns still win. |
+| `toJson` | reads, before the read schema parses | stored types as JSON (money as a number) |
+| `updateWhere` | update and delete | a stale write: no match on a row that is still there is 409 `{ error: 'stale' }` |
+| `project` | `toRead`, after parsing | hiding fields from a principal |
+
+`entityHandlers(def)` serves the entity: it joins `entityDefs()` (`entityDef(name)`, `entityDefForSchema(schema)`), and another entity with the same name or plural throws (serving the same one again is a no-op).
 
 ### 5.4 Commands
 
@@ -545,7 +567,8 @@ Points to keep in mind:
 - Always pass `via` to repo calls. Entity rules see it as `ctx.via`.
 - Every record you change goes into `touched`. Each entry becomes an audit row.
 - `authorize` alone decides whether a command parks. The optional `approval` config (`{ by, channels, minAssurance }`) only says who decides.
-- A domain event is a class that implements `NamedEvent` (`eventName` and `row`). Notifications can schedule on it:
+- The result leaves projected for the caller. A part of `output` that reuses an entity's read schema object (`MeetingView`, `z.array(Todo)`) is read and projected as that entity. For other shapes, pass `present: (value, p) => …` to `defineCommand`.
+- A domain event is a class that implements `NamedEvent` (`eventName` and `row`, optionally `before`, `resourceType` and `resourceId`). It is stored in the event outbox with the write, and notifications can schedule on it:
 
 ```ts
 export class MeetingClosed implements NamedEvent {
@@ -583,7 +606,7 @@ export class DomainModule {}
 | `DELETE /api/<plural>/:id` | delete |
 | `spec.http.method spec.http.path` | the command, 200 |
 
-`entityHandlers` and `commandHandler` also register each op for approval replay. You need both the controller and the handler. A controller without its handler has nothing to run, and a parked op without its handler fails as "can no longer be replayed".
+`entityHandlers` and `commandHandler` also register each op for approval replay (`registerOp`, which refuses another definition with the same name). You need both the controller and the handler. A controller without its handler has nothing to run, and a parked op without its handler fails as "can no longer be replayed".
 
 ### 5.6 The list grammar
 
@@ -591,7 +614,7 @@ export class DomainModule {}
 
 | Field | Meaning |
 |---|---|
-| `filterable` | `{ field: FieldType }`, where the type is one of `'enum'`, `'date'`, `'text'`, `'number'`, `'boolean'`, `'id'` |
+| `filterable` | `{ field: FieldType }`, where the type is one of `'enum'`, `'date'`, `'text'`, `'number'`, `'boolean'`, `'id'`, or a type a feature defined |
 | `sortable` | Fields you may sort by |
 | `defaultSort` | `[[field, 'asc' \| 'desc'], …]` |
 | `search` | Columns matched by `q`, case-insensitive, OR-ed. Without it there is no `q`. |
@@ -620,6 +643,8 @@ JSON:  { done: false, dueOn: { lte: '2026-10-31' }, sort: '-dueOn', limit: 20 }
 - `count: true` adds `total`.
 - Unknown fields or operators are a 400. That is on purpose.
 
+Field types are a registry. A feature adds one in two halves, each in its own file: the grammar in contracts, declared on `ListFieldTypes` (and new operators on `ListFilterOps`) and defined with `defineListFieldType({ name, ops, value, opValue? })`, which every process (server, tools, apps) loads; and the SQL in the server, `listFieldSql` (contributed as `listFieldSql`), `{ name, where({ table, field, column, op, value }) }`. A field of an undefined type fails when its schema is built, and one without SQL fails its request. Neither filters nothing.
+
 The response is `{ items, nextCursor, total? }`. Pagination is keyset: pass `nextCursor` back as `cursor`. A cursor from a different sort is a 400 `cursor_sort_mismatch`. Sorting on a nullable column works only for dates, timestamps and numbers. A nullable text or enum column in `sortable` passes load-time checks, then throws `Sorting on nullable ... is not supported` (`framework/core/src/query/list-grammar.ts`) on the first request that sorts by it, which the client sees as a 500. Keep such columns `notNull()` or out of `sortable`.
 
 ### 5.7 Expose: who can reach an action
@@ -641,7 +666,7 @@ type ApprovalCheck = (p: Principal, ctx: { action: string; input: object | null;
 type ApprovalRule =
   | 'always' | 'never'
   | ApprovalCheck
-  | { when?: 'always' | ApprovalCheck; by?: TenantRole[] | 'self'; channels?: Channel[]; minAssurance?: Assurance };
+  | { when?: 'always' | ApprovalCheck; by?: string[] | 'self'; channels?: Channel[]; minAssurance?: Assurance };
 ```
 
 - The function form is the common one: `(p) => p.actor.kind === 'agent'`. It also sees the payload, so
@@ -665,7 +690,14 @@ and `allow` / `deny` take the same optional `details`:
 The helpers copy only these four fields. Passing an earlier decision as `details`, to keep its tier,
 never changes the new decision, rule or reason.
 
-The write path carries these but does not act on them yet (section 14).
+What the write path does with them:
+- A park's deciders come from `approver` when it names a person or roles, and its channels and assurance
+  when it names them. The approval shows `tier` and `amount`, and the park's audit row records the tier.
+- A write that runs with `undoMs` stores its events with `available_at` that much later, so nothing is
+  passed on during the undo window.
+- An approved replay keeps the details on the allow it becomes.
+- Rules, entity plugins and write hooks combine with `strongerDecision`: deny beats needs_approval beats
+  allow, the highest tier and the longest undo window survive.
 
 ### 5.9 Extension points: traits, contributions and settings sections
 
@@ -677,23 +709,37 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   declares its key on `EntityTraits` or `CommandTraits` in its own file. Its plugin then acts on the
   specs that carry the key.
 - **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
-  Each key is a list, collected by one registry: `entityPlugins`, `writeHooks`, `readProjectors` and
-  `identityProviders` in `@hykr/core`; `toolContributions` in `@hykr/core/tools`; `deliveryChannels`,
-  `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`, `eventFeeds`,
-  `erasureContributors`, `exportContributors` and `authPlugins` in `@hykr/api`. `@hykr/api` re-exports
-  all of them.
+  Each key is a list, collected by one registry: `roles` and `capabilities` in `@hykr/contracts`
+  (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql` and
+  `identityProviders` in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
+  `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
+  `eventFeeds`, `erasureContributors`, `exportContributors` and `authPlugins` in `@hykr/api`.
+  `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
   - Registries are process-global, so read them per request, not at import.
   - To add a kind, create its registry with `{ collects: '<key>' }` and declare `<key>` on
     `Contributions` next to it.
 - **Settings sections.** `defineSettingsSection('<key>', schema)` adds a per-business section. Its
-  schema must have a default for every field. `parseTenantSettings(raw)` (used by `TenantsService`)
-  returns the base settings, `features` (switches by key, absent means off) and every section.
+  schema must have a default for every field. `parseTenantSettings(raw)` returns the base settings,
+  `features` (switches by key, absent means off) and every section. Read a business's settings with
+  `TenantConfigService` (`@hykr/core`, global): `get(tenantId)` caches them for 10 seconds per process
+  (`CoreModule.forRoot({ tenantConfigTtlMs })`), `invalidate(tenantId)` after you change them, and
+  `isEnabled(tenantId, key)` is true only for a stored `true` (no business, an unknown one or
+  settings that do not parse are all off).
+
+A framework feature also keeps its phrases, its scripted-model scripts and its fixture tables in files of its own, so parallel work never edits a shared file. One line in a barrel registers each one: `framework/i18n/src/messages/index.ts` (section 9), `framework/agents/src/fake/scripts/index.ts` (section 7.3). The fixture's per-feature migration sets need no line (section 12). These barrels merge with `merge=union` (`.gitattributes`).
+
+The write and read path reads `entityPlugins` (section 5.3), `writeHooks` (each write: `decide` tightens,
+`afterRun` runs in the transaction) and `readProjectors` (every record that leaves, by resource type:
+an entity's name, a command's name, `'approval'`) on every call.
 
 `ModuleDef` (`@hykr/api`) is the shape of one application module, and `DomainEventEnvelope`
-(`@hykr/contracts`) the shape of a stored event. The module system and the event outbox build on them.
-The fixture's `framework/api/test/fixture/src/features/seams/` shows all of these in use.
+(`@hykr/contracts`) the shape of a stored event: `toEnvelope(row)` reads one from `app.domain_events`, and
+`eventFor(event, p)` is how one leaves for a reader (another business's is null, fields are projected).
+Stored events carry the process's queue prefix (`queues`). The fixture's
+`framework/api/test/fixture/src/features/seams/` shows the seams, `features/write-path/` the write path's
+hooks in use, and `features/identity/` a role, a capability, an identity provider and an auth plugin.
 
 ### 5.10 Runtime registries: queues, events, turns, tools, channels
 
@@ -750,24 +796,43 @@ Every request becomes a `Principal` (`framework/contracts/src/principal.ts`). Th
 
 | Field | Meaning |
 |---|---|
-| `actor` | `{ kind: 'user' \| 'agent', id, role }`. `role` is deprecated; use `roles`. |
+| `actor` | `{ kind, id }`. `kind` is `'user'`, `'agent'`, `'system'` (the server's own work, below) or `'guest'` (a share link; not built yet). |
 | `actingFor` | For an agent: the person it acts for |
 | `subject` | Whose business this is: `{ kind: 'user', userId }` or `{ kind: 'contact', contactId }`. Set by the server only. |
 | `tenantId`, `roles`, `customerId` | The business, your roles in it, and your customer record if you are one |
-| `assurance` | `'whatsapp_number'` (a number alone) or `'session'` (signed in) |
-| `channel` | `'app'`, `'voice'` or `'whatsapp'` |
+| `capabilities` | What your roles allow there, by name (`'backoffice.use'`). Worked out by the server; check it with `can(p, …)` (6.4) |
+| `assurance` | `'whatsapp_number'` (a number alone) < `'otp'` (a one-time code; nothing sets it yet) < `'session'` (signed in) |
+| `channel` | `'app'`, `'voice'`, `'whatsapp'`, `'mcp'`, `'webmcp'`, `'api'`, `'background'` or `'share'`. A session request has none. |
 | `runId`, `agentVersion` | Set on agent calls, and written to audit |
 | `approvedBy` | Set on an approval replay |
 
-Everything comes from server data. Headers only choose: `x-tenant-id` picks among the businesses you belong to, and a WhatsApp channel lowers assurance. Sign-up creates the person's own business, with them as `owner` (a Better Auth `user.create.after` database hook in `framework/api/src/infra/auth.ts`). If that failed, `PrincipalGuard` creates it on their first call (`ensureDefaultTenant`).
+Everything comes from server data. Headers only choose: `x-tenant-id` picks among the businesses you belong to, and a WhatsApp channel lowers assurance. A role in a membership that nobody registered grants nothing (the server logs it once). Sign-up creates the person's own business, with them as `owner` (a Better Auth `user.create.after` database hook in `framework/api/src/infra/auth.ts`). If that failed, `PrincipalGuard` creates it on their first call (`ensureDefaultTenant`).
 
 A WhatsApp customer who has not linked an account acts as `actor.kind: 'user'` with id `contact:<id>`, roles `['customer']`.
+
+**Agents.** `PrincipalGuard` asks a chain of `AgentIdentityProvider`s who the caller is: the built-in
+agent key (`x-agent-key`, `x-agent-id`, `x-acting-for`, `x-run-id`) first, then each contributed
+`identityProviders` entry in order (an MCP bearer token, a run token). The first identity wins. A
+provider that recognises its credential but rejects it throws 401, and nothing else is asked. No
+identity: the session. A contributed provider cannot use a configured agent's id (`assistant`,
+`voice`); without a run id the guard makes one. When the credential fixes a business (its
+`tenantId`) or the request sends `x-tenant-id`, the principal acts in that business or not at all:
+a different header, a person who is not a member, or a contact of another business is 403
+(`tenant_mismatch` or `not_a_member`). The assistant may forward only a turn's channel in
+`x-channel` (`app`, `voice`, `whatsapp`). The identity is on the request as `req.agent`; relay checks
+read `req.agent.relay`.
+
+**The system principal.** Background work (a sweeper, a timer, an inbound webhook's job) writes
+through `runWrite` as `systemPrincipal({ tenantId, job, capabilities? })` from `@hykr/core`. It reaches
+every row of its one business, still passes entity rules and approval rules, and is audited as actor
+`system` with channel `background`. Only server code makes one; no header does. It cannot create an
+entity row (no owner) or park (nobody to ask) yet.
 
 Read `p` in your rules with the helpers in `@hykr/policy`: `subjectOf(p)`, `userIdOf(p)`, `subjectKeyOf(p)`.
 
 ### 6.2 Access
 
-`Access` (`framework/policy/src/access.ts`) says, per role, which rows a read or write reaches:
+`Access` (`framework/policy/src/access.ts`) says, per role name, which rows a read or write reaches:
 
 | Grant | Rows |
 |---|---|
@@ -796,9 +861,57 @@ When a customer creates a row, the row is owned by the business's default owner 
 1. Write access needs more assurance: deny `needs_assurance`.
 2. No grant, or the row is outside your grants: deny `no_access`.
 3. An agent, and the action is not exposed `'all'`: deny `humans_only`.
-4. Your entity `rules`: the first deny wins.
-5. `spec.approval[action]` parks: `needs_approval`, rule `<name>_<action>_needs_approval`.
-6. Otherwise allow, rule `scoped_access`.
+4. Your entity `rules`, then the entity plugins' rules: the first deny wins; a park waits.
+5. The entity plugins' `decide`: the first deny wins; a park waits.
+6. `spec.approval[action]` parks: `needs_approval`, rule `<name>_<action>_needs_approval`.
+7. A park from 4 to 6 parks (the first one's rule, the highest tier). Otherwise allow, rule `scoped_access`,
+   with any undo window an allowing rule or plugin gave.
+
+Then `runWrite` asks the write hooks, which may only tighten it.
+
+### 6.4 Roles and capabilities
+
+A role (`owner`, `site_lead`) is a name in the role registry. A capability (`backoffice.use`,
+`orders.cost.read`) is something a role may do that is not an entity's rows: a screen, a feature, a
+hidden field. Code checks capabilities, never role names:
+
+```ts
+import { can } from '@hykr/policy';
+import { requireCapability } from '@hykr/core';
+
+if (!can(p, 'orders.cost.read')) …                    // false when absent; throws if nobody defines it
+requireCapability(p, 'orders.cost.read', { rule: 'cost_hidden' });   // or a 403 with that rule
+```
+
+`can` reads `p.capabilities`, which the server works out from the roles when it resolves a request.
+`GET /api/me` returns the same list, so a client checks `me.capabilities` (the back office does).
+
+The framework registers five roles (`owner`, `admin`, `ops`, `staff`, `customer`) and five
+capabilities, with the roles that hold them by default:
+
+| Capability | Roles | What it opens |
+|---|---|---|
+| `backoffice.use` | owner, admin, ops, staff | The back office |
+| `customers.message` | owner, admin, ops, staff | `notify.send`: a template to a customer |
+| `history.all` | admin, ops | The whole business's history |
+| `channels.manage` | owner, admin | Setting the business's WhatsApp number |
+| `queues.admin` | owner, admin | Bull Board |
+
+An application or module adds its own through `contributes`. A capability can name its roles, and a
+role its capabilities, so neither has to edit the other's list:
+
+```ts
+import { defineCapability, defineRole } from '@hykr/contracts';
+
+contributes: {
+  capabilities: [defineCapability({ name: 'orders.cost.read', label, roles: ['owner'] })],
+  roles: [defineRole({ name: 'manager', label, capabilities: ['backoffice.use', 'orders.cost.read'] })],
+}
+```
+
+A role name is lower case (`[a-z][a-z0-9_]`, at most 32). A capability name is dotted (`<area>.<action>`).
+The API refuses to start when a role names a capability nobody defines. A role by itself grants nothing:
+give it rows in an entity's `access` and capabilities here.
 
 ---
 
@@ -864,6 +977,8 @@ defineScript({
 `VERBS`, `command` and `quoted` are local helpers in `application/domain/src/agent/scripts.ts`, not exports. Put new scripts in that file, or copy the helpers.
 
 Helpers you will use, all from `@hykr/agents/script`: `call`, `say`, `sayIn(turn, { en, hi, te })`, `verbs(...)`, `items(outcome)`, `written(...)`.
+
+The framework's own scripts (saved pages, handoff, the failing turn) run before the domain's. Each feature keeps them in `framework/agents/src/fake/scripts/<feature>.ts` as `defineScriptSet({ name, order, scripts })`, with one line in `scripts/index.ts`. The first script that matches runs, so `order` places the set: pages 100, handoff 200, testing 900. A set or script name used twice throws. A new framework tool gets its script there.
 
 The fake model reads the language, surfaces and canvas from the system prompt with regular expressions. If you change the wording of `buildInstructions` in `framework/agents/src/version.ts`, scripted tests can break silently.
 
@@ -1010,7 +1125,7 @@ The product speaks English, Hindi and Telugu (`LANGS` in `framework/i18n/src/lan
 
 | Words | Where they go |
 |---|---|
-| Framework phrases ("Waiting for your approval") | `framework/i18n/src/messages.ts`: add the key to `en`, `hi` and `te`. The test checks the placeholders match. |
+| Framework phrases ("Waiting for your approval") | `framework/i18n/src/messages/<feature>.ts`: `defineMessages({ en, hi, te })`, where `hi` and `te` must have exactly `en`'s keys or it does not compile. A new file gets one line in `messages/index.ts`. A key in two files throws. The test checks the placeholders match. |
 | View titles, empty lines, nouns | View `labels` |
 | Field names in approval previews | Entity `fieldLabels` |
 | Scripted answers | `sayIn(turn, { en, hi, te })`, and `VERBS` with `verbs(...)` |
@@ -1054,7 +1169,7 @@ Change the view's component (app), its `text` (WhatsApp) or its `speak` (voice).
 Define a template and a notification (section 8.2), then run `templates:sync`.
 
 **…call the API from a script or another service?**
-Use `createApiClient({ baseUrl, headers: () => ({ cookie }) })` from `@hykr/api-client`. `headers` is a function, `() => Record<string, string> | Promise<Record<string, string>>`, called on every request; web callers may pass `credentials: 'include'` instead. Then call `api.entity(TodoSpec).list({ done: false })` or `api.command(CloseMeetingSpec, input)`. Writes send a fresh idempotency key unless you pass one. A server-side sign-in through Better Auth also needs an `origin` header. To act as the assistant, send `x-agent-key`, `x-agent-id: assistant`, `x-acting-for` and an `x-run-id` matching `/^[A-Za-z0-9_-]{1,64}$/` (`framework/core/src/http/principal.ts`).
+Use `createApiClient({ baseUrl, headers: () => ({ cookie }) })` from `@hykr/api-client`. `headers` is a function, `() => Record<string, string> | Promise<Record<string, string>>`, called on every request; web callers may pass `credentials: 'include'` instead. Then call `api.entity(TodoSpec).list({ done: false })` or `api.command(CloseMeetingSpec, input)`. Writes send a fresh idempotency key unless you pass one. A server-side sign-in through Better Auth also needs an `origin` header. To act as the assistant, send `x-agent-key`, `x-agent-id: assistant`, `x-acting-for` and an `x-run-id` matching `/^[A-Za-z0-9_-]{1,64}$/` (`framework/core/src/http/identity.ts`).
 
 **…see why something was refused?**
 The 403 body has `rule` and `reason`. The `audit.events` row with `outcome = 'denied'` has the same.
@@ -1122,6 +1237,10 @@ it('the agent asks before deleting', async () => {
 });
 ```
 
+Both Vitest configs copy the `.env` into `process.env` when they load (the shell and CI win), so `globalSetup`, which migrates, uses the same database as the tests. Turbo runs test tasks uncached (`cache: false`: they depend on the database) and passes them every environment variable, so a new variable needs no `turbo.json` line. Add it to `ci.yml` only if CI needs a value other than the default.
+
+**Fixture tables for a framework feature.** Don't add to the fixture's `src/schema.ts` and its single journal. Give the feature its own migration set: tables in `framework/api/test/fixture/src/features/<f>/schema.ts` (import `app` from `@hykr/db`, don't export it), then `FIXTURE_FEATURE=<f> pnpm --filter @hykr/api fixture:generate --name <f>`, which writes `src/features/<f>/migrations/`. SQL hooks go in `src/features/<f>/sql/{pre,post}`. `migrationSetsIn` (`@hykr/db`) finds the folder, the e2e `globalSetup` applies it after the fixture's own tables, and it is recorded in `drizzle.__fixture_<f>_migrations`. Commit it with the feature. `src/features/par/` and `test/framework/migrations.e2e.test.ts` are the example.
+
 Other helpers: `me(person)`, `addMember(person, tenantId, roles)`, `seedContact(tenantId, name, address)`, `asAssistant(actingFor)` (agent headers), `eventually(check)`, `pool` (direct SQL) and `server` (the running Nest app). `@hykr/api/testing/internals` gives a test the services it drives directly: `NotifyService`, `TemplateSync`, `WHATSAPP` and `DB`.
 
 An eval case lists the tools that must run, in order:
@@ -1168,15 +1287,21 @@ These are not built. Each has a workaround for now.
 | File uploads | MinIO runs in compose, but no code uses it. There is no upload API yet. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| A system principal | `actor.kind` is `user` or `agent` only. Maintenance jobs write audit rows with `actorKind: 'system'` directly. Background domain writes have no principal to run as. |
+| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, the S3 client, `pdfkit` with `harfbuzzjs` and the Noto fonts, `expo-server-sdk` (in `@hykr/api`), `@mastra/memory` and `@ai-sdk/openai-compatible` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-notifications`, `expo-device`, `expo-location`, `expo-image-picker` and `expo-document-picker` (in the mobile app). Each feature that uses one adds its code. The Expo modules' config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client. Versions and reasons: `docs/decisions/F6.md`. |
+| More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
+| System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. |
+| Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |
+| Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
+| Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
-| Entity rules that park | An entity rule's `needs_approval` is ignored. Only `deny` counts. Use `spec.approval`, or a command whose `authorize` returns `needsApproval`. |
-| Hooks that run | Queues, schedules, subscribers, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (section 5.10). Entity plugins, write hooks, read projectors, identity providers and auth plugins are installed and not called yet. |
-| A durable event outbox | Subscribers get events from the in-process bus after commit. A crash between commit and relay loses one, the envelope's id is a fresh one rather than the stored event's (so the dedupe by event id does not reach the outbox), and the actor is `kind: 'unknown'`. Notifications still schedule from the bus. F5 adds the `outbox` feed when it is integrated after F3 (`framework/api/src/features/events/outbox-feed.ts`, contributed by `eventsFeature`), and the bus steps aside by itself. |
+| Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
+| Approval tiers | Deciders follow a decision's `approver`, the approval shows `tier` and `amount`, and `undoMs` holds events back. There are no multi-step tiers, no undo action and no rule against approving your own request. |
+| Withdrawing a stored event | Nothing sets `app.domain_events.cancelled_at` yet (there is no undo action). The outbox feed skips such rows, so the undo action only has to set it before `available_at`. |
+| Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
 | Per-turn agent version | A turn hook can pick the model, but audit rows' `agentVersion` still names `AGENT_MODEL`. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
-| Approval tiers | A decision's `tier`, `approver`, `amount` and `undoMs` are carried, not acted on. Parking, deciders and the audit trail ignore them, and an approved replay drops them. |
+| Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | Application modules | `ModuleDef` is a type only. There is no `defineModule`, and `defineServer` still takes one `domain` and one `module`. |
 | An approval sweeper | Expiry is checked when someone decides. Expired rows stay `pending` in `GET /api/approvals` until then. |
 | Concurrent duplicate requests | Two requests with the same idempotency key at the same moment can both run. Only the first answer is stored. |
@@ -1220,14 +1345,15 @@ An earlier outline described an API that was never built. Map it like this:
 | **Command** | A named, audited write that may touch several records: `commandSpec` and `defineCommand` |
 | **Spec** | The pure declaration in `@hykr/contracts` that routes, tools, hooks and views are built from |
 | **Principal** | Who is acting, for whom, in which business, with which roles and assurance |
-| **Actor** | The `user` or `agent` making the call |
+| **Actor** | Who makes the call: a `user`, an `agent`, the `system` (background work) or a `guest` |
 | **Subject** | Whose behalf the call is on: a user or a WhatsApp contact |
 | **Tenant** | A business. Every row has a `tenant_id`. |
 | **Membership** | A person's roles in a tenant (`app.memberships`) |
 | **Customer** | A record of a business's customer (`app.customers`). It is not a login. |
 | **Contact** | A WhatsApp number known to a business (`channel.contacts`) |
 | **Grant** | `own`, `customer` or `tenant`: which rows a role reaches |
-| **Assurance** | How sure we are of who it is: `whatsapp_number` < `session` |
+| **Capability** | Something a role may do besides reaching rows (`backoffice.use`), checked with `can(p, …)` |
+| **Assurance** | How sure we are of who it is: `whatsapp_number` < `otp` < `session` |
 | **Expose** | Who can reach an action: `all`, `human` or `internal` |
 | **Rule** | A named check that allows, denies or parks a write. Its name is audited. |
 | **Approval** | A parked write, waiting for a person's yes. It is replayed when approved. |

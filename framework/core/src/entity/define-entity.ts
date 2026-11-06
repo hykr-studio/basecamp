@@ -17,7 +17,7 @@ import {
   rowAllowed,
   subjectOf,
 } from '@hykr/policy';
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import {
   and,
   type Column,
@@ -30,17 +30,29 @@ import {
   type Table,
 } from 'drizzle-orm';
 import type { z } from 'zod';
-import { RuleDenied } from '../authorize.js';
+import { allow, RuleDenied } from '../authorize.js';
+import {
+  type EntityPlugin,
+  type EntityPluginTarget,
+  entityPlugins,
+  projectRead,
+} from '../hooks.js';
 import { buildListSql, decodeCursor, encodeCursor } from '../query/list-grammar.js';
 import type { Conn, Tx } from '../tokens.js';
+import { strongerDecision } from '../write/decisions.js';
 import { defineEntityCqrs, type EntityCqrs } from './cqrs-classes.js';
 
 type Row<T extends Table> = T['$inferSelect'];
+type Values = Record<string, unknown>;
 
 /** Where a write comes from: plain CRUD, or a named command calling the repository. */
 export type RuleContext = { via: 'crud' | string };
 
-/** A business rule: return a decision to refuse or park, or null to have no opinion. */
+/**
+ * A business rule: return a decision to refuse or park, or null to have no opinion. On a plain
+ * CRUD write a refusal refuses and a park parks. Inside a command (`ctx.via` is its name) only a
+ * refusal counts: the command's own `authorize` decides whether it parks.
+ */
 export type EntityRule<T extends Table> = (
   p: Principal,
   action: WriteAction,
@@ -68,7 +80,10 @@ export interface EntityConfig<S extends EntitySpec, T extends Table> {
     input: Record<string, unknown> | null,
     row: Row<T> | null,
   ) => string;
-  /** Publish <Name>Created/Updated/Deleted after commit. Default true. */
+  /**
+   * Store <entity>.created/updated/deleted in the event outbox with each write, and publish
+   * them after commit. Default true.
+   */
   events?: boolean;
   /** Unused generics anchor. */
   _spec?: S;
@@ -98,10 +113,19 @@ export interface EntityDef<S extends EntitySpec = EntitySpec, T extends Table = 
   table: T;
   repo: EntityRepository<T>;
   rules: EntityRule<T>[];
-  /** A row as it leaves the API: dates as ISO strings, only the read schema's fields. */
-  toRead(row: Row<T>): z.infer<S['schemas']['read']>;
+  /**
+   * A row as it leaves the server for this principal: dates as ISO strings, only the read
+   * schema's fields, then projected for p (plugins and read projectors may hide fields).
+   */
+  toRead(row: Row<T>, p: Principal): z.infer<S['schemas']['read']>;
+  /** A stored row as the JSON its read schema parses: dates as ISO, then plugins' toJson. */
+  readJson(row: Values): Values;
+  /** A record in its read shape as p may see it: plugins' project, then the read projectors. */
+  project(read: Values, p: Principal): Values;
+  /** The entity plugins that apply to it now (registered and whose appliesTo says so). */
+  plugins(): readonly EntityPlugin[];
   summarize(action: WriteAction, input: Record<string, unknown> | null, row: Row<T> | null): string;
-  /** Rules, then approval: the decision for one write before it runs. */
+  /** Access, rules, plugins' decisions, then approval: the decision for one CRUD write. */
   decide(
     p: Principal,
     action: WriteAction,
@@ -158,6 +182,22 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
   const rules = config.rules ?? [];
   const label = spec.label;
   const access = config.access ?? DEFAULT_ACCESS;
+  const target: EntityPluginTarget = { spec, table };
+
+  // Plugins are read when a call runs (contributions install after modules load), and the
+  // ones that apply are worked out once per registry snapshot.
+  let applying: { of: readonly EntityPlugin[]; list: readonly EntityPlugin[] } | undefined;
+  const plugins = (): readonly EntityPlugin[] => {
+    const all = entityPlugins.all();
+    if (applying?.of !== all)
+      applying = { of: all, list: all.filter((x) => x.appliesTo?.(spec) ?? true) };
+    return applying.list;
+  };
+  /** The entity's own rules, then its plugins' rules. */
+  const allRules = () => [
+    ...rules,
+    ...plugins().flatMap((x) => (x.rules ?? []) as readonly EntityRule<T>[]),
+  ];
 
   /** One grant as SQL: own rows, the customer's rows, or every row in the tenant. */
   const grantSql = (p: Principal, g: Grant): SQL | undefined => {
@@ -173,13 +213,15 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
    * The rows this principal reaches, for reading or writing: its tenant, then any of its
    * grants. No grant: no rows (a 404 for someone else's id, never a hint it exists).
    */
-  const scoped = (p: Principal, op: 'read' | 'write', ...more: SQL[]) => {
+  const scoped = (p: Principal, op: 'read' | 'write', ...more: (SQL | undefined)[]) => {
     const decision = accessFor(p, access, op);
     const grants =
       decision.kind === 'grants' ? decision.grants.flatMap((g) => grantSql(p, g) ?? []) : [];
     return and(
       eq(tenantCol, tenantOf(p)),
       grants.length ? or(...grants) : sql`false`,
+      // Plugins narrow further (a parent's scope, a platform grant); they never widen.
+      ...plugins().map((x) => x.scope?.(p, op, target)),
       ...more,
     ) as SQL;
   };
@@ -200,25 +242,68 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     throw new ForbiddenException({ error: 'forbidden', rule: 'no_access' });
   };
 
+  /** Columns only the framework sets: the business, the owner, the customer, provenance. */
+  const framed = (key: string) =>
+    key === ownerKey ||
+    key === 'id' ||
+    key === 'createdBy' ||
+    key === 'tenantId' ||
+    columns[key] === customerCol;
+
   /** Only real columns, with ISO strings turned into Dates for timestamp columns. */
-  function toValues(input: Record<string, unknown>) {
-    const out: Record<string, unknown> = {};
+  function columnValues(input: Values) {
+    const out: Values = {};
     for (const [key, value] of Object.entries(input)) {
       const c = columns[key];
-      if (
-        !c ||
-        value === undefined ||
-        key === ownerKey ||
-        key === 'id' ||
-        key === 'createdBy' ||
-        key === 'tenantId' ||
-        c === customerCol
-      )
-        continue;
+      if (!c || value === undefined || framed(key)) continue;
       out[key] =
         typeof value === 'string' && c.columnType === 'PgTimestamp' ? new Date(value) : value;
     }
     return out;
+  }
+
+  /**
+   * What a write stores: the input's columns, then each plugin's changes (a version, a
+   * number). The framework's own columns are set after this, so a plugin never moves a row.
+   */
+  function toValues(
+    p: Principal,
+    action: 'create' | 'update',
+    row: Row<T> | null,
+    input: Values,
+  ): Values {
+    let values = columnValues(input);
+    for (const x of plugins()) {
+      if (!x.toValues) continue;
+      values = x.toValues(values, { p, action, row: row as Values | null, input }, target);
+    }
+    return Object.fromEntries(
+      Object.entries(values).filter(([key, v]) => columns[key] && v !== undefined && !framed(key)),
+    );
+  }
+
+  /** The plugins' extra conditions on the row an update or delete targets. */
+  const staleWhere = (row: Row<T>, input: Values | null) =>
+    plugins().flatMap((x) => x.updateWhere?.(row as Values, input, target) ?? []);
+
+  /**
+   * Nothing was updated or deleted: a row still reachable without the plugins' conditions
+   * changed meanwhile (409); otherwise it is not there, or not theirs (404).
+   */
+  async function missed(tx: Tx, p: Principal, id: string, stale: SQL[]): Promise<never> {
+    if (stale.length) {
+      const [still] = await tx
+        .select({ id: sql<string>`${idCol}` })
+        .from(table as Table)
+        .where(scoped(p, 'write', eq(idCol, id)))
+        .limit(1);
+      if (still)
+        throw new ConflictException({
+          error: 'stale',
+          message: `This ${label} changed since it was read. Load it again and retry.`,
+        });
+    }
+    throw new NotFoundException({ error: 'not_found', message: `No such ${label}` });
   }
 
   function checkRules(
@@ -228,7 +313,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     input: Record<string, unknown> | null,
     ctx: RuleContext,
   ) {
-    for (const rule of rules) {
+    for (const rule of allRules()) {
       const result = rule(p, action, row, input, ctx);
       if (result?.decision === 'deny') throw new RuleDenied(result);
     }
@@ -286,7 +371,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       const [row] = await tx
         .insert(table as Table)
         .values({
-          ...toValues(parsed),
+          ...toValues(p, 'create', null, parsed),
           tenantId: owned.tenantId,
           [ownerKey]: owned.ownerId,
           ...(owned.customerId && customerCol
@@ -303,23 +388,25 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     async update(tx, p, row, patch, ctx = { via: 'crud' }) {
       const parsed = spec.schemas.update.parse(patch) as Record<string, unknown>;
       checkRules(p, 'update', row, parsed, ctx);
+      const id = (row as { id: string }).id;
+      const stale = staleWhere(row, parsed);
       const [updated] = await tx
         .update(table as Table)
-        .set(toValues(parsed) as never)
-        .where(scoped(p, 'write', eq(idCol, (row as { id: string }).id)))
+        .set(toValues(p, 'update', row, parsed) as never)
+        .where(scoped(p, 'write', eq(idCol, id), ...stale))
         .returning();
-      if (!updated)
-        throw new NotFoundException({ error: 'not_found', message: `No such ${label}` });
+      if (!updated) return missed(tx, p, id, stale);
       return updated as Row<T>;
     },
     async delete(tx, p, row, ctx = { via: 'crud' }) {
       checkRules(p, 'delete', row, null, ctx);
+      const id = (row as { id: string }).id;
+      const stale = staleWhere(row, null);
       const [deleted] = await tx
         .delete(table as Table)
-        .where(scoped(p, 'write', eq(idCol, (row as { id: string }).id)))
+        .where(scoped(p, 'write', eq(idCol, id), ...stale))
         .returning();
-      if (!deleted)
-        throw new NotFoundException({ error: 'not_found', message: `No such ${label}` });
+      if (!deleted) return missed(tx, p, id, stale);
       return deleted as Row<T>;
     },
   };
@@ -329,6 +416,18 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       (input?.title as string | undefined) ?? (row as { title?: string } | null)?.title ?? label,
     );
   const verb = { create: 'Create', update: 'Update', delete: 'Delete' } as const;
+
+  const readJson = (row: Values): Values =>
+    plugins().reduce(
+      (json, x) => (x.toJson ? x.toJson(json, target) : json),
+      toJson(row) as Values,
+    );
+  const project = (read: Values, p: Principal): Values =>
+    projectRead(
+      spec.name,
+      plugins().reduce((v, x) => (x.project ? x.project(v, p, target) : v), read),
+      p,
+    );
 
   const def: EntityDef<S, T> = {
     kind: 'entity',
@@ -340,7 +439,13 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     repo,
     rules,
     events: config.events ?? true,
-    toRead: (row) => spec.schemas.read.parse(toJson(row)) as z.infer<S['schemas']['read']>,
+    toRead: (row, p) =>
+      project(spec.schemas.read.parse(readJson(row as Values)) as Values, p) as z.infer<
+        S['schemas']['read']
+      >,
+    readJson,
+    project,
+    plugins,
     summarize:
       config.summarize ??
       ((action, input, row) =>
@@ -374,15 +479,23 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
           reason: `Only people can ${action} a ${label}`,
         };
       }
-      // Then the entity's own rules: any refusal wins.
-      for (const rule of rules) {
+      // Then the rules, the entity's and its plugins': any refusal wins; a rule may park.
+      let decision: AuthorizeResult | null = null;
+      for (const rule of allRules()) {
         const result = rule(p, action, row, input, { via: 'crud' });
         if (result?.decision === 'deny') return result;
+        decision = strongerDecision(decision, result);
+      }
+      // Then the plugins' decisions: refuse, park with a tier, or allow with an undo window.
+      for (const x of plugins()) {
+        const result = x.decide?.(p, action, row as Values | null, input, target) ?? null;
+        if (result?.decision === 'deny') return result;
+        decision = strongerDecision(decision, result);
       }
       // Then approval: who must confirm this action.
       const approval = spec.approval[action];
-      if (parksFor(approval, p, { action, input, row: row as Record<string, unknown> | null })) {
-        return {
+      if (parksFor(approval, p, { action, input, row: row as Values | null })) {
+        decision = strongerDecision(decision, {
           decision: 'needs_approval',
           rule: `${spec.name}_${action}_needs_approval`,
           // Says why it waits, in the person's words: "Deletes by the assistant need your approval".
@@ -390,13 +503,15 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
             approval === 'always'
               ? `Every ${label} ${action} needs your approval`
               : `${action[0].toUpperCase()}${action.slice(1)}s by the ${p.actor.kind === 'agent' ? 'assistant' : 'requester'} need your approval`,
-        };
+        });
       }
-      return {
-        decision: 'allow',
-        rule: 'scoped_access',
-        reason: `Works on ${spec.plural} they may reach`,
-      };
+      if (decision?.decision === 'needs_approval') return decision;
+      // Allowed, with whatever an allowing rule or plugin said is at stake (an undo window).
+      return allow(
+        'scoped_access',
+        `Works on ${spec.plural} they may reach`,
+        decision ?? undefined,
+      );
     },
     cqrs: defineEntityCqrs(spec.pascal, spec.plural),
   };

@@ -1,6 +1,7 @@
-import { SendTemplateSpec } from '@hykr/contracts';
+import { FrameworkCapabilities, SendTemplateSpec } from '@hykr/contracts';
 import { allow, defineCommand, deny, needsApproval } from '@hykr/core';
 import { schema } from '@hykr/db';
+import { can } from '@hykr/policy';
 import { NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { config } from '../../config.js';
@@ -11,8 +12,6 @@ const templates = () => runtime().notifications.templates;
 
 /** The outbox key for a template sent by hand, not by a notification. */
 export const TEMPLATE_KEY = 'template:';
-
-const STAFF = ['owner', 'admin', 'ops', 'staff'] as const;
 
 /**
  * notify.send: a template to one customer, written to the outbox with the audit row, so it is
@@ -34,7 +33,7 @@ export const SendTemplate = defineCommand(SendTemplateSpec, {
     return { customer, template: templates().find((t) => t.name === input.template) };
   },
   authorize: (p, { template }, input) => {
-    if (!p.roles?.some((r) => (STAFF as readonly string[]).includes(r)))
+    if (!can(p, FrameworkCapabilities.messageCustomers))
       return deny('staff_only', 'Only the business can message its customers');
     if (!template) return deny('unknown_template', `There is no template ${input.template}`);
     if (template.category === 'authentication')

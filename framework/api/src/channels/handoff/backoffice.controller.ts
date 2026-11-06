@@ -1,6 +1,12 @@
 import type { ChannelAdapter, OutboundMessage } from '@hykr/channels';
-import { type Principal, RequestHumanInput, type TenantRole } from '@hykr/contracts';
-import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@hykr/core';
+import { FrameworkCapabilities, type Principal, RequestHumanInput } from '@hykr/contracts';
+import {
+  CurrentPrincipal,
+  HumanOnlyGuard,
+  PrincipalGuard,
+  requireCapability,
+  TenantConfigService,
+} from '@hykr/core';
 import { type Database, schema, writeAudit } from '@hykr/db';
 import { langOf } from '@hykr/i18n';
 import { HandoffReply } from '@hykr/notifications';
@@ -26,12 +32,10 @@ import { ThreadsService } from '../../modules/threads/threads.service.js';
 import { type Contact, ContactsService, WINDOW_MS } from '../contacts.service.js';
 import { OutboundService } from '../outbound.service.js';
 import { TemplateSync } from '../templates/template-sync.js';
-import { TenantsService } from '../tenants.service.js';
 import { WHATSAPP } from '../whatsapp/adapter.provider.js';
 import { type Handoff, HandoffService } from './handoff.service.js';
 
 const { handoffs, contacts, templates } = schema;
-const STAFF: readonly TenantRole[] = ['owner', 'admin', 'ops', 'staff'];
 
 /** Less than this left in the 24-hour window: answer soon, or only a template will reach them. */
 const WAITING_MS = 2 * 60 * 60 * 1000;
@@ -45,13 +49,12 @@ const ConsentInput = z.object({
   note: z.string().trim().max(200).optional(),
 });
 
+/** The back office is for people whose roles have `backoffice.use` (by default, the team). */
 function staffOnly(p: Principal) {
-  if (!p.roles?.some((r) => STAFF.includes(r)))
-    throw new ForbiddenException({
-      error: 'forbidden',
-      rule: 'staff_only',
-      reason: 'The back office is for the business',
-    });
+  requireCapability(p, FrameworkCapabilities.backOffice, {
+    rule: 'staff_only',
+    reason: 'The back office is for the business',
+  });
 }
 
 /**
@@ -70,7 +73,7 @@ export class BackOfficeController {
     private readonly contacts: ContactsService,
     private readonly outbound: OutboundService,
     private readonly threads: ThreadsService,
-    private readonly tenants: TenantsService,
+    private readonly tenants: TenantConfigService,
     private readonly chat: ChatService,
     @Inject(WHATSAPP) wa: ChannelAdapter,
   ) {

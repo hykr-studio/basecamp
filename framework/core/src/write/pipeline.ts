@@ -11,9 +11,12 @@ import { subjectKeyOf, subjectOf } from '@hykr/policy';
 import { ConflictException, ForbiddenException, HttpException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import type { z } from 'zod';
-import { RuleDenied } from '../authorize.js';
+import { allow, RuleDenied } from '../authorize.js';
+import { writeHooks } from '../hooks.js';
 import type { Tx } from '../tokens.js';
 import { parkForApproval } from './approvals.js';
+import { strongerDecision } from './decisions.js';
+import { recordEvents } from './events.js';
 
 /** Who is writing and how to recognise a repeat. Carried by every command. */
 export interface WriteCtx {
@@ -55,8 +58,8 @@ export interface WriteOp<I, L, V> {
   authorize(p: Principal, loaded: L, input: I): AuthorizeResult;
   summarize(input: I, loaded: L): string;
   run(a: { tx: Tx; principal: Principal; input: I; loaded: L }): Promise<RunResult<V>>;
-  /** The value as it leaves the API (rows → contract shapes). */
-  present(value: V): unknown;
+  /** The value as it leaves the API for this principal (rows → contract shapes, projected). */
+  present(value: V, p: Principal): unknown;
 }
 
 export interface WriteOutcome {
@@ -100,8 +103,9 @@ const verbs = { created: 'create', updated: 'update', deleted: 'delete' } as con
 
 /**
  * The write path every command takes:
- * validate → idempotency → load → authorize → (park | run) → audit → events after commit.
- * Change how audit or approvals work here, once.
+ * validate → idempotency → load → authorize (the op, then write hooks) → (park | run) → audit
+ * → stored events → write hooks' afterRun, all in one transaction; in-process events are
+ * published by the caller after commit. Change how audit or approvals work here, once.
  */
 export async function runWrite<I, L, V>(
   db: Database,
@@ -137,14 +141,21 @@ export async function runWrite<I, L, V>(
     const loaded = (op.load ? await op.load(tx, p, input) : undefined) as L;
     const resourceId = op.resourceId(input, loaded);
 
-    // 4. Authorize. A person's approval turns needs_approval into allow for the replay.
+    // 4. Authorize: the operation's decision, tightened by every write hook (never loosened).
     let decision = op.authorize(p, loaded, input);
+    for (const hook of writeHooks.all()) {
+      if (!hook.decide) continue;
+      const tighter = hook.decide({ ctx, op, input, loaded, decision });
+      decision = strongerDecision(decision, tighter) ?? decision;
+    }
+    // A person's approval turns needs_approval into allow for the replay, keeping what is at
+    // stake (the tier, the undo window).
     if (decision.decision === 'needs_approval' && p.approvedBy) {
-      decision = {
-        decision: 'allow',
-        rule: `approved:${decision.rule}`,
-        reason: `Approved by the owner: ${decision.reason}`,
-      };
+      decision = allow(
+        `approved:${decision.rule}`,
+        `Approved by the owner: ${decision.reason}`,
+        decision,
+      );
     }
     if (decision.decision === 'deny') {
       refusal = { result: decision, resourceId };
@@ -153,6 +164,8 @@ export async function runWrite<I, L, V>(
 
     let result: WriteResult;
     let events: object[] = [];
+    let value: unknown;
+    let touched: Touched[] = [];
     if (decision.decision === 'needs_approval') {
       const parked = await parkForApproval(tx, ctx, op, input, loaded, decision);
       const approval: Approval = parked.approval;
@@ -163,7 +176,11 @@ export async function runWrite<I, L, V>(
         resourceType: op.resourceType,
         resourceId,
         outcome: 'needs_approval',
-        after: { approvalId: approval.id, summary: approval.summary },
+        after: {
+          approvalId: approval.id,
+          summary: approval.summary,
+          ...(decision.tier !== undefined ? { tier: decision.tier } : {}),
+        },
       });
       result = { status: 'needs_approval', approval };
     } else {
@@ -190,10 +207,25 @@ export async function runWrite<I, L, V>(
           after: { touched: out.touched.map(({ type, id, change }) => ({ type, id, change })) },
         });
       }
-      result = { status: 'done', value: op.present(out.value) };
-      // 7. Events are collected here and published by the caller after commit.
+      result = { status: 'done', value: op.present(out.value, p) };
+      value = out.value;
+      touched = out.touched;
+      // 7. Events: stored here, in the transaction; published by the caller after commit.
       events = out.events ?? [];
     }
+
+    // 8. The durable outbox: each named event. A write that ran is held back for its undo
+    // window; a park's approval.requested goes at once.
+    await recordEvents(tx, {
+      principal: p,
+      requestId: ctx.requestId,
+      events,
+      delayMs: decision.decision === 'allow' ? decision.undoMs : undefined,
+    });
+
+    // 9. Write hooks, still in the transaction: throwing rolls the whole write back.
+    for (const hook of writeHooks.all())
+      await hook.afterRun?.({ ctx, op, input, loaded, tx, value, touched, result });
 
     if (key) {
       await tx

@@ -3,7 +3,7 @@ import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@hykr/core';
 import { Controller, Get, Module, UseGuards } from '@nestjs/common';
 import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 
-/** Who the signed-in person is, in the business they are working in, with which roles. */
+/** Who the signed-in person is, in the business they are working in: roles and what they allow. */
 @Controller('api/me')
 @OptionalAuth()
 @UseGuards(PrincipalGuard, HumanOnlyGuard)
@@ -14,6 +14,7 @@ export class MeController {
       userId: p.actor.id,
       tenantId: p.tenantId ?? '',
       roles: p.roles ?? [],
+      capabilities: p.capabilities ?? [],
       customerId: p.customerId ?? null,
     };
   }

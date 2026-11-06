@@ -6,6 +6,7 @@ import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
 import { registerOp } from '../write/approvals.js';
 import { runWrite, type WriteCtx, type WriteOp } from '../write/pipeline.js';
 import type { AnyEntityDef } from './define-entity.js';
+import { registerEntityDef } from './registry.js';
 
 type Row = Record<string, unknown> & { id: string };
 
@@ -58,10 +59,10 @@ export function entityOp(
       return {
         value: row,
         touched: [touch(change, row, loaded)],
-        events: def.events ? [new Event(def.name, change, row)] : [],
+        events: def.events ? [new Event(def.name, change, row, loaded ?? undefined)] : [],
       };
     },
-    present: (row) => (action === 'delete' ? null : def.toRead(row)),
+    present: (row, p) => (action === 'delete' ? null : def.toRead(row, p)),
   };
 }
 
@@ -75,12 +76,18 @@ function assertExposed(def: AnyEntityDef, action: 'list' | 'get', p: Principal) 
   }
 }
 
-/** The five CQRS handlers for one entity. List them in the business module's providers. */
+/**
+ * The five CQRS handlers for one entity. List them in the business module's providers. This
+ * serves the entity: it joins `entityDefs()` and its writes can be replayed after approval.
+ */
 export function entityHandlers(def: AnyEntityDef): Type[] {
   const { cqrs } = def;
+  registerEntityDef(def);
   for (const action of ['create', 'update', 'delete'] as const) {
-    registerOp(`${def.name}.${action}`, (args) =>
-      entityOp(def, action, args as { id?: string } | null),
+    registerOp(
+      `${def.name}.${action}`,
+      (args) => entityOp(def, action, args as { id?: string } | null),
+      def,
     );
   }
 
@@ -90,7 +97,7 @@ export function entityHandlers(def: AnyEntityDef): Type[] {
     async execute(q: InstanceType<typeof cqrs.ListQuery>): Promise<Page<unknown>> {
       assertExposed(def, 'list', q.principal);
       const page = await def.repo.list(this.options.db, q.principal, q.query);
-      return { ...page, items: page.items.map((row) => def.toRead(row)) };
+      return { ...page, items: page.items.map((row) => def.toRead(row, q.principal)) };
     }
   }
 
@@ -99,7 +106,7 @@ export function entityHandlers(def: AnyEntityDef): Type[] {
     constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {}
     async execute(q: InstanceType<typeof cqrs.GetQuery>) {
       assertExposed(def, 'get', q.principal);
-      return def.toRead(await def.repo.get(this.options.db, q.principal, q.id));
+      return def.toRead(await def.repo.get(this.options.db, q.principal, q.id), q.principal);
     }
   }
 

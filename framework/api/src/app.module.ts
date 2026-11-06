@@ -8,7 +8,7 @@ import { ChannelsModule } from './channels/channels.module.js';
 import { config } from './config.js';
 import { FeaturesModule } from './features/features.module.js';
 import { HealthController } from './health/health.controller.js';
-import { auth } from './infra/auth.js';
+import { getAuth } from './infra/auth.js';
 import { coreImports } from './infra/core-imports.js';
 import { CallerThrottlerGuard } from './infra/throttle.js';
 import { ChatModule } from './modules/chat/chat.module.js';
@@ -21,8 +21,9 @@ import { QueuesModule } from './queues/queues.module.js';
   imports: [
     // Registers a global guard: every route needs a session unless marked
     // @AllowAnonymous() or @OptionalAuth(). CORS is set once, in main.ts.
+    // Better Auth is built here, once the application (and its auth plugins) is registered.
     AuthModule.forRoot({
-      auth,
+      auth: getAuth(),
       disableTrustedOriginsCors: true,
       // Webhooks are verified by an HMAC over the exact bytes received.
       bodyParser: { rawBody: true },

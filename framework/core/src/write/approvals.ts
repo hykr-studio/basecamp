@@ -5,6 +5,7 @@ import {
   type AuthorizeResult,
   approverOf,
   atLeast,
+  type DecisionDetails,
   type Principal,
 } from '@hykr/contracts';
 import { approvals, type Database, writeAudit } from '@hykr/db';
@@ -20,8 +21,11 @@ import {
 import { EventBus } from '@nestjs/cqrs';
 import { and, arrayOverlaps, asc, eq, or, type SQL } from 'drizzle-orm';
 import type { NamedEvent } from '../entity/cqrs-classes.js';
+import { entityDef } from '../entity/registry.js';
+import { projectRead } from '../hooks.js';
 import { PrincipalResolver } from '../http/resolver.js';
 import { CORE_OPTIONS, type CoreOptions, type Tx } from '../tokens.js';
+import { recordEvents } from './events.js';
 import { auditCtx, runWrite, type WriteCtx, type WriteOp } from './pipeline.js';
 
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -35,6 +39,10 @@ type ApprovalRow = typeof approvals.$inferSelect;
  */
 export class ApprovalEvent implements NamedEvent {
   readonly row: Omit<ApprovalRow, 'payload'>;
+  readonly resourceType = 'approval';
+  get resourceId() {
+    return this.row.id;
+  }
   constructor(
     readonly eventName: 'approval.requested' | 'approval.decided',
     row: ApprovalRow,
@@ -50,10 +58,18 @@ export class ApprovalEvent implements NamedEvent {
  */
 // biome-ignore lint/suspicious/noExplicitAny: heterogeneous operations
 type OpFactory = (args: Record<string, unknown> | null) => WriteOp<any, any, any>;
-const registry = new Map<string, OpFactory>();
+const registry = new Map<string, { factory: OpFactory; owner?: object }>();
 
-export function registerOp(name: string, factory: OpFactory) {
-  registry.set(name, factory);
+/**
+ * Register how to replay a parked operation. A name belongs to one definition: another entity
+ * or command with the same name would replay the wrong code, so it throws at startup instead.
+ * `owner` is that definition; registering it again (a module's forRoot called twice) is a no-op.
+ */
+export function registerOp(name: string, factory: OpFactory, owner?: object) {
+  const taken = registry.get(name);
+  if (taken && owner !== undefined && taken.owner === owner) return;
+  if (taken) throw new Error(`The operation "${name}" is registered twice`);
+  registry.set(name, { factory, owner });
 }
 
 type Stored = {
@@ -61,8 +77,11 @@ type Stored = {
   args: Record<string, unknown> | null;
   input: unknown;
   principal: Principal;
+  /** What the decision that parked it said is at stake. */
+  decision?: DecisionDetails;
 };
 
+/** An approval row as stored: every field, for the server's own use. */
 export function toApproval(row: ApprovalRow): Approval {
   return {
     id: row.id,
@@ -78,7 +97,26 @@ export function toApproval(row: ApprovalRow): Approval {
     expiresAt: row.expiresAt.toISOString(),
     failureReason: row.failureReason,
     decidedAt: row.decidedAt?.toISOString() ?? null,
+    tier: (row.payload as Stored | null)?.decision?.tier ?? null,
+    amount: (row.payload as Stored | null)?.decision?.amount ?? null,
   };
+}
+
+/**
+ * An approval as one person may see it. The parked input of an entity's write is projected as
+ * that entity's record (a hidden field stays hidden on the card), then the whole approval goes
+ * through the read projectors as 'approval'.
+ */
+export function approvalFor(row: ApprovalRow, p: Principal): Approval {
+  const approval = toApproval(row);
+  const def = entityDef(row.resourceType);
+  const input = approval.input;
+  const entityWrite = def && row.action.startsWith(`${def.name}.`);
+  const seen =
+    entityWrite && input && typeof input === 'object' && !Array.isArray(input)
+      ? def.project(input as Record<string, unknown>, p)
+      : input;
+  return projectRead('approval', { ...approval, input: seen }, p) as Approval;
 }
 
 let ttlMs = DEFAULT_TTL_MS;
@@ -104,6 +142,33 @@ function decidersFor(p: Principal, rule: ApprovalRule | undefined) {
   };
 }
 
+/**
+ * Who decides, when the decision names them (an approver per amount band): its person or roles
+ * replace the rule's deciders, and its channels and assurance replace the rule's.
+ */
+function withApprover(
+  deciders: ReturnType<typeof decidersFor>,
+  approver: AuthorizeResult['approver'],
+): ReturnType<typeof decidersFor> {
+  if (!approver) return deciders;
+  const named = approver.userId !== undefined || approver.roles !== undefined;
+  return {
+    approverUserId: named ? (approver.userId ?? null) : deciders.approverUserId,
+    approverRoles: named ? [...(approver.roles ?? [])] : deciders.approverRoles,
+    approverChannels: approver.channels ? [...approver.channels] : deciders.approverChannels,
+    minAssurance: approver.minAssurance ?? deciders.minAssurance,
+  };
+}
+
+const detailsOf = (r: AuthorizeResult): DecisionDetails | undefined => {
+  const out: DecisionDetails = {};
+  if (r.tier !== undefined) out.tier = r.tier;
+  if (r.approver !== undefined) out.approver = r.approver;
+  if (r.amount !== undefined) out.amount = r.amount;
+  if (r.undoMs !== undefined) out.undoMs = r.undoMs;
+  return Object.keys(out).length ? out : undefined;
+};
+
 /** Store the operation, its validated input and who asked; whoever may decide does, later. */
 export async function parkForApproval<I, L>(
   tx: Tx,
@@ -117,14 +182,21 @@ export async function parkForApproval<I, L>(
   const p = ctx.principal;
   const subject = subjectOf(p);
   if (!subject || !p.tenantId) throw new ConflictException('Nobody to ask for approval');
-  const stored: Stored = { op: op.name, args: op.args ?? null, input, principal: p };
+  const decision = detailsOf(result);
+  const stored: Stored = {
+    op: op.name,
+    args: op.args ?? null,
+    input,
+    principal: p,
+    ...(decision ? { decision } : {}),
+  };
   const [row] = await tx
     .insert(approvals)
     .values({
       tenantId: p.tenantId,
       ownerId: subject.kind === 'user' ? subject.userId : null,
       requesterContactId: subject.kind === 'contact' ? subject.contactId : null,
-      ...decidersFor(p, op.approval),
+      ...withApprover(decidersFor(p, op.approval), result.approver),
       action: op.name,
       rule: result.rule,
       reason: result.reason,
@@ -138,7 +210,7 @@ export async function parkForApproval<I, L>(
       expiresAt: new Date(Date.now() + ttlMs),
     })
     .returning();
-  return { approval: toApproval(row), event: new ApprovalEvent('approval.requested', row) };
+  return { approval: approvalFor(row, p), event: new ApprovalEvent('approval.requested', row) };
 }
 
 /**
@@ -176,7 +248,7 @@ export class ApprovalService {
       .from(approvals)
       .where(and(eq(approvals.id, id), decidable(p)));
     if (!row) throw new NotFoundException({ error: 'not_found', message: 'No such approval' });
-    return toApproval(row);
+    return approvalFor(row, p);
   }
 
   async pending(p: Principal): Promise<Approval[]> {
@@ -185,7 +257,7 @@ export class ApprovalService {
       .from(approvals)
       .where(and(decidable(p), eq(approvals.status, 'pending')))
       .orderBy(asc(approvals.createdAt));
-    return rows.map(toApproval);
+    return rows.map((row) => approvalFor(row, p));
   }
 
   async decide(p: Principal, id: string, approve: boolean, requestId: string): Promise<Approval> {
@@ -220,7 +292,7 @@ export class ApprovalService {
     });
 
     const close = async (
-      tx: Tx | Database,
+      tx: Tx,
       status: 'rejected' | 'expired' | 'failed',
       failureReason?: string,
     ) => {
@@ -249,20 +321,26 @@ export class ApprovalService {
         after: row,
         ...(failureReason ? { reason: failureReason } : {}),
       });
-      return toApproval(row);
+      await recordEvents(tx, {
+        principal: p,
+        requestId,
+        events: [new ApprovalEvent('approval.decided', row)],
+      });
+      return row;
     };
 
-    if (!approve) return this.decided(await this.db.transaction((tx) => close(tx, 'rejected')));
+    if (!approve) return this.decided(await this.db.transaction((tx) => close(tx, 'rejected')), p);
     if (found.expiresAt <= new Date())
-      return this.decided(await this.db.transaction((tx) => close(tx, 'expired')));
+      return this.decided(await this.db.transaction((tx) => close(tx, 'expired')), p);
 
     const stored = found.payload as Stored | null;
-    const factory = stored?.op ? registry.get(stored.op) : undefined;
+    const factory = stored?.op ? registry.get(stored.op)?.factory : undefined;
     if (!stored || !factory) {
       return this.decided(
         await this.db.transaction((tx) =>
           close(tx, 'failed', 'This request can no longer be replayed'),
         ),
+        p,
       );
     }
 
@@ -303,10 +381,15 @@ export class ApprovalService {
           before: current,
           after: row,
         });
-        return { approval: toApproval(row), events: out.events };
+        await recordEvents(tx, {
+          principal: p,
+          requestId,
+          events: [new ApprovalEvent('approval.decided', row)],
+        });
+        return { approval: row, events: out.events };
       });
       for (const event of events) this.events.publish(event);
-      return this.decided(approval);
+      return this.decided(approval, p);
     } catch (e) {
       // Refused or missing on replay (the meeting was closed meanwhile): record why.
       if (e instanceof HttpException && [401, 403, 404, 409].includes(e.getStatus())) {
@@ -317,16 +400,19 @@ export class ApprovalService {
           await this.db.transaction((tx) =>
             close(tx, 'failed', body?.reason ?? body?.message ?? e.message),
           ),
+          p,
         );
       }
       throw e;
     }
   }
 
-  /** Tell whoever listens (a customer waiting on WhatsApp) how it ended. */
-  private async decided(approval: Approval): Promise<Approval> {
-    const [row] = await this.db.select().from(approvals).where(eq(approvals.id, approval.id));
-    if (row) this.events.publish(new ApprovalEvent('approval.decided', row));
-    return approval;
+  /**
+   * Tell whoever listens in this process (a customer waiting on WhatsApp) how it ended. The
+   * event was stored with the decision; this is its in-process publication after commit.
+   */
+  private decided(row: ApprovalRow, p: Principal): Approval {
+    this.events.publish(new ApprovalEvent('approval.decided', row));
+    return approvalFor(row, p);
   }
 }

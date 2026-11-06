@@ -36,7 +36,13 @@ pnpm dev              # framework tsc -w watchers + `basecamp dev` (API, worker,
   `create-basecamp` from the tarballs, then builds and typechecks it. If you change a package's public
   exports or `files`, that job is what catches it.
 - `pnpm db:generate --name <name>` generates the application's migration from `application/domain/src/db/schema.ts`.
-  Never hand-edit files under `*/drizzle/`.
+  Never hand-edit files under `*/drizzle/`. Extensions, triggers and CHECK constraints go in idempotent SQL
+  hooks: `sql/pre/*.sql` and `sql/post/*.sql` next to the migrations (`framework/db/sql`, `application/domain/sql`),
+  run on every migrate. `db:migrate` takes a lock and refuses a migration drizzle would silently skip (one
+  older than the last applied): regenerate it, or recreate the database.
+- A framework feature's fixture tables get their own migration set:
+  `FIXTURE_FEATURE=<f> pnpm --filter @hykr/api fixture:generate --name <f>` writes
+  `framework/api/test/fixture/src/features/<f>/migrations/` from that folder's `schema.ts`.
 - `pnpm eval` runs the scripted assistant eval and needs the API running. From `application/`:
   `pnpm exec basecamp eval voice|whatsapp [--live]`.
 - `pnpm dev` passes `--concurrency=30` because turbo runs 16 persistent tasks. Pass it too if you call
@@ -69,10 +75,13 @@ E2E test gotchas:
   against one database, and turbo runs `@application/api#test` after `@hykr/api#test`.
 - Vitest forces `MODEL_MODE=fake`, `WORKER_INLINE=1` and `THROTTLE=off`. The voice e2e tests have no skip
   guard and fail unless `VOICE_AGENT_KEY` is set in `.env`.
+- Both Vitest configs load the root `.env` into the main process, so `globalSetup` migrates the same database
+  the tests use. Turbo runs test tasks uncached and passes them every environment variable.
 - The golden WhatsApp conversations (`application/api/test/whatsapp/`) need `whaloc-test` on :8090, which
   `pnpm infra:up` starts. Without it they skip.
-- Don't run a `pnpm dev` worker from another checkout against the same database while the tests run. Its
-  `OutboxRelay` takes outbox rows and the notification tests time out.
+- `OutboxRelay` only relays outbox rows of its own `BULL_PREFIX`, and each test run uses a fresh one. Two
+  processes with the same prefix on one database (two `pnpm dev` workers, both `bull`) still take each other's
+  rows: give each checkout its own `BULL_PREFIX`.
 
 Other gotchas:
 - `basecamp` is compiled, so it only works after `pnpm build`.
@@ -104,9 +113,11 @@ Other gotchas:
 1. **One write path.** Every write, whether from the app, the assistant, WhatsApp, voice or an approval
    replay, goes through `runWrite` in `framework/core/src/write/pipeline.ts`. The steps are validate,
    idempotency (`idempotency-key`), load through scoped repos (another tenant's row is a 404), authorize
-   (`allow` / `deny` / `needs_approval`), then run or park, plus an audit row (`audit.events`) in the same
-   transaction. Events are published after commit. Never write tables directly from a controller or
-   service. Sends from a write go through the outbox (`app.outbox`), never straight to WhatsApp or SMTP.
+   (`allow` / `deny` / `needs_approval`, tightened by write hooks), then run or park, plus an audit row
+   (`audit.events`) and the write's named events (`app.domain_events`, the durable event outbox) in the
+   same transaction. In-process events are published after commit. Never write tables directly from a
+   controller or service. Sends from a write go through the outbox (`app.outbox`), never straight to
+   WhatsApp or SMTP.
 2. **The assistant is a user.** The Mastra agent (`framework/agents`) has no DB access (`agents-not-to-db`).
    Its tools (generated in `framework/core/src/tools`) call the same HTTP API with
    `x-agent-key` / `x-acting-for` headers, so the same guards, scopes, approvals and audit apply. The agent
@@ -136,10 +147,12 @@ The tables (`application/domain/src/db/schema.ts`) live in the `app` schema. Use
 `createdAt` and `updatedAt`. The framework's migrations are tracked in `drizzle.__framework_migrations` and
 the application's in `drizzle.__app_migrations`.
 
-Tenancy: every row belongs to a business. The roles are `owner`, `admin`, `ops`, `staff` and `customer`, and
-an entity's `access` grants each role `own`, `customer` or `tenant` per read and write (the sample is in
-`application/domain/src/server/access.ts`). A WhatsApp-only principal can be refused with
-`minAssurance: 'session'`.
+Tenancy: every row belongs to a business. Roles are names in a registry (`roles` in `@hykr/contracts`;
+the framework's are `owner`, `admin`, `ops`, `staff` and `customer`), and an entity's `access` grants each
+role `own`, `customer` or `tenant` per read and write (the sample is in
+`application/domain/src/server/access.ts`). Anything else is a capability: check `can(p, 'backoffice.use')`
+(`@hykr/policy`), never a role name. A WhatsApp-only principal can be refused with `minAssurance: 'session'`.
+Background work writes as `systemPrincipal({ tenantId, job })` from `@hykr/core`.
 
 ### Non-obvious rules (each one has bitten someone)
 
@@ -148,8 +161,10 @@ an entity's `access` grants each role `own`, `customer` or `tenant` per read and
 - Inside a command, pass `via` to every repo call and list every changed record in `touched`.
 - Repo calls inside a command publish no entity events. Publish a `NamedEvent` from `run` if a notification
   should react.
-- Entity `rules` can only deny: a `needsApproval` from a rule is ignored. Use `spec.approval` or a command's
-  `authorize` instead.
+- Entity `rules` park plain CRUD writes only: inside a command a rule's `needsApproval` is ignored and only
+  its `deny` counts. A command parks through its own `authorize`.
+- Every read leaves through `def.toRead(row, p)`, projected for the principal (entity plugins' `project`,
+  then read projectors). Never return a repo row from a controller or service as is.
 - A command's `approval.by` says who decides. Without it, the person decides on their own assistant's request.
 - Return `deny(...)` with a stable `rule` code and a plain `reason` instead of throwing. The caller gets
   403 `{ error: 'forbidden', rule, reason }`. "Not yours" is a 404, never a 403.
@@ -159,7 +174,9 @@ an entity's `access` grants each role `own`, `customer` or `tenant` per read and
   view that can be spoken needs `noun` and `empty`.
 - The scripted model (`MODEL_MODE=fake`, `framework/agents/src/fake`, with the domain scripts in
   `application/domain/src/agent/scripts.ts`) is what tests and CI use. Its replies are asserted in golden
-  files, so its wording matters.
+  files, so its wording matters. The framework's own scripts are script sets in
+  `framework/agents/src/fake/scripts/<feature>.ts` (their `order` decides which matches first), and its phrases
+  are in `framework/i18n/src/messages/<feature>.ts`; each file has one line in its folder's `index.ts`.
 - `framework/app` keeps colour tokens in both `src/theme.ts` and `theme.css`. Its `test` script
   (`scripts/check-tokens.mjs`) fails if they drift apart.
 - `framework/create-basecamp/template/` is a copy of `application/` made at pack time. Don't edit it; it is
@@ -170,12 +187,14 @@ app in `framework/api/test/fixture`. Framework tests must not depend on the samp
 
 Extension points (developer guide, section 5.9): spec `traits`, `contributes` lists collected by
 registries (`createHookRegistry`, in `framework/core/src/hooks.ts` and `framework/api/src/hooks.ts`),
-and settings sections (`defineSettingsSection`). Each is extended by declaration merging. Add a new
-kind in your own file instead of editing a central one. Decisions per unit are in `docs/decisions/`.
-Section 5.10 says where each runtime registry is read: every queue comes from the `queues` registry
-(`defineQueue`, under `BULL_PREFIX`), framework features are one line each in
-`framework/api/src/features/index.ts` (`defineFeature`), event subscribers (`defineSubscriber`) run
-in the worker, and every chat turn passes the `turnHooks`.
+list field types (`defineListFieldType` plus `listFieldSql`), and settings sections
+(`defineSettingsSection`). Each is extended by declaration merging. Add a new kind in your own file
+instead of editing a central one. `registerOp` and the entity registry (`entityDefs()`) refuse a
+duplicate name. Decisions per unit are in `docs/decisions/`. Section 5.10 says where each runtime
+registry is read: every queue comes from the `queues` registry (`defineQueue`, under `BULL_PREFIX`),
+framework features are one line each in `framework/api/src/features/index.ts` (`defineFeature`),
+event subscribers (`defineSubscriber`) run in the worker on the stored events of
+`app.domain_events`, and every chat turn passes the `turnHooks`.
 
 ## Tooling notes
 

@@ -46,6 +46,13 @@ jobs:
       MODEL_MODE: fake
       VOICE_MODE: fake
       GUARDRAILS: "off"
+      # Links in messages, and the Mailpit service above.
+      APP_URL: http://localhost:8081
+      SMTP_HOST: localhost
+      SMTP_PORT: "1025"
+      MAILPIT_URL: http://localhost:8025
+      # turbo passes every variable to the test tasks (turbo.json), so a new variable needs a
+      # line here only when its default is wrong for CI.
 
     steps:
       - uses: actions/checkout@v4

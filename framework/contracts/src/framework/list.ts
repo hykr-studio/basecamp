@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHookRegistry } from './registry.js';
 
 /**
  * The list grammar: what callers may filter, sort and page on. One builder serves the
@@ -7,17 +8,78 @@ import { z } from 'zod';
  * Anything not declared is a validation error, never a silent full scan.
  */
 
-export type FieldType = 'enum' | 'date' | 'text' | 'number' | 'boolean' | 'id';
-export type FilterOp = 'eq' | 'ne' | 'in' | 'lt' | 'lte' | 'gt' | 'gte' | 'contains';
+/**
+ * The field types a list can filter on. Open: a feature adds one by declaration merging and
+ * defines it with `defineListFieldType` (its SQL is registered in @hykr/core, `listFieldSql`):
+ *
+ *   declare module '@hykr/contracts' {
+ *     interface ListFieldTypes { geo: true }
+ *     interface ListFilterOps { near: true }
+ *   }
+ */
+export interface ListFieldTypes {
+  enum: true;
+  date: true;
+  text: true;
+  number: true;
+  boolean: true;
+  id: true;
+}
+export type FieldType = keyof ListFieldTypes;
 
-export const OPS: Record<FieldType, readonly FilterOp[]> = {
-  enum: ['eq', 'ne', 'in'],
-  id: ['eq', 'ne', 'in'],
-  boolean: ['eq', 'ne'],
-  text: ['eq', 'ne', 'in', 'contains'],
-  date: ['eq', 'ne', 'in', 'lt', 'lte', 'gt', 'gte'],
-  number: ['eq', 'ne', 'in', 'lt', 'lte', 'gt', 'gte'],
-};
+/** The filter operators. Open, like ListFieldTypes. */
+export interface ListFilterOps {
+  eq: true;
+  ne: true;
+  in: true;
+  lt: true;
+  lte: true;
+  gt: true;
+  gte: true;
+  contains: true;
+}
+export type FilterOp = keyof ListFilterOps;
+
+/** What a field type's value schema is built from. */
+export interface FieldValueContext {
+  /** The field in the entity's read schema (an enum takes its values from it). */
+  readField: z.ZodType | undefined;
+  /** From a query string: strings are coerced to the type. */
+  coerce: boolean;
+}
+
+/**
+ * One list field type: its operators and the schema of a value. Isomorphic: the server, the
+ * agent's tools and the apps validate with it, so it registers when its module loads.
+ */
+export interface ListFieldType {
+  name: FieldType;
+  /** The operators it takes, in the order tools describe them. A bare value means `eq`. */
+  ops: readonly FilterOp[];
+  /** One value of the field. `in` takes a list of them. */
+  value(ctx: FieldValueContext): z.ZodType;
+  /** The value of an operator that is not one value or a list of them (near: { lat, lng, m }). */
+  opValue?(op: FilterOp, ctx: FieldValueContext): z.ZodType | undefined;
+}
+
+/** Every list field type, built-in and added. A name is defined once. */
+export const listFieldTypes = createHookRegistry<ListFieldType>('list field type', (t) => t.name);
+
+/** Define a list field type. It is usable in `filterable` from then on, in every process. */
+export function defineListFieldType(type: ListFieldType): ListFieldType {
+  listFieldTypes.register(type);
+  return type;
+}
+
+/** The field type by name. An unknown name throws: a filter is never silently dropped. */
+export function listFieldType(name: string): ListFieldType {
+  const type = listFieldTypes.get(name);
+  if (!type) throw new Error(`No list field type "${name}" is defined (defineListFieldType)`);
+  return type;
+}
+
+/** The operators of a field type. */
+export const opsOf = (type: FieldType): readonly FilterOp[] => listFieldType(type).ops;
 
 export interface ListConfig {
   filterable: Record<string, FieldType>;
@@ -69,36 +131,55 @@ function inner(schema: z.ZodType): z.ZodType {
   return cur;
 }
 
-function valueSchema(type: FieldType, readField: z.ZodType | undefined, coerce: boolean) {
-  switch (type) {
-    case 'boolean':
-      return coerce
-        ? z.preprocess((v) => (v === 'true' ? true : v === 'false' ? false : v), z.boolean())
-        : z.boolean();
-    case 'number':
-      return coerce ? z.coerce.number() : z.number();
-    case 'date':
-      return z.union([z.iso.datetime({ offset: true }), z.iso.date()]);
-    case 'enum': {
+const coerceBoolean = (coerce: boolean) =>
+  coerce
+    ? z.preprocess((v) => (v === 'true' ? true : v === 'false' ? false : v), z.boolean())
+    : z.boolean();
+
+// The built-in types.
+const EQUALITY = ['eq', 'ne', 'in'] as const;
+const ORDERED = ['eq', 'ne', 'in', 'lt', 'lte', 'gt', 'gte'] as const;
+for (const type of [
+  {
+    name: 'enum',
+    ops: EQUALITY,
+    value: ({ readField }) => {
       const base = readField ? inner(readField) : undefined;
       return base instanceof z.ZodEnum ? base : z.string();
-    }
-    case 'id':
-      return z.string().min(1);
-    case 'text':
-      return z.string().max(200);
-  }
-}
+    },
+  },
+  { name: 'id', ops: EQUALITY, value: () => z.string().min(1) },
+  { name: 'boolean', ops: ['eq', 'ne'], value: ({ coerce }) => coerceBoolean(coerce) },
+  { name: 'text', ops: [...EQUALITY, 'contains'], value: () => z.string().max(200) },
+  {
+    name: 'date',
+    ops: ORDERED,
+    value: () => z.union([z.iso.datetime({ offset: true }), z.iso.date()]),
+  },
+  {
+    name: 'number',
+    ops: ORDERED,
+    value: ({ coerce }) => (coerce ? z.coerce.number() : z.number()),
+  },
+] satisfies ListFieldType[])
+  defineListFieldType(type);
 
 /** The raw object form, strict: unknown fields and unknown operators are rejected. */
 export function listInputObject(spec: Spec, opts: { coerce?: boolean; maxLimit?: number } = {}) {
   const { list } = spec;
   const coerce = opts.coerce ?? false;
   const shape: Record<string, z.ZodType> = {};
-  for (const [field, type] of Object.entries(list.filterable)) {
-    const value = valueSchema(type, spec.schemas.read.shape[field], coerce);
+  for (const [field, typeName] of Object.entries(list.filterable)) {
+    const type = listFieldType(typeName);
+    const ctx: FieldValueContext = { readField: spec.schemas.read.shape[field], coerce };
+    const value = type.value(ctx);
     const ops: Record<string, z.ZodType> = {};
-    for (const op of OPS[type]) {
+    for (const op of type.ops) {
+      const own = type.opValue?.(op, ctx);
+      if (own) {
+        ops[op] = own.optional();
+        continue;
+      }
       const many = z.array(value).min(1).max(100);
       ops[op] =
         op === 'in'
@@ -108,7 +189,8 @@ export function listInputObject(spec: Spec, opts: { coerce?: boolean; maxLimit?:
             ).optional()
           : value.optional();
     }
-    shape[field] = z.union([value, z.object(ops).strict()]).optional();
+    const byOp = z.object(ops).strict();
+    shape[field] = (type.ops.includes('eq') ? z.union([value, byOp]) : byOp).optional();
   }
   if (list.search?.length) shape.q = z.string().min(1).max(200).optional();
   const limit = z
@@ -119,17 +201,26 @@ export function listInputObject(spec: Spec, opts: { coerce?: boolean; maxLimit?:
   shape.sort = z.string().max(200).optional();
   shape.limit = (coerce ? z.coerce.number().pipe(limit) : limit).optional();
   shape.cursor = z.string().max(2000).optional();
-  shape.count = (coerce ? valueSchema('boolean', undefined, true) : z.boolean()).optional();
+  shape.count = coerceBoolean(coerce).optional();
   return z.object(shape).strict();
 }
+
+const isOpForm = (v: unknown, ops: readonly string[]): v is Record<string, unknown> =>
+  v !== null &&
+  typeof v === 'object' &&
+  !Array.isArray(v) &&
+  Object.keys(v).every((k) => ops.includes(k));
 
 function normalize(spec: Spec, raw: Record<string, unknown>, ctx: z.RefinementCtx): ListQuery {
   const { list } = spec;
   const filters: ListFilter[] = [];
-  for (const field of Object.keys(list.filterable)) {
+  for (const [field, typeName] of Object.entries(list.filterable)) {
     const v = raw[field];
     if (v === undefined) continue;
-    if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+    const ops: readonly string[] = opsOf(typeName);
+    // The operator form: an object whose keys are all this type's operators. Any other value
+    // (an object-valued type's point, say) is a bare value, which means eq.
+    if (isOpForm(v, ops)) {
       for (const [op, value] of Object.entries(v)) {
         if (value !== undefined) filters.push({ field, op: op as FilterOp, value });
       }

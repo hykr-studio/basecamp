@@ -1,6 +1,13 @@
-import { HistoryEntry, type Principal } from '@hykr/contracts';
-import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@hykr/core';
+import { FrameworkCapabilities, HistoryEntry, type Principal } from '@hykr/contracts';
+import {
+  CurrentPrincipal,
+  entityDef,
+  HumanOnlyGuard,
+  PrincipalGuard,
+  projectRead,
+} from '@hykr/core';
 import { type Database, events } from '@hykr/db';
+import { can } from '@hykr/policy';
 import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
 import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 import { and, asc, desc, eq, gt, inArray, or } from 'drizzle-orm';
@@ -38,6 +45,13 @@ function titleOf(before: unknown, after: unknown): string | null {
   return null;
 }
 
+/** A stored row as this person may see it: a hidden field never names a line in the feed. */
+function seenBy(p: Principal, resourceType: string, row: unknown): unknown {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+  const values = row as Record<string, unknown>;
+  return entityDef(resourceType)?.project(values, p) ?? projectRead(resourceType, values, p);
+}
+
 /**
  * A record's history from the audit trail: who asked, who approved, what happened. Without a
  * record, the latest 20 across every record (Today's "what the assistant did"), newest first.
@@ -52,14 +66,15 @@ export class HistoryController {
   @Get()
   async list(@CurrentPrincipal() p: Principal, @Query() q: HistoryQuery): Promise<HistoryEntry[]> {
     const me = p.actor.id;
-    // In this business: what you (or the assistant for you) did; ops see the whole business's.
-    const everyone = (p.roles ?? []).some((r) => r === 'ops' || r === 'admin');
+    // In this business: what you (or the assistant for you) did; `history.all` (ops and admins
+    // by default) sees the whole business's.
+    const everyone = can(p, FrameworkCapabilities.wholeHistory);
     const one = q.resourceType && q.resourceId;
     const scope = and(
       eq(events.tenantId, p.tenantId ?? ''),
       everyone ? undefined : or(eq(events.actorId, me), eq(events.actingFor, me)),
     );
-    const rows = await this.db
+    const found = await this.db
       .select()
       .from(events)
       .where(
@@ -75,6 +90,11 @@ export class HistoryController {
       )
       .orderBy(one ? asc(events.at) : desc(events.at))
       .limit(one ? 50 : 20);
+    const rows = found.map((r) => ({
+      ...r,
+      before: seenBy(p, r.resourceType, r.before),
+      after: seenBy(p, r.resourceType, r.after),
+    }));
     // A request or a delete carries no row: name the record from its latest line that does.
     const titles = new Map<string, string>();
     const unnamed = [
@@ -86,12 +106,17 @@ export class HistoryController {
     ];
     if (!one && unnamed.length) {
       const named = await this.db
-        .select({ id: events.resourceId, before: events.before, after: events.after })
+        .select({
+          id: events.resourceId,
+          type: events.resourceType,
+          before: events.before,
+          after: events.after,
+        })
         .from(events)
         .where(and(scope, inArray(events.resourceId, unnamed)))
         .orderBy(desc(events.at));
       for (const n of named) {
-        const title = titleOf(n.before, n.after);
+        const title = titleOf(seenBy(p, n.type, n.before), seenBy(p, n.type, n.after));
         if (n.id && title && !titles.has(n.id)) titles.set(n.id, title);
       }
     }
