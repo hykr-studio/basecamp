@@ -1,24 +1,63 @@
 import {
   type Assurance,
   type Channel,
+  capabilitiesOf,
+  checkRoles,
+  knownRoles,
   type Principal,
   parseSubjectKey,
   type Subject,
-  TenantRole,
 } from '@hykr/contracts';
 import { contactById, ensureDefaultTenant, membershipOf, userExists } from '@hykr/db';
-import { ForbiddenException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
 
 /** The part of a principal that says who it is for and what they may do, in which business. */
-export type Standing = Required<Pick<Principal, 'subject' | 'tenantId' | 'roles' | 'assurance'>> &
+export type Standing = Required<
+  Pick<Principal, 'subject' | 'tenantId' | 'roles' | 'capabilities' | 'assurance'>
+> &
   Pick<Principal, 'customerId'>;
 
-const roles = (values: readonly string[]) =>
-  values.flatMap((r) => {
-    const parsed = TenantRole.safeParse(r);
-    return parsed.success ? [parsed.data] : [];
-  });
+/**
+ * How sure a channel makes us, at most: WhatsApp vouches only for a number, and a share link
+ * for even less until it asks for a code. A channel can only lower assurance, never raise it.
+ */
+const CHANNEL_ASSURANCE: Record<Channel, Assurance> = {
+  app: 'session',
+  voice: 'session',
+  api: 'session',
+  mcp: 'session',
+  webmcp: 'session',
+  background: 'session',
+  whatsapp: 'whatsapp_number',
+  share: 'whatsapp_number',
+};
+
+const logger = new Logger('PrincipalResolver');
+const warned = new Set<string>();
+
+/** The registered roles among these; an unknown one grants nothing, and is logged once. */
+function rolesOf(values: readonly string[]): string[] {
+  const known = knownRoles(values);
+  for (const r of values)
+    if (!known.includes(r) && !warned.has(r)) {
+      warned.add(r);
+      logger.warn(`Role "${r}" is in a membership but nobody registered it: it grants nothing`);
+    }
+  return known;
+}
+
+/** Roles and what they allow, as a principal carries them. */
+const standingOf = (values: readonly string[]) => {
+  const roles = rolesOf(values);
+  return { roles, capabilities: capabilitiesOf(roles) };
+};
 
 /**
  * Who a request is for, from facts the server holds: the session, the person or contact an
@@ -28,7 +67,10 @@ const roles = (values: readonly string[]) =>
  */
 @Injectable()
 export class PrincipalResolver {
-  constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {}
+  constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {
+    // When the API or worker starts: a role naming a capability nobody defines stops it.
+    checkRoles();
+  }
 
   /**
    * A person, in a business they belong to (that one, or their default). A WhatsApp turn is
@@ -50,7 +92,7 @@ export class PrincipalResolver {
     return {
       subject: { kind: 'user', userId },
       tenantId: membership.tenantId,
-      roles: roles(membership.roles),
+      ...standingOf(membership.roles),
       ...(membership.customerId ? { customerId: membership.customerId } : {}),
       assurance: this.assurance(opts.channel),
     };
@@ -74,7 +116,7 @@ export class PrincipalResolver {
     return {
       subject: { kind: 'contact', contactId },
       tenantId: contact.tenantId,
-      roles: ['customer'],
+      ...standingOf(['customer']),
       ...(contact.customerId ? { customerId: contact.customerId } : {}),
       assurance: 'whatsapp_number',
     };
@@ -117,6 +159,7 @@ export class PrincipalResolver {
   }
 
   private assurance(channel: Channel | undefined): Assurance {
-    return channel === 'whatsapp' ? 'whatsapp_number' : 'session';
+    // An unknown channel (an old stored principal) counts as the weakest.
+    return channel ? (CHANNEL_ASSURANCE[channel] ?? 'whatsapp_number') : 'session';
   }
 }

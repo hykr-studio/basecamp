@@ -24,6 +24,8 @@ export interface CoreOptions {
   agents: AgentKey[];
   /** How long a parked operation waits for its owner. Default 24 hours. */
   approvalTtlMs?: number;
+  /** How long a business's settings stay cached in this process (TenantConfigService). Default 10 s. */
+  tenantConfigTtlMs?: number;
 }
 
 /** A transaction handle: what every write and every command's repository calls receive. */
