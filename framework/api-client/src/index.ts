@@ -371,3 +371,5 @@ export function createApiClient(opts: ApiClientOptions) {
 }
 
 export type ApiClient = ReturnType<typeof createApiClient>;
+
+export { type ReadToolResult, runReadTool } from './read-tools.js';

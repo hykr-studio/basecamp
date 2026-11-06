@@ -31,7 +31,7 @@ places:
 | Where | What you write | What the framework does with it |
 |---|---|---|
 | `api/src/server.ts` | `defineServer({ name, persona, help, channel, modules, migrations })` | Serves the REST API, runs the write path (rules, approvals, audit), builds the assistant and its tools, sends notifications, runs the WhatsApp channel |
-| `mobile/src/app/_layout.tsx` | `<AppShell app modules catalog registry config />` | Renders the shell: sign-in, navigation, the assistant thread, approvals, the canvas, saved pages and voice. `modules` are your app modules (`defineAppModule`) |
+| `mobile/src/app/_layout.tsx` | `<AppShell app modules plugins catalog registry config />` | Renders the shell: sign-in, navigation, the assistant thread, approvals, the canvas, saved pages and voice. `modules` are your app modules (`defineAppModule`); `plugins` the framework features you use (`livePlugin()`, `pushPlugin()`, `webMcpPlugin()`) |
 
 Everything else in your application is one of these:
 
@@ -884,7 +884,8 @@ export const jobs = defineAppModule({
     bindScreen(JobDetailScreen, ({ id }) => <JobDetail id={id} embedded />);
   },
   hrefFor: { job: (id) => `/jobs/${id}` },
-  // Read tools a browser agent may call on these screens (WebMCP), by useScreenContext name.
+  // Read tools a browser agent may call on these screens (WebMCP), by useScreenContext name:
+  // list-jobs and get-job, with the person's access. `webMcpPlugin()` in _layout.tsx offers them.
   webmcp: { jobs: { reads: ['jobs'] }, job: { reads: ['jobs'] } },
 });
 ```
@@ -1203,7 +1204,8 @@ export default function Pages() {
 `_layout.tsx`, `pages/[id].tsx` and `+not-found.tsx` stay as the scaffold made them. They
 render the framework's shell and screens: `_layout.tsx` passes `settings`, the modules barrel
 (`import * as modules from '@/modules'`), `catalog`, `registry` and the framework plugins
-(`livePlugin()` for live updates, `pushPlugin()` for push notifications) to `<AppShell>`, and
+(`livePlugin()` for live updates, `pushPlugin()` for push notifications, `webMcpPlugin()` for a
+browser agent's read tools) to `<AppShell>`, and
 `+not-found.tsx` also serves the framework plugins' screens. Rename the app in `mobile/app.json` (`name`, `slug`,
 `scheme`, the iOS `bundleIdentifier` and the Android `package`). If you change `scheme`, change
 it in `_layout.tsx` too.
