@@ -24,5 +24,7 @@ export const todos = defineAppModule({
     bindView(TodoItemView, TodoItemComponent);
   },
   hrefFor: { todo: () => '/todos' },
+  // While the to-dos screen is open, a browser agent may list and get to-dos (WebMCP, read-only,
+  // with the person's own access): the tools list-todos and get-todo.
   webmcp: { todos: { reads: ['todos'] } },
 });

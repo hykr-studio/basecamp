@@ -3,5 +3,7 @@
 export { documentsFeature } from './documents/index.js';
 export { eventsFeature } from './events/index.js';
 export { filesFeature } from './files/index.js';
+export { liveFeature } from './live/index.js';
 export { modelsFeature } from './models/index.js';
 export { moneyFeature } from './money/index.js';
+export { pushFeature } from './push/index.js';

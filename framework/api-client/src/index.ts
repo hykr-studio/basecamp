@@ -20,7 +20,9 @@ import {
   type Page,
   type PresignFileInput,
   type PresignFileResult,
+  type PushDevice,
   pathParams,
+  type RegisterPushToken,
   type RenderDocumentInput,
   RenderDocumentSpec,
   SendDocumentSpec,
@@ -34,6 +36,15 @@ import {
   type WriteResult,
 } from '@hykr/contracts';
 import type { z } from 'zod';
+import { type LiveMessage, liveMessages, textOf } from './live.js';
+
+export {
+  type LiveMessage,
+  liveMessages,
+  readServerSentEvents,
+  type ServerSentEvent,
+  textOf,
+} from './live.js';
 
 export class ApiError extends Error {
   constructor(
@@ -156,6 +167,21 @@ export function createApiClient(opts: ApiClientOptions) {
     // A last event without its blank line still counts.
     const last = eventOf(buffer + decoder.decode().replace(/\r\n?/g, '\n'));
     if (last) yield last;
+  }
+
+  /**
+   * The live stream (GET /api/live): `ready`, then one `change` per event about a record the
+   * person may read. Resolves when the server closes it; rejects on a refusal or a network
+   * error. Abort with `signal`.
+   */
+  async function live(onMessage: (m: LiveMessage) => void, signal?: AbortSignal): Promise<void> {
+    const res = await fetch(`${opts.baseUrl}/api/live`, {
+      credentials: opts.credentials,
+      headers: { accept: 'text/event-stream', ...(await opts.headers?.()) },
+      signal,
+    });
+    if (!res.ok || !res.body) throw new ApiError(res.status, parseBody(await res.text()));
+    for await (const m of liveMessages(textOf(res.body))) onMessage(m);
   }
 
   function entity<S extends EntitySpec>(spec: S): EntityClient<S> {
@@ -357,6 +383,13 @@ export function createApiClient(opts: ApiClientOptions) {
       ),
     chat: (input: ChatRequest) => call<ChatResponse>('POST', '/api/chat/once', input),
     chatStream,
+    live,
+    /** This device, for push (people only); forget needs no session. */
+    push: {
+      register: (input: RegisterPushToken) => call<PushDevice>('POST', '/api/push/tokens', input),
+      devices: () => call<PushDevice[]>('GET', '/api/push/tokens'),
+      forget: (token: string) => call<null>('POST', '/api/push/tokens/forget', { token }),
+    },
     /** Voice: a person starts a session; the voice worker reports its end. */
     voice: {
       session: (input: Partial<VoiceSessionRequest> = {}) =>
@@ -377,3 +410,5 @@ export function createApiClient(opts: ApiClientOptions) {
 }
 
 export type ApiClient = ReturnType<typeof createApiClient>;
+
+export { type ReadToolResult, runReadTool } from './read-tools.js';

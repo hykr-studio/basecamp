@@ -96,4 +96,12 @@ describe('defineNotification', () => {
       /named twice/,
     );
   });
+
+  it('needs a title and body for push, and nothing else', () => {
+    expect(() => defineNotification({ ...base, channels: ['push', 'email'] })).toThrow(
+      /push is a channel but has no title and body/,
+    );
+    const push = { title: () => 'Done', body: () => 'It is done.', url: () => '/x' };
+    expect(defineNotification({ ...base, channels: ['push', 'email'], push }).push).toBe(push);
+  });
 });

@@ -165,7 +165,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/api/src/runtime.ts`, `start.ts` | `defineServer`, `startApi`, `startWorker`, `migrate`, `runTemplates`, `runEval`, `startStudio`. `testing.ts` is `@hykr/api/testing`. `hooks.ts` holds the server's extension points (section 5.9), `module.ts` `defineModule`, and `module-checks.ts` the boot checks across modules (section 5.11). |
 | `framework/api/src/channels/` | WhatsApp webhook, queues, sending, notifications dispatch, template sync, handoff, back office API, erasure |
 | `framework/api/src/modules/` | Chat, threads, history, me, voice, pages |
-| `framework/app/src/` | `AppShell`, `defineAppModule` and the plugin types (`framework/app-domain.ts`), their merge (`framework/compose-app.ts`) and plugin slots (`framework/plugins.ts`), data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; primitives in `@hykr/app/ui` |
+| `framework/app/src/` | `AppShell`, `defineAppModule` and the plugin types (`framework/app-domain.ts`), their merge (`framework/compose-app.ts`) and plugin slots (`framework/plugins.ts`), data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; framework features as plugins in `features/<x>/` (live, push, WebMCP); primitives in `@hykr/app/ui` |
 | `framework/cli/` | The `basecamp` command (`module-add.ts` scaffolds a module, `db-rebase.ts` regenerates migrations after a rebase), plus the `compose.yaml` and `infra/` it starts |
 
 ### Import rules
@@ -666,7 +666,7 @@ The response is `{ items, nextCursor, total? }`. Pagination is keyset: pass `nex
 | `expose` | HTTP route | Agent tool | Use it for |
 |---|---|---|---|
 | `'all'` | yes | yes | The default |
-| `'human'` | yes, with `HumanOnlyGuard` | no, and an agent call is denied `humans_only` | Irreversible actions. The meeting's `delete` is `'human'`. |
+| `'human'` | yes, with `HumanOnlyGuard` | no, and an agent call is denied `humans_only` (so is a page's WebMCP call) | Irreversible actions. The meeting's `delete` is `'human'`. |
 | `'internal'` | no | no | Records only commands should write, through `def.repo` |
 
 For commands, `'human'` gives a people-only route. To keep a command off the agent, leave out `tool`.
@@ -800,6 +800,18 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   merging. `whatsapp` is required only when WhatsApp is a channel. `sent` ends the fallback order;
   `unavailable` or a final failure moves on; a failure for now retries that channel. A failure found
   later goes to `NotifyService.fallback(meta)`. An unregistered channel stops the start.
+- **Push.** `push` is the framework's own delivery channel (`features/push`, decisions in
+  `docs/decisions/A9B15.md`). A notification that lists it needs `push: { title, body, url? }`. The
+  app's `pushPlugin()` registers the device's Expo token (`POST /api/push/tokens`) for the person and
+  business. Push reaches only devices registered in the notification's business. No device, or Expo
+  refusing every device, moves on at once; a receipt error on every device (polled each minute by the
+  `push.receipts` schedule) moves on later through `NotifyService.fallback`. A gone device is forgotten.
+- **Live updates.** `GET /api/live` (server-sent events, people only) sends `{ name, type, id }` for
+  each committed event about a record the person may read now: an entity's record through its scoped
+  read (as `GET`), any other type through a contributed `liveResources` check (`approval` is the
+  framework's). The `live.relay` subscriber publishes events on Redis per business, ids only. A record
+  that is gone reaches only streams already told about it and the person who changed it. The app's
+  `livePlugin()` invalidates the matching queries, and everything after a reconnect.
 - **Inbound hooks.** Each WhatsApp message the code did not answer itself (buttons, keywords) passes
   `inboundHooks` before its turn: `{ handled: true }` keeps it out, `{ context }` adds lines the turn
   reads. A hook that throws is logged and skipped. A burst that says "delete my data" passes no hook:
@@ -877,6 +889,21 @@ claimed twice, two plugins or two route shapes with one name, a view or screen b
 
 `Register` takes `{ catalog }` or `{ modules }` (isomorphic `ModuleSpec`s, entities merged).
 The tests are in `framework/app/src/framework/*.test.ts` and `framework/ui-registry/src/react.test.ts`.
+
+**WebMCP.** A screen's `webmcp` declaration (`{ [screen]: { reads: ['todos'] } }`, keyed by its
+`useScreenContext({ screen })` name, on a module or on the app's settings) lists the entities a
+browser agent may read while that screen is open. `webMcpPlugin()` from `@hykr/app`, listed in
+`<AppShell plugins>`, offers them to the browser (`document.modelContext`, or the older
+`navigator.modelContext`; a browser or a native app without one gets nothing) for a signed-in person
+only, and takes them back when the screen changes or the person signs out. Each entity gives the
+assistant's own read tools, `list-<plural>` and `get-<name>` (`entityReadTools(spec)` in
+`@hykr/contracts`: same ids, wording and input, only actions exposed `'all'`), marked read-only.
+A screen that reads an entity with neither stops the app at startup. A call runs through the API
+client with the person's session (`runReadTool` in `@hykr/api-client`) and `x-channel: webmcp`, so
+the API applies their business, access and field hiding. The server treats that channel as
+read-only (anything but GET or HEAD is 403 `read_only_channel`) and agent-driven (people-only
+routes, approvals and chat turns are 403). The header is not a security boundary: any script on the
+page holds the same session. Decisions: `docs/decisions/A2.md`.
 
 ### 5.12 Files on records
 
@@ -1042,7 +1069,7 @@ Every request becomes a `Principal` (`framework/contracts/src/principal.ts`). Th
 | `tenantId`, `roles`, `customerId` | The business, your roles in it, and your customer record if you are one |
 | `capabilities` | What your roles allow there, by name (`'backoffice.use'`). Worked out by the server; check it with `can(p, …)` (6.4) |
 | `assurance` | `'whatsapp_number'` (a number alone) < `'otp'` (a one-time code; nothing sets it yet) < `'session'` (signed in) |
-| `channel` | `'app'`, `'voice'`, `'whatsapp'`, `'mcp'`, `'webmcp'`, `'api'`, `'background'` or `'share'`. A session request has none. |
+| `channel` | `'app'`, `'voice'`, `'whatsapp'`, `'mcp'`, `'webmcp'`, `'api'`, `'background'` or `'share'`. A session request has none, unless it names `app` or `webmcp` in `x-channel` (any other value is 400 `bad_channel`). `webmcp` (a page's WebMCP tools) only reads and is refused on people-only routes. |
 | `runId`, `agentVersion` | Set on agent calls, and written to audit |
 | `approvedBy` | Set on an approval replay |
 
@@ -1361,9 +1388,10 @@ export const MeetingReminder = defineTemplate({
 | `send` | `{ on: [events] }`: send now |
 | `when` | `(row) => boolean`: checked at send time |
 | `to` | `(row) => [{ userId } \| { customerId } \| { contactId } \| { roles }]` |
-| `channels` | Fallback order, e.g. `['whatsapp', 'email']`, or a registered delivery channel (section 5.10) |
+| `channels` | Fallback order, e.g. `['push', 'whatsapp', 'email']`; also any registered delivery channel (section 5.10) |
 | `whatsapp` | `{ template, params(row, reader) }`. Required when `'whatsapp'` is a channel (and for `onButton`, `approval`). |
 | `email` | `{ subject, body }`. Required when `'email'` is in `channels`. |
+| `push` | `{ title(row, reader), body(row, reader), url?(row) }`: what the phone shows, and the app path a tap opens. Required when `'push'` is in `channels`. |
 | `onButton` | `{ [buttonId]: (row) => { reschedule?: Date; reply?: Labels } \| undefined }` |
 | `approval` | `(row) => approvalId`: the quick replies `approve` and `reject` decide that approval |
 | `dedupe` | Required. `(row) => string`: one pending schedule per key |
@@ -1590,7 +1618,7 @@ These are not built. Each has a workaround for now.
 | Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `expo-server-sdk` (in `@hykr/api`), `@mastra/memory` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-notifications`, `expo-device` and `expo-location` (in the mobile app). Each feature that uses one adds its code. Their Expo config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client (the image picker's is in, for files). Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `@mastra/memory` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-location` (in the mobile app). Each feature that uses one adds its code. Their Expo config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client (the image picker's is in, for files, and `expo-notifications`', for push). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. |
 | Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |
@@ -1613,7 +1641,15 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter), but no framework feature fills them yet, and WebMCP declarations (`webmcp`) are not registered with the browser. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots. Routes, nav and nav filters have no framework feature yet. |
+| Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
+| Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
+| Push through FCM or APNs directly | Push goes through Expo's push service only. |
+| Live deletions for everyone | A deleted record reaches only streams already told about it and the person who deleted it; others see it go at their next refetch (focus, reconnect, their own write). |
+| Live back office | The back office still polls its inbox (10 s) and an open conversation (5 s): inbound messages and handoffs write no outbox events. |
+| Missed live events | A reconnect refetches every query; `Last-Event-ID` replay is not supported. |
+| WebMCP actions | WebMCP tools only read; the API refuses any write on the `webmcp` channel. There are no declarative forms or write tools for a browser agent, and no read tool for a command. Public and share-link screens offer no tools. |
+| One wording for read tools | The assistant's list and get tools (`tool-factory.ts`) still build their own text; WebMCP takes the same wording from `entityReadTools`. Keep the two in step until the assistant uses it. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |
 | Per-module tools for the assistant | The assistant sees every module's tools on every turn. |
 | An approval sweeper | Expiry is checked when someone decides. Expired rows stay `pending` in `GET /api/approvals` until then. |
