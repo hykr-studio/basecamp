@@ -38,9 +38,12 @@ export function BusinessBrand(props: MarkProps) {
   return <Mark brand={settings.data?.branding} {...props} />;
 }
 
-/** The page's own address on the web; nothing elsewhere. */
-const pageOrigin = () =>
-  Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : null;
+/** The page's own address on the web, when it could be a business's (https); nothing elsewhere. */
+const pageOrigin = () => {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+  const { origin } = window.location;
+  return origin.startsWith('https://') ? origin : null;
+};
 
 /**
  * Before signing in: on a business's verified address, its name and logo; anywhere else (the
