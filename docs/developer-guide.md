@@ -895,7 +895,10 @@ with it.
   `webhook-signature`), sent only to public addresses (`INTEGRATIONS_ALLOWED_HOSTS` lets a
   development host through), and retried on `INTEGRATIONS_RETRY_SCHEDULE`. The log is
   `GET /api/integrations/endpoints/:id/deliveries` and `GET /api/integrations/deliveries/:id`;
-  `POST .../retry` sends one again. An entity opts out with `traits: { webhooks: false }`.
+  `POST .../retry` sends one again. Each try sends the stored body projected again for the
+  endpoint as it is then, so a capability taken away leaves retries and redeliveries too.
+  Changing an endpoint's URL or capabilities, or retrying its delivery, needs every capability
+  it reads with. An entity opts out with `traits: { webhooks: false }`.
   Receivers verify with `verifyWebhook` from `@hykr/connectors` or any Standard Webhooks library.
 - **Inbound.** A connector is a kind of sender (`defineConnector`, or `hmacConnector({ name,
   header, prefix })` for one that signs the body in a header; `standard-webhooks` is built in),
