@@ -705,8 +705,9 @@ claimed twice, two plugins or two route shapes with one name, a view or screen b
 `webMcpFor(screen)`. A framework feature plugs in as an `AppPlugin`, with optional slots:
 
 - `Provider`: wraps the app under the shell's providers, signed in or not;
-- `onSignedIn(user)`: runs once per signed-in person, and its returned cleanup at sign-out. Errors
-  are logged, never thrown into the app;
+- `onSignedIn(user)`: runs once per signed-in person, after the shell mounts, and its returned
+  cleanup at sign-out or when the shell installs again (Fast Refresh). Errors are logged, never
+  thrown into the app;
 - `routes`: screens at paths no route file claims, served by `+not-found` (`NotFoundScreen`). A
   `public` one also renders signed out, alone, without the shell;
 - `nav`: destinations for its routes;
