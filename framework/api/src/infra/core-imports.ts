@@ -23,6 +23,8 @@ export const coreImports = () => [
       // The voice worker: a relay that starts turns for the person it acts for.
       { id: VOICE_AGENT_ID, key: config.voiceAgentKey, relay: true, channel: 'voice' },
     ],
+    // Stored events carry this process's queue prefix: only its relay passes them on.
+    queuePrefix: config.queuePrefix,
   }),
   // The application's entities and commands.
   runtime().definition.module,

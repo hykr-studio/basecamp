@@ -3,10 +3,10 @@ import { Inject, type Type } from '@nestjs/common';
 import { CommandHandler, EventBus } from '@nestjs/cqrs';
 import type { z } from 'zod';
 import type { RuleContext } from '../entity/define-entity.js';
-import { toJson } from '../entity/define-entity.js';
 import { CORE_OPTIONS, type CoreOptions, type Tx } from '../tokens.js';
 import { registerOp } from '../write/approvals.js';
 import { type RunResult, runWrite, type WriteCtx, type WriteOp } from '../write/pipeline.js';
+import { presentOutput } from '../write/present.js';
 
 export interface CommandConfig<S extends CommandSpec, L, V> {
   /** What the rules need, loaded through entity repositories (owner-scoped: 404 if not theirs). */
@@ -32,6 +32,13 @@ export interface CommandConfig<S extends CommandSpec, L, V> {
    * the person it is for (a customer's request: the business's owner and ops).
    */
   approval?: ApproverRule;
+  /**
+   * The result as this principal may see it. Default: the output schema parses it, each part
+   * that reuses an entity's read schema is projected as that entity, then the read projectors
+   * run with the command's name. Give this when the output hides an entity in a union or a
+   * new schema (`.extend()`), so its fields are projected too.
+   */
+  present?: (value: V, p: Principal) => unknown;
 }
 
 export class AppCommand {
@@ -81,14 +88,15 @@ export function defineCommand<S extends CommandSpec, L, V>(
       summarize: config.summarize,
       approval: config.approval,
       run: (a) => config.run({ ...a, via }),
-      present: (value) => spec.output.parse(toJson(value)),
+      present: (value, p) =>
+        config.present ? config.present(value, p) : presentOutput(spec.output, value, p, spec.name),
     }),
   };
 }
 
 /** The CQRS handler for one command: it calls runWrite and publishes events after commit. */
 export function commandHandler(def: AnyCommandDef): Type {
-  registerOp(def.name, () => def.op());
+  registerOp(def.name, () => def.op(), def);
 
   @CommandHandler(def.Command)
   class Handler {

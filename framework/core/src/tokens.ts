@@ -24,6 +24,11 @@ export interface CoreOptions {
   agents: AgentKey[];
   /** How long a parked operation waits for its owner. Default 24 hours. */
   approvalTtlMs?: number;
+  /**
+   * This process's queue prefix (BULL_PREFIX), stamped on every stored event so only this
+   * deployment's relay passes it on. Default 'bull'.
+   */
+  queuePrefix?: string;
 }
 
 /** A transaction handle: what every write and every command's repository calls receive. */

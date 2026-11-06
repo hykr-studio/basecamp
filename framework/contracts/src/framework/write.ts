@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { Tier } from '../authorize.js';
 
 export const ApprovalStatus = z.enum(['pending', 'approved', 'rejected', 'expired', 'failed']);
 export type ApprovalStatus = z.infer<typeof ApprovalStatus>;
@@ -24,6 +25,10 @@ export const Approval = z.object({
   failureReason: z.string().nullable(),
   /** When the person decided it (null while it waits), so a client can say "since approved at 2:38". */
   decidedAt: z.iso.datetime().nullable().optional(),
+  /** What is at stake, when the decision that parked it said (see Tier). */
+  tier: Tier.nullable().optional(),
+  /** The amount it moves, in minor units (paise), when the decision said. */
+  amount: z.number().int().nullable().optional(),
 });
 export type Approval = z.infer<typeof Approval>;
 

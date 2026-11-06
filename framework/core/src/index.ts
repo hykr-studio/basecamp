@@ -28,6 +28,13 @@ export {
 } from './entity/define-entity.js';
 export { entityHandlers, entityOp } from './entity/handlers.js';
 export {
+  entityDef,
+  entityDefForSchema,
+  entityDefs,
+  entityRegistry,
+  registerEntityDef,
+} from './entity/registry.js';
+export {
   type AgentIdentity,
   type AgentIdentityProvider,
   type EntityPlugin,
@@ -56,9 +63,22 @@ export {
   type RequestMetaValue,
 } from './http/principal.js';
 export { PrincipalResolver, type Standing } from './http/resolver.js';
+export {
+  type ListFieldFilter,
+  type ListFieldSql,
+  listFieldSql,
+} from './query/field-sql.js';
 export { buildListSql, decodeCursor, encodeCursor } from './query/list-grammar.js';
 export { type AgentKey, CORE_OPTIONS, type Conn, type CoreOptions, type Tx } from './tokens.js';
-export { ApprovalEvent, ApprovalService, registerOp, toApproval } from './write/approvals.js';
+export {
+  ApprovalEvent,
+  ApprovalService,
+  approvalFor,
+  registerOp,
+  toApproval,
+} from './write/approvals.js';
+export { strongerDecision } from './write/decisions.js';
+export { eventFor, eventQueues, recordEvents, toEnvelope } from './write/events.js';
 export {
   type RunResult,
   runWrite,
@@ -66,3 +86,4 @@ export {
   type WriteCtx,
   type WriteOp,
 } from './write/pipeline.js';
+export { presentOutput } from './write/present.js';
