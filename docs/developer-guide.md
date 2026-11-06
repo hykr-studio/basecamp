@@ -1416,7 +1416,10 @@ call. What survives reaches the model as context lines, which it reads as data. 
 
 **The index.** `app.memory_index` keeps one vector per source and no text. A write hook marks every
 touched record of a trait entity (commands included, from `touched`) in the write's transaction; the
-worker embeds them each second. A message is indexed with the vector its turn's recall made. When a
+worker embeds them each second. It claims rows in a short transaction and calls the provider with
+none open (30 s timeout), so a write never waits for the provider; a result is kept only while the
+row still carries that run's claim (a newer write wins and the row is embedded again), and a claim
+older than two minutes is taken over. A message is indexed with the vector its turn's recall made. When a
 business's model policy changes, its vectors are made again with the new model, and a daily job
 (`memory.backfill`) finds records written before the trait. Distance is pgvector's when the database
 has the extension (`framework/db/sql/pre/memory.sql` creates it when offered), otherwise

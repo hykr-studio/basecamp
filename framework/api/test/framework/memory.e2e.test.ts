@@ -3,6 +3,8 @@
 // said, recalled by meaning before each turn and through GET /api/memory/recall, each memory
 // loaded again as the reader. Vectors come from the fake embedding (fake/embedding); the last
 // test switches a business to the stub gateway's embedding model.
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { TenantConfigService } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as api from '../../dist/index.js';
@@ -218,6 +220,29 @@ describe('indexing', () => {
       m.id,
     ]);
     expect(rows).toEqual([]);
+  });
+
+  it('a claim whose run died is taken over after its lease; a live run keeps its own', async () => {
+    const m = await memo(ana, { title: 'White bucket', body: 'Under the stairs' });
+    const row = () =>
+      pool
+        .query(`select state, claim from app.memory_index where source_id = $1`, [m.id])
+        .then((r) => r.rows[0]);
+    // Another run is embedding it right now: left alone.
+    await pool.query(
+      `update app.memory_index set state = 'pending', claim = 'live-run', claimed_at = now()
+       where source_id = $1`,
+      [m.id],
+    );
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(await row()).toEqual({ state: 'pending', claim: 'live-run' });
+    // That run died an hour ago: its claim has lapsed, and the row is embedded again.
+    await pool.query(
+      `update app.memory_index set claimed_at = now() - interval '1 hour' where source_id = $1`,
+      [m.id],
+    );
+    await indexed('memo', m.id);
+    expect(await row()).toEqual({ state: 'ready', claim: null });
   });
 
   it('records written before (or without a write) are found by the backfill', async () => {
@@ -531,5 +556,111 @@ describe("a business's embedding model changes", () => {
     );
     expect(rows.every((r) => r.model !== 'stub/embed')).toBe(true);
     expect((await recall(ana, { q: 'green ladder' })).body.model).toBe('stub/embed');
+  });
+});
+
+/**
+ * An embedding provider that answers nothing until it is released: what a slow or hung provider
+ * looks like to the indexer. Its vectors are [length of the text, 1, 0].
+ */
+async function heldProvider() {
+  let release = () => {};
+  const open = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const inputs: string[][] = [];
+  let waiting = 0;
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', async () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+      const input: string[] = Array.isArray(body.input) ? body.input : [body.input];
+      inputs.push(input);
+      waiting++;
+      await open;
+      waiting--;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          object: 'list',
+          model: body.model,
+          data: input.map((text, index) => ({
+            object: 'embedding',
+            index,
+            embedding: [text.length, 1, 0],
+          })),
+          usage: { prompt_tokens: input.length, total_tokens: input.length },
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    inputs,
+    waiting: () => waiting,
+    release: () => release(),
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+describe('the index waits for no provider', () => {
+  const eve = new Person('Eve Memory');
+  let provider: Awaited<ReturnType<typeof heldProvider>>;
+
+  beforeAll(async () => {
+    provider = await heldProvider();
+    process.env.MODEL_PROVIDERS = JSON.stringify([
+      {
+        id: 'held',
+        baseUrl: `${provider.url}/v1`,
+        apiKey: 'held-key',
+        models: [{ id: 'embed', kind: 'embedding' }],
+      },
+    ]);
+    await eve.signUp();
+    // Set directly: no policy event, so no rebuild runs into the test.
+    await settings((await me(eve)).tenantId, 'models', {
+      allowed: ['held/embed'],
+      embedding: 'held/embed',
+    });
+  });
+
+  afterAll(async () => {
+    provider?.release();
+    await provider?.close();
+  });
+
+  it('a record changed while its old words are being embedded is saved at once, and its new words win', async () => {
+    const made = await eve.call('POST', '/api/memos', { title: 'Grey tarp', body: 'On the roof' });
+    expect(made.status).toBe(201);
+    const id = made.body.value.id as string;
+    const row = () =>
+      pool
+        .query(`select state, claim, embedding from app.memory_index where source_id = $1`, [id])
+        .then((r) => r.rows[0]);
+    // The indexer has claimed the row and waits for the provider.
+    await eventually(() => provider.waiting() === 1);
+    expect(provider.inputs).toEqual([['Grey tarp. On the roof']]);
+    expect(await row()).toMatchObject({ state: 'pending', claim: expect.any(String) });
+
+    // The write locks nothing the indexer holds: it returns while the provider still waits.
+    const changed = await eve.call('PATCH', `/api/memos/${id}`, {
+      body: 'Folded in the garage by the door',
+    });
+    expect(changed.status).toBe(200);
+    expect(provider.waiting()).toBe(1);
+    expect(await row()).toMatchObject({ state: 'pending', claim: null });
+
+    // The old words' vector is not kept: the row is embedded again, with the new words.
+    provider.release();
+    const done = await eventually(async () => {
+      const r = await row();
+      return r?.state === 'ready' ? r : undefined;
+    });
+    expect(done.embedding).toEqual(['Grey tarp. Folded in the garage by the door'.length, 1, 0]);
+    expect(provider.inputs.at(-1)).toEqual(['Grey tarp. Folded in the garage by the door']);
   });
 });

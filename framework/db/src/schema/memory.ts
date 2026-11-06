@@ -69,6 +69,13 @@ export const memoryIndex = app.table(
     queues: text('queues').notNull().default('bull'),
     attempts: integer('attempts').notNull().default(0),
     error: text('error'),
+    /**
+     * The indexer run embedding a pending row (a token), and since when. The run writes its result
+     * only while the token is unchanged: a write that marks the row pending again clears it, and
+     * wins. A claim older than the indexer's lease is taken over.
+     */
+    claim: text('claim'),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()

@@ -124,7 +124,10 @@ export async function recentMessages(db: Conn, threadId: string, n: number): Pro
   return rows.map((r) => r.id);
 }
 
-/** A record to (re-)embed: pending, for this process's indexer. */
+/**
+ * A record to (re-)embed: pending, for this process's indexer. Any claim goes, so a run that is
+ * embedding the record's old words writes nothing (indexer.ts).
+ */
 export async function markPending(
   tx: Conn,
   a: { tenantId: string; type: string; id: string; queues: string },
@@ -145,6 +148,8 @@ export async function markPending(
         queues: a.queues,
         attempts: 0,
         error: null,
+        claim: null,
+        claimedAt: null,
         updatedAt: sql`now()`,
       },
     });
@@ -209,11 +214,22 @@ export async function backfill(
   return result.rowCount ?? 0;
 }
 
-/** Every vector of one business again (its embedding model changed): pending, for `queues`. */
+/**
+ * Every vector of one business again (its embedding model changed): pending, for `queues`; a run
+ * embedding with the old model writes nothing.
+ */
 export async function reindexAll(db: Conn, a: { tenantId: string; queues: string }) {
   const result = await db
     .update(memoryIndex)
-    .set({ state: 'pending', queues: a.queues, attempts: 0, error: null, updatedAt: sql`now()` })
+    .set({
+      state: 'pending',
+      queues: a.queues,
+      attempts: 0,
+      error: null,
+      claim: null,
+      claimedAt: null,
+      updatedAt: sql`now()`,
+    })
     .where(eq(memoryIndex.tenantId, a.tenantId));
   return result.rowCount ?? 0;
 }
