@@ -41,6 +41,8 @@ Then:
 
 1. `pnpm db:generate --name <domain>` (or `basecamp db generate`) and `pnpm db:migrate` for
    the new tables: the framework's migrations run first, then the application's.
+   Extensions, triggers and CHECK constraints go in idempotent SQL hooks in
+   `application/domain/sql/pre` and `sql/post`, which run around the migrations every time.
 2. `pnpm templates:sync` sends the new templates for review; `pnpm templates:check` passes once
    every template a notification uses is approved in English.
 3. `pnpm turbo run build typecheck test`, `pnpm lint`, `pnpm lint:deps`, and with the API
