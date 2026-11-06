@@ -33,11 +33,14 @@ export const MoneySection = defineSettingsSection('money', MoneySettings);
 // GET /api/money (the money feature in @hykr/api).
 reserveRoutes('money');
 
-/** A named amount from the business's settings, if it set one. */
+/**
+ * A named amount the business set, if any: from its `money` settings section, or from
+ * `tenantMoney` (@hykr/core), which carries the same `amounts`.
+ */
 export const moneyAmount = (
-  settings: { money?: MoneySettings } | undefined,
+  money: { amounts?: Readonly<Record<string, Money>> } | undefined,
   key: string,
-): Money | undefined => settings?.money?.amounts[key];
+): Money | undefined => money?.amounts?.[key];
 
 /**
  * Is the amount above the limit? Fails closed: no limit, or a limit in another currency,
