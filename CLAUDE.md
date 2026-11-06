@@ -31,7 +31,7 @@ pnpm dev              # framework tsc -w watchers + `basecamp dev` (API, worker,
 ```
 
 - `pnpm lint`: Biome check (`pnpm format` fixes it). Style: single quotes, 2-space indent, 100 columns.
-- `pnpm typecheck` and `pnpm test` run through turbo. `pnpm lint:deps` runs the dependency-cruiser boundary rules.
+- `pnpm typecheck` and `pnpm test` run through turbo. `pnpm lint:deps` runs the dependency-cruiser boundary rules; `pnpm lint:boundary` fails on product vocabulary in `framework/`.
 - CI (`.github/workflows/ci.yml`) runs lint, build, typecheck, lint:deps, db:migrate and test with
   `MODEL_MODE=fake`. A second `consumer` job packs every `@hykr/*` package, scaffolds an app with
   `create-basecamp` from the tarballs, then builds and typechecks it. If you change a package's public
@@ -97,8 +97,15 @@ Other gotchas:
 
 ## Architecture
 
-### Framework / application boundary (enforced by `pnpm lint:deps`, `.dependency-cruiser.cjs`)
+### Framework / application boundary (enforced by `pnpm lint:deps`, `.dependency-cruiser.cjs` and `pnpm lint:boundary`)
 
+- `framework/` holds **mechanisms only**. Anything that changes when the business changes is declared by the
+  application (modules, `defineServer` contributions) or stored per tenant (settings). It is never a
+  constant, enum value, default list, string or framework test wording. That covers role names beyond the
+  generic built-ins, what an approval level means and its thresholds, currencies and number formats, tax
+  rules, states and SLAs, retention periods, prices, document templates, participant kinds and catalog
+  contents. `scripts/check-boundary.sh` (`pnpm lint:boundary`, also in CI) fails on product vocabulary in
+  `framework/`. Pre-existing wording is listed in `scripts/boundary-allow.txt`.
 - `framework/` never imports `application/`. The application passes its modules in at exactly two points:
   - the server: `application/api/src/server.ts`, through `defineServer({ name, persona, help, channel, modules, migrations, contributes })`, started by `startApi` / `startWorker`. Each module is `defineModule({ ...moduleSpec, server, views, screens, templates, notifications, agent, tables, contributes })`;
   - the app: `application/mobile/src/app/_layout.tsx`, through `<AppShell app modules catalog registry config />`.

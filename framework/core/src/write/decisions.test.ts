@@ -22,12 +22,12 @@ describe('strongerDecision', () => {
   });
 
   it('on a tie the first keeps its rule and reason', () => {
-    const first = needsApproval('plugin_tier', 'Sends to a client wait', { tier: 2 });
+    const first = needsApproval('plugin_review', 'Marked for review', { tier: 2 });
     const second = needsApproval('chore_update_needs_approval', 'Updates need your approval');
     expect(strongerDecision(first, second)).toEqual({
       decision: 'needs_approval',
-      rule: 'plugin_tier',
-      reason: 'Sends to a client wait',
+      rule: 'plugin_review',
+      reason: 'Marked for review',
       tier: 2,
     });
   });

@@ -29,7 +29,7 @@ const asObject = (v: unknown): Values | undefined =>
 /**
  * Store the named events a write produced, in its transaction: they exist exactly when the
  * write committed. Each `NamedEvent` becomes one row (other event objects stay in-process).
- * `delayMs` holds them back (a tier 1 write's undo window). The rows keep the record as
+ * `delayMs` holds them back (the write's undo window, undoMs). The rows keep the record as
  * stored, every field included; `eventFor` filters one for its reader.
  */
 export async function recordEvents(

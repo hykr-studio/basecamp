@@ -1,0 +1,10 @@
+# Wording in framework/ that predates the boundary rule (scripts/check-boundary.sh).
+# <path>:<text on the line>. Example values for WhatsApp template review and test data from
+# the original sample; changing an approved template's example means a new template version.
+framework/api/test/fixture/src/notifications.ts:example: { title: 'Site visit'
+framework/api/test/framework/tenancy.e2e.test.ts:visit('Asha site visit')
+framework/channels/src/channels.test.ts:'Site visit'
+framework/notifications/src/framework/templates.ts:'Cancel the site visit'
+framework/notifications/src/framework/templates.ts:'Free site visits on Saturdays.'
+framework/notifications/src/notifications.test.ts:'Cancel the site visit'
+framework/api/test/framework/notifications.e2e.test.ts:'Snag list'

@@ -18,7 +18,7 @@ export const CAPABILITY_NAME = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
 
 /** A role a business gives its people. By itself it grants nothing: access maps and capabilities do. */
 export interface RoleDef {
-  /** As stored in memberships.roles: 'owner', 'site_lead'. */
+  /** As stored in memberships.roles: 'owner', 'team_lead'. */
   name: string;
   label: Labels;
   /** Capabilities this role has, besides those that name it (`CapabilityDef.roles`). */

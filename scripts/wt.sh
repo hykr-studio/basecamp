@@ -8,7 +8,8 @@
 #                                    app_<id> from app_tpl, .env, pnpm install, server build
 #   scripts/wt.sh resetdb <id>       drop and recreate app_<id> from app_tpl
 #   scripts/wt.sh test <id> [args]   pnpm turbo run test in the worktree, at most 2 at a time
-#   scripts/wt.sh check <id>         fail if the branch commits generated drizzle migrations
+#   scripts/wt.sh check <id>         fail if the branch commits generated drizzle migrations,
+#                                    or framework/ holds product vocabulary (check-boundary.sh)
 #   scripts/wt.sh tpl                rebuild app_tpl from the main checkout's migrations
 #   scripts/wt.sh ci [--since <sha>|--full]   the CI sequence in the main checkout, fresh DB
 #   scripts/wt.sh rm <id>            remove the worktree and its database (keeps the branch)
@@ -94,6 +95,7 @@ case "$cmd" in
       exit 1
     fi
     echo "ok: no generated migrations on gap/$id"
+    (cd "$wt" && "$ROOT/scripts/check-boundary.sh")
     ;;
   tpl)
     psql_ "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'app_tpl' AND pid <> pg_backend_pid()" >/dev/null
@@ -121,6 +123,7 @@ case "$cmd" in
     step() { local name="$1"; shift; echo "::step $name"; "$@" || { echo "::fail $name"; exit 1; }; }
     step install pnpm install --frozen-lockfile
     step lint pnpm lint
+    step boundary scripts/check-boundary.sh
     step build pnpm build
     step typecheck pnpm typecheck
     step lint:deps pnpm lint:deps
@@ -139,6 +142,6 @@ case "$cmd" in
     echo "removed worktree and database for $id"
     ;;
   *)
-    sed -n '2,16p' "$0"; exit 2
+    sed -n '2,17p' "$0"; exit 2
     ;;
 esac

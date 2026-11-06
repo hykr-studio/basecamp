@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Channel } from './voice.js';
 
-/** A role's name: lower case, letters, digits and underscores ('owner', 'site_lead'). */
+/** A role's name: lower case, letters, digits and underscores ('owner', 'team_lead'). */
 export const ROLE_NAME = /^[a-z][a-z0-9_]{0,31}$/;
 
 /**

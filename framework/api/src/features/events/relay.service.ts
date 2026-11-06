@@ -20,7 +20,7 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * Puts each committed event on the queue of every subscriber that wants it: the shared `events`
  * queue for a subscriber with `handle`, its own queue otherwise. The job id is
  * `<subscriber>--<event id>`, so an event relayed twice (a crash between adding and marking it)
- * runs once. An event not yet available (a tier 1 undo window) waits until then.
+ * runs once. An event not yet available (an undo window) waits until then.
  */
 @Injectable()
 export class EventRelay implements OnApplicationBootstrap {

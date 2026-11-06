@@ -27,7 +27,7 @@ export const Approval = z.object({
   decidedAt: z.iso.datetime().nullable().optional(),
   /** What is at stake, when the decision that parked it said (see Tier). */
   tier: Tier.nullable().optional(),
-  /** The amount it moves, in minor units (paise), when the decision said. */
+  /** The amount it moves, in minor units of the currency, when the decision said. */
   amount: z.number().int().nullable().optional(),
 });
 export type Approval = z.infer<typeof Approval>;

@@ -38,13 +38,13 @@ export const domainEvents = app.table(
     requestId: text('request_id'),
     runId: text('run_id'),
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
-    /** Not passed on before this time: a tier 1 write's undo window. Otherwise occurredAt. */
+    /** Not passed on before this time: the write's undo window (undoMs). Otherwise occurredAt. */
     availableAt: timestamp('available_at', { withTimezone: true }).notNull(),
     /** The queue prefix (BULL_PREFIX) of the process that wrote it: only its relay takes it. */
     queues: text('queues').notNull().default('bull'),
     /** When a relay passed it on. */
     relayedAt: timestamp('relayed_at', { withTimezone: true }),
-    /** When it was withdrawn before being passed on (an undone tier 1 write). */
+    /** When it was withdrawn before being passed on (a write undone within its undo window). */
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   },
   (table) => [

@@ -48,7 +48,7 @@ declare module '@hykr/contracts' {
   }
 }
 
-/** Text matched by whole word: `title[hasWord]=tiles` finds "Order tiles", not "tilesets". */
+/** Text matched by whole word: `title[hasWord]=apples` finds "Order apples", not "applesauce". */
 defineListFieldType({
   name: 'fixtureWords',
   ops: ['eq', 'hasWord'],
@@ -124,8 +124,8 @@ export const guarded: EntityPlugin = {
         : null,
   ],
   decide: (_p, action, _row, input) => {
-    if (String(input?.title ?? '').includes('[client]'))
-      return needsApproval('chore_client_send', 'Sends to a client wait for an admin', {
+    if (String(input?.title ?? '').includes('[review]'))
+      return needsApproval('chore_review', 'Marked for review: an admin decides', {
         tier: 2,
         approver: { roles: ['admin'] },
       });

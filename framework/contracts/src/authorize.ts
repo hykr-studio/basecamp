@@ -3,9 +3,9 @@ import { Assurance } from './principal.js';
 import { Channel } from './voice.js';
 
 /**
- * How much an action puts at stake: 0 a read; 1 an internal write, undoable for a while; 2 a
- * send to a client or vendor, which waits for approval; 3 money, legal or irreversible, which
- * needs a named person to decide.
+ * How much an action puts at stake, as an ordinal: higher means more at stake, and where several
+ * decisions meet the highest wins. What each level means, which actions get it and who decides
+ * it is the application's approval policy, never the framework's.
  */
 export const Tier = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]);
 export type Tier = z.infer<typeof Tier>;
@@ -29,9 +29,9 @@ export const AuthorizeResult = z.object({
   tier: Tier.optional(),
   /** Who decides it, when the decision names them (an approver per amount band). */
   approver: Approver.optional(),
-  /** The amount it moves, in minor units (paise) of the business's currency. */
+  /** The amount it moves, in the currency's minor units (an integer). */
   amount: z.number().int().optional(),
-  /** How long the person can still undo it (tier 1), in milliseconds. */
+  /** How long the person can still undo it, in milliseconds (the decision's undo window). */
   undoMs: z.number().int().min(0).optional(),
 });
 export type AuthorizeResult = z.infer<typeof AuthorizeResult>;

@@ -101,7 +101,7 @@ describe('queues and schedules', () => {
 
 describe('events and subscribers', () => {
   it('a subscriber on task.* gets the creator’s business, the record and its id', async () => {
-    const created = await ana.call('POST', '/api/tasks', { title: 'Order tiles' });
+    const created = await ana.call('POST', '/api/tasks', { title: 'Order paper' });
     const id = created.body.value.id;
     const event = await eventually(() =>
       seen.events.find((e) => e.name === 'task.created' && e.resourceId === id),
@@ -109,7 +109,7 @@ describe('events and subscribers', () => {
     expect(event).toMatchObject({
       tenantId: anaTenant,
       resourceType: 'task',
-      row: { id, title: 'Order tiles', tenantId: anaTenant },
+      row: { id, title: 'Order paper', tenantId: anaTenant },
     });
     await ana.call('PATCH', `/api/tasks/${id}`, { done: true });
     await eventually(() =>

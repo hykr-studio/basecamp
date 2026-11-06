@@ -82,7 +82,7 @@ describe('approval rules see the action, the input and the row', () => {
 
 describe('decisions carry what is at stake', () => {
   it('the helpers keep the tier, approver, amount and undo window', () => {
-    const parked = needsApproval('order_send', 'Sends to a client wait', {
+    const parked = needsApproval('marked_review', 'Marked for review', {
       tier: 3,
       approver: { userId: 'ana', channels: ['app'], minAssurance: 'session' },
       amount: 250_000,
@@ -90,8 +90,8 @@ describe('decisions carry what is at stake', () => {
     });
     expect(AuthorizeResult.parse(parked)).toEqual({
       decision: 'needs_approval',
-      rule: 'order_send',
-      reason: 'Sends to a client wait',
+      rule: 'marked_review',
+      reason: 'Marked for review',
       tier: 3,
       approver: { userId: 'ana', channels: ['app'], minAssurance: 'session' },
       amount: 250_000,

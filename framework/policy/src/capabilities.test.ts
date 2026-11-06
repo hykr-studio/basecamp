@@ -55,8 +55,8 @@ describe('the framework roles and capabilities', () => {
   it('an unknown role grants nothing, and is not kept', () => {
     expect(capabilitiesOf(['wizard'])).toEqual([]);
     expect(knownRoles(['wizard', 'ops', 'ops', 'owner'])).toEqual(['ops', 'owner']);
-    expect(TenantRole.safeParse('Site Lead').success).toBe(false);
-    expect(TenantRole.safeParse('site_lead').success).toBe(true);
+    expect(TenantRole.safeParse('Team Lead').success).toBe(false);
+    expect(TenantRole.safeParse('team_lead').success).toBe(true);
   });
 });
 
@@ -83,7 +83,7 @@ describe('roles and capabilities added by an application', () => {
 
   it('names are checked', () => {
     expect(() => defineCapability({ name: 'reports', label })).toThrow('<area>.<action>');
-    expect(() => defineRole({ name: 'Site Lead', label })).toThrow('lower case');
+    expect(() => defineRole({ name: 'Team Lead', label })).toThrow('lower case');
     expect(() => defineRole({ name: 'lead', label, capabilities: ['nope'] })).toThrow(
       'is not a capability',
     );

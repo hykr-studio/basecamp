@@ -83,16 +83,16 @@ afterAll(shutdown);
 
 describe('entity plugins', () => {
   it('toValues sets a column the input cannot, never the business or the owner; toJson runs before parsing', async () => {
-    const made = await chore(owner, { title: '  Sweep the site  ' });
+    const made = await chore(owner, { title: '  Sweep the floor  ' });
     expect(made.status).toBe(201);
     // toJson trimmed the title; toValues gave it a due date.
-    expect(made.body.value).toMatchObject({ title: 'Sweep the site', dueOn: '2030-01-01' });
+    expect(made.body.value).toMatchObject({ title: 'Sweep the floor', dueOn: '2030-01-01' });
     const { rows } = await pool.query(
       'select title, tenant_id, owner_id, due_on::text as due_on from app.fixture_tasks where id = $1',
       [made.body.value.id],
     );
     expect(rows[0]).toEqual({
-      title: '  Sweep the site  ',
+      title: '  Sweep the floor  ',
       tenant_id: tenantId,
       owner_id: owner.id,
       due_on: '2030-01-01',
@@ -113,10 +113,10 @@ describe('entity plugins', () => {
   it("a plugin's decision parks with a tier and a named approver role; the park is audited", async () => {
     const made = await chore(owner, { title: 'Photos' });
     const id = made.body.value.id;
-    const res = await owner.call('PATCH', `/api/chores/${id}`, { title: '[client] Send photos' });
+    const res = await owner.call('PATCH', `/api/chores/${id}`, { title: '[review] Send photos' });
     expect(res.body).toMatchObject({
       status: 'needs_approval',
-      approval: { rule: 'chore_client_send', tier: 2 },
+      approval: { rule: 'chore_review', tier: 2 },
     });
     const approvalId = res.body.approval.id;
     const { rows } = await pool.query(
@@ -134,7 +134,7 @@ describe('entity plugins', () => {
     // The named role decides; the requester may not.
     expect((await owner.call('GET', `/api/approvals/${approvalId}`)).status).toBe(404);
     const seen = await admin.call('GET', `/api/approvals/${approvalId}`, undefined, inTenant());
-    expect(seen.body).toMatchObject({ tier: 2, input: { title: '[client] Send photos' } });
+    expect(seen.body).toMatchObject({ tier: 2, input: { title: '[review] Send photos' } });
     const approved = await admin.call(
       'POST',
       `/api/approvals/${approvalId}/approve`,
@@ -142,7 +142,7 @@ describe('entity plugins', () => {
       inTenant(),
     );
     expect(approved.body).toMatchObject({ status: 'approved', tier: 2 });
-    expect((await owner.call('GET', `/api/chores/${id}`)).body.title).toBe('[client] Send photos');
+    expect((await owner.call('GET', `/api/chores/${id}`)).body.title).toBe('[review] Send photos');
   });
 
   it("an entity's own rule parks a plain write", async () => {
@@ -168,7 +168,7 @@ describe('entity plugins', () => {
   });
 
   it('a write from a stale read answers 409; a missing row is still a 404', async () => {
-    const made = await chore(owner, { title: 'Order sand' });
+    const made = await chore(owner, { title: 'Order paper' });
     const p = principalOf(owner, ['owner']);
     const read = await ChoreDef.repo.get(db(), p, made.body.value.id);
     await owner.call('PATCH', `/api/chores/${read.id}`, { title: 'Order river sand' });
@@ -292,7 +292,7 @@ describe('a hidden field stays hidden wherever the record leaves', () => {
 
 describe('another business', () => {
   it('gets a 404 for a chore, its approval, and nothing from its events', async () => {
-    const made = await chore(owner, { title: 'Tile [client] quote' });
+    const made = await chore(owner, { title: 'Report [review] draft' });
     expect(made.body.status).toBe('needs_approval');
     const approvalId = made.body.approval.id;
     const other = await chore(owner, { title: 'Private chore' });
@@ -512,11 +512,11 @@ describe('registries', () => {
   });
 
   it('a contributed list field type filters over HTTP, and refuses what it does not take', async () => {
-    await chore(owner, { title: 'Order tiles' });
-    await chore(owner, { title: 'Count tilesets' });
-    const res = await owner.call('GET', '/api/chores?title[hasWord]=tiles');
+    await chore(owner, { title: 'Order apples' });
+    await chore(owner, { title: 'Count applesauce' });
+    const res = await owner.call('GET', '/api/chores?title[hasWord]=apples');
     expect(res.status).toBe(200);
-    expect(res.body.items.map((c: { title: string }) => c.title)).toEqual(['Order tiles']);
+    expect(res.body.items.map((c: { title: string }) => c.title)).toEqual(['Order apples']);
     expect((await owner.call('GET', '/api/chores?title[hasWord]=a%20b')).status).toBe(400);
     expect((await owner.call('GET', '/api/chores?title[contains]=tiles')).status).toBe(400);
   });

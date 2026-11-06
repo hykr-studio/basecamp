@@ -29,7 +29,7 @@ export const DomainEventEnvelope = z.object({
   requestId: z.string().optional(),
   runId: z.string().optional(),
   occurredAt: z.iso.datetime(),
-  /** Not passed on before this time (a tier 1 write's undo window). Omitted: at once. */
+  /** Not passed on before this time (the write's undo window, undoMs). Omitted: at once. */
   availableAt: z.iso.datetime().optional(),
 });
 export type DomainEventEnvelope = z.infer<typeof DomainEventEnvelope>;

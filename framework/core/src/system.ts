@@ -2,13 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { type CapabilityDef, capabilities, type Principal } from '@hykr/contracts';
 import { RUN_ID } from './http/identity.js';
 
-/** A job's name, as audited (the actor id): lower case and dotted, 'sla.sweeper'. */
+/** A job's name, as audited (the actor id): lower case and dotted, 'reminders.sweep'. */
 const JOB = /^[a-z][a-z0-9_.-]{0,63}$/;
 
 export interface SystemPrincipalOptions {
   /** The one business it works in. Every scoped query still starts here. */
   tenantId: string;
-  /** What runs, as audit names it: 'sla.sweeper', 'leads.route'. */
+  /** What runs, as audit names it: 'reminders.sweep', 'requests.route'. */
   job: string;
   /** Ties together the rows one run writes. Default: a new id. */
   runId?: string;

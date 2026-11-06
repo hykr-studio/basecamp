@@ -64,11 +64,11 @@ describe('contributions', () => {
   });
 
   it('the app serves as before with them installed', async () => {
-    const created = await ana.call('POST', '/api/tasks', { title: 'Order tiles' });
+    const created = await ana.call('POST', '/api/tasks', { title: 'Order paper' });
     expect(created.status).toBe(201);
-    expect(created.body).toMatchObject({ status: 'done', value: { title: 'Order tiles' } });
+    expect(created.body).toMatchObject({ status: 'done', value: { title: 'Order paper' } });
     const list = await ana.call('GET', '/api/tasks');
-    expect(list.body.items.map((t: { title: string }) => t.title)).toEqual(['Order tiles']);
+    expect(list.body.items.map((t: { title: string }) => t.title)).toEqual(['Order paper']);
   });
 
   it('a name is unique in its registry', () => {

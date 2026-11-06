@@ -16,7 +16,8 @@
     "db:migrate": "pnpm --dir application exec basecamp db migrate",
     "templates:sync": "pnpm --dir application exec basecamp templates sync",
     "templates:check": "pnpm --dir application exec basecamp templates check",
-    "eval": "pnpm --dir application exec basecamp eval"
+    "eval": "pnpm --dir application exec basecamp eval",
+    "lint:boundary": "scripts/check-boundary.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

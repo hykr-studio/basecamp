@@ -70,6 +70,7 @@ jobs:
         run: psql postgres://app:app@localhost:5432/app -v ON_ERROR_STOP=1 -f framework/cli/infra/postgres/init.sql
 
       - run: pnpm lint
+      - run: pnpm lint:boundary
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm lint:deps
