@@ -50,9 +50,9 @@ export const pointSql = (p: GeoPointValue): SQL =>
 
 /**
  * A point column, read and written as `{ lat, lng }`. Its type is plain `geography` (WGS84):
- * drizzle-kit quotes a type with a modifier (`"geography(Point,4326)"`, which Postgres refuses),
- * so the column is not narrowed to points in the table. Every write goes through `pointSql` (a
- * point, SRID 4326) and a read refuses anything but a point.
+ * drizzle-kit writes a type with a modifier as one quoted name (`"geography(Point,4326)"`,
+ * which Postgres refuses), so the table does not narrow the column to points. Every write goes
+ * through `pointSql` (a point, SRID 4326) and a read refuses anything but a point.
  */
 export const geoPoint = customType<{ data: GeoPointValue; driverData: string }>({
   dataType: () => 'geography',
