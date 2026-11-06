@@ -95,11 +95,17 @@ To bring another domain, replace the modules. Nothing in `framework/` changes. T
 
 Every row belongs to a business (a tenant) and is read and written only inside it. A person can
 hold several roles in a business. The framework registers `owner`, `admin`, `ops`, `staff` and
-`customer`; a domain adds its own with `contributes: { roles, capabilities }` (developer guide
-6.4). An entity's `access` says what each role reaches, per read and write:
+`customer`; a domain adds its own with `contributes: { roles, capabilities }`, relabels or
+re-grants any declared role with `roleOverrides`, and names the roles a business's creator and a
+WhatsApp contact get with `roleDefaults` (developer guide 6.4). Each business then defines its own
+roles from those capabilities and edits the declared ones (its `roles` settings, `/api/members`).
+An entity's `access` says what each role, or each capability, reaches, per read and write:
 
 - `own`: rows the person owns; `customer`: rows of the customer they are; `tenant`: every row
-  in the business.
+  in the business; `{ grant: 'granted' }`: the rows granted to the person one by one
+  (`/api/grants`), or, with `of` and `via`, the children of such a row.
+- A key may be a capability (`'orders.read_all': 'tenant'`): that is how a role a business made
+  reaches rows. A rule may be a list (`['own', { grant: 'granted' }]`).
 - A write may need `minAssurance: 'session'`: a WhatsApp number alone (`whatsapp_number`) is
   refused with `needs_assurance`.
 
@@ -112,7 +118,10 @@ the business's default owner.
 Anything else a role may do (a screen, a feature, a hidden field) is a capability: declare it
 with `defineCapability({ name: '<area>.<action>', label, roles })` and check it with
 `can(p, name)` from `@hykr/policy`, never by naming a role. `GET /api/me` lists the person's
-capabilities for the apps.
+capabilities for the apps. A field only some may see is declared on the spec,
+`traits: { fieldPolicy: { cost: 'orders.cost.read' } }`: it is removed wherever the record leaves
+for anyone without the capability, and filtering, sorting or writing it is refused. The sample's
+to-dos module declares a `buyer` role and `todos.cost.read` this way.
 
 Approvals take an object form, `{ when, by, channels, minAssurance }`: who decides (the person
 it is for by default; a customer's request goes to `owner` and `ops`), and where (`channels:
