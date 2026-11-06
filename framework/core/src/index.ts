@@ -85,7 +85,6 @@ export {
   setDefaultCurrency,
   tenantMoney,
 } from './money/tenant-money.js';
-export * from './plugins/index.js';
 export {
   customFieldsHook,
   customFieldsOf,
@@ -94,6 +93,7 @@ export {
   hasCustomFields,
   mergeCustom,
 } from './plugins/custom-fields.js';
+export * from './plugins/index.js';
 export {
   configureSharedRecords,
   defineSharedEntity,
