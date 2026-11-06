@@ -38,9 +38,10 @@ const HELP = `basecamp: run an application on the Basecamp framework
   basecamp module add <name> [--entity e]
                                      a new module: both halves and the lines that register it
   basecamp templates sync|check      WhatsApp templates at the provider
-  basecamp eval [assistant|voice|whatsapp] [--module m] [--live]
-                                     score the assistant (scripted model, or your AGENT_MODEL),
-                                     every module's evals or one module's
+  basecamp eval [assistant|voice|whatsapp] [--module m] [--live [--model <provider>/<model>]]
+                                     score the assistant (scripted model, or the deployment's
+                                     default model, or one model of MODEL_PROVIDERS), every
+                                     module's evals or one module's
   basecamp studio                    Mastra Studio for the assistant
 
 Run it anywhere inside an application: the nearest package.json with a "basecamp" block is the
@@ -167,6 +168,7 @@ async function main() {
     allowPositionals: true,
     options: {
       live: { type: 'boolean', default: false },
+      model: { type: 'string' },
       name: { type: 'string' },
       module: { type: 'string' },
       entity: { type: 'string' },
@@ -287,6 +289,11 @@ async function main() {
       if (!['assistant', 'voice', 'whatsapp'].includes(suite))
         fail('eval assistant, eval voice or eval whatsapp');
       process.env.MODEL_MODE = values.live ? 'live' : 'fake';
+      // One registered model for this run: check a model before a business allows it.
+      if (values.model) {
+        if (!values.live) fail('--model needs --live: the scripted model answers otherwise');
+        process.env.AGENT_MODEL = values.model;
+      }
       const { api, server: app } = await loadServer(root, config);
       process.exit((await api.runEval(app, suite, { module: values.module })) ? 0 : 1);
       break;
