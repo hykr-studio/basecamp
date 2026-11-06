@@ -4,10 +4,12 @@
  */
 import { meetingsViews } from '../modules/meetings/views/index.js';
 import { notesViews } from '../modules/notes/views/index.js';
+import { ordersViews } from '../modules/orders/views/index.js';
 import { todosViews } from '../modules/todos/views/index.js';
 
 export * from '../modules/meetings/views/index.js';
 export * from '../modules/notes/views/index.js';
+export * from '../modules/orders/views/index.js';
 export * from '../modules/todos/views/index.js';
 
 /** Every module's views and screens, in module order: `createUiRegistry(...moduleViews)`. */
@@ -15,5 +17,6 @@ export const moduleViews = [
   todosViews,
   notesViews,
   meetingsViews,
+  ordersViews,
   // basecamp module add: one line per module, above this one.
 ] as const;

@@ -26,9 +26,6 @@ import {
 
 const ana = new Person('Ana Seams');
 const NAME = 'fixture.seams';
-/** What the fixture registered, without the framework's own entries. */
-const fixtureOnes = <T extends { name: string }>(xs: readonly T[]) =>
-  xs.filter((x) => x.name.startsWith('fixture.'));
 
 /** Each contribution key and the registry that collects it. */
 const registries = {
@@ -59,10 +56,15 @@ describe('contributions', () => {
     for (const [key, registry] of Object.entries(registries)) {
       const [contributed] = seamsContributions[key as keyof typeof registries] ?? [];
       expect(registry.get(NAME), key).toBe(contributed);
-      // The framework registers its own too: queues (the channel's, the events queue) and its
-      // features' hooks (the settings feature's plugins, write hooks and turn hook).
+      // The framework's features register their own too (the channel's queues, the events
+      // queue, the files hooks, money's entity plugins `parent` and `money`, the push channel,
+      // its schedule and contributors, the settings feature's plugins, write hooks and turn
+      // hook): the application's is the only fixture one.
       expect(registry.all(), key).toContain(contributed);
-      expect(fixtureOnes(registry.all()), key).toEqual([contributed]);
+      const fixtures = (registry.all() as readonly { name: string }[]).filter((x) =>
+        x.name.startsWith('fixture.'),
+      );
+      expect(fixtures, key).toEqual([contributed]);
     }
     expect(api.runtime().contributions).toEqual(seamsContributions);
   });
@@ -79,7 +81,8 @@ describe('contributions', () => {
     expect(() => api.turnHooks.register({ name: NAME })).toThrow(
       'The turn hook "fixture.seams" is registered twice',
     );
-    expect(fixtureOnes(api.turnHooks.all())).toHaveLength(1);
+    // The settings feature registers its own turn hook; the fixture registered one.
+    expect(api.turnHooks.all().filter((h) => h.name.startsWith('fixture.'))).toHaveLength(1);
   });
 
   it('a key that nothing collects fails closed, before anything is registered', () => {

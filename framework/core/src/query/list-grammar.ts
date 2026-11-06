@@ -36,6 +36,9 @@ function sortExpr(column: Column, dir: 'asc' | 'desc'): SQL | Column {
     case 'PgDoublePrecision':
     case 'PgReal':
       return sql`coalesce(${column}, ${far === 'max' ? 1e15 : -1e15})`;
+    // Money in minor units: past any amount a JavaScript number holds exactly.
+    case 'PgBigInt53':
+      return sql`coalesce(${column}, ${farValue(column, far)}::bigint)`;
     default:
       throw new Error(
         `Sorting on nullable ${column.columnType} column "${column.name}" is not supported: cursors would skip its nulls`,
@@ -151,6 +154,8 @@ function farValue(column: Column, far: 'max' | 'min') {
       return far === 'max' ? '9999-12-31' : '0001-01-01';
     case 'PgTimestamp':
       return new Date(far === 'max' ? '9999-12-31T00:00:00Z' : '0001-01-01T00:00:00Z');
+    case 'PgBigInt53':
+      return far === 'max' ? Number.MAX_SAFE_INTEGER : -Number.MAX_SAFE_INTEGER;
     default:
       return far === 'max' ? 1e15 : -1e15;
   }

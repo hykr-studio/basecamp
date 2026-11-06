@@ -12,12 +12,23 @@ export { Button } from './components/Button';
 export { ScreenTitle, SectionHeading } from './components/ScreenTitle';
 export { type AppConfig, appConfig, configure } from './config';
 export {
+  FileField,
+  FileThumbs,
+  fileFieldPolicy,
+  type PickedFile,
+  pickDocuments,
+  pickPhotos,
+  useFiles,
+  useFileUpload,
+} from './features/files';
+export * from './features/index';
+export { createInvalidator, liveKeysFor } from './features/live/keys';
+export {
   BrandMark,
   brandTokens,
   CustomFieldInputs,
   CustomFieldValues,
   hideOff,
-  settingsPlugin,
   useBranding,
   useClientSettings,
   useCustomFields,
@@ -98,6 +109,7 @@ export { Icon, type IconName } from './framework/Icon';
 export { Loading } from './framework/Loading';
 export { useLang, useT } from './framework/lang';
 export { Markdown } from './framework/Markdown';
+export { useMoneyText } from './framework/money';
 export {
   filterNav,
   runSignedIn,

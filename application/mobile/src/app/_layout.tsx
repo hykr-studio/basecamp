@@ -1,5 +1,5 @@
 import '../../global.css';
-import { AppShell, settingsPlugin } from '@hykr/app';
+import { AppShell, livePlugin, pushPlugin, settingsPlugin } from '@hykr/app';
 import { catalog, registry } from '@/catalog';
 import * as modules from '@/modules';
 import { settings } from '@/settings';
@@ -12,17 +12,21 @@ const config = {
   scheme: 'agenticstack',
 };
 
-/** The business's flags, branding and phrases (A11). Made once, outside render. */
-const plugins = [settingsPlugin()];
+/**
+ * The framework features the app uses, made once, outside render: the business's flags, branding
+ * and phrases, live updates (other people's changes show without a reload) and push notifications
+ * (the to-do reminder goes to the phone first).
+ */
+const plugins = [settingsPlugin(), livePlugin(), pushPlugin({ androidChannel: 'Reminders' })];
 
 export default function RootLayout() {
   return (
     <AppShell
       app={settings}
       modules={modules}
+      plugins={plugins}
       catalog={catalog}
       registry={registry}
-      plugins={plugins}
       config={config}
     />
   );

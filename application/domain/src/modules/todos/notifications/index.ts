@@ -29,8 +29,12 @@ const SUBJECT: Record<Lang, (title: string) => string> = {
   te: (title) => `రిమైండర్: ${title}`,
 };
 const DUE = { en: 'is due today', hi: 'आज करना है', te: 'ఈరోజు చేయాలి' } as const;
+const DUE_TODAY = { en: 'Due today', hi: 'आज करना है', te: 'ఈరోజు చేయాల్సింది' } as const;
 
-/** At 9am (IST) on the day a to-do is due, unless it is done by then. */
+/**
+ * At 9am (IST) on the day a to-do is due, unless it is done by then: a push to the person's
+ * phone first, then WhatsApp, then email (the fallback order is this list).
+ */
 export const TodoDueNotification = defineNotification<TodoRow>({
   key: 'todo.due',
   topic: 'reminders',
@@ -40,7 +44,12 @@ export const TodoDueNotification = defineNotification<TodoRow>({
     cancelOn: ['todo.deleted'],
   },
   to: (t) => [...(t.customerId ? [{ customerId: t.customerId }] : []), { userId: t.ownerId }],
-  channels: ['whatsapp', 'email'],
+  channels: ['push', 'whatsapp', 'email'],
+  push: {
+    title: (_t, r) => pick(DUE_TODAY, r.lang),
+    body: (t) => t.title,
+    url: () => '/todos',
+  },
   whatsapp: { template: TodoDue, params: (t) => ({ title: t.title }) },
   email: {
     subject: (t, r) => SUBJECT[r.lang](t.title),

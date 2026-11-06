@@ -58,6 +58,13 @@ export const config = {
   workerInline: env.WORKER_INLINE === '1',
   /** Where links in messages point: the app (sign-in, a page, an approval). */
   appUrl: (env.APP_URL ?? 'http://localhost:8081').replace(/\/$/, ''),
+  /**
+   * The currency of a business that set none in its settings (ISO 4217, upper case). Unset:
+   * XXX, "no currency": the framework assumes none.
+   */
+  defaultCurrency: env.DEFAULT_CURRENCY?.trim() || undefined,
+  /** The largest JSON body a request may send (a whole order with its lines). */
+  jsonBodyLimit: env.JSON_BODY_LIMIT?.trim() || '1mb',
 };
 
 /** Refuse to start with a missing or guessable secret. */
@@ -77,6 +84,12 @@ export function assertConfig() {
   if (config.voiceAgentKey && config.voiceAgentKey === config.agentApiKey) {
     throw new Error('VOICE_AGENT_KEY must differ from AGENT_API_KEY: audit tells them apart');
   }
+  if (config.defaultCurrency !== undefined && !/^[A-Z]{3}$/.test(config.defaultCurrency))
+    throw new Error(
+      `DEFAULT_CURRENCY must be an ISO 4217 code such as EUR, not "${config.defaultCurrency}"`,
+    );
+  if (!/^\d+(?:\.\d+)?(?:b|kb|mb)?$/i.test(config.jsonBodyLimit))
+    throw new Error(`JSON_BODY_LIMIT must be a size such as 1mb, not "${config.jsonBodyLimit}"`);
   // LiveKit's dev-mode pair is fine on a laptop; in production it would let anyone mint tokens.
   const devLiveKit = config.livekit.apiKey === 'devkey' || config.livekit.apiSecret === 'secret';
   if (config.voiceAgentKey && process.env.NODE_ENV === 'production' && devLiveKit) {

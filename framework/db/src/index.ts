@@ -14,7 +14,11 @@ export function createDb(url: string) {
   };
 }
 
+// Builders for an application's own tables: the `app` schema, the id column, file and money
+// columns, custom fields and shared records.
 export { customFieldsColumn } from './columns/custom-fields.js';
+export { fileColumn, fileColumns } from './columns/files.js';
+export { currencyColumn, minorUnits } from './columns/money.js';
 export { sharedFromColumn } from './columns/shared.js';
 export type { Database, DbOrTx } from './database.js';
 export {
@@ -25,8 +29,9 @@ export {
   sqlHookFiles,
 } from './migrate.js';
 export { tableRef } from './ref.js';
-export { type AuditInput, type WriteCtx, writeAudit } from './repos/audit.js';
+export { type AuditInput, type WriteCtx, writeAudit, writeAuditMany } from './repos/audit.js';
 export { idempotencyRepo } from './repos/idempotency.js';
+export { takeNumber } from './repos/numbering.js';
 export {
   type Contact,
   contactById,
@@ -36,7 +41,6 @@ export {
   membershipOf,
 } from './repos/tenancy.js';
 export { userExists } from './repos/users.js';
-// Builders for an application's own tables: the `app` schema and the id column.
 export { app, id } from './schema/base.js';
 export * as schema from './schema/index.js';
 export * from './schema/index.js';

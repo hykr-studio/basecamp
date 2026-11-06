@@ -18,18 +18,20 @@ export type Reader = { lang: Lang; timeZone: string };
 export type Row = Record<string, unknown> & { id: string; tenantId: string };
 
 /**
- * The channels a notification can name. WhatsApp and email are built in. A feature that
- * registers a delivery channel (@hykr/api's `deliveryChannels`) adds its name here, and any
+ * The channels a notification can name. WhatsApp and email are built in to the dispatcher; push
+ * is the framework's push feature (@hykr/api, a registered delivery channel). Another feature
+ * that registers a delivery channel (@hykr/api's `deliveryChannels`) adds its name here, and any
  * content of its own on `NotificationDef`, by declaration merging:
  *
  *   declare module '@hykr/notifications' {
- *     interface NotificationChannels { push: true }
- *     interface NotificationDef<R extends Row = Row> { push?: { title: (row: R) => string } }
+ *     interface NotificationChannels { pager: true }
+ *     interface NotificationDef<R extends Row = Row> { pager?: { text: (row: R) => string } }
  *   }
  */
 export interface NotificationChannels {
   whatsapp: true;
   email: true;
+  push: true;
 }
 export type NotificationChannel = keyof NotificationChannels & string;
 
@@ -70,6 +72,16 @@ export interface NotificationDef<R extends Row = Row> {
     body: (row: R, reader: Reader) => string;
   };
   /**
+   * What a push notification to the person's phone says. Required when `'push'` is a channel.
+   * Push text shows on a lock screen: keep it to what the recipient may read anywhere.
+   */
+  push?: {
+    title: (row: R, reader: Reader) => string;
+    body: (row: R, reader: Reader) => string;
+    /** The app path a tap opens ('/orders/<id>'). Without it, a tap opens the app. */
+    url?: (row: R) => string;
+  };
+  /**
    * A quick-reply button tapped on the template, by button id: schedule it again, and what to
    * say back.
    */
@@ -91,6 +103,8 @@ export function defineNotification<R extends Row>(def: NotificationDef<R>): Noti
     throw new Error(`Notification ${def.key}: WhatsApp is a channel but has no template`);
   if (def.channels.includes('email') && !def.email)
     throw new Error(`Notification ${def.key}: email is a channel but has no subject and body`);
+  if (def.channels.includes('push') && !def.push)
+    throw new Error(`Notification ${def.key}: push is a channel but has no title and body`);
   if ((def.onButton || def.approval) && !def.whatsapp)
     throw new Error(`Notification ${def.key}: buttons are WhatsApp quick replies; give a template`);
   return def;

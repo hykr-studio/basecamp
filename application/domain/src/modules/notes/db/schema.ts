@@ -1,5 +1,5 @@
 /** The notes module's tables. */
-import { app, customerColumn, id, tableRef, tenantColumn, user } from '@hykr/db';
+import { app, customerColumn, fileColumns, id, tableRef, tenantColumn, user } from '@hykr/db';
 import { index, text, timestamp } from 'drizzle-orm/pg-core';
 
 export const notes = app.table(
@@ -17,6 +17,8 @@ export const notes = app.table(
     meetingId: text('meeting_id').references(() => tableRef('meetings').id, {
       onDelete: 'set null',
     }),
+    /** Photos: file ids (app.files), in order. */
+    photos: fileColumns('photos'),
     /** Who made the row: the person, or the assistant acting for them. Set by the framework. */
     createdBy: text('created_by', { enum: ['person', 'assistant'] })
       .notNull()
