@@ -8,7 +8,7 @@ lives in `application/`. The framework never imports the application; the applic
 its domain to the framework in two places:
 
 - the server: `application/api/src/server.ts`, `defineServer({ domain, module, views,
-  notifications, agent, channel, migrations })` from `@hykr/api`;
+  notifications, agent, channel, migrations, contributes })` from `@hykr/api`;
 - the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app catalog registry config />`
   from `@hykr/app`.
 
@@ -32,7 +32,7 @@ To bring another domain, replace these folders. Nothing in `framework/` changes.
 | Notifications | `application/domain/src/notifications/` | `domainTemplates` (`defineTemplate`) and `domainNotifications` (`defineNotification`): the WhatsApp templates and the reminders the domain sends |
 | Views | `application/domain/src/views/` | `uiDomain = { views, screens }`, declared with `defineView` / `defineScreen` |
 | Assistant | `application/domain/src/agent/` | `agentDomain: AgentDomain` (`@hykr/agents/script`): persona, domain rules, the scripted model's scripts and help, eval cases (and spoken `voiceEvalCases`) and setup |
-| Server | `application/api/src/server.ts` | `server = defineServer({ ... })`, with the pieces above and `channel.does`: what the assistant helps with, in each language (WhatsApp's welcome and HELP) |
+| Server | `application/api/src/server.ts` | `server = defineServer({ ... })`, with the pieces above and `channel.does`: what the assistant helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind (developer guide, section 5.9) |
 | App | `application/mobile/src/domain/` | `appDomain = defineAppDomain({ title, tagline, nav, home, suggestions, bind })` from `@hykr/app`; `bind` calls `bindView` / `bindScreen` for the domain's views and screens; `catalog` and `registry` built with `createCatalog` / `createUiRegistry` |
 | App routes | `application/mobile/src/app/(domain)/` | The domain's screens; the group adds no URL segment. Provide `index.tsx` (the home screen) |
 | Tests | `application/api/test/`, `application/domain/src/**/*.test.ts` | The domain's own e2e, WhatsApp, voice, view and notification tests |

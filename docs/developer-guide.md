@@ -139,7 +139,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/contracts/src/framework/` | `entitySpec`, `commandSpec`, `defineDomain`, the list grammar, present intents, `WriteResult` |
 | `framework/contracts/src/platform/` | The framework's own entities (saved `pages`) and commands (`notify.send`, `handoff.request`) |
 | `framework/contracts/src/catalog.ts` | `createCatalog(domain)`: the domain's entities and commands plus the platform's. Tools, hooks and history read from a catalog. |
-| `framework/core/src/` | `defineEntity`, `defineCommand`, `runWrite`, `ApprovalService`, guards, controller factories, list SQL. `src/tools/` builds agent tools (imported as `@hykr/core/tools`). |
+| `framework/core/src/` | `defineEntity`, `defineCommand`, `runWrite`, `ApprovalService`, guards, controller factories, list SQL. `src/tools/` builds agent tools (imported as `@hykr/core/tools`). `hooks.ts` holds the core's extension points (section 5.9). |
 | `framework/policy/src/` | `accessFor`, `rowAllowed`, `DEFAULT_ACCESS`, `subjectOf`, `userIdOf` |
 | `framework/db/src/schema/`, `framework/db/drizzle/` | Tenancy, approvals, idempotency, audit, channel tables and their migrations (`drizzle.__framework_migrations`); `app`, `id()`, `tenantColumn()`, `customerColumn()` for your tables |
 | `framework/agents/src/` | `createAgents`, the Mastra assistant, profiles, the fake model, scorers, Studio; script helpers in `@hykr/agents/script`, the evals harness in `@hykr/agents/evals` |
@@ -148,7 +148,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/channels/src/` | WhatsApp transport only: adapter, render, split, keywords, approval tokens |
 | `framework/notifications/src/` | `defineTemplate`, `defineNotification`, `createNotificationCatalog`, quiet hours and marketing cap rules |
 | `framework/api-client/src/` | `createApiClient`: `entity(spec)`, `command(spec, input)`, and typed calls for every framework route |
-| `framework/api/src/runtime.ts`, `start.ts` | `defineServer`, `startApi`, `startWorker`, `migrate`, `runTemplates`, `runEval`, `startStudio`. `testing.ts` is `@hykr/api/testing`. |
+| `framework/api/src/runtime.ts`, `start.ts` | `defineServer`, `startApi`, `startWorker`, `migrate`, `runTemplates`, `runEval`, `startStudio`. `testing.ts` is `@hykr/api/testing`. `hooks.ts` holds the server's extension points, `module.ts` the `ModuleDef` shape (section 5.9). |
 | `framework/api/src/channels/` | WhatsApp webhook, queues, sending, notifications dispatch, template sync, handoff, back office API, erasure |
 | `framework/api/src/modules/` | Chat, threads, history, me, voice, pages |
 | `framework/app/src/` | `AppShell`, `defineAppDomain`, data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; primitives in `@hykr/app/ui` |
@@ -637,18 +637,59 @@ For commands, `'human'` gives a people-only route. To keep a command off the age
 On an entity spec, `approval[action]` decides whether a write parks:
 
 ```ts
+type ApprovalCheck = (p: Principal, ctx: { action: string; input: object | null; row: object | null }) => boolean;
 type ApprovalRule =
   | 'always' | 'never'
-  | ((p: Principal) => boolean)
-  | { when?: 'always' | ((p) => boolean); by?: TenantRole[] | 'self'; channels?: Channel[]; minAssurance?: Assurance };
+  | ApprovalCheck
+  | { when?: 'always' | ApprovalCheck; by?: TenantRole[] | 'self'; channels?: Channel[]; minAssurance?: Assurance };
 ```
 
-- The function form is the common one: `(p) => p.actor.kind === 'agent'`.
+- The function form is the common one: `(p) => p.actor.kind === 'agent'`. It also sees the payload, so
+  `(p, { input }) => Number(input?.amount ?? 0) > 100_000` parks large amounts only. `input` and `row`
+  are `null` when they are unknown: a tool's description is written before any call, and a create has
+  no row.
 - The object form also says who decides and where. For example, `{ when: (p) => p.actor.kind === 'agent', by: ['owner', 'admin'], channels: ['app'] }`. `channels: ['app']` keeps an irreversible decision off WhatsApp buttons. No sample entity uses the object form yet. The one real example is a command: `approval: { by: ['owner', 'admin'] }` in `framework/api/src/channels/notify/send-template.command.ts`.
 
 Who decides, when `by` is not set: the person the request is for, if they are a user and not only a customer. Otherwise, the business's `owner` and `ops`.
 
 Approvals expire after 24 hours by default (`CoreModule.forRoot({ approvalTtlMs })`). Expiry is checked when someone tries to decide.
+
+A decision (`AuthorizeResult`) can also say what is at stake. `needsApproval(rule, reason, details)`
+and `allow` / `deny` take the same optional `details`:
+- `tier`: 0 a read, 1 an internal write (undoable), 2 a send to a client or vendor, 3 money, legal or
+  irreversible;
+- `approver`: `{ userId?, roles?, channels?, minAssurance? }`;
+- `amount`: integer minor units (paise);
+- `undoMs`: the undo window.
+
+The write path carries these but does not act on them yet (section 14).
+
+### 5.9 Extension points: traits, contributions and settings sections
+
+Shared behaviour plugs in without editing the framework's central files. There are three seams, and
+each works by TypeScript declaration merging plus a registry that rejects a duplicate name
+(`createHookRegistry` in `@hykr/contracts`).
+
+- **Traits.** `entitySpec({ ..., traits: { <key>: … } })`, and the same on `commandSpec`. A feature
+  declares its key on `EntityTraits` or `CommandTraits` in its own file. Its plugin then acts on the
+  specs that carry the key.
+- **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
+  Each key is a list, collected by one registry: `entityPlugins`, `writeHooks`, `readProjectors` and
+  `identityProviders` in `@hykr/core`; `toolContributions` in `@hykr/core/tools`; `deliveryChannels`,
+  `turnHooks`, `inboundHooks`, `queues`, `schedules`, `erasureContributors`, `exportContributors` and
+  `authPlugins` in `@hykr/api`. `@hykr/api` re-exports all of them.
+  - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
+    registry collects stops the start.
+  - Registries are process-global, so read them per request, not at import.
+  - To add a kind, create its registry with `{ collects: '<key>' }` and declare `<key>` on
+    `Contributions` next to it.
+- **Settings sections.** `defineSettingsSection('<key>', schema)` adds a per-business section. Its
+  schema must have a default for every field. `parseTenantSettings(raw)` (used by `TenantsService`)
+  returns the base settings, `features` (switches by key, absent means off) and every section.
+
+`ModuleDef` (`@hykr/api`) is the shape of one application module, and `DomainEventEnvelope`
+(`@hykr/contracts`) the shape of a stored event. The module system and the event outbox build on them.
+The fixture's `framework/api/test/fixture/src/features/seams/` shows all of these in use.
 
 ---
 
@@ -1082,6 +1123,9 @@ These are not built. Each has a workaround for now.
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
 | Entity rules that park | An entity rule's `needs_approval` is ignored. Only `deny` counts. Use `spec.approval`, or a command whose `authorize` returns `needsApproval`. |
+| Hooks that run | The registries of section 5.9 exist and `contributes` fills them, but nothing reads them yet. A contributed hook is installed and never called. Each consumer lands with its feature. |
+| Approval tiers | A decision's `tier`, `approver`, `amount` and `undoMs` are carried, not acted on. Parking, deciders and the audit trail ignore them, and an approved replay drops them. |
+| Application modules | `ModuleDef` is a type only. There is no `defineModule`, and `defineServer` still takes one `domain` and one `module`. |
 | An approval sweeper | Expiry is checked when someone decides. Expired rows stay `pending` in `GET /api/approvals` until then. |
 | Concurrent duplicate requests | Two requests with the same idempotency key at the same moment can both run. Only the first answer is stored. |
 | Opt-out from a marketing quick reply | The `stop_offers` button is not handled. The STOP keyword is the only working opt-out. |

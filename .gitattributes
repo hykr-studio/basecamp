@@ -1,0 +1,18 @@
+# Barrels that list one entry per line. Parallel branches each add their own line, and a union
+# merge keeps both lines instead of conflicting. Use it only where every line stands alone (an
+# `export * from` or one `export { x } from` per line); a new barrel of that kind gets a line
+# here. After a union merge, run `pnpm format` (it puts the lines back in order) and the build.
+framework/agents/src/evals/index.ts merge=union
+framework/contracts/src/framework/index.ts merge=union
+framework/contracts/src/index.ts merge=union
+framework/contracts/src/settings/index.ts merge=union
+framework/db/src/schema/index.ts merge=union
+framework/i18n/src/index.ts merge=union
+framework/policy/src/index.ts merge=union
+framework/ui-registry/src/index.ts merge=union
+# Planned barrels: framework features, core plugins, app features, application modules.
+framework/api/src/features/index.ts merge=union
+framework/app/src/features/index.ts merge=union
+framework/core/src/plugins/index.ts merge=union
+application/domain/src/modules/index.ts merge=union
+application/mobile/src/modules/index.ts merge=union
