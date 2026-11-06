@@ -4,4 +4,5 @@
 export { filesScripts } from './files.js';
 export { handoffScripts } from './handoff.js';
 export { pagesScripts } from './pages.js';
+export { statesScripts } from './states.js';
 export { testingScripts } from './testing.js';
