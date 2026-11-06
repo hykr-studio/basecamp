@@ -5,7 +5,6 @@ import { schema } from '@hykr/db';
 import type { BetterAuthPlugin } from 'better-auth';
 import { and, eq, isNotNull } from 'drizzle-orm';
 import type { AuthPlugin } from '../../hooks.js';
-import { sharedDb } from '../../infra/db.js';
 
 /** Looks up a host's TXT records: DNS, or a test's fake. */
 export type TxtResolver = (name: string) => Promise<string[][]>;
@@ -34,6 +33,8 @@ export async function verifiedTenantOf(origin: string): Promise<string | null> {
   const hit = cache.get(origin);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.tenantId;
   const d = schema.tenantDomains;
+  // Loaded when first asked: @hykr/api reads no configuration when it loads.
+  const { sharedDb } = await import('../../infra/db.js');
   const [row] = await sharedDb.db
     .select({ tenantId: d.tenantId })
     .from(d)

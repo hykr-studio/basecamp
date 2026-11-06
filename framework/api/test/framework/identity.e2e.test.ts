@@ -91,6 +91,7 @@ describe('roles and capabilities', () => {
         'customers.message',
         'fixture.reports',
         'queues.admin',
+        'settings.manage',
       ],
     });
     expect((await inAna(ops)('GET', '/api/me')).body.capabilities).toEqual([
