@@ -5,6 +5,12 @@
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
 export {
+  anyRole,
+  backfillAll,
+  MemoryIndexer,
+  RecallService,
+} from './features/memory/index.js';
+export {
   ModelPolicyChanged,
   ModelPolicyService,
   ModelRefused,

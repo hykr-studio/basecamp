@@ -12,6 +12,8 @@ import {
   type Me,
   type Page,
   pathParams,
+  type RecallQuery,
+  type RecallResult,
   type TemplateStatus,
   type Thread,
   type ThreadMessage,
@@ -262,6 +264,16 @@ export function createApiClient(opts: ApiClientOptions) {
       session: (input: Partial<VoiceSessionRequest> = {}) =>
         call<VoiceSessionResponse>('POST', '/api/voice/session', input),
       end: (input: VoiceSessionEnd) => call<null>('POST', '/api/voice/end', input),
+    },
+    /** What is remembered, by meaning: memories the caller may read now, best first. */
+    memory: {
+      recall: (q: RecallQuery) => {
+        const params = new URLSearchParams({ q: q.q });
+        if (q.about) params.set('about', q.about);
+        if (q.limit) params.set('limit', String(q.limit));
+        if (q.kinds) params.set('kinds', q.kinds);
+        return call<RecallResult>('GET', `/api/memory/recall?${params}`);
+      },
     },
     /** The person's conversations, kept on the server so every channel shares them (people only). */
     threads: {
