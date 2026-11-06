@@ -2,7 +2,7 @@ import { type SQL, sql } from 'drizzle-orm';
 import { type AnyPgColumn, customType, index, jsonb } from 'drizzle-orm/pg-core';
 
 /**
- * Places on the map (B13): a point column (PostGIS `geography(Point,4326)`, enabled by
+ * Places on the map (B13): a point column (PostGIS `geography`, enabled by
  * `sql/pre/10-postgis.sql`), its GiST index, and an address column. Give the point column the
  * spec field's key, and list the field as `'geo'` in `filterable` (near, within) and, to sort by
  * distance to a `near` point, in `sortable`.
@@ -48,9 +48,14 @@ export function readEwkbPoint(hex: string): GeoPointValue {
 export const pointSql = (p: GeoPointValue): SQL =>
   sql`ST_SetSRID(ST_MakePoint(${p.lng}::float8, ${p.lat}::float8), 4326)::geography`;
 
-/** A point column: `geography(Point,4326)`, read and written as `{ lat, lng }`. */
+/**
+ * A point column, read and written as `{ lat, lng }`. Its type is plain `geography` (WGS84):
+ * drizzle-kit quotes a type with a modifier (`"geography(Point,4326)"`, which Postgres refuses),
+ * so the column is not narrowed to points in the table. Every write goes through `pointSql` (a
+ * point, SRID 4326) and a read refuses anything but a point.
+ */
 export const geoPoint = customType<{ data: GeoPointValue; driverData: string }>({
-  dataType: () => 'geography(Point,4326)',
+  dataType: () => 'geography',
   toDriver: (value) => pointSql(value),
   fromDriver: (value) => readEwkbPoint(value),
 });

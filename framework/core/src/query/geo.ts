@@ -7,8 +7,8 @@ import { type ListFieldFilter, type ListFieldSort, listFieldSql } from './field-
 
 /**
  * The SQL of the `geo` list field type (its grammar is in @hykr/contracts): PostGIS on a
- * `geography(Point,4326)` column. Distances are metres on the WGS84 spheroid, the same for the
- * `near` filter, the distance sort and `withinMeters`.
+ * `geography` point column (`geoPoint`). Distances are metres on the WGS84 spheroid, the same
+ * for the `near` filter, the distance sort and `withinMeters`.
  */
 
 /** Past any distance on the earth: where rows without a point sort. */

@@ -1,4 +1,6 @@
 import {
+  fieldPolicyOf,
+  hiddenFields,
   type ListFilter,
   type ListQuery,
   type Money,
@@ -168,16 +170,34 @@ export async function summarize(
   const currencyKey = q.measures.some((m) => m.money) ? (trait?.currency ?? 'currency') : undefined;
   const empty = (): Summary => ({ groups: [], totals: [emptyBucket(q)], more: false });
 
-  // The reader must see every field the summary names; a reader who reaches nothing gets zeros.
+  // The reader must see every field the summary names. First the declared field policy (the
+  // same for every record), then what plugins refuse of a list asking for these fields, then
+  // the reader's projection of a record in reach (read projectors may hide more). A reader who
+  // reaches no record gets zeros, which reveal nothing.
+  const named = [...namedFields(def, q, currencyKey)];
+  const refuse = (field: string) => {
+    const label = spec.fieldLabels?.[field]?.en ?? field;
+    return new ForbiddenException({
+      error: 'forbidden',
+      rule: 'field_hidden',
+      reason: `You can't summarize ${spec.plural} by ${label}`,
+    });
+  };
+  const policyHidden = new Set(hiddenFields(fieldPolicyOf(spec), p));
+  const declared = named.find((f) => policyHidden.has(f));
+  if (declared) throw refuse(declared);
+  const asList: ListQuery = {
+    filters: q.filters,
+    q: q.q,
+    sort: named.map((field) => ({ field, dir: 'asc' })),
+    limit: 1,
+    count: false,
+  };
+  for (const x of def.plugins()) x.query?.(asList, p, { spec, table: def.table });
   const visible = await visibleFields(conn, def, p);
   if (!visible) return empty();
-  for (const field of namedFields(def, q, currencyKey))
-    if (!visible.has(field))
-      throw new ForbiddenException({
-        error: 'forbidden',
-        rule: 'field_hidden',
-        reason: `You can't summarize ${spec.plural} by ${field}`,
-      });
+  const projected = named.find((f) => !visible.has(f));
+  if (projected) throw refuse(projected);
 
   const column = (field: string) => {
     const c = columns[field];

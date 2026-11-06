@@ -1,12 +1,15 @@
 // Places on the map (B13), on neutral data: a `spots` module whose spots keep a point and an
 // address, listed near a point or in a box and sorted by distance, and an `arrive` command that
-// takes a check-in only within the spot's radius (`withinMeters`). Only the geo test boots this
-// server (`geoApp`).
+// takes a check-in only within the spot's radius (`withinMeters`). A spot's point and address
+// are read only with a capability staff lack (field policy). Only the geo test boots this server
+// (`geoApp`).
 import { defineModule, defineServer } from '@hykr/api';
 import {
   Address,
+  type Contributions,
   CreatedBy,
   commandSpec,
+  defineCapability,
   entitySpec,
   GeoPoint,
   moduleSpec,
@@ -29,14 +32,16 @@ import { z } from 'zod';
 import { fixture } from '../../index.js';
 import { spotArrivals, spots } from './schema.js';
 
+const label = (en: string) => ({ en, hi: en, te: en });
 const title = z.string().min(1).max(200);
 const radiusM = z.number().int().min(1).max(100_000);
 
 export const Spot = z.object({
   id: z.string(),
   title,
-  location: GeoPoint.nullable(),
-  address: Address.nullable(),
+  // Optional: removed for whoever may not read them.
+  location: GeoPoint.nullable().optional(),
+  address: Address.nullable().optional(),
   radiusM: z.number().int(),
   createdBy: CreatedBy,
   createdAt: z.iso.datetime(),
@@ -69,6 +74,8 @@ export const SpotSpec = entitySpec({
     pageSize: { default: 50, max: 100 },
   },
   approval: { delete: (p) => p.actor.kind === 'agent' },
+  fieldLabels: { location: label('Place'), address: label('Address') },
+  traits: { fieldPolicy: { location: 'fixture.spots.where', address: 'fixture.spots.where' } },
 });
 
 export const SpotArrival = z.object({
@@ -128,11 +135,17 @@ const ACCESS: Access = {
   write: { owner: 'own', admin: 'tenant', ops: 'tenant', staff: 'own', customer: 'customer' },
 };
 
+/** Staff see every spot of the business (not where it is) and check in at it. */
+const SPOT_ACCESS: Access = {
+  read: { ...ACCESS.read, owner: 'tenant', staff: 'tenant' },
+  write: ACCESS.write,
+};
+
 export const SpotDef = defineEntity(SpotSpec, {
   table: spots,
   owner: (t) => t.ownerId,
   customer: (t) => t.customerId,
-  access: ACCESS,
+  access: SPOT_ACCESS,
 });
 
 export const SpotArrivalDef = defineEntity(SpotArrivalSpec, {
@@ -215,8 +228,19 @@ export const spotsModule = defineModule({
   tables: { spots, spotArrivals },
 });
 
+export const geoContributions: Partial<Contributions> = {
+  capabilities: [
+    defineCapability({
+      name: 'fixture.spots.where',
+      label: label('See where spots are'),
+      roles: ['owner', 'admin', 'ops'],
+    }),
+  ],
+};
+
 /** The fixture plus spots. */
 export const geoApp = defineServer({
   ...fixture.definition,
   modules: [...fixture.definition.modules, spotsModule],
+  contributes: geoContributions,
 });
