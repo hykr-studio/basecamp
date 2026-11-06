@@ -4,6 +4,9 @@ services:
     # multi-arch (amd64 + arm64) build of postgis/postgis, which ships amd64 only
     image: ${POSTGRES_IMAGE:-imresamu/postgis:17-3.5}
     environment: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
+    # Several checkouts and test runs at once (each app opens pools for Drizzle and Mastra);
+    # the default of 100 runs out.
+    command: ["postgres", "-c", "max_connections=400"]
     ports: ["5432:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data

@@ -38,8 +38,14 @@ pnpm dev              # framework tsc -w watchers + `basecamp dev` (API, worker,
   exports or `files`, that job is what catches it.
 - `pnpm db:generate --name <name>` generates the application's migration from every module's
   `application/domain/src/modules/*/db/schema.ts` (one journal). Never hand-edit files under `*/drizzle/`.
-  After a rebase, `pnpm --dir application exec basecamp db rebase --base <branch>` drops this branch's
-  migrations and generates them again on top of the base's.
+  Extensions, triggers and CHECK constraints go in idempotent SQL hooks: `sql/pre/*.sql` and `sql/post/*.sql`
+  next to the migrations (`framework/db/sql`, `application/domain/sql`), run on every migrate. `db:migrate`
+  takes a lock and refuses a migration drizzle would silently skip (one older than the last applied):
+  regenerate it, or recreate the database. After a rebase, `pnpm --dir application exec basecamp db rebase
+  --base <branch>` drops this branch's migrations and generates them again on top of the base's.
+- A framework feature's fixture tables get their own migration set:
+  `FIXTURE_FEATURE=<f> pnpm --filter @hykr/api fixture:generate --name <f>` writes
+  `framework/api/test/fixture/src/features/<f>/migrations/` from that folder's `schema.ts`.
 - `pnpm --dir application exec basecamp module add <name> [--entity <singular>]` scaffolds a module (both
   halves) and adds its line to each module list.
 - `pnpm eval` runs the scripted assistant eval and needs the API running. From `application/`:
@@ -74,10 +80,13 @@ E2E test gotchas:
   against one database, and turbo runs `@application/api#test` after `@hykr/api#test`.
 - Vitest forces `MODEL_MODE=fake`, `WORKER_INLINE=1` and `THROTTLE=off`. The voice e2e tests have no skip
   guard and fail unless `VOICE_AGENT_KEY` is set in `.env`.
+- Both Vitest configs load the root `.env` into the main process, so `globalSetup` migrates the same database
+  the tests use. Turbo runs test tasks uncached and passes them every environment variable.
 - The golden WhatsApp conversations (`application/api/test/whatsapp/`) need `whaloc-test` on :8090, which
   `pnpm infra:up` starts. Without it they skip.
-- Don't run a `pnpm dev` worker from another checkout against the same database while the tests run. Its
-  `OutboxRelay` takes outbox rows and the notification tests time out.
+- `OutboxRelay` only relays outbox rows of its own `BULL_PREFIX`, and each test run uses a fresh one. Two
+  processes with the same prefix on one database (two `pnpm dev` workers, both `bull`) still take each other's
+  rows: give each checkout its own `BULL_PREFIX`.
 
 Other gotchas:
 - `basecamp` is compiled, so it only works after `pnpm build`.
@@ -170,7 +179,10 @@ an entity's `access` grants each role `own`, `customer` or `tenant` per read and
 - The scripted model (`MODEL_MODE=fake`, `framework/agents/src/fake`, with each module's scripts in
   `application/domain/src/modules/<name>/agent/scripts.ts`) is what tests and CI use. Its replies are asserted
   in golden files, so its wording matters. The first matching script wins, earlier modules first, and
-  `defineServer` refuses to boot when one module's script would take another module's eval turn.
+  `defineServer` refuses to boot when one module's script would take another module's eval turn. The
+  framework's own scripts are script sets in `framework/agents/src/fake/scripts/<feature>.ts` (their `order`
+  decides which matches first), and its phrases are in `framework/i18n/src/messages/<feature>.ts`; each file
+  has one line in its folder's `index.ts`.
 - `defineServer` throws one `ModulesError` listing every collision between modules (and with the framework).
   A framework feature with its own `/api/<x>` routes calls `reserveRoutes('<x>')` (`@hykr/contracts`).
 - `framework/app` keeps colour tokens in both `src/theme.ts` and `theme.css`. Its `test` script
