@@ -6,11 +6,13 @@
  */
 import { meetings } from './meetings/index.js';
 import { notes } from './notes/index.js';
+import { orders } from './orders/index.js';
 import { todos } from './todos/index.js';
 
 export const modules = [
   todos,
   notes,
   meetings,
+  orders,
   // basecamp module add: one line per module, above this one.
 ];
