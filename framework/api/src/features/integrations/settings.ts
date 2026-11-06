@@ -43,13 +43,21 @@ export function requireSecretBox(): SecretBox {
   return box;
 }
 
-/** At start: a SECRETS_KEY that is set must be long enough. Unset is fine (nothing is sealed). */
-export function checkSecretsKey(): void {
+/**
+ * At start, so nothing fails on a setting later (after a request was sent): a SECRETS_KEY that is
+ * set must be long enough (unset is fine: nothing is sealed), and the retry schedule must parse.
+ */
+export function checkSettings(): void {
   for (const key of [process.env.SECRETS_KEY ?? '', ...list(process.env.SECRETS_KEY_PREVIOUS)])
     if (key && key.length < SECRET_KEY_MIN_LENGTH)
       throw new Error(
         `SECRETS_KEY (and each SECRETS_KEY_PREVIOUS) must be at least ${SECRET_KEY_MIN_LENGTH} characters: openssl rand -hex 32`,
       );
+  try {
+    retrySchedule();
+  } catch (e) {
+    throw new Error(`INTEGRATIONS_RETRY_SCHEDULE: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 /** Where deliveries may go: public addresses over https, plus the allowed hosts. */

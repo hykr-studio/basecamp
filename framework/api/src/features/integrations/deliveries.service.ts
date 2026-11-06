@@ -14,7 +14,7 @@ import {
   integrationEndpoints,
 } from '@hykr/db';
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { and, eq, inArray, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, lte, sql } from 'drizzle-orm';
 import { config } from '../../config.js';
 import type { Jobs } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
@@ -39,8 +39,15 @@ const LEASE_GRACE_MS = 30_000;
 const SWEEP_GRACE_MS = 30_000;
 /** What the attempt log keeps of an answer. */
 const RESPONSE_CHARS = 512;
+/** What one sweep takes of each kind, the longest waiting first. */
+const SWEEP_LIMIT = 500;
+/** The log's word for a try whose lease ran out before its result was saved. */
+const UNFINISHED = 'The try did not finish (the worker stopped, or its result could not be saved)';
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 500);
+/** Postgres text cannot hold NUL, and a receiver's answer (or an error repeating it) may. */
+const storable = (text: string) => text.replaceAll('\u0000', '');
+
+const message = (e: unknown) => storable(e instanceof Error ? e.message : String(e)).slice(0, 500);
 
 /** BullMQ ids may not contain ':'. */
 const jobId = (...parts: (string | number)[]) => parts.join('--').replaceAll(':', '_');
@@ -122,16 +129,20 @@ export class DeliveriesService {
   }
 
   /**
-   * One try. The delivery is claimed only if this is its next attempt and nobody holds it (or
-   * whoever held it let the lease run out), so a duplicate job sends nothing.
+   * One try. The delivery is claimed only if this is its next try and nobody holds it, so a
+   * duplicate job sends nothing. The claim counts the try: one that never finishes (a worker that
+   * died, a result that could not be saved) still uses up its place in the schedule (`sweep`).
    */
   async attempt({ deliveryId, attempt }: DeliverJob): Promise<string> {
+    // Read before anything is claimed or sent: a bad setting fails here, not after a send.
+    const schedule = retrySchedule();
     const policy = outboundPolicy();
     const leaseMs = (policy.timeoutMs ?? 10_000) + LEASE_GRACE_MS;
     const [d] = await this.db
       .update(integrationDeliveries)
       .set({
         status: 'sending',
+        attempts: attempt,
         leaseUntil: sql`now() + ${`${leaseMs} milliseconds`}::interval`,
         updatedAt: new Date(),
       })
@@ -140,13 +151,7 @@ export class DeliveriesService {
           eq(integrationDeliveries.id, deliveryId),
           eq(integrationDeliveries.queues, config.queuePrefix),
           eq(integrationDeliveries.attempts, attempt - 1),
-          or(
-            inArray(integrationDeliveries.status, ['pending', 'retrying']),
-            and(
-              eq(integrationDeliveries.status, 'sending'),
-              lt(integrationDeliveries.leaseUntil, sql`now()`),
-            ),
-          ),
+          inArray(integrationDeliveries.status, ['pending', 'retrying']),
         ),
       )
       .returning();
@@ -161,8 +166,13 @@ export class DeliveriesService {
           eq(integrationEndpoints.tenantId, d.tenantId),
         ),
       );
+    // A cancelled try sends nothing, so it is not counted.
     if (endpoint?.status !== 'active') {
-      await this.finish(d.id, { status: 'cancelled', lastError: 'The endpoint is paused' });
+      await this.finish(d.id, attempt, {
+        status: 'cancelled',
+        attempts: attempt - 1,
+        lastError: 'The endpoint is paused',
+      });
       return 'cancelled';
     }
 
@@ -170,8 +180,9 @@ export class DeliveriesService {
     // capabilities since gets no field it may no longer read, on a retry or a redelivery.
     const body = bodyToSend(d.body, d.resourceType, endpointPrincipal(endpoint));
     if (body === null) {
-      await this.finish(d.id, {
+      await this.finish(d.id, attempt, {
         status: 'cancelled',
+        attempts: attempt - 1,
         lastError: 'The record may no longer leave the platform',
       });
       return 'cancelled';
@@ -202,7 +213,7 @@ export class DeliveriesService {
       final = isEgressBlocked(e);
     }
 
-    await this.db.insert(integrationAttempts).values({
+    await this.logAttempt({
       tenantId: d.tenantId,
       deliveryId: d.id,
       attempt,
@@ -210,42 +221,48 @@ export class DeliveriesService {
       status: res?.status ?? null,
       error: error ?? null,
       durationMs: res?.durationMs ?? Date.now() - started,
-      response: res ? res.body.slice(0, RESPONSE_CHARS) : null,
+      response: res ? storable(res.body.slice(0, RESPONSE_CHARS)) : null,
     });
 
     if (!error) {
-      await this.finish(d.id, {
+      const held = await this.finish(d.id, attempt, {
         status: 'delivered',
-        attempts: attempt,
         lastStatus: res?.status ?? null,
         lastError: null,
         deliveredAt: new Date(),
         nextAttemptAt: null,
       });
-      return 'delivered';
+      return held ? 'delivered' : 'taken over';
     }
-    const schedule = retrySchedule();
     const wait = final ? undefined : schedule[attempt - 1];
     if (wait === undefined) {
-      await this.finish(d.id, {
+      const held = await this.finish(d.id, attempt, {
         status: 'failed',
-        attempts: attempt,
         lastStatus: res?.status ?? null,
         lastError: error,
         nextAttemptAt: null,
       });
-      log.warn(`delivery ${d.id} failed for good after ${attempt} tries: ${error}`);
-      return 'failed';
+      if (held) log.warn(`delivery ${d.id} failed for good after ${attempt} tries: ${error}`);
+      return held ? 'failed' : 'taken over';
     }
-    await this.finish(d.id, {
+    const held = await this.finish(d.id, attempt, {
       status: 'retrying',
-      attempts: attempt,
       lastStatus: res?.status ?? null,
       lastError: error,
       nextAttemptAt: new Date(Date.now() + wait),
     });
+    if (!held) return 'taken over';
     await this.enqueue(d.id, attempt + 1, wait);
     return 'retrying';
+  }
+
+  /** One row of the attempt log. Failing to write it never keeps the delivery's state unsaved. */
+  private async logAttempt(row: typeof integrationAttempts.$inferInsert): Promise<void> {
+    try {
+      await this.db.insert(integrationAttempts).values(row);
+    } catch (e) {
+      log.warn(`delivery ${row.deliveryId}: try ${row.attempt} was not logged: ${message(e)}`);
+    }
   }
 
   /** The secrets that sign now: the current one, and the previous during its overlap. */
@@ -269,45 +286,132 @@ export class DeliveriesService {
     }
   }
 
+  /**
+   * Ends try `attempt`, if it is still this worker's: once the sweeper has taken a try over
+   * (its lease ran out), a late result changes nothing. True when it was saved.
+   */
   private async finish(
     id: string,
+    attempt: number,
     set: Partial<typeof integrationDeliveries.$inferInsert>,
-  ): Promise<void> {
-    await this.db
+  ): Promise<boolean> {
+    const done = await this.db
       .update(integrationDeliveries)
       .set({ ...set, leaseUntil: null, updatedAt: new Date() })
-      .where(eq(integrationDeliveries.id, id));
+      .where(
+        and(
+          eq(integrationDeliveries.id, id),
+          eq(integrationDeliveries.attempts, attempt),
+          eq(integrationDeliveries.status, 'sending'),
+        ),
+      )
+      .returning({ id: integrationDeliveries.id });
+    return done.length > 0;
   }
 
   /**
-   * Every minute: deliveries of this queue prefix that are due but whose job was lost (a crash
-   * between the commit and the add, a worker that died mid-send) get a job again.
+   * Every minute, for this queue prefix: a try whose lease ran out counts as a failed try (the
+   * delivery moves on, or ends `failed` when the schedule is used up), and a due delivery whose
+   * job was lost (a crash between the commit and the add) gets a job again. The longest waiting
+   * go first, so one business's backlog does not hold back the others' older ones.
    */
   async sweep(): Promise<number> {
+    const schedule = retrySchedule();
+    const unfinished = await this.db
+      .select({
+        id: integrationDeliveries.id,
+        tenantId: integrationDeliveries.tenantId,
+        attempts: integrationDeliveries.attempts,
+        url: integrationEndpoints.url,
+      })
+      .from(integrationDeliveries)
+      .innerJoin(
+        integrationEndpoints,
+        and(
+          eq(integrationEndpoints.id, integrationDeliveries.endpointId),
+          eq(integrationEndpoints.tenantId, integrationDeliveries.tenantId),
+        ),
+      )
+      .where(
+        and(
+          eq(integrationDeliveries.queues, config.queuePrefix),
+          eq(integrationDeliveries.status, 'sending'),
+          lt(integrationDeliveries.leaseUntil, sql`now()`),
+        ),
+      )
+      .orderBy(asc(integrationDeliveries.leaseUntil))
+      .limit(SWEEP_LIMIT);
+    for (const d of unfinished) await this.giveUp(d, schedule);
+
     const due = await this.db
       .select({ id: integrationDeliveries.id, attempts: integrationDeliveries.attempts })
       .from(integrationDeliveries)
       .where(
         and(
           eq(integrationDeliveries.queues, config.queuePrefix),
-          or(
-            and(
-              inArray(integrationDeliveries.status, ['pending', 'retrying']),
-              lte(
-                integrationDeliveries.nextAttemptAt,
-                sql`now() - ${`${SWEEP_GRACE_MS} milliseconds`}::interval`,
-              ),
-            ),
-            and(
-              eq(integrationDeliveries.status, 'sending'),
-              lt(integrationDeliveries.leaseUntil, sql`now()`),
-            ),
+          inArray(integrationDeliveries.status, ['pending', 'retrying']),
+          lte(
+            integrationDeliveries.nextAttemptAt,
+            sql`now() - ${`${SWEEP_GRACE_MS} milliseconds`}::interval`,
           ),
         ),
       )
-      .limit(500);
+      .orderBy(asc(integrationDeliveries.nextAttemptAt))
+      .limit(SWEEP_LIMIT);
     const minute = Math.floor(Date.now() / 60_000);
     for (const d of due) await this.enqueue(d.id, d.attempts + 1, 0, `sweep-${minute}`);
-    return due.length;
+    return unfinished.length + due.length;
+  }
+
+  /** A try that did not finish: logged as such, then on as after any failed try. */
+  private async giveUp(
+    d: { id: string; tenantId: string; attempts: number; url: string },
+    schedule: number[],
+  ): Promise<void> {
+    const wait = schedule[d.attempts - 1];
+    const [moved] = await this.db
+      .update(integrationDeliveries)
+      .set({
+        status: wait === undefined ? 'failed' : 'retrying',
+        lastStatus: null,
+        lastError: UNFINISHED,
+        nextAttemptAt: wait === undefined ? null : new Date(Date.now() + wait),
+        leaseUntil: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(integrationDeliveries.id, d.id),
+          eq(integrationDeliveries.status, 'sending'),
+          eq(integrationDeliveries.attempts, d.attempts),
+          lt(integrationDeliveries.leaseUntil, sql`now()`),
+        ),
+      )
+      .returning({ id: integrationDeliveries.id });
+    if (!moved) return;
+    // The worker may have logged the try before it stopped.
+    const [logged] = await this.db
+      .select({ id: integrationAttempts.id })
+      .from(integrationAttempts)
+      .where(
+        and(eq(integrationAttempts.deliveryId, d.id), eq(integrationAttempts.attempt, d.attempts)),
+      )
+      .limit(1);
+    if (!logged)
+      await this.logAttempt({
+        tenantId: d.tenantId,
+        deliveryId: d.id,
+        attempt: d.attempts,
+        url: d.url,
+        status: null,
+        error: UNFINISHED,
+        durationMs: null,
+        response: null,
+      });
+    if (wait === undefined) {
+      log.warn(`delivery ${d.id} failed for good after ${d.attempts} tries: ${UNFINISHED}`);
+      return;
+    }
+    await this.enqueue(d.id, d.attempts + 1, wait);
   }
 }

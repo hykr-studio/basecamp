@@ -38,7 +38,10 @@ export type InboundJob = { inboundId: string };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 500);
+/** Postgres text and jsonb cannot hold NUL, and a handler's error may carry what came in. */
+const storable = (text: string) => text.replaceAll('\u0000', '');
+
+const message = (e: unknown) => storable(e instanceof Error ? e.message : String(e)).slice(0, 500);
 
 /** A refusal (403, 404, 409…) will be the same next time: the event fails for good. */
 function finalReason(e: unknown): string | null {
@@ -46,8 +49,10 @@ function finalReason(e: unknown): string | null {
   const status = e.getStatus();
   if (status < 400 || status >= 500 || status === 408 || status === 429) return null;
   const body = e.getResponse() as { reason?: string; message?: string; rule?: string } | string;
-  if (typeof body === 'string') return body;
-  return [body.rule, body.reason ?? body.message ?? e.message].filter(Boolean).join(': ');
+  if (typeof body === 'string') return storable(body).slice(0, 500);
+  return storable(
+    [body.rule, body.reason ?? body.message ?? e.message].filter(Boolean).join(': '),
+  ).slice(0, 500);
 }
 
 const notFound = () => new NotFoundException({ error: 'not_found', message: 'No such webhook' });

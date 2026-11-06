@@ -44,7 +44,7 @@ import {
 import { projectPayload } from './payload.js';
 import { connectors } from './registry.js';
 import {
-  checkSecretsKey,
+  checkSettings,
   connectionAad,
   endpointAad,
   PREVIOUS_SECRET_MS,
@@ -80,7 +80,7 @@ export class IntegrationsService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    checkSecretsKey();
+    checkSettings();
     registerIntegrationOps();
   }
 
