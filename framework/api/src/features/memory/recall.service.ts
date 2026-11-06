@@ -62,11 +62,15 @@ export function parseAbout(about: string | undefined): MemoryAbout | undefined {
 
 /** One recalled memory as a line of a turn's context: where it comes from, then its words. */
 export function contextLine(item: RecallItem, label?: string): string {
+  const text = cut(oneLine(item.text), CONTEXT_CHARS);
   if (item.kind === 'message')
-    return `Recalled, what the person said${item.at ? ` on ${item.at.slice(0, 10)}` : ''}: ${cut(item.text, CONTEXT_CHARS)}`;
+    return `Recalled, what the person said${item.at ? ` on ${item.at.slice(0, 10)}` : ''}: ${text}`;
   const about = item.about ? ` about ${item.about.type} ${item.about.id}` : '';
-  return `Recalled ${label ?? item.type} ${item.id}${about}: ${cut(item.text, CONTEXT_CHARS)}`;
+  return `Recalled ${label ?? item.type} ${item.id}${about}: ${text}`;
 }
+
+/** One line, whatever the memory holds: recalled words never start a line of the prompt. */
+const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 export interface RecallRequest {
   query: string;

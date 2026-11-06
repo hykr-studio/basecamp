@@ -14,6 +14,7 @@ import { TenantConfigService } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { TenantsService } from '../../dist/channels/tenants.service.js';
+import { installFeatures } from '../../dist/features/install.js';
 import * as api from '../../dist/index.js';
 import { boot, me, Person, pool, server, shutdown } from '../../dist/testing.js';
 import { TaskSpec } from '../fixture/dist/contracts.js';
@@ -58,7 +59,16 @@ describe('contributions', () => {
       expect(registry.get(NAME), key).toBe(contributed);
       // The framework registers its own queues too (the channel's, the events queue).
       if (key === 'queues') expect(registry.all(), key).toContain(contributed);
-      else expect(registry.all(), key).toEqual([contributed]);
+      else {
+        // Besides the framework's features' own contributions (memory's hooks), only this one.
+        const features = new Set<unknown>(
+          installFeatures().flatMap((f) => f.contributes?.[key as keyof typeof registries] ?? []),
+        );
+        expect(
+          registry.all().filter((x: unknown) => !features.has(x)),
+          key,
+        ).toEqual([contributed]);
+      }
     }
     expect(api.runtime().contributions).toEqual(seamsContributions);
   });
@@ -72,10 +82,11 @@ describe('contributions', () => {
   });
 
   it('a name is unique in its registry', () => {
+    const before = api.turnHooks.all();
     expect(() => api.turnHooks.register({ name: NAME })).toThrow(
       'The turn hook "fixture.seams" is registered twice',
     );
-    expect(api.turnHooks.all()).toHaveLength(1);
+    expect(api.turnHooks.all()).toEqual(before);
   });
 
   it('a key that nothing collects fails closed, before anything is registered', () => {
