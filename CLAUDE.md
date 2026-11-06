@@ -186,6 +186,10 @@ role `own`, `customer` or `tenant` per read and write (the sample is in
 - Every read leaves through `def.toRead(row, p)`, projected for the principal (entity plugins' `project`,
   then read projectors). Never return a repo row from a controller or service as is.
 - A command's `approval.by` says who decides. Without it, the person decides on their own assistant's request.
+- Money is `Money = { minor, currency }` everywhere (`minorUnits()` columns, the spec's `money` trait), never
+  a float or `numeric`. Take a document number with `nextNumber` in a command's `run` (a parked write
+  then takes none), and cancel numbered records instead of deleting them. Line items are a child entity
+  (`defineChildEntity`, `traits.parent`), written whole with `children.replace` (developer guide 5.12).
 - Return `deny(...)` with a stable `rule` code and a plain `reason` instead of throwing. The caller gets
   403 `{ error: 'forbidden', rule, reason }`. "Not yours" is a 404, never a 403.
 - WhatsApp templates (`defineTemplate`) are versioned forever. To change the wording, add `_v2`;
