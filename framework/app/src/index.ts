@@ -11,6 +11,8 @@ export { applyCanvasIntent, useCanvas } from './canvas/store';
 export { Button } from './components/Button';
 export { ScreenTitle, SectionHeading } from './components/ScreenTitle';
 export { type AppConfig, appConfig, configure } from './config';
+export * from './features/index';
+export { createInvalidator, liveKeysFor } from './features/live/keys';
 export {
   ApprovalCard,
   ApprovalItem,
