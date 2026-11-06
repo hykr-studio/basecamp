@@ -808,10 +808,10 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   `push.receipts` schedule) moves on later through `NotifyService.fallback`. A gone device is forgotten.
 - **Live updates.** `GET /api/live` (server-sent events, people only) sends `{ name, type, id }` for
   each committed event about a record the person may read now: an entity's record through its scoped
-  read (as `GET`), any other type through a contributed `liveResources` check (`approval` is the
-  framework's). The `live.relay` subscriber publishes events on Redis per business, ids only. A record
-  that is gone reaches only streams already told about it and the person who changed it. The app's
-  `livePlugin()` invalidates the matching queries, and everything after a reconnect.
+  read (as `GET`), any other type through a contributed `liveResources` check (`approval` and `job`
+  are the framework's). The `live.relay` subscriber publishes events on Redis per business, ids
+  only. A record that is gone reaches only streams already told about it and the person who changed
+  it. The app's `livePlugin()` invalidates the matching queries, and everything after a reconnect.
 - **Inbound hooks.** Each WhatsApp message the code did not answer itself (buttons, keywords) passes
   `inboundHooks` before its turn: `{ handled: true }` keeps it out, `{ context }` adds lines the turn
   reads. A hook that throws is logged and skipped. A burst that says "delete my data" passes no hook:
@@ -1062,7 +1062,9 @@ run: async ({ tx, principal, loaded }) => ({
   caller's own), through the read projectors as resource type `job`; the service's id and the secret
   never leave. People cancel with `POST /api/jobs/:id/cancel`. The assistant has `get-job` and
   `list-jobs`. In the app: `useJob(id)`, `useJobs({ entity, id })`, `useCancelJob()` and
-  `<JobProgress job />`.
+  `<JobProgress job />`. A job's events reach the live stream (`GET /api/live`) of whoever reaches
+  the job (a `liveResources` check), and `livePlugin()` refreshes every jobs query on them; the hooks
+  also ask every 2 s until the job finishes, for apps without the live plugin.
 - **Configuration.** `JOBS_PUBLIC_URL` (where services post; default `BETTER_AUTH_URL`),
   `JOBS_SECRET` (derived from `BETTER_AUTH_SECRET` when unset), `JOBS_CALLBACK_TOLERANCE_S` (300),
   `JOBS_ALLOW_PRIVATE_URLS`. The fixture's `features/jobs` and `test/framework/jobs.e2e.test.ts`
@@ -1621,7 +1623,7 @@ These are not built. Each has a workaround for now.
 | Files of a deleted business or of rows deleted outside the write path | Their rows go with the business (cascade) or stay attached; their objects stay in the bucket. |
 | Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |
 | Telling someone a job finished | Jobs store `job.succeeded` and `job.failed` events; nothing notifies a person yet. Subscribe to them (section 5.10) or show `<JobProgress>`. |
-| Live job progress | The app polls `GET /api/jobs/:id` every 2 s until the job finishes (no SSE yet). |
+| Job progress without polling | `useJob` and `useJobs` still ask every 2 s until a job finishes, even when `livePlugin()` already refreshes them on each job event. |
 | Retention of finished jobs | Jobs and their result files are kept until "delete my data" (jobs about no record only). |
 | A result file on a record | Result files stay on their job; `complete` puts a copy on a record (`ctx.copyFile`). |
 | Every job of a business | `GET /api/jobs` lists a record's jobs or the caller's own; there is no operations view. |

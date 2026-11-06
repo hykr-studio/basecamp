@@ -56,10 +56,13 @@ describe('liveKeysFor', () => {
       ['history'],
     ]);
   });
-  it('an approval invalidates the list and that approval; an unknown type nothing', () => {
+  it('an approval: the list and that approval; a job: every jobs query; an unknown type nothing', () => {
     expect(
       liveKeysFor({ name: 'approval.requested', type: 'approval', id: 'a1' }, catalog),
     ).toEqual([['approvals'], ['approval', 'a1']]);
+    expect(liveKeysFor({ name: 'job.progress', type: 'job', id: 'j1' }, catalog)).toEqual([
+      ['jobs'],
+    ]);
     expect(liveKeysFor({ name: 'thing.made', type: 'thing', id: 'x' }, catalog)).toEqual([]);
   });
 });

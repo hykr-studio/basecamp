@@ -2,8 +2,9 @@
 // and a stand-in outside service run here: started by a command (the assistant's start waits for
 // approval), submitted by the worker, moved on by signed callbacks or by polling, finished with
 // result files kept on the job and written back by `complete`; another business gets 404, staff
-// never see a render's cost, deadlines, cancelling, and personal data.
+// never see a render's cost, deadlines, cancelling, live updates and personal data.
 import { createServer, type Server } from 'node:http';
+import { type LiveMessage, liveMessages, textOf } from '@hykr/api-client';
 import type { Principal } from '@hykr/contracts';
 import { eventFor, toEnvelope } from '@hykr/core';
 import { domainEvents } from '@hykr/db';
@@ -21,6 +22,7 @@ import {
   eventually,
   type Json,
   me,
+  origin,
   Person,
   pool,
   server,
@@ -788,6 +790,73 @@ describe('deadlines and cancelling', () => {
     expect(await events(id)).toContain('job.cancelled');
     await eventually(() => stand.cancelled.includes(s.id));
     expect((await owner.call('POST', `/api/jobs/${id}/cancel`)).status).toBe(409);
+  });
+});
+
+describe('live updates', () => {
+  type Stream = { messages: LiveMessage[]; raw: string; close: () => void };
+
+  /** This person's live stream (in this business), read in the background. */
+  async function stream(who: Person, headers: Record<string, string> = {}) {
+    const controller = new AbortController();
+    const res = await fetch(`${server.base}/api/live`, {
+      headers: { origin, cookie: who.cookie, ...headers },
+      signal: controller.signal,
+    });
+    expect(res.status).toBe(200);
+    const s: Stream = { messages: [], raw: '', close: () => controller.abort() };
+    const body = res.body as ReadableStream<Uint8Array>;
+    async function* tee() {
+      for await (const text of textOf(body)) {
+        s.raw += text;
+        yield text;
+      }
+    }
+    void (async () => {
+      try {
+        for await (const m of liveMessages(tee())) s.messages.push(m);
+      } catch {
+        // aborted
+      }
+    })();
+    await eventually(() => s.messages.find((m) => m.kind === 'ready'));
+    return s;
+  }
+  const heard = (s: Stream, id: string) =>
+    s.messages.flatMap((m) => (m.kind === 'change' && m.event.id === id ? [m.event] : []));
+  const hears = (s: Stream, id: string, name: string) =>
+    eventually(() => {
+      const found = heard(s, id);
+      return found.some((e) => e.name === name) ? found : undefined;
+    });
+
+  it('a job’s changes reach whoever reaches it, as ids; nobody else', async () => {
+    const ownerS = await stream(owner);
+    const staffS = await stream(staff, inTenant());
+    const strangerS = await stream(stranger);
+    try {
+      const rendered = await running((await drawing('Plan Live')).id);
+      await post(rendered, { status: 'running', progress: 70, message: 'Live secret step' });
+      const seen = await hears(ownerS, rendered, 'job.progress');
+      expect(seen.map((e) => e.name)).toEqual(['job.queued', 'job.running', 'job.progress']);
+      expect(seen[0]).toEqual({ name: 'job.queued', type: 'job', id: rendered });
+      // A colleague who reads the drawing hears of its render.
+      await hears(staffS, rendered, 'job.progress');
+
+      // A job about no record: only the person it was started for.
+      const converted = (await owner.call('POST', '/api/drawings/convert', { text: 'live' })).body
+        .value.id as string;
+      await hears(ownerS, converted, 'job.running');
+
+      await new Promise((r) => setTimeout(r, 2500));
+      expect(heard(staffS, converted)).toEqual([]);
+      expect(heard(strangerS, rendered)).toEqual([]);
+      expect(heard(strangerS, converted)).toEqual([]);
+      // Ids only: never the message, the input or the output.
+      expect(ownerS.raw).not.toContain('Live secret step');
+    } finally {
+      for (const s of [ownerS, staffS, strangerS]) s.close();
+    }
   });
 });
 

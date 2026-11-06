@@ -4,6 +4,7 @@ import { defineFeature } from '../feature.js';
 import { jobDefs } from './define.js';
 import { jobFiles } from './holder.js';
 import { JobCallbackController, JobsController } from './jobs.controller.js';
+import { jobLive } from './live.js';
 import { jobsErasure, jobsExport } from './privacy.js';
 import './routes.js';
 import {
@@ -85,7 +86,8 @@ export const JobsOnSucceeded = defineSubscriber({
 /**
  * Long-running jobs (docs/decisions/B11.md): kinds declared with `defineJob`, started inside a
  * write (`startJob`), submitted by the worker, followed through signed callbacks or polling,
- * finished with an output and result files kept on the job, written back by `complete`.
+ * finished with an output and result files kept on the job, written back by `complete`. Its
+ * events reach the live stream of whoever reaches the job.
  */
 export const jobsFeature = defineFeature({
   name: 'jobs',
@@ -97,6 +99,7 @@ export const jobsFeature = defineFeature({
     schedules: [JobsTickSchedule],
     subscribers: [JobsOnQueued, JobsOnSucceeded],
     fileHolders: [jobFiles],
+    liveResources: [jobLive],
     toolContributions: [jobsTools],
     erasureContributors: [jobsErasure],
     exportContributors: [jobsExport],
