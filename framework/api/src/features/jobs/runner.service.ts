@@ -705,9 +705,14 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
     return this.db.transaction(async (tx) => {
       const [current] = await tx.select().from(jobs).where(eq(jobs.id, id)).for('update');
       if (!current || isJobFinished(current.status)) return 'ignored: finished';
-      const pct = progress === undefined ? null : Math.max(0, Math.min(100, Math.floor(progress)));
+      // From ctx.progress too, unchecked by the update schema: a number from 0 to 100, or none.
+      const pct =
+        typeof progress === 'number' && Number.isFinite(progress)
+          ? Math.max(0, Math.min(100, Math.floor(progress)))
+          : null;
       const up = pct !== null && (current.progress === null || pct > current.progress);
-      const said = message !== undefined && message !== current.message;
+      const text = message === undefined ? undefined : String(message).slice(0, 500);
+      const said = text !== undefined && text !== current.message;
       const started = current.status === 'queued';
       if (!up && !said && !started)
         return pct !== null && current.progress !== null && pct < current.progress
@@ -719,7 +724,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
         .set({
           status: 'running',
           ...(up ? { progress: pct } : {}),
-          ...(said ? { message } : {}),
+          ...(said ? { message: text } : {}),
           ...(def?.poll && current.submittedAt ? { nextPollAt: later(pollEvery(def)) } : {}),
         })
         .where(eq(jobs.id, id))
