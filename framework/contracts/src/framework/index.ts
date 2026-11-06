@@ -1,3 +1,4 @@
+export * from './comments.js';
 export * from './domain.js';
 export * from './events.js';
 export * from './files.js';
