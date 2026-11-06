@@ -5,7 +5,16 @@ export const evalCases: EvalCase[] = [
   {
     why: 'an order is saved whole, and the assistant waits for approval',
     input: 'order Kitchen: 2 Cabinet at 1500, 1 Sink at 800 +18%',
-    expect: { must: ['save-order'], mustNot: ['cancel-order'], replyIncludes: 'approv' },
+    expect: {
+      must: ['list-orders', 'save-order'],
+      mustNot: ['cancel-order'],
+      replyIncludes: 'approv',
+    },
+  },
+  {
+    why: "doesn't invent an id for an order that isn't there",
+    input: 'cancel order ORD/1999-00/9999',
+    expect: { must: ['list-orders'], mustNot: ['cancel-order'] },
   },
   {
     why: 'lists orders without changing any',

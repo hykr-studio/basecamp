@@ -1,7 +1,8 @@
 // Records with a parent (B5): a basket's items as a tree (groups and lines), saved whole in one
 // write, reached only through a basket the caller reaches, audited row by row, and parked and
 // approved as one operation. The fixture's baskets (fixture/src/features/line-items).
-import { buildTree, type Money } from '@hykr/contracts';
+import { buildTree, type Money, type Principal } from '@hykr/contracts';
+import { CORE_OPTIONS, type CoreOptions, insertMany } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addMember,
@@ -14,7 +15,7 @@ import {
   server,
   shutdown,
 } from '../../dist/testing.js';
-import { lineItems } from '../fixture/dist/features/line-items/index.js';
+import { BasketDef, BasketItemDef, lineItems } from '../fixture/dist/features/line-items/index.js';
 
 const owner = new Person('Owner Lines');
 const staff = new Person('Staff Lines');
@@ -22,6 +23,21 @@ const admin = new Person('Admin Lines');
 const stranger = new Person('Stranger Lines');
 let tenantId = '';
 const inTenant = () => ({ 'x-tenant-id': tenantId });
+
+const db = () => {
+  if (!server.app) throw new Error('The app is not booted');
+  return (server.app.get(CORE_OPTIONS, { strict: false }) as CoreOptions).db;
+};
+
+/** As the server builds it for the signed-in owner. */
+const asOwner = (): Principal => ({
+  actor: { kind: 'user', id: owner.id },
+  subject: { kind: 'user', userId: owner.id },
+  tenantId,
+  roles: ['owner'],
+  assurance: 'session',
+  scopes: [],
+});
 
 type Item = {
   id: string;
@@ -360,5 +376,80 @@ describe('a whole tree parked and approved as one', () => {
     );
     expect(card.body.input.items).toHaveLength(4);
     for (const i of card.body.input.items) expect(i).not.toHaveProperty('cost');
+  });
+});
+
+describe('appending, and many records of any entity', () => {
+  it('children.insert appends under a node, after its children; a stored id or a foreign node is refused', async () => {
+    const res = await save(owner, { title: 'Append', items: flat(2, 2) });
+    const basket = (
+      await pool.query('select * from app.fixture_baskets where id = $1', [
+        res.body.value.basket.id,
+      ])
+    ).rows[0];
+    const row = await db().transaction((tx) => BasketDef.repo.get(tx, asOwner(), basket.id));
+    const group = res.body.value.items[0] as Item;
+    const added = await db().transaction((tx) =>
+      BasketItemDef.children.insert(
+        tx,
+        asOwner(),
+        row,
+        [{ title: 'Late line', quantity: 1, price: { minor: 5 }, amount: { minor: 5 } }],
+        { via: 'test.append' },
+        { under: group.id },
+      ),
+    );
+    expect(added.created).toHaveLength(1);
+    expect(added.created[0]).toMatchObject({
+      parentItemId: group.id,
+      position: 2,
+      currency: 'EUR',
+    });
+    expect(added.rows).toHaveLength(7);
+    expect(added.touched).toEqual([
+      expect.objectContaining({ type: 'basketItem', change: 'created' }),
+    ]);
+    await expect(
+      db().transaction((tx) =>
+        BasketItemDef.children.insert(tx, asOwner(), row, [{ id: group.id, title: 'Again' }], {
+          via: 'test.append',
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    const other = await save(owner, { title: 'Elsewhere', items: flat(1, 1) });
+    await expect(
+      db().transaction((tx) =>
+        BasketItemDef.children.insert(
+          tx,
+          asOwner(),
+          row,
+          [{ title: 'Lost' }],
+          { via: 'test' },
+          {
+            under: other.body.value.items[0].id,
+          },
+        ),
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('insertMany writes each record through its repository, with one touched list', async () => {
+    const made = await db().transaction((tx) =>
+      insertMany(
+        tx,
+        asOwner(),
+        BasketDef,
+        [
+          { title: 'Many 1', currency: 'EUR', total: '1' },
+          { title: 'Many 2', currency: 'EUR', total: '2' },
+        ],
+        { via: 'test.many' },
+      ),
+    );
+    expect(made.rows.map((r) => [r.title, r.total, r.ownerId])).toEqual([
+      ['Many 1', 100, owner.id],
+      ['Many 2', 200, owner.id],
+    ]);
+    expect(made.touched.map((t) => t.change)).toEqual(['created', 'created']);
   });
 });

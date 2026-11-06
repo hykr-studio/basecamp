@@ -285,5 +285,15 @@ describe('who decides, and who sees the cost', () => {
     const res = await owner.chat('order Hall: 2 Lamp at 1200, 1 Rug at 3000 +12%');
     expect(res.status).toBe(200);
     expect(JSON.stringify(res.body)).toMatch(/approv/i);
+    // A cancel finds the order by its number first, and waits for approval too.
+    const saved = await save(owner, { title: 'To cancel', items: [] });
+    const number = saved.body.value.order.number;
+    const cancel = await owner.chat(`cancel order ${number}`);
+    expect(JSON.stringify(cancel.body)).toMatch(/approv/i);
+    const { rows } = await pool.query(
+      "select status from app.approvals where action = 'order.cancel' and resource_id = $1",
+      [saved.body.value.order.id],
+    );
+    expect(rows).toEqual([{ status: 'pending' }]);
   });
 });
