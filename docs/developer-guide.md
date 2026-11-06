@@ -758,12 +758,14 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   one export line in `features/index.ts`. `FeaturesModule.forRoot` loads controllers only in the API and
   processors only where jobs run.
 - **Events and subscribers.** `defineSubscriber({ name, on: ['task.*'], when?, handle | queue })`,
-  contributed as `subscribers`. The relay adds one job per event and subscriber (id
-  `<subscriber>--<event id>`, so a repeat runs once): `handle` runs on the shared `events` queue,
-  `queue` adds the envelope to your own queue. Events come from the registered `eventFeeds` (the
-  durable outbox), polled by the worker each second with this process's prefix and `ctx`; `relayed`
-  marks what went out. Until a feed exists, the in-process event bus is relayed after commit.
-  Subscribers get the stored row: pass it through `projectRead` before it leaves the server.
+  contributed as `subscribers`. Events come from the registered `eventFeeds`, which the worker polls
+  each second with this process's prefix and `ctx`. The framework's `outbox` feed returns the rows of
+  `app.domain_events` with this prefix that are due (`available_at` passed), not withdrawn
+  (`cancelled_at`) and not yet relayed, oldest first. The relay adds one job per event and subscriber
+  (id `<subscriber>--<stored event id>`, so a repeat runs once), then sets `relayed_at`. `handle`
+  runs on the shared `events` queue; `queue` adds the envelope to your own queue. The envelope has
+  the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
+  (F3) before it leaves the server. The in-process `EventBus` is not relayed.
 - **Turn hooks.** Every chat turn and back-office draft passes `turnHooks` in `ChatService`, after
   the framework's own `model-key` hook. `before` returns `{ refuse: { rule, reason, status?, say? } }`
   or `{ context?, model?, withoutTools? }`; a refusal is `TurnRefused` (403 unless given, nothing saved;
