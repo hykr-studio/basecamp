@@ -893,7 +893,9 @@ with it.
   principal with the `capabilities` it was given, so a field that needs a capability stays
   hidden), signed the Standard Webhooks way (`webhook-id`, `webhook-timestamp`,
   `webhook-signature`), sent only to public addresses (`INTEGRATIONS_ALLOWED_HOSTS` lets a
-  development host through), and retried on `INTEGRATIONS_RETRY_SCHEDULE`. The log is
+  development host through), and retried on `INTEGRATIONS_RETRY_SCHEDULE` (checked at start).
+  Every try counts when it is claimed, so a try that never finishes (a worker that died) uses up
+  its place: the sweeper logs it and moves the delivery on, or ends it `failed`. The log is
   `GET /api/integrations/endpoints/:id/deliveries` and `GET /api/integrations/deliveries/:id`;
   `POST .../retry` sends one again. Each try sends the stored body projected again for the
   endpoint as it is then, so a capability taken away leaves retries and redeliveries too.
