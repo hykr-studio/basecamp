@@ -57,6 +57,8 @@ export class LiveHub implements OnModuleDestroy, OnApplicationShutdown {
   private readonly byTenant = new Map<string, Set<Connection>>();
   /** One chain per business: signals are checked and sent in the order they arrive. */
   private readonly chains = new Map<string, Promise<void>>();
+  /** Each business's Redis subscription, while it has streams: a stream waits for it. */
+  private readonly subscriptions = new Map<string, Promise<void>>();
   private redis: Redis | undefined;
   private readonly ctx: ServerContext;
 
@@ -103,7 +105,6 @@ export class LiveHub implements OnModuleDestroy, OnApplicationShutdown {
       closed: false,
     };
     const set = this.byTenant.get(tenantId) ?? new Set<Connection>();
-    const first = set.size === 0;
     set.add(conn);
     this.byTenant.set(tenantId, set);
     // The client went away (or the response ended): forget the stream.
@@ -112,10 +113,16 @@ export class LiveHub implements OnModuleDestroy, OnApplicationShutdown {
     res.on('error', close);
     conn.timers.push(setInterval(() => this.write(conn, ': ping\n\n'), HEARTBEAT_MS));
     conn.timers.push(setTimeout(() => this.close(conn), maxMs()));
+    let subscribed = this.subscriptions.get(tenantId);
+    if (!subscribed) {
+      subscribed = this.subscribe(tenantId);
+      this.subscriptions.set(tenantId, subscribed);
+    }
     try {
-      if (first) await this.subscribe(tenantId);
+      await subscribed;
     } catch (e) {
       log.error(`subscribing for live updates failed: ${message(e)}`);
+      if (this.subscriptions.get(tenantId) === subscribed) this.subscriptions.delete(tenantId);
       this.close(conn);
       return;
     }
@@ -144,6 +151,7 @@ export class LiveHub implements OnModuleDestroy, OnApplicationShutdown {
     set?.delete(conn);
     if (set && set.size === 0) {
       this.byTenant.delete(conn.tenantId);
+      this.subscriptions.delete(conn.tenantId);
       this.redis
         ?.unsubscribe(liveChannel(config.queuePrefix, conn.tenantId))
         .catch((e) => log.warn(`unsubscribe failed: ${message(e)}`));
