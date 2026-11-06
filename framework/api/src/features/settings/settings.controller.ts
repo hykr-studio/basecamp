@@ -32,7 +32,7 @@ import {
 import { AllowAnonymous, OptionalAuth } from '@thallesp/nestjs-better-auth';
 import { asc, eq } from 'drizzle-orm';
 import { domainView } from './commands.js';
-import { verifiedTenantOf } from './domains.js';
+import { isDomainOrigin, verifiedTenantOf } from './domains.js';
 import { FeatureGates, flagsOn } from './gates.js';
 
 const list = (xs: readonly string[] | undefined) => [...(xs ?? [])];
@@ -97,15 +97,17 @@ export class SettingsController {
   /**
    * Branding for the sign-in screen of a verified custom domain, before anyone signs in: the
    * request's Origin (or `?origin=`). Anything else is 404, so nothing is learnt about a business.
+   * No session is needed, so anything that is not an https origin is refused before any lookup.
    */
   @Get('branding/public')
   @AllowAnonymous()
   async publicBranding(
     @Headers('origin') header: string | undefined,
-    @Query('origin') asked: string | undefined,
+    @Query('origin') asked: unknown,
   ): Promise<PublicBranding> {
     const origin = asked ?? header;
-    const tenantId = origin ? await verifiedTenantOf(origin) : null;
+    const tenantId =
+      typeof origin === 'string' && isDomainOrigin(origin) ? await verifiedTenantOf(origin) : null;
     if (!tenantId) throw new NotFoundException({ error: 'not_found', message: 'Not found' });
     const { branding } = (await this.config.get(tenantId)).settings;
     return { name: branding.name, logoUrl: branding.logoUrl, colors: branding.colors };

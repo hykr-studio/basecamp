@@ -540,6 +540,31 @@ describe('custom domains', () => {
     expect(none.status).toBe(404);
   });
 
+  it('what is not an exact https origin is refused before any lookup, signed in or not', async () => {
+    for (const asked of [
+      'http://evil.example.com',
+      `${origin}/sign-in`,
+      `https://${'a'.repeat(250)}.example.com`,
+    ]) {
+      const res = await fetch(
+        `${server.base}/api/branding/public?origin=${encodeURIComponent(asked)}`,
+      );
+      expect(res.status, asked).toBe(404);
+    }
+    const twice = await fetch(
+      `${server.base}/api/branding/public?origin=${encodeURIComponent(origin)}&origin=x`,
+    );
+    expect(twice.status).toBe(404);
+    const plain = await fetch(`${server.base}/api/me`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: origin.replace('https:', 'http:'),
+        'access-control-request-method': 'GET',
+      },
+    });
+    expect(plain.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
   it("one origin belongs to one business; another business cannot see or touch a business's domain", async () => {
     const taken = await other.call('POST', '/api/settings/domains', { origin });
     expect(taken.status).toBe(409);

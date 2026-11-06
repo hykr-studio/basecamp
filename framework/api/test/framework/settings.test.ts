@@ -1,5 +1,6 @@
 // The settings feature's pure parts (A11), without booting: what flags switch off, custom field
-// values against their definitions, the `custom` list filter, a business's phrases.
+// values against their definitions, the `custom` list filter, a business's phrases, the lookup of
+// verified origins.
 import {
   CustomFieldKey,
   customValueProblems,
@@ -13,6 +14,7 @@ import {
 } from '@hykr/contracts';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { originLookup } from '../../dist/features/settings/domains.js';
 
 describe('feature flags', () => {
   const a = defineFeatureFlag({
@@ -160,5 +162,77 @@ describe("a business's phrases", () => {
       expect.stringMatching(/placeholders \{replyTime\}/),
     ]);
     expect(phraseProblems({ 'no.such': { en: 'x' } })).toEqual(['"no.such" is not a phrase']);
+  });
+});
+
+describe('verified origins, asked by anyone', () => {
+  const acme = 'https://app.acme.example.com';
+  const counted = (origins: Record<string, string> = { [acme]: 't-acme' }) => {
+    const calls = { n: 0 };
+    const lookup = originLookup(async () => {
+      calls.n += 1;
+      return new Map(Object.entries(origins));
+    });
+    return { calls, lookup };
+  };
+
+  it('one load answers every origin, and an origin nobody verified costs no query', async () => {
+    const { calls, lookup } = counted();
+    expect(await lookup.tenantOf(acme)).toBe('t-acme');
+    for (let i = 0; i < 2000; i++)
+      expect(await lookup.tenantOf(`https://r${i}.attacker.example`)).toBeNull();
+    expect(calls.n).toBe(1);
+  });
+
+  it('never looks up what is not an exact https origin of at most 200 characters', async () => {
+    const { calls, lookup } = counted();
+    for (const bad of [
+      '',
+      'null',
+      'http://app.acme.example.com',
+      `${acme}/path`,
+      'https://*.example.com',
+      `https://${'a'.repeat(200)}.example.com`,
+    ])
+      expect(await lookup.tenantOf(bad)).toBeNull();
+    expect(calls.n).toBe(0);
+  });
+
+  it('askers at the same moment share one load', async () => {
+    const { calls, lookup } = counted();
+    const answers = await Promise.all(
+      Array.from({ length: 50 }, (_, i) => lookup.tenantOf(i % 2 ? acme : `https://x${i}.test`)),
+    );
+    expect(answers.filter(Boolean)).toHaveLength(25);
+    expect(calls.n).toBe(1);
+  });
+
+  it('forgetting loads again, and a load that started before it is not kept', async () => {
+    let release: () => void = () => {};
+    let n = 0;
+    // The first load sees the set before the address was verified; it ends after the change.
+    const lookup = originLookup(async () => {
+      const mine = ++n;
+      if (mine === 1) await new Promise<void>((r) => (release = r));
+      return new Map(mine === 1 ? [] : [[acme, 't-acme']]);
+    });
+    const stale = lookup.tenantOf(acme);
+    lookup.forget();
+    expect(await lookup.tenantOf(acme)).toBe('t-acme');
+    release();
+    expect(await stale).toBeNull();
+    expect(await lookup.tenantOf(acme)).toBe('t-acme');
+    expect(n).toBe(2);
+  });
+
+  it('a failed load is not kept: the next question tries again', async () => {
+    let n = 0;
+    const lookup = originLookup(async () => {
+      n += 1;
+      if (n === 1) throw new Error('database down');
+      return new Map([[acme, 't-acme']]);
+    });
+    await expect(lookup.tenantOf(acme)).rejects.toThrow('database down');
+    expect(await lookup.tenantOf(acme)).toBe('t-acme');
   });
 });
