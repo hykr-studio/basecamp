@@ -15,7 +15,7 @@ const best = (o: Outcome) => {
 
 export const memoryScripts = defineScriptSet({
   name: 'memory',
-  order: 300,
+  order: 350,
   scripts: [
     defineScript({
       name: 'remember',

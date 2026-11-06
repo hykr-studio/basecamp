@@ -86,7 +86,7 @@ function columnWhere({ column, field, op, value }: ListFieldFilter): SQL {
   }
 }
 
-for (const name of ['enum', 'id', 'boolean', 'text', 'date', 'number'] as const)
+for (const name of ['enum', 'id', 'boolean', 'text', 'date', 'number', 'money'] as const)
   listFieldSql.register({ name, where: columnWhere });
 
 /** The SQL for one filter of a field of this type. */

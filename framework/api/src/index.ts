@@ -5,6 +5,19 @@
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
 export {
+  dispositionOf,
+  type FileRow,
+  type FilesConfig,
+  FilesService,
+  fileLine,
+  filesConfig,
+  STORAGE,
+  type StorageDriver,
+  StorageUnavailable,
+  type Uploader,
+} from './features/files/public.js';
+export { type LiveResource, liveResources } from './features/live/resources.js';
+export {
   anyRole,
   backfillAll,
   MemoryIndexer,

@@ -159,11 +159,19 @@ function toInbound(
   if (m.type === 'audio' && m.audio)
     return { ...common, body: { kind: 'audio', mediaId: m.audio.id, mime: m.audio.mime_type } };
   const media = m.image ?? m.document ?? m.video;
-  if (media)
+  if (media) {
+    const filename = m.document?.filename;
     return {
       ...common,
-      body: { kind: 'media', mediaId: media.id, mime: media.mime_type, caption: media.caption },
+      body: {
+        kind: 'media',
+        mediaId: media.id,
+        mime: media.mime_type,
+        caption: media.caption,
+        ...(filename ? { filename } : {}),
+      },
     };
+  }
   return undefined;
 }
 

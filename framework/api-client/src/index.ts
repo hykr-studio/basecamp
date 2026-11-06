@@ -5,15 +5,22 @@ import {
   type ChatStreamRequest,
   type CommandSpec,
   type EntitySpec,
+  type FileInfo,
+  type FileTarget,
+  type FileTranscript,
   type HandoffThread,
   type HistoryEntry,
   type Inbox,
   type ListInput,
   type Me,
   type Page,
+  type PresignFileInput,
+  type PresignFileResult,
+  type PushDevice,
   pathParams,
   type RecallQuery,
   type RecallResult,
+  type RegisterPushToken,
   type TemplateStatus,
   type Thread,
   type ThreadMessage,
@@ -24,6 +31,15 @@ import {
   type WriteResult,
 } from '@hykr/contracts';
 import type { z } from 'zod';
+import { type LiveMessage, liveMessages, textOf } from './live.js';
+
+export {
+  type LiveMessage,
+  liveMessages,
+  readServerSentEvents,
+  type ServerSentEvent,
+  textOf,
+} from './live.js';
 
 export class ApiError extends Error {
   constructor(
@@ -148,6 +164,21 @@ export function createApiClient(opts: ApiClientOptions) {
     if (last) yield last;
   }
 
+  /**
+   * The live stream (GET /api/live): `ready`, then one `change` per event about a record the
+   * person may read. Resolves when the server closes it; rejects on a refusal or a network
+   * error. Abort with `signal`.
+   */
+  async function live(onMessage: (m: LiveMessage) => void, signal?: AbortSignal): Promise<void> {
+    const res = await fetch(`${opts.baseUrl}/api/live`, {
+      credentials: opts.credentials,
+      headers: { accept: 'text/event-stream', ...(await opts.headers?.()) },
+      signal,
+    });
+    if (!res.ok || !res.body) throw new ApiError(res.status, parseBody(await res.text()));
+    for await (const m of liveMessages(textOf(res.body))) onMessage(m);
+  }
+
   function entity<S extends EntitySpec>(spec: S): EntityClient<S> {
     const base = `/api/${spec.plural}`;
     const one = (id: string) => `${base}/${encodeURIComponent(id)}`;
@@ -175,9 +206,65 @@ export function createApiClient(opts: ApiClientOptions) {
     return call(spec.http.method, path, values, key);
   }
 
+  /** A URL the API gave relative to itself (a local store's), made absolute. */
+  const absolute = (url: string) => (url.startsWith('/') ? `${opts.baseUrl}${url}` : url);
+  const withUrl = (f: FileInfo): FileInfo => (f.url ? { ...f, url: absolute(f.url) } : f);
+  const fileUrl = (id: string, rest = '') => `/api/files/${encodeURIComponent(id)}${rest}`;
+
+  const files = {
+    /** Step one of an upload: a pending file, and where to PUT its bytes. */
+    presign: async (input: PresignFileInput) => {
+      const out = await call<PresignFileResult>('POST', '/api/files', input);
+      return { ...out, upload: { ...out.upload, url: absolute(out.upload.url) } };
+    },
+    /** Step three: the bytes are there. */
+    confirm: async (id: string) => withUrl(await call<FileInfo>('POST', fileUrl(id, '/confirm'))),
+    /** One file, with a short-lived download URL (none for the assistant). */
+    get: async (id: string) => withUrl(await call<FileInfo>('GET', fileUrl(id))),
+    /** The files of these ids the caller reaches; the others are left out. */
+    getMany: async (ids: readonly string[]) => {
+      if (!ids.length) return [] as FileInfo[];
+      const out = await call<{ items: FileInfo[] }>(
+        'GET',
+        `/api/files?ids=${ids.map(encodeURIComponent).join(',')}`,
+      );
+      return out.items.map(withUrl);
+    },
+    /** Throw away an upload that is on no record yet. */
+    remove: (id: string) => call<null>('DELETE', fileUrl(id)),
+    /** An audio file's words (kept once heard). */
+    transcribe: (id: string) => call<FileTranscript>('POST', fileUrl(id, '/transcribe')),
+    /**
+     * Presign, PUT the bytes, confirm: a ready file for one entity's file field, whose id the
+     * record's create or update then carries.
+     */
+    upload: async (
+      body: Blob | ArrayBuffer | Uint8Array,
+      o: { name: string; mime: string; for: FileTarget },
+    ): Promise<FileInfo> => {
+      const size = body instanceof Blob ? body.size : body.byteLength;
+      const { file, upload } = await files.presign({
+        name: o.name,
+        mime: o.mime,
+        size,
+        for: o.for,
+      });
+      const put = await fetch(upload.url, {
+        method: 'PUT',
+        headers: upload.headers,
+        body: body as BodyInit,
+        credentials: 'omit',
+      });
+      if (!put.ok) throw new ApiError(put.status, parseBody(await put.text()));
+      return files.confirm(file.id);
+    },
+  };
+
   return {
     entity,
     command,
+    /** Files: uploads, and files reached through the records they are on. */
+    files,
     /** Who is signed in, in which business, with which roles. */
     me: () => call<Me>('GET', '/api/me'),
     /** The back office: conversations staff have taken from the assistant (staff only). */
@@ -259,6 +346,13 @@ export function createApiClient(opts: ApiClientOptions) {
       ),
     chat: (input: ChatRequest) => call<ChatResponse>('POST', '/api/chat/once', input),
     chatStream,
+    live,
+    /** This device, for push (people only); forget needs no session. */
+    push: {
+      register: (input: RegisterPushToken) => call<PushDevice>('POST', '/api/push/tokens', input),
+      devices: () => call<PushDevice[]>('GET', '/api/push/tokens'),
+      forget: (token: string) => call<null>('POST', '/api/push/tokens/forget', { token }),
+    },
     /** Voice: a person starts a session; the voice worker reports its end. */
     voice: {
       session: (input: Partial<VoiceSessionRequest> = {}) =>

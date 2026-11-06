@@ -9,6 +9,7 @@ import { SendTemplateSpec } from './notify.js';
 import { SavedPageSpec } from './page.js';
 
 export * from './backoffice.js';
+export * from './file.js';
 export * from './handoff.js';
 export * from './memory.js';
 export * from './notify.js';

@@ -20,7 +20,7 @@ You declare your business once, in a typed spec: its records (entities), its mul
 - An audit row for every write, refusal and decision.
 - History lines, approval cards, and how the assistant shows results on screen, on WhatsApp and in speech.
 
-The template ships with a sample application: meetings, notes and to-dos, as three modules in `application/`. It shows every feature. You replace it with your own (see `DOMAIN.md` at the root), or start a new application from the same sample with `npm create @hykr/basecamp <folder>`. The framework never imports the application: the application passes its modules in, through `defineServer` (`application/api/src/server.ts`) and `<AppShell>` (`application/mobile/src/app/_layout.tsx`).
+The template ships with a sample application: meetings, notes, to-dos and orders, as four modules in `application/`. It shows every feature. You replace it with your own (see `DOMAIN.md` at the root), or start a new application from the same sample with `npm create @hykr/basecamp <folder>`. The framework never imports the application: the application passes its modules in, through `defineServer` (`application/api/src/server.ts`) and `<AppShell>` (`application/mobile/src/app/_layout.tsx`).
 
 ### The three rules
 
@@ -258,7 +258,7 @@ Things that will trip you up:
 | pgAdmin | http://localhost:5050 | `admin@example.com` / `admin`; server `app` (host `postgres`, user `app`) is preregistered |
 | Mastra Studio | http://localhost:4000 | Try the assistant and its tools, and read traces. `pnpm dev` starts it once the API is up and skips it if ports 4000 or 4111 are taken; it restarts when the agent's code changes. On its own: `cd application && pnpm exec basecamp studio` (needs the API running) |
 | LiveKit | ws://localhost:7880 | Voice rooms (dev keys `devkey` / `secret`) |
-| MinIO | http://localhost:9001 | Runs in compose, but no code uses it yet |
+| MinIO | http://localhost:9001 | File storage (`STORAGE_DRIVER=s3`); the `basecamp` bucket is created when the API starts |
 
 Postgres is on `localhost:5432` (`app` / `app` / `app`). Redis is on `localhost:6379`.
 
@@ -724,8 +724,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   specs that carry the key (`memory`, section 7.6, is one).
 - **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
   Each key is a list, collected by one registry: `roles` and `capabilities` in `@hykr/contracts`
-  (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql` and
-  `identityProviders` in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
+  (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql`,
+  `identityProviders` and `numberSeries` (section 5.13) in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors` and `authPlugins` in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
@@ -799,6 +799,18 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   merging. `whatsapp` is required only when WhatsApp is a channel. `sent` ends the fallback order;
   `unavailable` or a final failure moves on; a failure for now retries that channel. A failure found
   later goes to `NotifyService.fallback(meta)`. An unregistered channel stops the start.
+- **Push.** `push` is the framework's own delivery channel (`features/push`, decisions in
+  `docs/decisions/A9B15.md`). A notification that lists it needs `push: { title, body, url? }`. The
+  app's `pushPlugin()` registers the device's Expo token (`POST /api/push/tokens`) for the person and
+  business. Push reaches only devices registered in the notification's business. No device, or Expo
+  refusing every device, moves on at once; a receipt error on every device (polled each minute by the
+  `push.receipts` schedule) moves on later through `NotifyService.fallback`. A gone device is forgotten.
+- **Live updates.** `GET /api/live` (server-sent events, people only) sends `{ name, type, id }` for
+  each committed event about a record the person may read now: an entity's record through its scoped
+  read (as `GET`), any other type through a contributed `liveResources` check (`approval` is the
+  framework's). The `live.relay` subscriber publishes events on Redis per business, ids only. A record
+  that is gone reaches only streams already told about it and the person who changed it. The app's
+  `livePlugin()` invalidates the matching queries, and everything after a reconnect.
 - **Inbound hooks.** Each WhatsApp message the code did not answer itself (buttons, keywords) passes
   `inboundHooks` before its turn: `{ handled: true }` keeps it out, `{ context }` adds lines the turn
   reads. A hook that throws is logged and skipped. A burst that says "delete my data" passes no hook:
@@ -876,6 +888,97 @@ claimed twice, two plugins or two route shapes with one name, a view or screen b
 
 `Register` takes `{ catalog }` or `{ modules }` (isomorphic `ModuleSpec`s, entities merged).
 The tests are in `framework/app/src/framework/*.test.ts` and `framework/ui-registry/src/react.test.ts`.
+
+### 5.12 Files on records
+
+A record keeps files (photos, documents, voice notes) by id, in **file fields** (`docs/decisions/B1.md`).
+The framework's `files` feature stores the bytes and decides who reaches them.
+
+```ts
+// contracts: the field is a FileRef (one file, nullable) or fileRefs(max) (a list); the trait
+// says what each file field accepts.
+schemas: { read: z.object({ …, photos: fileRefs(10) }), create: z.object({ …, photos: fileRefs(10).optional() }), … },
+traits: { files: { photos: { accept: ['image/*'], maxBytes: 10 * 1024 * 1024, max: 10 } } },
+// db: a column under the field's key
+photos: fileColumns('photos'),   // text[]; fileColumn('cover') for one file
+```
+
+- **Uploading** is three steps: `POST /api/files { name, mime, size, for: { entity, field, id? } }`
+  (people only), a `PUT` of exactly those bytes to the URL it returns (with its headers), then
+  `POST /api/files/:id/confirm`. Presign checks the field's `accept` (`image/*` never matches SVG) and
+  size, then the person's reach: they may update that record now, or create one. Confirm checks the
+  size, and that an image or a PDF starts like one. `api.files.upload(blob, { name, mime, for })` in
+  `@hykr/api-client` does all three; `<FileField entity field value onChange />` in `@hykr/app` picks
+  from the library, the camera or the file picker, and `<FileThumbs ids />` shows a record's files.
+- **Attaching is the record's write.** Put the new id in the field with the entity's create or update
+  (or a command that lists the record in `touched`): the `files` write hook claims each new id in the
+  write's transaction (it must be the writer's own upload, or one this field let go of, and fit the
+  field), lets go of ids that left the field, and of every file of a deleted record. A file that does
+  not fit refuses the whole write: 403 `file_unavailable`, audited as denied. A parked write checks its
+  new ids at once and claims them when the approved write runs.
+- **Reaching a file.** `GET /api/files/:id` and `GET /api/files?ids=a,b` answer only for a file on a
+  record the caller reaches, whose field they still see once the record is projected for them (a hidden
+  field hides its files), or for their own upload not on a record yet. Anything else is 404. The answer
+  carries a download URL valid for `FILES_URL_TTL_S`; the assistant gets none.
+- **Storage.** `STORAGE_DRIVER`: `s3` (MinIO in development; the bucket is created at startup;
+  `S3_PUBLIC_ENDPOINT` is what URLs name, so a phone on the LAN can reach it), `fs` (`STORAGE_DIR`) or
+  `memory` (one process: tests and CI force it). The local drivers' URLs are the API's own
+  (`/api/files/blob/<signed token>`, relative: the client resolves them).
+- **Server code** stores bytes it has with `FilesService.storeBytes(...)` (`@hykr/api`), a ready file on
+  no record, which its uploader (or a system principal, for `uploader: { kind: 'server' }`) attaches.
+- **WhatsApp.** A photo, document or video someone sends is stored as their file by the `files` inbound
+  hook (a business turns it off with the `files.keepInboundMedia` setting), the message row becomes
+  `media`, and the turn reads a line with the file's id, so the assistant can put it on a record with a
+  write. Voice notes are still turned into words and not kept. `POST /api/files/:id/transcribe` (and the
+  assistant's `transcribe-file`) keeps an audio file's words on it.
+- **Personal data and sweeping.** "Delete my data" erases every file the person sent (contributor
+  `files`); the `files.sweep` schedule deletes erased files, uploads never confirmed (a day), and files
+  never put on a record or taken off one (after `FILES_DETACHED_GRACE_H`).
+
+### 5.13 Money, number series and records with a parent
+
+The framework moves money one way and keeps documents numbered without gaps; what the money is,
+how numbers read and how tax is worked out are the application's (`docs/decisions/B3B5.md`). The
+sample's `orders` module uses every part.
+
+- **Money.** `Money = { minor, currency }` (`@hykr/contracts`): whole minor units of an ISO 4217
+  currency. Store an amount in a `minorUnits('total')` column (`bigint`, read as a number) beside a
+  `currencyColumn()` (`@hykr/db`), and give the spec the trait `money: { fields: ['total'] }`: reads
+  carry `Money`, writes take `MoneyInput` (`{ minor }`, or a decimal string such as `"1500.00"` read
+  with the currency's exponent), and a record keeps one currency (`currency_mismatch`,
+  `currency_fixed`, `currency_required`, `money_invalid`). Filter a money field with the `money`
+  list type, in minor units. Arithmetic is exact: `mulDiv`, `scaleMoney`, `allocateMinor`,
+  `sumMoney`, with the rounding you name. `moneyText(m, lang)` and `spokenMoney` (`@hykr/i18n`) and
+  `useMoneyText()` (`@hykr/app`) format through Intl.
+- **A business's money.** The `money` settings section: `currency`, `fyStartMonth`, and named
+  `amounts` and `bands` the application reads in its own rules (`moneyAmount`, `exceeds`,
+  `moneyBand`). `tenantMoney(conn, tenantId)` resolves the currency: the business's, else
+  `DEFAULT_CURRENCY`, else `XXX`. `GET /api/money` gives clients the currency, its exponent and the
+  financial year, never the amounts.
+- **Tax.** `defineTaxFunction({ name, compute(lines, { currency, at }) })` is your computation;
+  `applyTax(fn, lines, { currency })` checks its lines (`TaxLine`: code, label, basis, `rateBp`,
+  amount, `included`) and returns the subtotal, tax lines, tax total and total.
+- **Number series.** `defineNumberSeries({ name, format: 'ORD/{fy}/{seq:4}', reset: 'fiscal' })`,
+  contributed as `numberSeries`. In a command's `run`, `nextNumber(tx, p, series)` takes the next
+  number in the write's own transaction: a write that fails gives it back, and a parked write takes
+  none until it is approved. Periods follow the business's time zone and `fyStartMonth`. Never
+  delete a numbered record: cancel it.
+- **Records with a parent.** Give a child spec `traits.parent: { entity, field, nest?, position? }`
+  (`nest`: its own field pointing at the node above, for groups and lines to any depth), list its
+  `field` as filterable `'id'`, put `nest` and `position` in its update schema, and serve it with
+  `defineChildEntity(spec, { table, owner, customer, access, parent: { def, owner, customer } })`,
+  giving it the parent's `access`. Each child carries its parent's owner, customer and currency, so
+  it is reached exactly when its parent is (the `parent` plugin also checks the parent exists in the
+  same business). In a command, `Child.children.replace(tx, p, parentRow, nodes, via)` makes the
+  children exactly a tree of nodes (`{ id?, ...fields, children? }`): new nodes in a few multi-row
+  inserts, changed ones updated, missing ones deleted, each audited. `children.insert` appends;
+  `children.list` reads them in tree order; `buildTree` (`@hykr/contracts`) builds the tree on a
+  client. Plain CRUD never adds, moves or deletes a node of a tree. Add composite foreign keys
+  `(tenant_id, parent_id) → parent (tenant_id, id)` and `(parent_id, nest) → child (parent_id, id)`
+  so the database also refuses a row that points elsewhere.
+- **Large writes.** `runWrite` audits a write's rows in one statement, the JSON body limit is
+  `JSON_BODY_LIMIT` (1 MB), and a tree holds at most 1000 nodes and 8 levels (`maxNodes`,
+  `maxDepth` on the trait). The approval card sums up long lists.
 
 ---
 
@@ -1273,9 +1376,10 @@ export const MeetingReminder = defineTemplate({
 | `send` | `{ on: [events] }`: send now |
 | `when` | `(row) => boolean`: checked at send time |
 | `to` | `(row) => [{ userId } \| { customerId } \| { contactId } \| { roles }]` |
-| `channels` | Fallback order, e.g. `['whatsapp', 'email']`, or a registered delivery channel (section 5.10) |
+| `channels` | Fallback order, e.g. `['push', 'whatsapp', 'email']`; also any registered delivery channel (section 5.10) |
 | `whatsapp` | `{ template, params(row, reader) }`. Required when `'whatsapp'` is a channel (and for `onButton`, `approval`). |
 | `email` | `{ subject, body }`. Required when `'email'` is in `channels`. |
+| `push` | `{ title(row, reader), body(row, reader), url?(row) }`: what the phone shows, and the app path a tap opens. Required when `'push'` is in `channels`. |
 | `onButton` | `{ [buttonId]: (row) => { reschedule?: Date; reply?: Labels } \| undefined }` |
 | `approval` | `(row) => approvalId`: the quick replies `approve` and `reject` decide that approval |
 | `dedupe` | Required. `(row) => string`: one pending schedule per key |
@@ -1335,6 +1439,9 @@ Some app copy is still English only: toasts in `useAct`, tool-line labels in `To
 
 **…add a field to an existing entity?**
 Add it to the read, create and update schemas. Add the column to the table. Run `pnpm db:generate --name <change>` and `pnpm db:migrate`. If people filter on it, add it to `list.filterable`, and to `list.examples` so the assistant learns it. Add a `fieldLabels` entry.
+
+**…keep photos or documents on a record?**
+Give it a file field (`fileRefs()` or `FileRef`, a `files` trait, a `fileColumns()` column) and use `<FileField>` in its form. Section 5.12.
 
 **…add an entity?**
 Follow section 5.
@@ -1479,10 +1586,16 @@ These are not built. Each has a workaround for now.
 |---|---|
 | Invitations to a business | Insert into `app.memberships` with SQL, as `addMember` in `@hykr/api/testing` does |
 | Seed data | Create data through the API or the app. Maestro's demo assumes data exists. |
-| File uploads | MinIO runs in compose, but no code uses it. There is no upload API yet. |
+| Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
+| Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
+| Sending media (WhatsApp documents, email attachments) | Not built (B2). Send a link to the record instead. |
+| A file on two records, versioned files | One file belongs to one record field. Upload the file again for a second record. |
+| Storage quotas, malware scanning | Not built. Keep `FILES_MAX_BYTES` and each field's `maxBytes` small. |
+| Files of a deleted business or of rows deleted outside the write path | Their rows go with the business (cascade) or stay attached; their objects stay in the bucket. |
+| Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, the S3 client, `pdfkit` with `harfbuzzjs` and the Noto fonts, `expo-server-sdk` (in `@hykr/api`), `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.6), the React Query persister (in `@hykr/app`), and `expo-notifications`, `expo-device`, `expo-location`, `expo-image-picker` and `expo-document-picker` (in the mobile app). Each feature that uses one adds its code. The Expo modules' config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client. Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `pdfkit` with `harfbuzzjs` and the Noto fonts, `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.6), the React Query persister (in `@hykr/app`), and `expo-location` (in the mobile app). Each feature that uses one adds its code. Their Expo config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client (the image picker's is in, for files, and `expo-notifications`', for push). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. |
 | Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |
@@ -1491,6 +1604,10 @@ These are not built. Each has a workaround for now.
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
 | Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
+| Editing a business's money settings | Nothing in the API changes `money` (currency, `fyStartMonth`, amounts, bands) yet: set it in `app.tenants.settings` with SQL. |
+| Bulk writes for plain entities | Only children of a parent are inserted in bulk (`children.insert`/`replace`); `insertMany` for any other entity is one insert per row. There is no bulk update. |
+| Line-level tools | The assistant saves a whole tree in one call (the sample's `save-order`); there are no tools to add or move one line. |
+| Several currencies in one record | A record and its children have one currency, and there are no exchange rates. |
 | Memory recall at scale | Recall compares every vector of one business (no approximate index), and the compose and CI images have no pgvector, so it runs on `app.memory_cosine`. Fine for thousands of memories per business; beyond that, install pgvector and add an index. |
 | Memory of the record on screen | A turn's recall does not prefer memory of the record the person is looking at. Ask with `recall-memory` and `about`. |
 | Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it, or the `memory` settings, yet. |
@@ -1504,7 +1621,13 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter), but no framework feature fills them yet, and WebMCP declarations (`webmcp`) are not registered with the browser. |
+| Plugin slots in use | `livePlugin()` and `pushPlugin()` use the provider and sign-in slots. Routes, nav and nav filters have no framework feature yet, and WebMCP declarations (`webmcp`) are not registered with the browser. |
+| Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
+| Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
+| Push through FCM or APNs directly | Push goes through Expo's push service only. |
+| Live deletions for everyone | A deleted record reaches only streams already told about it and the person who deleted it; others see it go at their next refetch (focus, reconnect, their own write). |
+| Live back office | The back office still polls its inbox (10 s) and an open conversation (5 s): inbound messages and handoffs write no outbox events. |
+| Missed live events | A reconnect refetches every query; `Last-Event-ID` replay is not supported. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |
 | Per-module tools for the assistant | The assistant sees every module's tools on every turn. |
 | An approval sweeper | Expiry is checked when someone decides. Expired rows stay `pending` in `GET /api/approvals` until then. |

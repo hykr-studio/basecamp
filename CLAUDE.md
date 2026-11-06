@@ -8,8 +8,8 @@ Basecamp is a framework for full-stack apps where an AI assistant works alongsid
 approvals and audit trail. You declare an entity once (a Zod spec), and the framework generates the REST
 routes, the agent tools, the app data hooks, approval cards, history, and the WhatsApp and voice rendering.
 It is a pnpm + Turborepo monorepo. `framework/` holds the `@hykr/*` packages, which can be published to npm.
-`application/` holds one sample application built on them: meetings, notes and to-dos, as three modules
-(`application/domain/src/modules/<name>/`).
+`application/` holds one sample application built on them: meetings, notes, to-dos and orders, as four
+modules (`application/domain/src/modules/<name>/`).
 
 The long-form references are `docs/developer-guide.md` (architecture, rules, testing, known gaps),
 `docs/tutorial.md` (one feature end to end), `docs/new-application.md` (a new product from scratch) and
@@ -83,7 +83,8 @@ E2E test gotchas:
   every source change. `pnpm test` does the build for you through turbo.
 - They need Postgres and Redis up (`pnpm infra:up`). Files run one at a time (`fileParallelism: false`)
   against one database, and turbo runs `@application/api#test` after `@hykr/api#test`.
-- Vitest forces `MODEL_MODE=fake`, `WORKER_INLINE=1` and `THROTTLE=off`. The voice e2e tests have no skip
+- Vitest forces `MODEL_MODE=fake`, `WORKER_INLINE=1`, `THROTTLE=off` and `STORAGE_DRIVER=memory` (files in
+  the test process; the S3 driver's own test runs against MinIO and skips without it). The voice e2e tests have no skip
   guard and fail unless `VOICE_AGENT_KEY` is set in `.env`.
 - Both Vitest configs load the root `.env` into the main process, so `globalSetup` migrates the same database
   the tests use. Turbo runs test tasks uncached and passes them every environment variable.
@@ -113,7 +114,8 @@ Other gotchas:
   `framework/`. Pre-existing wording is listed in `scripts/boundary-allow.txt`.
 - `framework/` never imports `application/`. The application passes its modules in at exactly two points:
   - the server: `application/api/src/server.ts`, through `defineServer({ name, persona, help, channel, modules, migrations, contributes })`, started by `startApi` / `startWorker`. Each module is `defineModule({ ...moduleSpec, server, views, screens, templates, notifications, agent, tables, contributes })`;
-  - the app: `application/mobile/src/app/_layout.tsx`, through `<AppShell app modules catalog registry config />`.
+  - the app: `application/mobile/src/app/_layout.tsx`, through `<AppShell app modules plugins catalog registry config />`
+    (`plugins`: framework features such as `livePlugin()` and `pushPlugin()`).
     Each app module (`defineAppModule` in `application/mobile/src/modules/<name>/index.tsx`) brings its
     nav, suggestions, `bind`, `hrefFor` and `webmcp`; its routes are one-line files in `src/app/<name>/`.
 - `application/` imports `@hykr/*` by package name and public subpath only. No relative paths into
@@ -191,6 +193,10 @@ role `own`, `customer` or `tenant` per read and write (the sample is in
 - Every read leaves through `def.toRead(row, p)`, projected for the principal (entity plugins' `project`,
   then read projectors). Never return a repo row from a controller or service as is.
 - A command's `approval.by` says who decides. Without it, the person decides on their own assistant's request.
+- Money is `Money = { minor, currency }` everywhere (`minorUnits()` columns, the spec's `money` trait), never
+  a float or `numeric`. Take a document number with `nextNumber` in a command's `run` (a parked write
+  then takes none), and cancel numbered records instead of deleting them. Line items are a child entity
+  (`defineChildEntity`, `traits.parent`), written whole with `children.replace` (developer guide 5.13).
 - Return `deny(...)` with a stable `rule` code and a plain `reason` instead of throwing. The caller gets
   403 `{ error: 'forbidden', rule, reason }`. "Not yours" is a 404, never a 403.
 - WhatsApp templates (`defineTemplate`) are versioned forever. To change the wording, add `_v2`;
@@ -210,6 +216,10 @@ role `own`, `customer` or `tenant` per read and write (the sample is in
   (`scripts/check-tokens.mjs`) fails if they drift apart.
 - `framework/create-basecamp/template/` is a copy of `application/` made at pack time. Don't edit it; it is
   git-ignored.
+- Files are reached only through the record that holds them (`/api/files`, `docs/decisions/B1.md`). Put a
+  file on a record by writing its id into the record's file field (`FileRef`, `fileRefs()`, the `files`
+  trait); never write `app.files` yourself. `STORAGE_DRIVER=s3` with MinIO in development (`.env.example`);
+  unset means memory, which loses the worker's files to the API.
 
 A framework change needs its own tests: e2e tests in `framework/api/test/framework` against the fixture
 app in `framework/api/test/fixture`. Framework tests must not depend on the sample domain.

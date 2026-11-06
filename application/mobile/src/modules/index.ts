@@ -2,4 +2,5 @@
 // orders their destinations by `order`, then by name.
 export { meetings } from './meetings';
 export { notes } from './notes';
+export { orders } from './orders';
 export { todos } from './todos';

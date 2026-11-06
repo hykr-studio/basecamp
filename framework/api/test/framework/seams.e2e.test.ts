@@ -14,7 +14,6 @@ import { TenantConfigService } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { TenantsService } from '../../dist/channels/tenants.service.js';
-import { installFeatures } from '../../dist/features/install.js';
 import * as api from '../../dist/index.js';
 import { boot, me, Person, pool, server, shutdown } from '../../dist/testing.js';
 import { TaskSpec } from '../fixture/dist/contracts.js';
@@ -57,18 +56,14 @@ describe('contributions', () => {
     for (const [key, registry] of Object.entries(registries)) {
       const [contributed] = seamsContributions[key as keyof typeof registries] ?? [];
       expect(registry.get(NAME), key).toBe(contributed);
-      // The framework registers its own queues too (the channel's, the events queue).
-      if (key === 'queues') expect(registry.all(), key).toContain(contributed);
-      else {
-        // Besides the framework's features' own contributions (memory's hooks), only this one.
-        const features = new Set<unknown>(
-          installFeatures().flatMap((f) => f.contributes?.[key as keyof typeof registries] ?? []),
-        );
-        expect(
-          registry.all().filter((x: unknown) => !features.has(x)),
-          key,
-        ).toEqual([contributed]);
-      }
+      // The framework's features register their own too (the channel's queues, the events
+      // queue, the files hooks, money's entity plugins `parent` and `money`, the push channel,
+      // its schedule and contributors): the application's is the only fixture one.
+      expect(registry.all(), key).toContain(contributed);
+      const fixtures = (registry.all() as readonly { name: string }[]).filter((x) =>
+        x.name.startsWith('fixture.'),
+      );
+      expect(fixtures, key).toEqual([contributed]);
     }
     expect(api.runtime().contributions).toEqual(seamsContributions);
   });

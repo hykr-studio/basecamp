@@ -31,6 +31,11 @@ export interface CoreOptions {
    * deployment's relay passes it on. Default 'bull'.
    */
   queuePrefix?: string;
+  /**
+   * The currency of a business that chose none (DEFAULT_CURRENCY, ISO 4217). Unset: XXX, the
+   * standard's "no currency".
+   */
+  defaultCurrency?: string;
 }
 
 /** A transaction handle: what every write and every command's repository calls receive. */

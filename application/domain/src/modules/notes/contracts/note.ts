@@ -1,14 +1,17 @@
-import { CreatedBy, entitySpec } from '@hykr/contracts';
+import { CreatedBy, entitySpec, fileRefs } from '@hykr/contracts';
 import { z } from 'zod';
 
 const title = z.string().min(1).max(200);
 const body = z.string().max(20_000);
+/** Photos kept on the note: uploaded in the app, or sent on WhatsApp. */
+const photos = fileRefs(10);
 
 export const NoteView = z.object({
   id: z.string(),
   title,
   body,
   meetingId: z.string().nullable(),
+  photos,
   createdBy: CreatedBy,
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -19,6 +22,7 @@ export const CreateNoteInput = z.object({
   title,
   body: body.default(''),
   meetingId: z.uuid().optional(),
+  photos: photos.optional(),
 });
 export type CreateNoteInput = z.input<typeof CreateNoteInput>;
 
@@ -27,6 +31,7 @@ export const UpdateNoteInput = z
     title: title.optional(),
     body: body.optional(),
     meetingId: z.uuid().nullable().optional(),
+    photos: photos.optional(),
   })
   .refine(
     (v) => Object.values(v).some((x) => x !== undefined),
@@ -45,6 +50,7 @@ export const NoteSpec = entitySpec({
     title: { en: 'Title', hi: 'शीर्षक', te: 'శీర్షిక' },
     body: { en: 'Note', hi: 'नोट', te: 'నోట్' },
     meetingId: { en: 'Meeting', hi: 'मीटिंग', te: 'మీటింగ్' },
+    photos: { en: 'Photos', hi: 'फ़ोटो', te: 'ఫోటోలు' },
     createdBy: { en: 'Created by', hi: 'किसने बनाया', te: 'ఎవరు సృష్టించారు' },
   },
   list: {
@@ -61,9 +67,11 @@ export const NoteSpec = entitySpec({
   },
   approval: { delete: (p) => p.actor.kind === 'agent' },
   views: { list: 'note.list', item: 'note.card' },
-  // Notes are memory: the assistant recalls them by meaning, as memory of their meeting, for
-  // whoever may read both (the framework loads each again as the reader).
+  // Up to ten images of 10 MB each; SVG is not an image here. Notes are memory too: the
+  // assistant recalls them by meaning, as memory of their meeting, for whoever may read both
+  // (the framework loads each again as the reader).
   traits: {
+    files: { photos: { accept: ['image/*'], maxBytes: 10 * 1024 * 1024, max: 10 } },
     memory: {
       text: (n: NoteView) => [n.title, n.body?.trim()].filter(Boolean).join(': '),
       about: (n: NoteView) => (n.meetingId ? { type: 'meeting', id: n.meetingId } : null),

@@ -1,4 +1,4 @@
-// The sample as three modules: closing a meeting still writes the note and to-dos of the modules
+// The sample as four modules: closing a meeting still writes the note and to-dos of the modules
 // it builds on, and a module's evals pass on their own (a fresh user, that module's setup).
 
 import { runEval } from '@hykr/api';
@@ -18,12 +18,14 @@ beforeAll(async () => {
 afterAll(shutdown);
 
 describe('the sample modules', () => {
-  it('are todos, notes and meetings, in dependency order', () => {
+  it('are todos, notes, meetings and orders, in dependency order', () => {
     expect(application.catalog.modules.map((m) => [m.name, m.dependsOn])).toEqual([
       ['todos', []],
       ['notes', []],
       ['meetings', ['todos', 'notes']],
+      ['orders', []],
     ]);
+    expect(application.catalog.moduleOf('order.save')).toBe('orders');
     expect(application.catalog.moduleOf('meeting.close')).toBe('meetings');
   });
 
@@ -55,5 +57,9 @@ describe('the sample modules', () => {
 describe('a module evaluated on its own', () => {
   it('meetings: its cases pass after its own setup, with no to-dos made first', async () => {
     expect(await runEval(application, 'assistant', { module: 'meetings' })).toBe(true);
+  }, 120_000);
+
+  it('orders: a whole order is saved and waits for approval; the list reads them', async () => {
+    expect(await runEval(application, 'assistant', { module: 'orders' })).toBe(true);
   }, 120_000);
 });

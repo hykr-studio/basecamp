@@ -1,0 +1,1 @@
+ALTER TABLE "app"."notes" ADD COLUMN "photos" text[] DEFAULT '{}'::text[] NOT NULL;
