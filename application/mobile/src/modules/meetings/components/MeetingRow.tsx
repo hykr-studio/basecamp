@@ -1,5 +1,6 @@
 import type { MeetingView } from '@application/domain/contracts';
 import { clock, colors, Icon, space, styles, when } from '@hykr/app';
+import { addressText } from '@hykr/contracts';
 import { Link } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBadge } from '../status';
@@ -23,6 +24,11 @@ export function MeetingRow({ meeting }: { meeting: MeetingView }) {
             {when(meeting.startsAt)}–{clock(meeting.endsAt)}
             {meeting.attendees.length ? ` · ${meeting.attendees.join(', ')}` : ''}
           </Text>
+          {meeting.address && (
+            <Text style={styles.muted} numberOfLines={1}>
+              {addressText(meeting.address)}
+            </Text>
+          )}
         </View>
         <Icon name="chevron-right" color={colors.muted} />
       </Pressable>

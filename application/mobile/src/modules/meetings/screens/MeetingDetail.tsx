@@ -27,12 +27,14 @@ import {
   useToast,
   when,
 } from '@hykr/app';
+import { addressText } from '@hykr/contracts';
 import { Link, router } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { NoteRow } from '@/modules/notes';
 import { TodoRow } from '@/modules/todos';
 import { CloseMeetingForm } from '../components/CloseMeetingForm';
+import { MeetingPlace } from '../components/MeetingPlace';
 import { needsClosing, StatusBadge } from '../status';
 
 function Reschedule({ meeting, onDone }: { meeting: MeetingView; onDone: () => void }) {
@@ -159,6 +161,7 @@ export function MeetingDetail({ id, embedded = false }: { id: string; embedded?:
           {when(m.startsAt)}–{clock(m.endsAt)}
           {m.attendees.length ? ` · ${m.attendees.join(', ')}` : ''}
         </Text>
+        {m.address && <Text style={styles.muted}>{addressText(m.address)}</Text>}
         {line && <Text style={styles.text}>{line}</Text>}
         {/* The "Needs closing" badge carries the alarm; this line only says what closing does. */}
         {needsClosing(m) && (
@@ -199,6 +202,8 @@ export function MeetingDetail({ id, embedded = false }: { id: string; embedded?:
       {panel === 'close' && !closed && (
         <CloseMeetingForm meeting={m} onDone={() => setPanel(null)} />
       )}
+
+      <MeetingPlace meeting={m} />
 
       <View style={styles.section}>
         <SectionHeading>Notes</SectionHeading>
