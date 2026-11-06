@@ -300,6 +300,9 @@ importers:
       '@hykr/agents':
         specifier: workspace:*
         version: link:../../framework/agents
+      '@hykr/api':
+        specifier: workspace:*
+        version: link:../../framework/api
       '@hykr/contracts':
         specifier: workspace:*
         version: link:../../framework/contracts

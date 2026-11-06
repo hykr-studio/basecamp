@@ -1,15 +1,17 @@
 // WhatsApp turns: words only (surfaces ['text'], channel whatsapp), the business-only rule, and
 // the language the person writes in. Scored on the right tools and the reply's language.
-// `basecamp eval whatsapp` (scripted model) or `basecamp eval whatsapp --live`.
+// `basecamp eval whatsapp [--module <m>]` (scripted model) or `basecamp eval whatsapp --live`.
 //
-// The framework's own cases, then the application's Hindi and Telugu turns typed instead of
-// said. Needs the API running.
+// The framework's own cases, then each module's Hindi and Telugu turns typed instead of said.
+// Needs the API running.
 import type { Surface } from '@hykr/contracts';
 import type { Lang } from '@hykr/i18n';
+import type { RequestContext } from '@mastra/core/request-context';
 import type { EvalCase } from '../agent-domain.js';
 import type { Agents } from '../agents.js';
+import { suitesFor } from '../modules.js';
 import { expectedOutcome, listBeforeWrite, repliesInLanguage } from '../scorers.js';
-import { prepare, report, runCases } from './harness.js';
+import { prepare, type Row, report, runCases } from './harness.js';
 
 const TEXT: Surface[] = ['text'];
 const NO_SCREEN = ['canvas', 'screen', 'tap '];
@@ -42,22 +44,31 @@ const framework = (agents: Agents): WhatsAppCase[] => [
   },
 ];
 
-export async function evalWhatsapp(agents: Agents): Promise<boolean> {
-  const typed: WhatsAppCase[] = (agents.domain.voiceEvalCases ?? [])
-    .filter((c) => c.lang !== 'en')
-    .map((c) => ({ ...c, why: `${c.why}, typed on WhatsApp`, surfaces: TEXT }));
-  const userId = await prepare(agents, 'WhatsApp turns');
-  return report(
-    await runCases(
-      agents,
-      userId,
-      [...framework(agents).map((c) => ({ ...c, surfaces: TEXT })), ...typed],
-      [expectedOutcome, listBeforeWrite(agents.catalog.commands), repliesInLanguage],
-      (c, ctx) => {
-        ctx.set('lang', c.lang);
-        ctx.set('channel', 'whatsapp');
-      },
-      (c) => ({ ...c.expect, lang: c.lang }),
-    ),
-  );
+export async function evalWhatsapp(
+  agents: Agents,
+  options: { module?: string } = {},
+): Promise<boolean> {
+  const scorers = [expectedOutcome, listBeforeWrite(agents.catalog.commands), repliesInLanguage];
+  const extra = (c: WhatsAppCase, ctx: RequestContext) => {
+    ctx.set('lang', c.lang);
+    ctx.set('channel', 'whatsapp');
+  };
+  const truth = (c: WhatsAppCase) => ({ ...c.expect, lang: c.lang });
+  const rows: Row[] = [];
+  // The framework's own cases belong to no module: they run when no module is named.
+  const suites = suitesFor(agents.domain, options.module);
+  if (options.module === undefined) {
+    const userId = await prepare('WhatsApp turns (framework)');
+    const cases = framework(agents).map((c) => ({ ...c, surfaces: TEXT }));
+    rows.push(...(await runCases(agents, userId, cases, scorers, extra, truth)));
+  }
+  for (const suite of suites) {
+    const typed: WhatsAppCase[] = suite.voiceEvalCases
+      .filter((c) => c.lang !== 'en')
+      .map((c) => ({ ...c, why: `${c.why}, typed on WhatsApp`, surfaces: TEXT }));
+    if (!typed.length) continue;
+    const userId = await prepare(`WhatsApp turns (${suite.module})`, suite.evalSetup);
+    rows.push(...(await runCases(agents, userId, typed, scorers, extra, truth)));
+  }
+  return report(rows);
 }

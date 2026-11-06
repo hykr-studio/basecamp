@@ -98,10 +98,14 @@ export async function migrate(app: Basecamp) {
   );
 }
 
-/** The assistant's eval suites, against the running API (`basecamp eval`). */
+/**
+ * The assistant's eval suites, against the running API (`basecamp eval`): every module's, or one
+ * module's (`--module`), each with a fresh user and its own setup.
+ */
 export async function runEval(
   app: Basecamp,
   suite: 'assistant' | 'voice' | 'whatsapp',
+  options: { module?: string } = {},
 ): Promise<boolean> {
   setRuntime(app);
   const evals = await import('@hykr/agents/evals');
@@ -110,7 +114,7 @@ export async function runEval(
     voice: evals.evalVoice,
     whatsapp: evals.evalWhatsapp,
   };
-  return run[suite](app.agents);
+  return run[suite](app.agents, options);
 }
 
 /**

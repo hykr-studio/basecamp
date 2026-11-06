@@ -1,10 +1,10 @@
-// The eval runner the suites share: a fresh user through the API, the application's setup, one
-// runEvals per agent profile, and a PASS/FAIL report that exits 1 on any miss.
+// The eval runner the suites share: per module, a fresh user through the API and that module's
+// setup; one runEvals per agent profile; and a PASS/FAIL report that exits 1 on any miss.
 import { randomUUID } from 'node:crypto';
 import type { Surface } from '@hykr/contracts';
 import { type MastraScorer, runEvals } from '@mastra/core/evals';
 import { RequestContext } from '@mastra/core/request-context';
-import type { EvalCase } from '../agent-domain.js';
+import type { EvalCase, EvalSetup } from '../agent-domain.js';
 import { AGENT_KEYS, type Agents, profileFor } from '../agents.js';
 import { modelId } from '../version.js';
 
@@ -27,10 +27,10 @@ async function evalUser() {
   return { userId: ((await res.json()) as { user: { id: string } }).user.id, cookie };
 }
 
-/** A fresh user with the application's eval data, so each run starts from the same place. */
-export async function prepare(agents: Agents, what: string) {
+/** A fresh user with one module's eval data, so each suite starts from the same place. */
+export async function prepare(what: string, setup?: EvalSetup) {
   const { userId, cookie } = await evalUser();
-  await agents.domain.evalSetup?.(async (method, path, body) => {
+  await setup?.(async (method, path, body) => {
     const res = await fetch(`${api}${path}`, {
       method,
       headers: { 'content-type': 'application/json', origin: api, cookie },
@@ -44,7 +44,12 @@ export async function prepare(agents: Agents, what: string) {
   return userId;
 }
 
-type Row = { case: string; input: string; scores: Record<string, number>; reasons: string[] };
+export type Row = {
+  case: string;
+  input: string;
+  scores: Record<string, number>;
+  reasons: string[];
+};
 
 /**
  * Run the cases in order, one runEvals per profile (each targets the agent with that

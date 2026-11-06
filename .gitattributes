@@ -15,4 +15,7 @@ framework/api/src/features/index.ts merge=union
 framework/app/src/features/index.ts merge=union
 framework/core/src/plugins/index.ts merge=union
 application/domain/src/modules/index.ts merge=union
+# The domain's aggregates for the apps: one line per module, like modules/index.ts.
+application/domain/src/contracts/index.ts merge=union
+application/domain/src/views/index.ts merge=union
 application/mobile/src/modules/index.ts merge=union

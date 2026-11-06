@@ -16,6 +16,7 @@ export function createDb(url: string) {
 
 export type { Database, DbOrTx } from './database.js';
 export { frameworkMigrations, type MigrationSet, runMigrations } from './migrate.js';
+export { tableRef } from './ref.js';
 export { type AuditInput, type WriteCtx, writeAudit } from './repos/audit.js';
 export { idempotencyRepo } from './repos/idempotency.js';
 export {

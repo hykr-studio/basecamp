@@ -60,12 +60,13 @@ export const RescheduleVisit = defineCommand(RescheduleVisitSpec, {
   },
 });
 
+/** The tasks module's routes and handlers. */
+@Module({ controllers: [entityController(Task)], providers: [...entityHandlers(Task)] })
+export class TasksModule {}
+
+/** The visits module's routes and handlers. */
 @Module({
-  controllers: [
-    entityController(Task),
-    entityController(Visit),
-    commandController(RescheduleVisit),
-  ],
-  providers: [...entityHandlers(Task), ...entityHandlers(Visit), commandHandler(RescheduleVisit)],
+  controllers: [entityController(Visit), commandController(RescheduleVisit)],
+  providers: [...entityHandlers(Visit), commandHandler(RescheduleVisit)],
 })
-export class FixtureModule {}
+export class VisitsModule {}

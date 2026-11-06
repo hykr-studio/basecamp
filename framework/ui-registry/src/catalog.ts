@@ -1,3 +1,4 @@
+import { assertNoProblems, PLATFORM_MODULE } from '@hykr/contracts';
 import type { Lang } from '@hykr/i18n';
 import type { ScreenDef, ViewDef } from './define-view.js';
 import { platformScreens, platformViews } from './platform/index.js';
@@ -9,11 +10,43 @@ export interface UiDomain {
   screens: readonly ScreenDef[];
 }
 
-/** The system's registry: the framework's own views and screens, plus the application's. */
-export function createUiRegistry(ui: UiDomain = { views: [], screens: [] }) {
+/** One module's views and screens, under its name: what `createUiRegistry` takes per module. */
+export interface UiPart {
+  /** The module's name ('todos'): `registry.moduleOf` answers with it. */
+  name?: string;
+  views?: readonly ViewDef[];
+  screens?: readonly ScreenDef[];
+}
+
+/**
+ * The system's registry: the framework's own views and screens, plus each module's. A view or
+ * screen name declared twice throws (a ModulesError naming both owners) instead of the later one
+ * replacing the earlier.
+ */
+export function createUiRegistry(...parts: readonly (UiPart | undefined)[]) {
+  const owners = new Map<string, string>();
+  const problems: string[] = [];
+  const all = [
+    { name: PLATFORM_MODULE, views: platformViews, screens: platformScreens },
+    ...parts.filter((p): p is UiPart => p !== undefined),
+  ];
+  for (const part of all) {
+    const module = part.name ?? 'the application';
+    for (const [kind, defs] of [
+      ['view', part.views ?? []],
+      ['screen', part.screens ?? []],
+    ] as const)
+      for (const def of defs) {
+        const taken = owners.get(`${kind}:${def.name}`);
+        if (taken === undefined) owners.set(`${kind}:${def.name}`, module);
+        else problems.push(`The ${kind} ${def.name} is declared by both ${taken} and ${module}`);
+      }
+  }
+  assertNoProblems(problems);
   return createRegistry({
-    views: [...platformViews, ...ui.views],
-    screens: [...platformScreens, ...ui.screens],
+    views: all.flatMap((p) => p.views ?? []),
+    screens: all.flatMap((p) => p.screens ?? []),
+    moduleOf: (name) => owners.get(`view:${name}`) ?? owners.get(`screen:${name}`),
   });
 }
 

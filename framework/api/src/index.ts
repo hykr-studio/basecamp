@@ -38,7 +38,7 @@ export {
   type WriteHook,
   writeHooks,
 } from './hooks.js';
-export type { ModuleDef } from './module.js';
+export { defineModule, type ModuleDef } from './module.js';
 export {
   type Basecamp,
   defineServer,

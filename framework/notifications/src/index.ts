@@ -24,15 +24,36 @@ export interface NotificationCatalog {
   notifications: readonly NotificationDef<any>[];
 }
 
-export function createNotificationCatalog(domain: NotificationsDomain = {}): NotificationCatalog {
-  const templates = [...frameworkTemplates, ...(domain.templates ?? [])];
-  const names = templates.map((t) => t.name);
-  const duplicate = names.find((n, i) => names.indexOf(n) !== i);
-  if (duplicate) throw new Error(`Template ${duplicate} is defined twice`);
-  return {
-    templates,
-    notifications: [...frameworkNotifications, ...(domain.notifications ?? [])],
-  };
+/**
+ * Every template and notification: the framework's, then each module's, in order. Throws, listing
+ * every problem, when a template name or a notification key is declared twice, or when a
+ * notification names a template that is not in the catalog (it could never be sent).
+ */
+export function createNotificationCatalog(
+  ...parts: readonly (NotificationsDomain | undefined)[]
+): NotificationCatalog {
+  const templates = [...frameworkTemplates, ...parts.flatMap((p) => p?.templates ?? [])];
+  const notifications = [
+    ...frameworkNotifications,
+    ...parts.flatMap((p) => p?.notifications ?? []),
+  ];
+  const problems: string[] = [];
+  const twice = (names: string[]) => names.filter((n, i) => names.indexOf(n) !== i);
+  for (const name of new Set(twice(templates.map((t) => t.name))))
+    problems.push(`The template ${name} is defined twice`);
+  for (const key of new Set(twice(notifications.map((n) => n.key))))
+    problems.push(`The notification ${key} is defined twice`);
+  const known = new Set(templates.map((t) => t.name));
+  for (const n of notifications) {
+    const template = (n as { whatsapp?: { template?: TemplateDef } }).whatsapp?.template;
+    if (template && !known.has(template.name))
+      problems.push(
+        `The notification ${n.key} sends ${template.name}, which is not a template here`,
+      );
+  }
+  if (problems.length)
+    throw new Error(`Modules do not fit together:\n${problems.map((p) => `- ${p}`).join('\n')}`);
+  return { templates, notifications };
 }
 
 export * from './rules.js';

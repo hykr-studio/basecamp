@@ -1,8 +1,8 @@
 // The framework's extension points as an application uses them: its own trait and settings
 // section (declared by declaration merging, checked by tsc), a module's shape, and one
-// contribution of every kind. Only the seams e2e test boots `seams`; the fixture itself
+// contribution of every kind, from a module. Only the seams e2e test boots `seams`; the fixture
 // contributes nothing, so the other tests run without these.
-import { defineServer, type ModuleDef } from '@hykr/api';
+import { defineModule, defineServer } from '@hykr/api';
 import {
   type Contributions,
   commandSpec,
@@ -86,15 +86,18 @@ export const seamsContributions: Partial<Contributions> = {
   authPlugins: [{ name: NAME, trustedOrigins: [] }],
 };
 
-/** A module's shape: what `defineModule` will take. */
-export const seamsModule: ModuleDef = {
+/** A module that adds no entities, only hooks: its contributions are installed with the app's. */
+export const seamsModule = defineModule({
   name: 'seams',
   dependsOn: [],
   entities: {},
   commands: [],
-  agent: { rules: ['- Nothing to add.'] },
+  agent: { rules: ['Nothing to add.'] },
   contributes: seamsContributions,
-};
+});
 
-/** The fixture, plus the module's contributions. */
-export const seams = defineServer({ ...fixture.definition, contributes: seamsModule.contributes });
+/** The fixture, plus the module. */
+export const seams = defineServer({
+  ...fixture.definition,
+  modules: [...fixture.definition.modules, seamsModule],
+});
