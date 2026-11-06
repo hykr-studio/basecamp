@@ -712,8 +712,9 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   Each key is a list, collected by one registry: `roles` and `capabilities` in `@hykr/contracts`
   (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql` and
   `identityProviders` in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
-  `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `erasureContributors`,
-  `exportContributors` and `authPlugins` in `@hykr/api`. `@hykr/api` re-exports the core's and its own.
+  `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
+  `eventFeeds`, `erasureContributors`, `exportContributors` and `authPlugins` in `@hykr/api`.
+  `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
   - Registries are process-global, so read them per request, not at import.
@@ -739,6 +740,53 @@ an entity's name, a command's name, `'approval'`) on every call.
 Stored events carry the process's queue prefix (`queues`). The fixture's
 `framework/api/test/fixture/src/features/seams/` shows the seams, `features/write-path/` the write path's
 hooks in use, and `features/identity/` a role, a capability, an identity provider and an auth plugin.
+
+### 5.10 Runtime registries: queues, events, turns, tools, channels
+
+Where each registry is read, and how to use it (`docs/decisions/F5.md` has the full API). The fixture's
+`framework/api/test/fixture/src/features/runtime/` uses every one.
+
+- **Queues and schedules.** `defineQueue({ name, concurrency, attempts, backoffMs, process(job, ctx) })`
+  and `defineSchedule({ name, queue, every | cron })`, contributed as `queues` and `schedules`. Names
+  are lower case words joined by `.` or `-`, prefixed by their owner (`credits.alerts`). `QueuesModule`
+  registers every queue in the registry, the channel's included, under `BULL_PREFIX`. A queue with
+  `process` gets a worker in the worker process (and in the API with `WORKER_INLINE=1`); the worker
+  upserts each schedule at startup. Add jobs with `@Inject(JOBS) jobs: Jobs` or `ctx.jobs.add(queue, data)`.
+  `ctx` (`ServerContext`) also has `db` and `get(token)` for any Nest provider.
+- **Framework features.** One folder per feature in `framework/api/src/features/<x>/`, with
+  `defineFeature({ name, imports, controllers, providers, processors, exports, contributes })`, and
+  one export line in `features/index.ts`. `FeaturesModule.forRoot` loads controllers only in the API and
+  processors only where jobs run.
+- **Events and subscribers.** `defineSubscriber({ name, on: ['task.*'], when?, handle | queue })`,
+  contributed as `subscribers`. Events come from the registered `eventFeeds`, which the worker polls
+  each second with this process's prefix and `ctx`. The framework's `outbox` feed returns the rows of
+  `app.domain_events` with this prefix that are due (`available_at` passed), not withdrawn
+  (`cancelled_at`) and not yet relayed, oldest first. The relay adds one job per event and subscriber
+  (id `<subscriber>--<stored event id>`, so a repeat runs once), then sets `relayed_at`. `handle`
+  runs on the shared `events` queue; `queue` adds the envelope to your own queue. The envelope has
+  the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
+  (F3) before it leaves the server. The in-process `EventBus` is not relayed.
+- **Turn hooks.** Every chat turn and back-office draft passes `turnHooks` in `ChatService`, after
+  the framework's own `model-key` hook. `before` returns `{ refuse: { rule, reason, status?, say? } }`
+  or `{ context?, model?, withoutTools? }`; a refusal is `TurnRefused` (403 unless given, nothing saved;
+  on WhatsApp the person hears `say`). `after` sees the reply, the tools called and the token usage.
+- **The agent per turn.** The model (`model` from a hook, else `AGENT_MODEL`), the tools (generated,
+  plus `toolContributions`, minus `withoutTools`) and the instructions (plus the hooks' context lines,
+  as data) are resolved from the request context. A tool id defined twice stops the start.
+- **Delivery channels.** A notification's `channels` may name any registered `DeliveryChannel` beside
+  `whatsapp` and `email`; add the name to `NotificationChannels` (`@hykr/notifications`) by declaration
+  merging. `whatsapp` is required only when WhatsApp is a channel. `sent` ends the fallback order;
+  `unavailable` or a final failure moves on; a failure for now retries that channel. A failure found
+  later goes to `NotifyService.fallback(meta)`. An unregistered channel stops the start.
+- **Inbound hooks.** Each WhatsApp message the code did not answer itself (buttons, keywords) passes
+  `inboundHooks` before its turn: `{ handled: true }` keeps it out, `{ context }` adds lines the turn
+  reads. A hook that throws is logged and skipped. A burst that says "delete my data" passes no hook:
+  the erasure is queued and the rest of the burst is dropped.
+- **Personal data.** "Delete my data" runs `erasureContributors` in its transaction and audits their
+  counts. `exportPersonalData({ subject, db })` collects `exportContributors` by kind.
+- **Hooks that need services.** Queue processors and subscriber handlers get `ctx`. A turn, inbound
+  or delivery hook that needs DI is a Nest provider that registers itself in `onModuleInit`
+  (`inboundHooks.register(this)`).
 
 ---
 
@@ -1032,8 +1080,8 @@ export const MeetingReminder = defineTemplate({
 | `send` | `{ on: [events] }`: send now |
 | `when` | `(row) => boolean`: checked at send time |
 | `to` | `(row) => [{ userId } \| { customerId } \| { contactId } \| { roles }]` |
-| `channels` | Fallback order, e.g. `['whatsapp', 'email']` |
-| `whatsapp` | `{ template, params(row, reader) }`. Required, even for email-only. |
+| `channels` | Fallback order, e.g. `['whatsapp', 'email']`, or a registered delivery channel (section 5.10) |
+| `whatsapp` | `{ template, params(row, reader) }`. Required when `'whatsapp'` is a channel (and for `onButton`, `approval`). |
 | `email` | `{ subject, body }`. Required when `'email'` is in `channels`. |
 | `onButton` | `{ [buttonId]: (row) => { reschedule?: Date; reply?: Labels } \| undefined }` |
 | `approval` | `(row) => approvalId`: the quick replies `approve` and `reject` decide that approval |
@@ -1249,9 +1297,12 @@ These are not built. Each has a workaround for now.
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
-| Hooks that run | Entity plugins, write hooks, read projectors and list field SQL run; `roles`, `capabilities`, `identityProviders` and `authPlugins` are read. The others in section 5.9 (tool contributions, delivery channels, turn and inbound hooks, queues, schedules, erasure, export) are installed and not called yet. Each consumer lands with its feature. |
+| Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
 | Approval tiers | Deciders follow a decision's `approver`, the approval shows `tier` and `amount`, and `undoMs` holds events back. There are no multi-step tiers, no undo action and no rule against approving your own request. |
-| Passing stored events on | `app.domain_events` fills with every write's events, but no relay reads it yet: `relayed_at` and `cancelled_at` are never set. In-process subscribers (`EventBus`) work as before. |
+| Withdrawing a stored event | Nothing sets `app.domain_events.cancelled_at` yet (there is no undo action). The outbox feed skips such rows, so the undo action only has to set it before `available_at`. |
+| Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
+| Per-turn agent version | A turn hook can pick the model, but audit rows' `agentVersion` still names `AGENT_MODEL`. |
+| Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | Application modules | `ModuleDef` is a type only. There is no `defineModule`, and `defineServer` still takes one `domain` and one `module`. |
 | An approval sweeper | Expiry is checked when someone decides. Expired rows stay `pending` in `GET /api/approvals` until then. |

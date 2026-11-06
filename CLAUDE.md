@@ -190,7 +190,11 @@ registries (`createHookRegistry`, in `framework/core/src/hooks.ts` and `framewor
 list field types (`defineListFieldType` plus `listFieldSql`), and settings sections
 (`defineSettingsSection`). Each is extended by declaration merging. Add a new kind in your own file
 instead of editing a central one. `registerOp` and the entity registry (`entityDefs()`) refuse a
-duplicate name. Decisions per unit are in `docs/decisions/`.
+duplicate name. Decisions per unit are in `docs/decisions/`. Section 5.10 says where each runtime
+registry is read: every queue comes from the `queues` registry (`defineQueue`, under `BULL_PREFIX`),
+framework features are one line each in `framework/api/src/features/index.ts` (`defineFeature`),
+event subscribers (`defineSubscriber`) run in the worker on the stored events of
+`app.domain_events`, and every chat turn passes the `turnHooks`.
 
 ## Tooling notes
 

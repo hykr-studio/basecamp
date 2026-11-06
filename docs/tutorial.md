@@ -433,7 +433,7 @@ Every command write goes through `runWrite` in `framework/core/src/write/pipelin
 4. **Deny.** The transaction rolls back. An `outcome: 'denied'` audit row is written and the caller gets `403 { error: 'forbidden', rule, reason }`.
 5. **Needs approval.** An `app.approvals` row is written, with an audit row with `outcome: 'needs_approval'`. The caller gets `{ status: 'needs_approval', approval }`.
 6. **Allow.** `run` executes. There is one audit row per `touched` entry, plus one for the command. The caller gets `{ status: 'done', value }`.
-7. **Events.** Each `NamedEvent` is stored in the event outbox (`app.domain_events`) in the same transaction, then published in-process only **after commit**.
+7. **Events.** Each `NamedEvent` is stored in the event outbox (`app.domain_events`) in the same transaction, then published in-process only **after commit**. The worker relays the stored row to event subscribers (`defineSubscriber`, developer guide section 5.10).
 
 Who decides a parked cancel? For a command, `approval` is an `ApproverRule` (`{ by, channels, minAssurance }`). It says **who** decides. Whether the command parks at all is decided only by `authorize`. Without `by`, `decidersFor` in `framework/core/src/write/approvals.ts` behaves like this:
 

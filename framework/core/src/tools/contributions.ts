@@ -15,11 +15,18 @@ declare module '@hykr/contracts' {
 export interface ToolContribution {
   /** Unique: 'memory'. */
   name: string;
-  /** The tools, keyed by tool id, for one run. */
+  /**
+   * The tools, keyed by tool id, for one run. Only build them here: call `kit.clientFor(ctx)` inside
+   * a tool's `execute`, because the start builds every tool once to check the ids.
+   */
   tools(kit: ToolKit): ToolsInput;
 }
 
-/** Contributed tools, in registration order. Nothing adds them to the agent yet. */
+/**
+ * Contributed tools, in registration order. The agent gets them on every turn, after the
+ * generated tools; an id that is already taken stops the start (ChatService builds the whole set
+ * once when the app starts).
+ */
 export const toolContributions = createHookRegistry<ToolContribution>(
   'tool contribution',
   (x) => x.name,

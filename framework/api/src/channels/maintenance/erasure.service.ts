@@ -4,6 +4,7 @@ import { langOf, t } from '@hykr/i18n';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { DB } from '../../infra/db.module.js';
+import { eraseWithContributors } from '../../privacy/contributors.js';
 import { ContactsService } from '../contacts.service.js';
 import { WHATSAPP } from '../whatsapp/adapter.provider.js';
 
@@ -27,7 +28,9 @@ const log = new Logger('Erasure');
  * sends, the requests it left waiting for approval, and, for a person with an account, the
  * WhatsApp side of their thread. A customer record stays only as an anonymous business record
  * (their bookings remain the business's); a linked person's account keeps theirs. Audit rows
- * stay and never held the number. They are told once it is done.
+ * stay and never held the number. Every erasure contributor (a feature's own records about
+ * them) runs in the same transaction, and its count goes on the audit row. They are told once it
+ * is done.
  */
 @Injectable()
 export class ErasureService {
@@ -90,6 +93,12 @@ export class ErasureService {
           .set({ displayName: 'Erased customer' })
           .where(eq(customers.id, contact.customerId));
       }
+      // What features hold about them, before the contact row their rows may point at.
+      const contributed = await eraseWithContributors({
+        subject: { kind: 'contact', contactId: contact.id },
+        tenantId: contact.tenantId,
+        tx,
+      });
       // Consents, messages, handoffs and the contact's own thread go with it (cascade).
       await tx.delete(contacts).where(eq(contacts.id, contact.id));
       await writeAudit(tx, {
@@ -101,6 +110,7 @@ export class ErasureService {
         tenantId: contact.tenantId,
         channel: 'whatsapp',
         reason: 'The person asked to delete their data',
+        ...(Object.keys(contributed).length ? { after: { contributors: contributed } } : {}),
       });
     });
 

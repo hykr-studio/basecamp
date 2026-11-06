@@ -34,15 +34,11 @@ export async function boot(application: Basecamp) {
 }
 
 export async function shutdown() {
-  // This run's queues: emptied, so Redis keeps nothing from the tests.
+  // Every queue this run registered (the channel's, the features', the app's): emptied, so Redis
+  // keeps nothing from the tests.
   const { getQueueToken } = await import('@nestjs/bullmq');
-  for (const name of [
-    'wa-inbound',
-    'wa-send',
-    'notify-dispatch',
-    'templates-sync',
-    'channel-maintenance',
-  ]) {
+  const { queues } = await import('./hooks.js');
+  for (const { name } of queues.all()) {
     const queue = server.app?.get(getQueueToken(name), { strict: false });
     await queue?.obliterate({ force: true }).catch(() => {});
   }

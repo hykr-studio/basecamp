@@ -32,7 +32,7 @@ To bring another domain, replace these folders. Nothing in `framework/` changes.
 | Notifications | `application/domain/src/notifications/` | `domainTemplates` (`defineTemplate`) and `domainNotifications` (`defineNotification`): the WhatsApp templates and the reminders the domain sends |
 | Views | `application/domain/src/views/` | `uiDomain = { views, screens }`, declared with `defineView` / `defineScreen` |
 | Assistant | `application/domain/src/agent/` | `agentDomain: AgentDomain` (`@hykr/agents/script`): persona, domain rules, the scripted model's scripts and help, eval cases (and spoken `voiceEvalCases`) and setup |
-| Server | `application/api/src/server.ts` | `server = defineServer({ ... })`, with the pieces above and `channel.does`: what the assistant helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind (developer guide, section 5.9) |
+| Server | `application/api/src/server.ts` | `server = defineServer({ ... })`, with the pieces above and `channel.does`: what the assistant helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools and delivery channels (developer guide, sections 5.9 and 5.10) |
 | App | `application/mobile/src/domain/` | `appDomain = defineAppDomain({ title, tagline, nav, home, suggestions, bind })` from `@hykr/app`; `bind` calls `bindView` / `bindScreen` for the domain's views and screens; `catalog` and `registry` built with `createCatalog` / `createUiRegistry` |
 | App routes | `application/mobile/src/app/(domain)/` | The domain's screens; the group adds no URL segment. Provide `index.tsx` (the home screen) |
 | Tests | `application/api/test/`, `application/domain/src/**/*.test.ts` | The domain's own e2e, WhatsApp, voice, view and notification tests |
@@ -86,7 +86,9 @@ domain sends on its own initiative is a template, declared in code:
   follows the entity events (`meeting.created`, `meeting.deleted`) and the domain's own: a
   command's event implements `NamedEvent` (`eventName`, `row`) to be one. `to` names the
   recipients (a user, a customer, a contact, or everyone with a role); `channels` is the order
-  to try (`['whatsapp', 'email']`); `onButton` answers its quick replies (snooze).
+  to try (`['whatsapp', 'email']`, or a delivery channel a feature registers, such as push);
+  `whatsapp` (the template) is needed only when WhatsApp is one of them; `onButton` answers its
+  quick replies (snooze).
 - The framework decides the rest per recipient: consent for the topic, quiet hours and the
   marketing cap (per business), the template in their language or English, and the next
   channel when WhatsApp can't be used or fails for good. No domain code sends a message.
@@ -131,8 +133,9 @@ From the contracts declaration alone:
   (`/api/voice/*`, LiveKit, the voice worker), and the framework's phrases in `@hykr/i18n`.
 - Businesses, memberships and customers (`/api/me`), and the scope engine behind `access`.
 - The durable event outbox (`app.domain_events`): every entity event, every `NamedEvent` a command
-  returns and every approval request and decision, stored with the write that caused it. And the
-  read path: each record leaves through `toRead(row, p)`, projected for whoever reads it.
+  returns and every approval request and decision, stored with the write that caused it. The worker
+  relays each one to the event subscribers (developer guide, section 5.10). And the read path: each
+  record leaves through `toRead(row, p)`, projected for whoever reads it.
 - The WhatsApp channel (`framework/api/src/channels`, `framework/channels`): the webhook, the queues
   (`/admin/queues` in development) and the worker, contacts and linking by code, consent and the
   keywords (STOP, START, HELP, talk to a person, delete my data) in every language, erasure,

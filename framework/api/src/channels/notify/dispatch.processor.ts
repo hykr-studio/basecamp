@@ -8,12 +8,13 @@ import {
   type Recipient,
   underMarketingCap,
 } from '@hykr/notifications';
-import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
+import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Inject, Logger } from '@nestjs/common';
 import { EventsHandler, type IEventHandler } from '@nestjs/cqrs';
-import type { Job, Queue } from 'bullmq';
+import type { Job } from 'bullmq';
 import { and, arrayOverlaps, desc, eq, gt, sql } from 'drizzle-orm';
 import { config } from '../../config.js';
+import { deliveryChannels, type NotificationMeta } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
 import { runtime } from '../../runtime.js';
 import { type Contact, ContactsService } from '../contacts.service.js';
@@ -24,7 +25,7 @@ import { TemplateSync } from '../templates/template-sync.js';
 import { TenantsService } from '../tenants.service.js';
 import { WHATSAPP } from '../whatsapp/adapter.provider.js';
 import { MailerService } from './mailer.service.js';
-import { type DispatchJob, jobIdOf, NotifyService } from './notify.service.js';
+import { type DispatchJob, NotifyService } from './notify.service.js';
 import { TEMPLATE_KEY } from './send-template.command.js';
 
 /** Read when used: this module may load before the application registers. */
@@ -36,17 +37,12 @@ const log = new Logger('Dispatch');
 /** How long an Approve or Reject button works after it is sent. */
 export const APPROVAL_BUTTON_MS = 30 * 60_000;
 
-/** What a notification needs to move on, kept with the WhatsApp message it went as. */
-export type NotificationMeta = {
-  key: string;
-  dedupe: string;
-  row: DispatchJob['row'];
-  recipient: Record<string, string>;
-  /** The channels still to try if this one fails for good. */
-  next: ('whatsapp' | 'email')[];
-};
+type Resolved = { contact?: Contact; userId?: string; email?: string; reader: Reader };
 
-type Resolved = { contact?: Contact; email?: string; reader: Reader };
+/** Tries of one registered channel for one recipient before the next channel is tried. */
+const CHANNEL_TRIES = 3;
+/** The first retry's delay; it doubles each time. */
+const CHANNEL_BACKOFF_MS = 5000;
 
 /** A template a person chose to send (notify.send): one customer, WhatsApp only. */
 function byHand(key: string): NotificationDef | undefined {
@@ -116,12 +112,16 @@ export class DispatchProcessor extends WorkerHost {
     def: NotificationDef,
     data: DispatchJob,
     recipient: Recipient,
-    channels: ('whatsapp' | 'email')[],
+    channels: readonly string[],
     settings: { timeZone: string; marketingPerWeek: number },
   ) {
     const to = await this.resolve(data.tenantId, recipient, settings.timeZone);
     for (const [i, channel] of channels.entries()) {
       const next = channels.slice(i + 1);
+      if (channel !== 'whatsapp' && channel !== 'email') {
+        if (await this.viaRegistered(channel, def, data, recipient, to, next)) return;
+        continue;
+      }
       if (
         channel === 'whatsapp' &&
         (await this.viaWhatsApp(def, data, recipient, to, next, settings))
@@ -142,16 +142,75 @@ export class DispatchProcessor extends WorkerHost {
     log.warn(`${def.key}: no channel could reach ${JSON.stringify(recipient)}`);
   }
 
+  /**
+   * A registered delivery channel (push, in-app). Sent: done. Unavailable, or failed for good:
+   * the next channel, now. Failed for now: this channel and the rest again later, for this one
+   * recipient, up to CHANNEL_TRIES; then the next channel. Returns whether it is taken care of.
+   */
+  private async viaRegistered(
+    name: string,
+    def: NotificationDef,
+    data: DispatchJob,
+    recipient: Recipient,
+    to: Resolved,
+    next: string[],
+  ): Promise<boolean> {
+    const channel = deliveryChannels.get(name);
+    if (!channel) {
+      log.error(`${def.key}: no delivery channel is registered as ${name}`);
+      return false;
+    }
+    const meta: NotificationMeta = {
+      key: def.key,
+      dedupe: data.dedupe,
+      row: data.row,
+      recipient,
+      next,
+    };
+    const outcome = await channel.deliver({
+      tenantId: data.tenantId,
+      notification: def,
+      to: {
+        ...(to.userId ? { userId: to.userId } : {}),
+        ...(to.contact ? { contactId: to.contact.id } : {}),
+      },
+      reader: to.reader,
+      row: data.row,
+      dedupe: data.dedupe,
+      meta,
+    });
+    if (outcome.status === 'sent') return true;
+    if (outcome.status === 'unavailable' || outcome.final) {
+      if (outcome.status === 'failed') log.warn(`${def.key} by ${name} failed: ${outcome.reason}`);
+      return false;
+    }
+    const attempt = (data.attempt ?? 0) + 1;
+    if (attempt >= CHANNEL_TRIES) {
+      log.warn(`${def.key} by ${name} failed ${attempt} times: ${outcome.reason}`);
+      return false;
+    }
+    await this.notify.retry(
+      {
+        ...data,
+        only: { channels: [name, ...next], recipient: recipient as Record<string, string> },
+        attempt,
+      },
+      CHANNEL_BACKOFF_MS * 2 ** (attempt - 1),
+      name,
+    );
+    return true;
+  }
+
   private async viaWhatsApp(
     def: NotificationDef,
     data: DispatchJob,
     recipient: Recipient,
     to: Resolved,
-    next: ('whatsapp' | 'email')[],
+    next: string[],
     settings: { marketingPerWeek: number },
   ): Promise<boolean> {
     const contact = to.contact;
-    if (!contact || contact.unreachableAt) return false;
+    if (!def.whatsapp || !contact || contact.unreachableAt) return false;
     if (!(await this.contacts.consent(contact.id, def.topic))) return false;
     if (def.topic === 'marketing') {
       const [sent] = await this.db
@@ -197,13 +256,13 @@ export class DispatchProcessor extends WorkerHost {
       key: def.key,
       dedupe: data.dedupe,
       row: data.row,
-      recipient: recipient as Record<string, string>,
+      recipient,
       next,
     };
     await this.outbound.queue({ tenantId: data.tenantId, contactId: contact.id, from }, [message], {
       notification: def.key,
       category: template.category,
-      extra: meta,
+      extra: { ...meta },
     });
     return true;
   }
@@ -279,6 +338,7 @@ export class DispatchProcessor extends WorkerHost {
       : [];
     return {
       contact,
+      ...(userId ? { userId } : {}),
       email: person?.email,
       reader: { lang: langOf(contact?.locale), timeZone: contact?.timeZone ?? timeZone },
     };
@@ -291,7 +351,7 @@ export class DeliveryFallback implements IEventHandler<DeliveryFailed> {
   constructor(
     private readonly outbound: OutboundService,
     private readonly contacts: ContactsService,
-    @InjectQueue(QUEUES.dispatch) private readonly queue: Queue<DispatchJob>,
+    private readonly notify: NotifyService,
   ) {}
 
   async handle(e: DeliveryFailed) {
@@ -300,16 +360,6 @@ export class DeliveryFallback implements IEventHandler<DeliveryFailed> {
     const row = await this.outbound.load(e.messageId);
     const meta = row?.meta as NotificationMeta | null;
     if (!row || !meta?.next.length) return;
-    await this.queue.add(
-      'fallback',
-      {
-        key: meta.key,
-        tenantId: row.tenantId,
-        row: meta.row,
-        dedupe: meta.dedupe,
-        only: { channels: meta.next, recipient: meta.recipient },
-      },
-      { jobId: jobIdOf(`${meta.dedupe}:fallback:${e.messageId}`), attempts: 3 },
-    );
+    await this.notify.fallback(meta, e.messageId);
   }
 }

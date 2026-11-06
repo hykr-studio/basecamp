@@ -6,6 +6,7 @@ import { AuthModule } from '@thallesp/nestjs-better-auth';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { ChannelsModule } from './channels/channels.module.js';
 import { config } from './config.js';
+import { FeaturesModule } from './features/features.module.js';
 import { HealthController } from './health/health.controller.js';
 import { getAuth } from './infra/auth.js';
 import { coreImports } from './infra/core-imports.js';
@@ -14,6 +15,7 @@ import { ChatModule } from './modules/chat/chat.module.js';
 import { HistoryController } from './modules/history/history.controller.js';
 import { MeModule } from './modules/me/me.controller.js';
 import { VoiceModule } from './modules/voice/voice.module.js';
+import { QueuesModule } from './queues/queues.module.js';
 
 @Module({
   imports: [
@@ -35,7 +37,10 @@ import { VoiceModule } from './modules/voice/voice.module.js';
     // The framework (CQRS, principals, approvals), the domain, and saved pages: shared with
     // the queue worker.
     ...coreImports(),
-    // The channel's queues: this process adds jobs; the worker runs them (or this one, inline).
+    // Every registered queue: this process adds jobs; the worker runs them (or this one, inline).
+    QueuesModule.forRoot({ processors: config.workerInline }),
+    // The framework's features (features/index.ts).
+    FeaturesModule.forRoot({ http: true, processors: config.workerInline }),
     ChannelsModule.forRoot({ processors: config.workerInline }),
     // The assistant, in the app and on WhatsApp.
     ChatModule,

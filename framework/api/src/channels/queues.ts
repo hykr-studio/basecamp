@@ -1,9 +1,10 @@
-import { BullModule } from '@nestjs/bullmq';
-import { config } from '../config.js';
+import { registerQueue } from '../queues/define.js';
 
 /**
  * The channel's queues. The API only adds jobs (a webhook must answer in milliseconds; the
  * agent takes seconds); the worker process runs them, with retries, delays and rate limits.
+ * They are in the queue registry like every other queue (QueuesModule registers them all), and
+ * the channel's Nest classes are their processors.
  */
 export const QUEUES = {
   /** One stored inbound message (or a burst from one sender) → one agent turn. */
@@ -19,12 +20,4 @@ export const QUEUES = {
 } as const;
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
-/** Redis for jobs (the same Redis as the rate limiter), and every queue registered once. */
-export const queueImports = [
-  BullModule.forRoot({
-    connection: { url: config.redisUrl },
-    prefix: config.queuePrefix,
-    defaultJobOptions: { removeOnComplete: 1000, removeOnFail: 5000 },
-  }),
-  BullModule.registerQueue(...Object.values(QUEUES).map((name) => ({ name }))),
-];
+registerQueue(...Object.values(QUEUES).map((name) => ({ name })));

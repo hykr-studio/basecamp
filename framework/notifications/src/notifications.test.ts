@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { defineNotification } from './define-notification.js';
 import { contentHash, defineTemplate, toTemplateSpec } from './define-template.js';
 import { createNotificationCatalog } from './index.js';
 
@@ -53,6 +54,33 @@ describe('defineTemplate refuses what Meta would reject', () => {
 
   it('notifications name only templates that exist', () => {
     const names = new Set(templates.map((t) => t.name));
-    for (const n of notifications) expect(names.has(n.whatsapp.template.name)).toBe(true);
+    for (const n of notifications)
+      if (n.whatsapp) expect(names.has(n.whatsapp.template.name)).toBe(true);
+  });
+});
+
+describe('defineNotification', () => {
+  const base = {
+    key: 'x.done',
+    topic: 'service' as const,
+    to: () => [{ userId: 'u1' }],
+    dedupe: (row: { id: string }) => `x.done:${row.id}`,
+    email: { subject: () => 'Done', body: () => 'It is done.' },
+  };
+
+  it('needs no WhatsApp template when WhatsApp is not a channel', () => {
+    expect(defineNotification({ ...base, channels: ['email'] }).whatsapp).toBeUndefined();
+  });
+
+  it('needs a template for WhatsApp, and WhatsApp for buttons; a channel once', () => {
+    expect(() => defineNotification({ ...base, channels: ['whatsapp', 'email'] })).toThrow(
+      /WhatsApp is a channel but has no template/,
+    );
+    expect(() =>
+      defineNotification({ ...base, channels: ['email'], onButton: { ok: () => undefined } }),
+    ).toThrow(/quick replies/);
+    expect(() => defineNotification({ ...base, channels: ['email', 'email'] })).toThrow(
+      /named twice/,
+    );
   });
 });
