@@ -1,10 +1,34 @@
 // The repository's boundaries. framework/ is Basecamp, published as @hykr/* packages;
-// application/ is one application built on it (the sample domain). The framework never
-// imports an application, and an application reaches the framework only through the
-// packages' public exports, as it would from npm.
+// application/ is one application built on it (the sample modules). The framework never
+// imports an application, an application reaches the framework only through the packages'
+// public exports, as it would from npm, and a module reaches another only through its public
+// parts and only along its declared dependsOn.
+
+const { existsSync, readdirSync, readFileSync } = require('node:fs');
+const { join } = require('node:path');
 
 /** The framework's runtimes: they host an application rather than serve as building blocks. */
 const RUNTIMES = 'api|app|back-office|voice-worker|cli|create-basecamp';
+
+/** The application's modules: application/domain/src/modules/<name>/ (see DOMAIN.md). */
+const MODULES = '^application/domain/(src|dist)/modules/';
+
+/**
+ * Each module and the modules it declares in `dependsOn`, read from the `moduleSpec({ ... })` in
+ * its contracts/index.ts. defineServer checks the same list at boot.
+ */
+function applicationModules() {
+  const dir = join(__dirname, 'application/domain/src/modules');
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map(({ name }) => {
+      const file = join(dir, name, 'contracts', 'index.ts');
+      const source = existsSync(file) ? readFileSync(file, 'utf8') : '';
+      const list = /dependsOn:\s*\[([^\]]*)\]/.exec(source)?.[1] ?? '';
+      return { name, dependsOn: [...list.matchAll(/['"]([a-z0-9_]+)['"]/g)].map((m) => m[1]) };
+    });
+}
 
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
@@ -146,12 +170,17 @@ module.exports = {
     {
       name: 'domain-specs-and-views-are-isomorphic',
       comment:
-        "The domain's contracts, views and notifications are read by the server and the apps alike: no database, Nest, model or server-only framework package in them.",
+        "A module's contracts, views and notifications (and the domain's aggregates of them) are read by the server and the apps alike: no database, Nest, model or server-only framework package in them, and no module's server, tables, assistant or bundle.",
       severity: 'error',
-      from: { path: '^application/domain/(src|dist)/(contracts|views|notifications)/' },
+      from: {
+        path: '^application/domain/(src|dist)/(contracts|views|notifications|modules/[^/]+/(contracts|views|notifications))/',
+      },
       to: {
         path: [
           '^application/domain/(src|dist)/(server|db|agent)/',
+          `${MODULES}[^/]+/(server|db|agent)/`,
+          `${MODULES}index\\.`,
+          `${MODULES}[^/]+/index\\.`,
           '^framework/(db|policy|core|agents|api)/',
           '(^|/)@hykr/(db|policy|core|agents|api)(/|$)',
           '(^|/)(@mastra|@nestjs|drizzle-orm|bullmq)(/|$)',
@@ -161,16 +190,57 @@ module.exports = {
     {
       name: 'apps-read-only-isomorphic-domain',
       comment:
-        "The Expo apps read the domain's contracts and views only: never its server, tables or assistant.",
+        "The Expo apps read the modules' contracts and views only (directly, or through the domain's contracts and views aggregates): never a server, tables, assistant, notifications or module bundle.",
       severity: 'error',
       from: { path: '^application/(mobile|back-office)/' },
       to: {
         path: [
           '^application/domain/(src|dist)/(server|db|agent)/',
+          `${MODULES}index\\.`,
+          `${MODULES}[^/]+/(?!contracts/|views/)`,
+          // The same, by package name (how an app imports it): only contracts and views.
+          '(^|/)@application/domain/(db|modules)$',
+          '(^|/)@application/domain/modules/[^/]+/(?!contracts$|views$)',
           '^application/api/',
           '^framework/(db|policy|core|agents|api|channels|notifications)/',
         ],
       },
+    },
+
+    /* ── Between the application's modules ──────────────────────────────────── */
+    {
+      name: 'module-imports-public-parts',
+      comment:
+        'A module reaches another module only through its contracts/ (isomorphic) or its server/public.ts (server side). Everything else in a module is its own.',
+      severity: 'error',
+      from: { path: `${MODULES}([^/]+)/` },
+      to: {
+        path: `${MODULES}(?!$2/)[^/]+/`,
+        pathNot: `${MODULES}[^/]+/(contracts/|server/public\\.)`,
+      },
+    },
+    {
+      name: 'module-not-to-aggregates',
+      comment:
+        'A module never imports the list of modules or the contracts and views aggregates: they import every module, so it would import itself.',
+      severity: 'error',
+      from: { path: `${MODULES}[^/]+/` },
+      to: { path: ['^application/domain/(src|dist)/(contracts|views)/', `${MODULES}index\\.`] },
+    },
+    ...applicationModules().map((m) => ({
+      name: `module-${m.name}-imports-its-dependencies`,
+      comment: `${m.name} imports only itself and the modules in its dependsOn (${m.dependsOn.join(', ') || 'none'}).`,
+      severity: 'error',
+      from: { path: `${MODULES}${m.name}/` },
+      to: { path: `${MODULES}(?!(${[m.name, ...m.dependsOn].join('|')})/)[^/]+/` },
+    })),
+    {
+      name: 'no-module-cycles',
+      comment:
+        'Modules form a DAG (dependsOn), and no file inside the modules takes part in a cycle.',
+      severity: 'error',
+      from: { path: MODULES },
+      to: { path: MODULES, circular: true },
     },
   ],
   options: {

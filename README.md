@@ -51,7 +51,7 @@ npm. `pnpm lint:deps` enforces both rules.
 
 ```
 framework/                 Basecamp: @hykr/* packages, publishable to npm
-  contracts/      defineDomain, entity and command specs (Zod), createCatalog
+  contracts/      moduleSpec, entity and command specs (Zod), createCatalog
   core/           defineEntity / defineCommand, the write path, list grammar, generated tools
   db/             the framework's tables and migrations, builders for an application's tables
   policy/         authorize(): who may do what
@@ -168,9 +168,9 @@ exactly what was called, parked and refused.
 
 ## Defining an entity
 
-An entity is one spec in `application/domain/src/contracts`, a table in
-`application/domain/src/db/schema.ts`, and a module in `application/domain/src/server` that
-wires it up. For example, the sample to-do:
+An entity lives in a module (`application/domain/src/modules/<name>/`): one spec in its
+`contracts/`, a table in its `db/schema.ts`, and a Nest module in its `server/` that wires it up.
+For example, the sample to-do, in the `todos` module:
 
 ```ts
 export const TodoSpec = entitySpec({
@@ -198,24 +198,37 @@ From the declaration alone you get:
   assistant writes
 - history, approval cards, and how tool results look in the app, on WhatsApp and in speech
 
-The application hands its domain to the framework in two places: the server
-(`application/api/src/server.ts`) and the app (`application/mobile/src/app/_layout.tsx`):
+The application is a list of modules, which teams can build in parallel. It hands them to the
+framework in two places: the server (`application/api/src/server.ts`) and the app
+(`application/mobile/src/app/_layout.tsx`):
 
 ```ts
+// application/domain/src/modules/todos/index.ts
+export const todos = defineModule({
+  ...todosSpec,           // moduleSpec({ name: 'todos', dependsOn, entities, commands })
+  server: TodosModule,    // the Nest module with defineEntity / defineCommand
+  views: todosViews.views, // defineView / defineScreen
+  templates, notifications,
+  agent: todosAgent,      // rules, scripts, eval cases
+  tables,                 // its db/schema.ts
+});
+
+// application/api/src/server.ts
 export const server = defineServer({
-  domain,                 // defineDomain({ name, entities, commands })
-  module: DomainModule,   // the Nest module with defineEntity / defineCommand
-  views: uiDomain,        // defineView / defineScreen
-  notifications: { templates: domainTemplates, notifications: domainNotifications },
-  agent: agentDomain,     // persona, rules, scripts, eval cases
+  name: 'Meetings',
+  persona: 'You are a meetings assistant. …',
+  modules,                // [todos, notes, meetings], in dependency order
   migrations: [migrations],
 });
 ```
 
+`defineServer` refuses modules that collide (an entity, route, tool, view, template or table
+declared twice) and lists every problem. `basecamp module add <name>` writes a new module.
+
 ## Replacing the domain
 
 Meetings, notes and to-dos live in `application/`; nothing in `framework/` names them. To
-build a real product, replace `application/domain` and the domain's screens in
+build a real product, replace the modules in `application/domain/src/modules` and their screens in
 `application/mobile`, or start fresh with `npm create @hykr/basecamp`.
 
 **[DOMAIN.md](DOMAIN.md)** covers:

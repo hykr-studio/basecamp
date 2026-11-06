@@ -1,17 +1,20 @@
-// The domain's views: their words for channels without a screen, and their wiring.
+// The modules' views: their words for channels without a screen, and their wiring.
 import { LANGS } from '@hykr/i18n';
 import { createUiRegistry, emptyLabels } from '@hykr/ui-registry';
 import { describe, expect, it } from 'vitest';
 import type { Todo } from '../contracts/index.js';
-import { uiDomain } from './index.js';
-import { CalendarWeekView } from './meeting.js';
-import { TodoListView } from './todo.js';
+import { CalendarWeekView, moduleViews, TodoListView } from './index.js';
 
-const registry = createUiRegistry(uiDomain);
+const registry = createUiRegistry(...moduleViews);
 
 describe('the views’ words', () => {
   it('every view label and noun is filled in for every language', () => {
-    expect(emptyLabels(uiDomain.views, LANGS)).toEqual([]);
+    expect(
+      emptyLabels(
+        moduleViews.flatMap((m) => m.views ?? []),
+        LANGS,
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -48,8 +51,10 @@ describe('domain views', () => {
     expect(TodoListView.speak({ items: [] }, { timeZone: 'UTC', lang: 'hi' })).toBe('कोई काम नहीं।');
   });
 
-  it('are in the app registry, and the week collapses to the day view on a phone', () => {
+  it('are in the app registry under their module, and the week collapses to the day view on a phone', () => {
     expect(registry.getViewDef('todo.list')).toBe(TodoListView);
+    expect(registry.moduleOf('todo.list')).toBe('todos');
+    expect(registry.moduleOf('meeting.detail')).toBe('meetings');
     expect(registry.getViewDef(CalendarWeekView.collapseTo ?? '')).toBeDefined();
   });
 

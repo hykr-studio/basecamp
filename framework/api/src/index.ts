@@ -50,7 +50,7 @@ export {
   type WriteHook,
   writeHooks,
 } from './hooks.js';
-export type { ModuleDef } from './module.js';
+export { defineModule, type ModuleDef } from './module.js';
 export { TurnRefused } from './modules/chat/turn-hooks.js';
 export { eraseWithContributors, exportPersonalData } from './privacy/contributors.js';
 export { defineQueue, defineSchedule, JOBS, registerQueue } from './queues/define.js';

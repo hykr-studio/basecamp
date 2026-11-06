@@ -67,8 +67,3 @@ export const VisitReminderNotification = defineNotification<VisitRow>({
   },
   dedupe: (v) => `visit.reminder:${v.id}`,
 });
-
-export const fixtureNotifications = {
-  templates: [VisitReminder, TaskDue],
-  notifications: [VisitReminderNotification],
-};

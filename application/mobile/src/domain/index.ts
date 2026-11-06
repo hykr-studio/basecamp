@@ -2,17 +2,17 @@
  * THE DOMAIN, in the app: meetings, notes and to-dos. Replace this folder and the routes in
  * src/app/(domain) to bring another domain; the shell reads only what this file exports.
  */
-import { domain } from '@application/domain/contracts';
-import { uiDomain } from '@application/domain/views';
+import { moduleSpecs } from '@application/domain/contracts';
+import { moduleViews } from '@application/domain/views';
 import { defineAppDomain } from '@hykr/app';
 import { createCatalog } from '@hykr/contracts';
 import { createUiRegistry } from '@hykr/ui-registry';
 import { bindDomain } from './bindings';
 
 /** Every entity and command this app serves: the domain's and the framework's. */
-export const catalog = createCatalog(domain);
+export const catalog = createCatalog(...moduleSpecs);
 /** Every view and screen the assistant may show here. */
-export const registry = createUiRegistry(uiDomain);
+export const registry = createUiRegistry(...moduleViews);
 
 // Entity names and rows are typed in this app's screens: useEntityList('meetings') is MeetingView[].
 declare module '@hykr/app' {

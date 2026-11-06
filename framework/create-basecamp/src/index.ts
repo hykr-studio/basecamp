@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // npm create @hykr/basecamp <folder>   (or pnpm create @hykr/basecamp <folder>)
 //
-// A new Basecamp application: the sample domain (meetings, notes, to-dos) as a starting point,
-// on the published @hykr/* packages. Replace the domain with your own (see DOMAIN.md).
+// A new Basecamp application: the sample modules (meetings, notes, to-dos) as a starting point,
+// on the published @hykr/* packages. Replace them with your own (see DOMAIN.md).
 import { cpSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -94,6 +94,7 @@ A Basecamp application in ${target}
   pnpm exec basecamp db migrate
   pnpm exec basecamp dev
 
-Your domain lives in domain/ (contracts, db, server, views, notifications, agent) and the
-app's screens in mobile/src/domain and mobile/src/app/(domain). The framework is @hykr/*.
+Your application is a list of modules: domain/src/modules/<name>/ (contracts, db, server,
+views, notifications, agent), registered in domain/src/modules/index.ts, and the app's screens
+in mobile/. Start a new one with: pnpm exec basecamp module add <name>. The framework is @hykr/*.
 `);

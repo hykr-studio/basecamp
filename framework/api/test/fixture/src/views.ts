@@ -27,5 +27,3 @@ export const TaskListView = defineView({
       ctx,
     ),
 });
-
-export const fixtureViews = { views: [TaskListView], screens: [] };

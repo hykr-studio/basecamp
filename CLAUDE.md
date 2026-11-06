@@ -8,7 +8,8 @@ Basecamp is a framework for full-stack apps where an AI assistant works alongsid
 approvals and audit trail. You declare an entity once (a Zod spec), and the framework generates the REST
 routes, the agent tools, the app data hooks, approval cards, history, and the WhatsApp and voice rendering.
 It is a pnpm + Turborepo monorepo. `framework/` holds the `@hykr/*` packages, which can be published to npm.
-`application/` holds one sample application built on them: meetings, notes and to-dos.
+`application/` holds one sample application built on them: meetings, notes and to-dos, as three modules
+(`application/domain/src/modules/<name>/`).
 
 The long-form references are `docs/developer-guide.md` (architecture, rules, testing, known gaps),
 `docs/tutorial.md` (one feature end to end), `docs/new-application.md` (a new product from scratch) and
@@ -35,16 +36,20 @@ pnpm dev              # framework tsc -w watchers + `basecamp dev` (API, worker,
   `MODEL_MODE=fake`. A second `consumer` job packs every `@hykr/*` package, scaffolds an app with
   `create-basecamp` from the tarballs, then builds and typechecks it. If you change a package's public
   exports or `files`, that job is what catches it.
-- `pnpm db:generate --name <name>` generates the application's migration from `application/domain/src/db/schema.ts`.
-  Never hand-edit files under `*/drizzle/`. Extensions, triggers and CHECK constraints go in idempotent SQL
-  hooks: `sql/pre/*.sql` and `sql/post/*.sql` next to the migrations (`framework/db/sql`, `application/domain/sql`),
-  run on every migrate. `db:migrate` takes a lock and refuses a migration drizzle would silently skip (one
-  older than the last applied): regenerate it, or recreate the database.
+- `pnpm db:generate --name <name>` generates the application's migration from every module's
+  `application/domain/src/modules/*/db/schema.ts` (one journal). Never hand-edit files under `*/drizzle/`.
+  Extensions, triggers and CHECK constraints go in idempotent SQL hooks: `sql/pre/*.sql` and `sql/post/*.sql`
+  next to the migrations (`framework/db/sql`, `application/domain/sql`), run on every migrate. `db:migrate`
+  takes a lock and refuses a migration drizzle would silently skip (one older than the last applied):
+  regenerate it, or recreate the database. After a rebase, `pnpm --dir application exec basecamp db rebase
+  --base <branch>` drops this branch's migrations and generates them again on top of the base's.
 - A framework feature's fixture tables get their own migration set:
   `FIXTURE_FEATURE=<f> pnpm --filter @hykr/api fixture:generate --name <f>` writes
   `framework/api/test/fixture/src/features/<f>/migrations/` from that folder's `schema.ts`.
+- `pnpm --dir application exec basecamp module add <name> [--entity <singular>]` scaffolds a module (both
+  halves) and adds its line to each module list.
 - `pnpm eval` runs the scripted assistant eval and needs the API running. From `application/`:
-  `pnpm exec basecamp eval voice|whatsapp [--live]`.
+  `pnpm exec basecamp eval [assistant|voice|whatsapp] [--module <name>] [--live]`.
 - `pnpm dev` passes `--concurrency=30` because turbo runs 16 persistent tasks. Pass it too if you call
   `turbo run dev` yourself.
 
@@ -94,8 +99,8 @@ Other gotchas:
 
 ### Framework / application boundary (enforced by `pnpm lint:deps`, `.dependency-cruiser.cjs`)
 
-- `framework/` never imports `application/`. The application passes its domain in at exactly two points:
-  - the server: `application/api/src/server.ts`, through `defineServer({ domain, module, views, notifications, agent, channel, migrations, contributes })`, started by `startApi` / `startWorker`;
+- `framework/` never imports `application/`. The application passes its modules in at exactly two points:
+  - the server: `application/api/src/server.ts`, through `defineServer({ name, persona, help, channel, modules, migrations, contributes })`, started by `startApi` / `startWorker`. Each module is `defineModule({ ...moduleSpec, server, views, screens, templates, notifications, agent, tables, contributes })`;
   - the app: `application/mobile/src/app/_layout.tsx`, through `<AppShell app catalog registry config />`.
 - `application/` imports `@hykr/*` by package name and public subpath only. No relative paths into
   `framework/`, and no `src/` or `dist/` paths.
@@ -104,9 +109,11 @@ Other gotchas:
 - `contracts` and `i18n` are leaves. `ui-registry` holds no runtime code: React lives in its `/react`
   subpath. `channels` and `notifications` hold no DB, Nest, queue or policy code.
 - The client packages (`app`, `back-office`, `voice-worker`) reach the API only over HTTP, through `@hykr/api-client`.
-- `application/domain/src/{contracts,views,notifications}` are isomorphic: the server and the Expo apps both
-  load them. They must not import Nest, Drizzle, Mastra, BullMQ, or the domain's `server`, `db` or `agent`
-  folders.
+- A module's `contracts`, `views` and `notifications` folders (and the `src/contracts` and `src/views`
+  aggregates) are isomorphic: the server and the Expo apps both load them. They must not import Nest, Drizzle,
+  Mastra, BullMQ, or any module's `server`, `db` or `agent` folder.
+- A module imports another module only through its `contracts/` or `server/public.ts`, only if it lists it in
+  `dependsOn`, and modules form no cycle (`module-*` rules). The apps import only modules' contracts and views.
 
 ### The three design rules
 
@@ -129,30 +136,33 @@ Other gotchas:
 
 ### How an entity flows through the stack
 
-The contracts are declared in `application/domain/src/contracts/`: `entitySpec` and `commandSpec` (Zod
-schemas, `fieldLabels`, list filterable/sortable/search, `approval`, `views`), collected in
-`defineDomain(...)`. `createCatalog(domain)` merges in the platform entities (saved `pages`, `notify.send`,
-`handoff.request`). The catalog drives:
+Each module (`application/domain/src/modules/<name>/`) declares its contracts in `contracts/`: `entitySpec` and
+`commandSpec` (Zod schemas, `fieldLabels`, list filterable/sortable/search, `approval`, `views`), collected in
+`moduleSpec({ name, dependsOn, entities, commands })`, which stamps each spec with the module (`spec.module`).
+`defineServer` merges the modules with `createCatalog(...modules)`, which adds the platform entities (saved
+`pages`, `notify.send`, `handoff.request`) and refuses any collision (names, plurals, routes and the framework's
+`/api/*` prefixes, tool ids, approval ops, `touches`, `dependsOn` order). The catalog drives:
 - the server: `defineEntity(Spec, { table, owner, customer, access, rules })` and
-  `defineCommand(...)` in `application/domain/src/server/`, wired with
-  `entityController` / `entityHandlers` / `commandController` into `DomainModule`;
+  `defineCommand(...)` in the module's `server/`, wired with
+  `entityController` / `entityHandlers` / `commandController` into the module's Nest module;
 - the agent tools: `list-*`, `get-*`, `create-*`, `update-*`, `delete-*`, plus one per command;
 - the typed client (`@hykr/api-client`, built at runtime from the spec, nothing to codegen) and the app hooks
   (`useEntityList`, `useEntity`, `useEntityMutation`, `useCommand` in `framework/app/src/framework/hooks.ts`);
-- the views (`defineView` / `defineScreen` in `application/domain/src/views/`), bound to React components in
+- the views (`defineView` / `defineScreen` in the module's `views/`), bound to React components in
   `application/mobile/src/domain/bindings.tsx`.
 
-The tables (`application/domain/src/db/schema.ts`) live in the `app` schema. Use `id()`, `tenantColumn()`,
-`customerColumn()` and `user` from `@hykr/db`. Each table needs an owner column plus `createdBy`,
+The tables (each module's `db/schema.ts`) live in the `app` schema and are named after the module (`todos`,
+`todos_<x>`). Use `id()`, `tenantColumn()`, `customerColumn()`, `user` and `tableRef(name)` (a foreign key to a
+module that depends on this one) from `@hykr/db`. Each table needs an owner column plus `createdBy`,
 `createdAt` and `updatedAt`. The framework's migrations are tracked in `drizzle.__framework_migrations` and
-the application's in `drizzle.__app_migrations`.
+the application's (one journal for every module) in `drizzle.__app_migrations`.
 
 Tenancy: every row belongs to a business. Roles are names in a registry (`roles` in `@hykr/contracts`;
 the framework's are `owner`, `admin`, `ops`, `staff` and `customer`), and an entity's `access` grants each
 role `own`, `customer` or `tenant` per read and write (the sample is in
-`application/domain/src/server/access.ts`). Anything else is a capability: check `can(p, 'backoffice.use')`
-(`@hykr/policy`), never a role name. A WhatsApp-only principal can be refused with `minAssurance: 'session'`.
-Background work writes as `systemPrincipal({ tenantId, job })` from `@hykr/core`.
+`application/domain/src/server/access.ts`, shared by the modules). Anything else is a capability: check
+`can(p, 'backoffice.use')` (`@hykr/policy`), never a role name. A WhatsApp-only principal can be refused with
+`minAssurance: 'session'`. Background work writes as `systemPrincipal({ tenantId, job })` from `@hykr/core`.
 
 ### Non-obvious rules (each one has bitten someone)
 
@@ -172,11 +182,15 @@ Background work writes as `systemPrincipal({ tenantId, job })` from `@hykr/core`
   `templates:sync` refuses an edit to an approved template.
 - Every user-facing word is `Labels` (`{ en, hi, te }`), which won't compile with a language missing. A list
   view that can be spoken needs `noun` and `empty`.
-- The scripted model (`MODEL_MODE=fake`, `framework/agents/src/fake`, with the domain scripts in
-  `application/domain/src/agent/scripts.ts`) is what tests and CI use. Its replies are asserted in golden
-  files, so its wording matters. The framework's own scripts are script sets in
-  `framework/agents/src/fake/scripts/<feature>.ts` (their `order` decides which matches first), and its phrases
-  are in `framework/i18n/src/messages/<feature>.ts`; each file has one line in its folder's `index.ts`.
+- The scripted model (`MODEL_MODE=fake`, `framework/agents/src/fake`, with each module's scripts in
+  `application/domain/src/modules/<name>/agent/scripts.ts`) is what tests and CI use. Its replies are asserted
+  in golden files, so its wording matters. The first matching script wins, earlier modules first, and
+  `defineServer` refuses to boot when one module's script would take another module's eval turn. The
+  framework's own scripts are script sets in `framework/agents/src/fake/scripts/<feature>.ts` (their `order`
+  decides which matches first), and its phrases are in `framework/i18n/src/messages/<feature>.ts`; each file
+  has one line in its folder's `index.ts`.
+- `defineServer` throws one `ModulesError` listing every collision between modules (and with the framework).
+  A framework feature with its own `/api/<x>` routes calls `reserveRoutes('<x>')` (`@hykr/contracts`).
 - `framework/app` keeps colour tokens in both `src/theme.ts` and `theme.css`. Its `test` script
   (`scripts/check-tokens.mjs`) fails if they drift apart.
 - `framework/create-basecamp/template/` is a copy of `application/` made at pack time. Don't edit it; it is

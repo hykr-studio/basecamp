@@ -10,7 +10,7 @@ import { DbModule } from './db.module.js';
 
 /**
  * What both processes stand on, the API and the queue worker: the database, the framework
- * (CQRS buses, principals, approvals) and the business's entities and commands.
+ * (CQRS buses, principals, approvals) and the application modules' entities and commands.
  */
 export const coreImports = () => [
   DbModule,
@@ -26,8 +26,8 @@ export const coreImports = () => [
     // Stored events carry this process's queue prefix: only its relay passes them on.
     queuePrefix: config.queuePrefix,
   }),
-  // The application's entities and commands.
-  runtime().definition.module,
+  // Each module's entities and commands, in module order.
+  ...runtime().definition.modules.flatMap((m) => (m.server ? [m.server] : [])),
   // The framework's own entities: saved canvas pages.
   PagesModule,
 ];

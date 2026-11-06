@@ -300,6 +300,9 @@ importers:
       '@hykr/agents':
         specifier: workspace:*
         version: link:../../framework/agents
+      '@hykr/api':
+        specifier: workspace:*
+        version: link:../../framework/api
       '@hykr/contracts':
         specifier: workspace:*
         version: link:../../framework/contracts
@@ -923,6 +926,9 @@ importers:
       '@types/node':
         specifier: ^26.6.4
         version: 26.6.4
+      vitest:
+        specifier: ^5.0.3
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(vite@8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
 
   framework/contracts:
     dependencies:

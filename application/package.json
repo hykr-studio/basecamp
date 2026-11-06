@@ -2,7 +2,7 @@
   "name": "@application/app",
   "version": "0.0.0",
   "private": true,
-  "description": "A Basecamp application: the sample domain (meetings, notes and to-dos). Replace it with your own.",
+  "description": "A Basecamp application: the sample modules (meetings, notes and to-dos). Replace them with your own.",
   "type": "module",
   "basecamp": {
     "server": "api/dist/server.js",
@@ -21,11 +21,13 @@
     "infra:up": "basecamp infra up",
     "db:generate": "basecamp db generate",
     "db:migrate": "basecamp db migrate",
+    "db:rebase": "basecamp db rebase",
     "templates:sync": "basecamp templates sync",
     "templates:check": "basecamp templates check",
     "eval": "basecamp eval assistant",
     "eval:voice": "basecamp eval voice",
     "eval:whatsapp": "basecamp eval whatsapp",
+    "module:add": "basecamp module add",
     "studio": "basecamp studio"
   },
   "devDependencies": {

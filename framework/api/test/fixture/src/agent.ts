@@ -1,5 +1,5 @@
 import {
-  type AgentDomain,
+  type AgentModule,
   call,
   defineScript,
   items,
@@ -56,10 +56,21 @@ const scripts = [
   }),
 ];
 
-export const fixtureAgent: AgentDomain = {
-  persona: 'You are a test assistant. You help the user keep tasks and visits.',
-  rules: [],
+/** What the tasks module teaches the assistant; the application keeps the persona (index.ts). */
+export const tasksAgent: AgentModule = {
   help: 'I can add or delete tasks.',
   scripts,
-  evalCases: [],
+  // `basecamp eval --module tasks`: one conversation, a fresh user.
+  evalCases: [
+    {
+      why: 'adds a task',
+      input: 'add Buy milk',
+      expect: { must: ['create-task'], replyIncludes: 'milk' },
+    },
+    {
+      why: "an agent's delete is parked for approval, and says so",
+      input: 'delete Buy milk',
+      expect: { must: ['list-tasks', 'delete-task'], replyIncludes: 'approv' },
+    },
+  ],
 };

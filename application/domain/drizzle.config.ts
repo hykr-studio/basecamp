@@ -5,11 +5,12 @@ const url =
   process.env.DATABASE_URL ??
   'postgres://app:app@localhost:5432/app';
 
-// The application's own tables. The framework's (users, tenancy, approvals, channels) ship with
-// @hykr/db and run first; `basecamp db migrate` applies both.
+// The application's own tables: every module's db/schema.ts, in one journal (drizzle/). The
+// framework's (users, tenancy, approvals, channels) ship with @hykr/db and run first;
+// `basecamp db migrate` applies both.
 export default defineConfig({
   dialect: 'postgresql',
-  schema: './src/db/schema.ts',
+  schema: './src/modules/*/db/schema.ts',
   out: './drizzle',
   dbCredentials: { url },
   migrations: { schema: 'drizzle', table: '__app_migrations' },

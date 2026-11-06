@@ -1,10 +1,10 @@
 import type { CommandSpec, EntitySpec } from './spec.js';
 
 /**
- * A business domain, as the framework sees it: its entities (keyed by plural, the name used
- * in routes and query keys) and its commands. Everything else (API routes, agent tools,
- * views, the app's data hooks) is derived from this one declaration, so replacing the
- * domain means replacing the folders that declare it, nothing in the framework.
+ * A set of entities (keyed by plural, the name used in routes and query keys) and commands under
+ * one name: what `createCatalog` takes per part. An application declares its parts as modules
+ * (`moduleSpec`, module.ts), which also stamp each spec with the module's id; `defineDomain` is
+ * for one-off sets, such as a test's.
  */
 export interface Domain<
   E extends Record<string, EntitySpec> = Record<string, EntitySpec>,

@@ -1,4 +1,10 @@
-import { drawsComponents, type PageSpec, type Present, type Surface } from '@hykr/contracts';
+import {
+  assertNoProblems,
+  drawsComponents,
+  type PageSpec,
+  type Present,
+  type Surface,
+} from '@hykr/contracts';
 import type { ScreenDef, ViewDef } from './define-view.js';
 import { checkProps, checkQuery, problem } from './validate.js';
 
@@ -18,9 +24,17 @@ export type Checked =
 export function createRegistry(input: {
   views: readonly ViewDef[];
   screens: readonly ScreenDef[];
+  /** The module that declares a view or screen, when the registry was built from modules. */
+  moduleOf?: (name: string) => string | undefined;
 }) {
   const viewsByName = new Map(input.views.map((v) => [v.name, v]));
   const screensByName = new Map(input.screens.map((s) => [s.name, s]));
+  // A name given twice would leave the first one unreachable.
+  const twice = [
+    ...input.views.filter((v, i) => input.views.findIndex((x) => x.name === v.name) !== i),
+    ...input.screens.filter((s, i) => input.screens.findIndex((x) => x.name === s.name) !== i),
+  ].map((d) => `${d.name} is declared twice`);
+  assertNoProblems(twice);
   for (const v of input.views)
     if (v.collapseTo && !viewsByName.has(v.collapseTo))
       throw new Error(`${v.name} collapses to an unknown view ${v.collapseTo}`);
@@ -132,6 +146,8 @@ export function createRegistry(input: {
   return {
     views: input.views,
     screens: input.screens,
+    /** The module that declares a view or screen ('todos'; 'platform' for the framework's). */
+    moduleOf: (name: string) => input.moduleOf?.(name),
     getViewDef,
     getScreenDef,
     viewsFor,

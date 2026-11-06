@@ -1,6 +1,12 @@
-// What an application writes for its assistant: the AgentDomain (persona, rules, eval cases)
-// and scripts for the scripted model (MODEL_MODE=fake), built with these helpers.
-export type { AgentDomain, EvalCase, VoiceEvalCase } from './agent-domain.js';
+// What a module writes for the assistant: its AgentModule (rules, help, eval cases) and scripts
+// for the scripted model (MODEL_MODE=fake), built with these helpers.
+export type {
+  AgentDomain,
+  AgentModule,
+  EvalCase,
+  EvalSetup,
+  VoiceEvalCase,
+} from './agent-domain.js';
 export {
   type CanvasPage,
   call,
