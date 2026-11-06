@@ -370,6 +370,33 @@ describe('custom fields', () => {
     );
   });
 
+  it('a value kept from a removed field stays until someone changes or clears it', async () => {
+    const size = await owner.call('POST', '/api/custom-fields', {
+      entity: 'gadget',
+      key: 'size',
+      type: 'text',
+      label: { en: 'Size' },
+    });
+    expect(size.status).toBe(201);
+    const made = await owner.call('POST', '/api/gadgets', {
+      title: 'Lamp',
+      custom: { size: 'big' },
+    });
+    expect(made.status).toBe(201);
+    const id = made.body.value.id;
+    expect((await owner.call('DELETE', `/api/custom-fields/${size.body.value.id}`)).status).toBe(
+      200,
+    );
+    const changed = await owner.call('PATCH', `/api/gadgets/${id}`, { custom: { estimate: 2 } });
+    expect(changed.status).toBe(200);
+    expect(changed.body.value.custom).toEqual({ size: 'big', estimate: 2 });
+    const reset = await owner.call('PATCH', `/api/gadgets/${id}`, { custom: { size: 'small' } });
+    expect(reset.status).toBe(400);
+    expect(reset.body).toMatchObject({ error: 'custom_field_invalid' });
+    const cleared = await owner.call('PATCH', `/api/gadgets/${id}`, { custom: { size: null } });
+    expect(cleared.body.value.custom).toEqual({ estimate: 2 });
+  });
+
   it('tells the assistant the business’s fields for the turn', async () => {
     const shape = await turnFor(owner, tenantId);
     expect(shape?.context?.join('\n')).toContain(
@@ -592,6 +619,20 @@ describe('shared records', () => {
       'Shared A',
       'Shared C',
     ]);
+  });
+
+  it('a platform row leaves projected for the reader: a field hidden from staff stays hidden', async () => {
+    const page = await listed(staff, 'rank[gte]=100', inTenant());
+    expect(page.items.map((g: { title: string }) => g.title)).toEqual(['Shared A', 'Shared C']);
+    for (const item of page.items) expect(item).not.toHaveProperty('rank');
+    const one = await staff.call('GET', `/api/gadgets/${ids['Shared A']}`, undefined, inTenant());
+    expect(one.status).toBe(200);
+    expect(one.body).toMatchObject({ title: 'Shared A', shared: true });
+    expect(one.body).not.toHaveProperty('rank');
+    // The admin of the same business sees it.
+    expect(
+      (await admin.call('GET', `/api/gadgets/${ids['Shared A']}`, undefined, inTenant())).body,
+    ).toMatchObject({ rank: 101 });
   });
 
   it('a platform row is read-only to every other business', async () => {

@@ -25,6 +25,7 @@ import {
   entityController,
   entityHandlers,
   needsApproval,
+  type ReadProjector,
 } from '@hykr/core';
 import type { Access } from '@hykr/policy';
 import { Module } from '@nestjs/common';
@@ -190,6 +191,16 @@ class ExtrasModule {}
 })
 class GadgetsModule {}
 
+/** Staff never see a gadget's rank, the platform's shared ones included. */
+export const staffSeeNoRank: ReadProjector = {
+  name: 'fixture.settings.staff-rank',
+  project: (type, value, p) => {
+    if (type !== 'gadget' || !p.roles?.includes('staff')) return value;
+    const { rank: _hidden, ...rest } = value;
+    return rest;
+  },
+};
+
 /** Switches the whole extras module; the business switches it itself. */
 export const ExtrasFlag = defineFeatureFlag({
   key: 'extras.all',
@@ -220,7 +231,7 @@ const gadgetsModule = defineModule({
   }),
   server: GadgetsModule,
   tables: { gadgets },
-  contributes: { featureFlags: [ExtrasFlag, PolishFlag] },
+  contributes: { featureFlags: [ExtrasFlag, PolishFlag], readProjectors: [staffSeeNoRank] },
 });
 
 /** The fixture with the settings feature's modules. */

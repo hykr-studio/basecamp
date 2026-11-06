@@ -26,6 +26,9 @@ import {
 
 const ana = new Person('Ana Seams');
 const NAME = 'fixture.seams';
+/** What the fixture registered, without the framework's own entries. */
+const fixtureOnes = <T extends { name: string }>(xs: readonly T[]) =>
+  xs.filter((x) => x.name.startsWith('fixture.'));
 
 /** Each contribution key and the registry that collects it. */
 const registries = {
@@ -56,9 +59,10 @@ describe('contributions', () => {
     for (const [key, registry] of Object.entries(registries)) {
       const [contributed] = seamsContributions[key as keyof typeof registries] ?? [];
       expect(registry.get(NAME), key).toBe(contributed);
-      // The framework registers its own queues too (the channel's, the events queue).
-      if (key === 'queues') expect(registry.all(), key).toContain(contributed);
-      else expect(registry.all(), key).toEqual([contributed]);
+      // The framework registers its own too: queues (the channel's, the events queue) and its
+      // features' hooks (the settings feature's plugins, write hooks and turn hook).
+      expect(registry.all(), key).toContain(contributed);
+      expect(fixtureOnes(registry.all()), key).toEqual([contributed]);
     }
     expect(api.runtime().contributions).toEqual(seamsContributions);
   });
@@ -75,7 +79,7 @@ describe('contributions', () => {
     expect(() => api.turnHooks.register({ name: NAME })).toThrow(
       'The turn hook "fixture.seams" is registered twice',
     );
-    expect(api.turnHooks.all()).toHaveLength(1);
+    expect(fixtureOnes(api.turnHooks.all())).toHaveLength(1);
   });
 
   it('a key that nothing collects fails closed, before anything is registered', () => {

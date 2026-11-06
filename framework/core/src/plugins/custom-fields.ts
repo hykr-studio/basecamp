@@ -175,12 +175,23 @@ export const customFieldsHook: WriteHook = {
       if (t.change === 'deleted') continue;
       const def = entityDef(t.type);
       if (!def || !hasCustomFields(def.spec)) continue;
-      const after = (t.after as Values | undefined)?.custom as Values | undefined;
-      const before = (t.before as Values | undefined)?.custom as Values | undefined;
-      const changed = t.change === 'created' || JSON.stringify(after) !== JSON.stringify(before);
-      if (!changed) continue;
+      const after = ((t.after as Values | undefined)?.custom ?? {}) as Values;
+      const before = ((t.before as Values | undefined)?.custom ?? {}) as Values;
+      const same = (k: string) => JSON.stringify(after[k]) === JSON.stringify(before[k]);
+      if (t.change !== 'created' && Object.keys({ ...after, ...before }).every(same)) continue;
+      // Only the values this write set are checked: one kept from before its field was removed
+      // (or its option dropped) stays as it is until someone changes or clears it. Required
+      // fields must hold a value whenever custom values change.
+      const set = Object.fromEntries(
+        Object.entries(after).filter(([k]) => t.change === 'created' || !same(k)),
+      );
       const fields = await customFieldsOf(tx, tenantId, def.name);
-      const problems = customValueProblems(fields, after ?? {}, { checkRequired: true });
+      const problems = [
+        ...customValueProblems(fields, set, { checkRequired: false }),
+        ...fields
+          .filter((f) => f.required && (after[f.key] === undefined || after[f.key] === ''))
+          .map((f) => `${f.key}: required`),
+      ];
       if (problems.length) throw invalid(problems);
     }
   },
