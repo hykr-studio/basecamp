@@ -1106,8 +1106,10 @@ needs the entity's `get` exposed) reads its comments, and anyone else gets 404.
   `can: { edit, remove }` for the caller; the assistant's `list-comments`.
 - **Per entity**, the `comments` trait: `false` turns comments off (`comments_off`); its object form
   gives an `approval` rule for added comments (checked with the action `comment`, the input and the
-  record; its object form also names who decides) and an `anchor` schema (a version, a point) without
-  which a comment carries no anchor.
+  record; its object form also names who decides and the approval `level`) and an `anchor` schema (a
+  JSON object: a version, a point) without which a comment carries no anchor. Across the
+  application, a level rule on `comment.add` (section 5.8) sees `input.entity` and `input.internal`:
+  the sample's orders module puts comments a customer could read at its `external` level.
 - **Mentions** are tokens in the text, `@[Name](user:<id>)`. The server checks each one: a member
   of the business who may read the record now (and, for an `internal` comment, holds
   `comments.internal`). Anyone else refuses the comment (`mention_not_allowed`), so nobody is told of

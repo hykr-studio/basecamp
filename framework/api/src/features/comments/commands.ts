@@ -10,9 +10,9 @@ import {
   type Comment,
   CommentCapabilities,
   commentExcerpt,
+  type DecisionDetails,
   EditCommentSpec,
   type Mention,
-  type Principal,
   parksFor,
   RemoveCommentSpec,
 } from '@hykr/contracts';
@@ -95,16 +95,19 @@ function mentioned(
 const added = (now: readonly Mention[], before: readonly Mention[]) =>
   now.filter((m) => !before.some((b) => b.kind === m.kind && b.id === m.id));
 
-/** Who decides a parked comment, from the trait's rule (its object form). */
-function approverFrom(rule: ApprovalRule | undefined, p: Principal): Approver | undefined {
-  const { by, channels, minAssurance } = approverOf(rule);
-  const out: Approver = {};
-  if (by === 'self') {
-    const self = userIdOf(p);
-    if (self) out.userId = self;
-  } else if (by) out.roles = [...by];
-  if (channels) out.channels = [...channels];
-  if (minAssurance) out.minAssurance = minAssurance;
+/**
+ * What a parked comment says from the trait's rule (its object form): who decides, where, how
+ * surely, and the application's approval level it parks at.
+ */
+function parkDetails(rule: ApprovalRule | undefined): DecisionDetails | undefined {
+  const { by, channels, minAssurance, level } = approverOf(rule);
+  const approver: Approver = {};
+  if (by) approver.by = by;
+  if (channels) approver.channels = [...channels];
+  if (minAssurance) approver.minAssurance = minAssurance;
+  const out: DecisionDetails = {};
+  if (Object.keys(approver).length) out.approver = approver;
+  if (level) out.level = level;
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -191,11 +194,10 @@ export const AddComment = onRecord(AddCommentSpec, {
     const rule = parent.policy.approval;
     const at = parent.def.toRead(parent.row, p) as Record<string, unknown>;
     if (parksFor(rule, p, { action: 'comment', input: { ...input }, row: at })) {
-      const approver = approverFrom(rule, p);
       return needsApproval(
         'comment_needs_approval',
         `Comments by the ${p.actor.kind === 'agent' ? 'assistant' : 'requester'} on this ${label} need approval`,
-        approver ? { approver } : undefined,
+        parkDetails(rule),
       );
     }
     return allow('comment_on_readable', 'Comments on a record they can read');

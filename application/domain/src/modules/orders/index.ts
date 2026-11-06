@@ -8,6 +8,7 @@ import { ordersAgent } from './agent/index.js';
 import { ordersSpec } from './contracts/index.js';
 import * as tables from './db/schema.js';
 import { ordersNotifications } from './notifications/index.js';
+import { OrderCommentLevels } from './server/comment-levels.js';
 import { costHidden, OrdersCostRead } from './server/cost.js';
 import { OrdersModule } from './server/orders.module.js';
 import { OrdersApprove } from './server/policy.js';
@@ -27,5 +28,6 @@ export const orders = defineModule({
     numberSeries: [OrderSeries],
     capabilities: [OrdersApprove, OrdersCostRead],
     readProjectors: [costHidden],
+    levelRules: [OrderCommentLevels],
   },
 });

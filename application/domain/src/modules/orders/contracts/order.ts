@@ -70,14 +70,7 @@ export const OrderSpec = entitySpec({
   },
   // Orders change only through their commands: a whole save, a cancel. Never deleted.
   expose: { list: 'all', get: 'all', create: 'internal', update: 'internal', delete: 'internal' },
-  traits: {
-    money: { fields: ['subtotal', 'taxTotal', 'total'] },
-    // A comment the assistant adds where a customer could read it waits for the person; a
-    // team-only one goes at once.
-    comments: {
-      approval: (p, { input }) => p.actor.kind === 'agent' && input?.internal !== true,
-    },
-  },
+  traits: { money: { fields: ['subtotal', 'taxTotal', 'total'] } },
   views: { list: 'order.list', item: 'order.card' },
 });
 

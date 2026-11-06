@@ -1,7 +1,8 @@
 // Comments on orders: the framework's comments, configured by the orders module. A mention
 // reaches the person's in-app inbox (the framework's notification) and, with no phone
-// registered, their email (the module's push-then-email notification). The assistant's comment
-// waits for the person unless it is team-only.
+// registered, their email (the module's push-then-email notification). A comment a customer
+// could read is at the application's `external` level, so the assistant's waits for the person;
+// a team-only one does not.
 
 import { addMember, asAssistant, boot, eventually, me, Person, shutdown } from '@hykr/api/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -84,10 +85,17 @@ describe('comments on an order', () => {
       recordId: orderId,
       body: 'The shelf ships Monday.',
     });
+    // The orders module puts it at the application's `external` level, decided by the person.
     expect(parked.body).toMatchObject({
       status: 'needs_approval',
-      approval: { resourceType: 'order', resourceId: orderId },
+      approval: {
+        resourceType: 'order',
+        resourceId: orderId,
+        level: { name: 'external' },
+      },
     });
+    const approved = await owner.call('POST', `/api/approvals/${parked.body.approval.id}/approve`);
+    expect(approved.body).toMatchObject({ status: 'approved' });
     const internal = await run('POST', '/api/comments', {
       entity: 'order',
       recordId: orderId,
