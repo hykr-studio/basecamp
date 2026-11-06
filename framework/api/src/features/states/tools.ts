@@ -65,6 +65,10 @@ export const transitionTools: ToolContribution = {
         }),
         execute: async (input, ctx) => {
           const { id: recordId, transition, ...rest } = input as Record<string, unknown>;
+          // The tool takes every move's fields; a move gets only its own (the route refuses
+          // any other).
+          const own = new Set(open.find((t) => t.name === transition)?.fields ?? []);
+          const taken = Object.fromEntries(Object.entries(rest).filter(([k]) => own.has(k)));
           return safely(
             id,
             ctx,
@@ -72,7 +76,7 @@ export const transitionTools: ToolContribution = {
             () =>
               kit
                 .clientFor(ctx)
-                .transition(spec, String(recordId), String(transition), rest as never),
+                .transition(spec, String(recordId), String(transition), taken as never),
             shown(spec, String(recordId)),
           );
         },
