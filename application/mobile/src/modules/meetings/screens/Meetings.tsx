@@ -25,7 +25,7 @@ import {
 import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
-import { MeetingRow } from '@/domain/components/Rows';
+import { MeetingRow } from '../components/MeetingRow';
 
 const chips = (): Chip[] => {
   const now = new Date().toISOString();
@@ -126,7 +126,7 @@ function NewMeeting({ onDone }: { onDone: () => void }) {
 }
 
 /** Upcoming, past and closed meetings: filter, search, scroll by cursor. */
-export default function Meetings() {
+export function Meetings() {
   useScreenContext({ screen: 'meetings' });
   const params = useLocalSearchParams<{ new?: string }>();
   const options = chips();

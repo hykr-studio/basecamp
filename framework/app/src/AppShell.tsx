@@ -4,12 +4,12 @@ import {
   useFonts,
 } from '@expo-google-fonts/schibsted-grotesk';
 import { ApiError } from '@hykr/api-client';
-import { type Catalog, createCatalog, type Domain } from '@hykr/contracts';
-import { createUiRegistry, type Registry, type UiDomain } from '@hykr/ui-registry';
+import type { Catalog } from '@hykr/contracts';
+import type { Registry } from '@hykr/ui-registry';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { router, Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -33,14 +33,21 @@ import { type AppConfig, configure } from './config';
 import { ApprovalCard } from './framework/ApprovalCard';
 import { ApprovalsAnnouncer } from './framework/ApprovalsAnnouncer';
 import { ASSISTANT_ICON } from './framework/AssistantMark';
-import type { AppDomain, NavItem as Destination } from './framework/app-domain';
+import type {
+  AppModule,
+  AppPlugin,
+  AppSettings,
+  NavItem as Destination,
+} from './framework/app-domain';
 import { AssistantProvider, useAssistant } from './framework/assistant-context';
+import { bindAll, composeApp, type ModuleList, matchRoute } from './framework/compose-app';
 import { isFocused, isHovered } from './framework/hover';
 import { Icon } from './framework/Icon';
 import { LangProvider } from './framework/lang';
+import { runSignedIn, useNavFilters, wrapProviders } from './framework/plugins';
 import { ToastProvider } from './framework/Toast';
 import { inApp, webHref } from './framework/web-link';
-import { type AppRuntime, getAppDomain, setRuntime } from './runtime';
+import { getApp, setRuntime } from './runtime';
 import { SignIn } from './screens/SignIn';
 import { colors, space, styles } from './theme';
 import { bindPlatformViews } from './views';
@@ -56,45 +63,112 @@ const queryClient = new QueryClient({
   },
 });
 
-/** The framework's own destinations, after the application's. */
-const FRAMEWORK_NAV: Destination[] = [
-  { href: '/pages', label: 'Pages', icon: 'layout', match: (p) => p.startsWith('/pages') },
-];
-
 /**
- * What the application passes in: its shell settings (`app`), and its domain either as a
- * catalog and registry it built itself, or as the raw declarations (`domain`, `views`) for
- * the shell to build them from. `config` carries what the app read from its environment.
+ * What the application passes in: its own settings (`app`: name, home screen), its app modules,
+ * the framework plugins it uses, and the catalog and registry it built from its modules' specs
+ * and views. `modules` may be a list or the namespace of a barrel (`import * as modules`).
+ * `config` carries what the app read from its environment.
  */
 export type AppShellProps = {
-  app: AppDomain;
+  app: AppSettings;
+  modules: ModuleList;
+  plugins?: readonly AppPlugin[];
+  catalog: Catalog;
+  registry: Registry;
   config?: Partial<AppConfig>;
-} & (
-  | { catalog: Catalog; registry: Registry; domain?: never; views?: never }
-  | { domain: Domain; views?: UiDomain; catalog?: never; registry?: never }
-);
+};
 
-let installed: AppRuntime | undefined;
+type Installed = {
+  app: AppSettings;
+  modules: readonly AppModule[];
+  plugins: readonly AppPlugin[];
+  catalog: Catalog;
+  registry: Registry;
+  /** Counts installations: the shell remounts on a new one, so plugin hooks keep their order. */
+  generation: number;
+};
+let installed: Installed | undefined;
+
+const listOf = (modules: ModuleList): readonly AppModule[] =>
+  Array.isArray(modules)
+    ? (modules as readonly AppModule[])
+    : Object.keys(modules)
+        .sort()
+        .map((k) => (modules as Readonly<Record<string, AppModule>>)[k]);
+const sameList = <T,>(a: readonly T[], b: readonly T[]) =>
+  a.length === b.length && a.every((x, i) => x === b[i]);
 
 /**
- * Hands the application's catalog, registry and settings to the framework, and binds every
- * component to its view or screen. Once: a re-render with the same app does nothing.
+ * Composes the application's settings, modules and plugins (refusing any collision), hands the
+ * result, the catalog and the registry to the framework, and binds every component to its view
+ * or screen. Again only when one of them changes (Fast Refresh): the same members in a new list
+ * do nothing.
  */
-function install(props: AppShellProps) {
-  if (installed?.appDomain === props.app) return;
+function install(props: AppShellProps): Installed {
+  const modules = listOf(props.modules);
+  const plugins = props.plugins ?? [];
+  if (
+    installed &&
+    installed.app === props.app &&
+    installed.catalog === props.catalog &&
+    installed.registry === props.registry &&
+    sameList(installed.modules, modules) &&
+    sameList(installed.plugins, plugins)
+  )
+    return installed;
   if (props.config) configure(props.config);
-  const runtime: AppRuntime = props.domain
-    ? {
-        appDomain: props.app,
-        catalog: createCatalog(props.domain),
-        registry: createUiRegistry(props.views),
-      }
-    : { appDomain: props.app, catalog: props.catalog, registry: props.registry };
-  setRuntime(runtime);
-  bindPlatformViews();
-  bindPlatformScreens();
-  props.app.bind();
-  installed = runtime;
+  const app = composeApp({
+    app: props.app,
+    modules: props.modules,
+    plugins,
+    catalog: props.catalog,
+  });
+  setRuntime({ catalog: props.catalog, registry: props.registry, app });
+  bindAll(
+    [
+      {
+        owner: 'framework',
+        bind: () => {
+          bindPlatformViews();
+          bindPlatformScreens();
+        },
+      },
+      ...app.modules.map((m) => ({ owner: m.name, bind: m.bind })),
+    ],
+    props.registry,
+  );
+  installed = {
+    app: props.app,
+    modules,
+    plugins,
+    catalog: props.catalog,
+    registry: props.registry,
+    generation: (installed?.generation ?? 0) + 1,
+  };
+  return installed;
+}
+
+/** Each plugin's onSignedIn while this person is signed in; their cleanups at sign-out. */
+function SignedInEffects({ user }: { user: SessionUser }) {
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per person
+  useEffect(() => runSignedIn(getApp().plugins, user), [user.id]);
+  return null;
+}
+
+/** Signed out on a plugin's public route: that screen alone, without the shell. */
+function PublicRoute({ fallback }: { fallback: ReactNode }) {
+  const path = usePathname();
+  const hit = matchRoute(
+    getApp().routes.filter((r) => r.public),
+    path,
+  );
+  if (!hit) return fallback;
+  const Screen = hit.route.screen;
+  return (
+    <View style={styles.screen}>
+      <Screen params={hit.params} />
+    </View>
+  );
 }
 
 /** The parts of the page the browser draws: focus ring, selection, caret, themed from the palette. */
@@ -186,8 +260,9 @@ function SkipLink() {
 }
 
 function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }) {
-  const app = getAppDomain();
-  const nav = [...app.nav, ...FRAMEWORK_NAV];
+  const app = getApp();
+  // The plugins' nav filters (flags, roles) may hide destinations, never add one.
+  const nav = useNavFilters(app.nav, app.plugins);
   const wide = useWindowDimensions().width >= 900;
   const path = usePathname();
   const [chatOpen, setChatOpen] = useState(false);
@@ -362,8 +437,8 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
  * the assistant's thread, the canvas and approvals. An application's root _layout renders it.
  */
 export function AppShell(props: AppShellProps) {
-  // Before anything below renders: they read the catalog and registry.
-  install(props);
+  // Before anything below renders: they read the catalog, the registry and the composed app.
+  const { generation } = install(props);
   useBrowserSurfaces();
   // Headings' face. If it fails to load, the platform font stands in; nothing waits on it twice.
   const [fontsLoaded, fontError] = useFonts({
@@ -385,30 +460,39 @@ export function AppShell(props: AppShellProps) {
         <LangProvider>
           <AssistantProvider>
             <StatusBar style="dark" />
-            {user === undefined || !(fontsLoaded || fontError) ? (
-              <View style={styles.screen}>
-                <ActivityIndicator
-                  style={{ marginTop: 96 }}
-                  color={colors.primary}
-                  accessibilityLabel="Loading your session"
+            {wrapProviders(
+              getApp().plugins,
+              user === undefined || !(fontsLoaded || fontError) ? (
+                <View style={styles.screen}>
+                  <ActivityIndicator
+                    style={{ marginTop: 96 }}
+                    color={colors.primary}
+                    accessibilityLabel="Loading your session"
+                  />
+                </View>
+              ) : user === null ? (
+                <PublicRoute
+                  fallback={
+                    <View style={styles.screen}>
+                      <SignIn onSignedIn={setUser} />
+                    </View>
+                  }
                 />
-              </View>
-            ) : user === null ? (
-              <View style={styles.screen}>
-                <SignIn onSignedIn={setUser} />
-              </View>
-            ) : (
-              <ChatRuntime key={user.id}>
-                <Shell
-                  user={user}
-                  onSignOut={() => {
-                    auth.signOut().finally(() => {
-                      queryClient.clear();
-                      setUser(null);
-                    });
-                  }}
-                />
-              </ChatRuntime>
+              ) : (
+                <ChatRuntime key={user.id}>
+                  <SignedInEffects key={generation} user={user} />
+                  <Shell
+                    key={generation}
+                    user={user}
+                    onSignOut={() => {
+                      auth.signOut().finally(() => {
+                        queryClient.clear();
+                        setUser(null);
+                      });
+                    }}
+                  />
+                </ChatRuntime>
+              ),
             )}
           </AssistantProvider>
         </LangProvider>

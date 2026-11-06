@@ -30,9 +30,10 @@ import {
 import { Link, router } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { NoteRow } from '@/modules/notes';
+import { TodoRow } from '@/modules/todos';
 import { CloseMeetingForm } from '../components/CloseMeetingForm';
-import { NoteRow, StatusBadge, TodoRow } from '../components/Rows';
-import { needsClosing } from '../meetings';
+import { needsClosing, StatusBadge } from '../status';
 
 function Reschedule({ meeting, onDone }: { meeting: MeetingView; onDone: () => void }) {
   const move = useCommand(RescheduleMeetingSpec);

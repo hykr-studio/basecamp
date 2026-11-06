@@ -1,14 +1,13 @@
-import type { MeetingView, NoteView, Todo } from '@application/domain/contracts';
+import type { Todo } from '@application/domain/contracts';
 import {
   Button,
   ByAssistant,
-  clock,
   colors,
   entityApi,
+  hrefFor,
   Icon,
   isFocused,
   isHovered,
-  Markdown,
   relativeDay,
   space,
   styles,
@@ -16,33 +15,42 @@ import {
   useEntityMutation,
   useToast,
   useUndoableDelete,
-  when,
 } from '@hykr/app';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { needsClosing } from '../meetings';
 
-/** A to-do: tick it, tap the title to rename, delete with undo. */
-/** Where a to-do came from: a link to its meeting, by title. */
+/**
+ * Where a to-do came from: its meeting, by title, linked where meetings open (`hrefFor`). By
+ * entity name only: this module imports nothing from the meetings module.
+ */
 function FromMeeting({ id }: { id: string }) {
   const meeting = useEntity('meetings', id);
   if (!meeting.data) return null;
+  const href = hrefFor('meeting', id);
+  const label = (
+    <>
+      <Icon name="calendar" color={colors.primary} size={13} />
+      <Text style={[styles.muted, { color: colors.primary }]}>{meeting.data.title}</Text>
+    </>
+  );
+  const style = StyleSheet.flatten([styles.row, { gap: 4, alignSelf: 'flex-start' as const }]);
+  if (!href) return <View style={style}>{label}</View>;
   return (
-    <Link href={`/meetings/${id}`} asChild>
+    <Link href={href} asChild>
       <Pressable
         accessibilityRole="link"
         accessibilityLabel={`From the meeting ${meeting.data.title}`}
-        style={StyleSheet.flatten([styles.row, { gap: 4, alignSelf: 'flex-start' as const }])}
+        style={style}
       >
-        <Icon name="calendar" color={colors.primary} size={13} />
-        <Text style={[styles.muted, { color: colors.primary }]}>{meeting.data.title}</Text>
+        {label}
       </Pressable>
     </Link>
   );
 }
 
+/** A to-do: tick it, tap the title to rename, delete with undo. */
 export function TodoRow({
   todo,
   canDelete = true,
@@ -158,82 +166,6 @@ export function TodoRow({
   );
 }
 
-export function MeetingRow({ meeting }: { meeting: MeetingView }) {
-  return (
-    <Link href={`/meetings/${meeting.id}`} asChild>
-      <Pressable
-        accessibilityRole="link"
-        accessibilityLabel={`${meeting.title}, ${when(meeting.startsAt)}`}
-        style={s.meeting}
-      >
-        <View style={{ flex: 1, gap: 2 }}>
-          {/* Title and status share a line; the time gets the full width below, so it never wraps mid-time. */}
-          <View style={[styles.row, { flexWrap: 'wrap', justifyContent: 'space-between' }]}>
-            <Text style={[styles.text, { fontWeight: '600', flexShrink: 1 }]}>{meeting.title}</Text>
-            <StatusBadge meeting={meeting} />
-          </View>
-          <Text style={styles.muted}>
-            {when(meeting.startsAt)}–{clock(meeting.endsAt)}
-            {meeting.attendees.length ? ` · ${meeting.attendees.join(', ')}` : ''}
-          </Text>
-        </View>
-        <Icon name="chevron-right" color={colors.muted} />
-      </Pressable>
-    </Link>
-  );
-}
-
-export function NoteRow({
-  note,
-  onPress,
-  full,
-}: {
-  note: NoteView;
-  onPress?: () => void;
-  full?: boolean;
-}) {
-  const body = (
-    <View style={{ gap: 2, paddingVertical: space.xs }}>
-      <Text style={[styles.text, { fontWeight: '600' }]}>{note.title}</Text>
-      {note.body.trim() ? (
-        <Markdown text={note.body} lines={full ? undefined : 3} />
-      ) : (
-        <Text style={styles.muted}>No text yet.</Text>
-      )}
-      {note.createdBy === 'assistant' && <ByAssistant />}
-    </View>
-  );
-  return onPress ? (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Edit note “${note.title}”`}
-      onPress={onPress}
-      style={{ minHeight: 44 }}
-    >
-      {body}
-    </Pressable>
-  ) : (
-    body
-  );
-}
-
-/** Status as the person needs it: a past meeting that is still open says so. */
-export function StatusBadge({ meeting }: { meeting: { status: string; startsAt: string } }) {
-  const pending = needsClosing(meeting);
-  const [label, fg, bg] = pending
-    ? ['Needs closing', colors.warnText, colors.warnBg]
-    : meeting.status === 'closed'
-      ? ['Closed', colors.muted, colors.agentBubble]
-      : meeting.status === 'held'
-        ? ['Held', colors.primary, colors.primaryTint]
-        : ['Upcoming', colors.success, colors.successTint];
-  return (
-    <View style={[s.badge, { backgroundColor: bg }]}>
-      <Text style={[styles.muted, { color: fg, fontWeight: '600' }]}>{label}</Text>
-    </View>
-  );
-}
-
 const s = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: space.sm, minHeight: 52 },
   hit: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
@@ -257,6 +189,4 @@ const s = StyleSheet.create({
   },
   boxDone: { backgroundColor: colors.primary, borderColor: colors.primary },
   done: { color: colors.muted, textDecorationLine: 'line-through' },
-  meeting: { flexDirection: 'row', alignItems: 'center', gap: space.md, minHeight: 56 },
-  badge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
 });

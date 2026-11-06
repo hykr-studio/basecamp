@@ -19,8 +19,8 @@ import {
 import { router } from 'expo-router';
 import { type ReactNode, useState } from 'react';
 import { Text, View } from 'react-native';
-import { MeetingRow, TodoRow } from '@/domain/components/Rows';
-import { needsClosing as toClose } from '@/domain/meetings';
+import { MeetingRow, needsClosing as toClose } from '@/modules/meetings';
+import { TodoRow } from '@/modules/todos';
 
 /** Below this width the sections stack; above it, what the assistant did sits beside the day. */
 const TWO_COLUMNS = 720;
@@ -55,19 +55,13 @@ function Quiet({
   );
 }
 
-/** A record the assistant touched, opened where it lives (meetings have their own page). */
-const hrefFor = (type: string, id: string) => {
-  if (type === 'meeting') return `/meetings/${id}`;
-  if (type === 'todo') return '/todos';
-  if (type === 'note') return '/notes';
-  return undefined;
-};
-
 /**
  * Today: what waits for your decision, what the assistant did, then the day itself (its
- * meetings, those still to close, and what is due). The first two are the framework's.
+ * meetings, those still to close, and what is due). The first two are the framework's. The
+ * application's own screen: it combines the meetings and to-dos modules. What the assistant did
+ * links each record where its module opens it.
  */
-export default function Today() {
+export function Today() {
   useScreenContext({ screen: 'today' });
   const [width, setWidth] = useState(0);
   const wide = width >= TWO_COLUMNS;
@@ -103,7 +97,7 @@ export default function Today() {
     />
   );
 
-  const activity = <AssistantActivity hrefFor={hrefFor} ask="add Book the site visit" />;
+  const activity = <AssistantActivity ask="add Book the site visit" />;
 
   const needsClosing = pending.items.length > 0 && (
     <Section title="Needs closing">

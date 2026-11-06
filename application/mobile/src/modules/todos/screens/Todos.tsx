@@ -19,7 +19,7 @@ import {
 } from '@hykr/app';
 import { useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
-import { TodoRow } from '@/domain/components/Rows';
+import { TodoRow } from '../components/TodoRow';
 
 const chips = (): Chip[] => [
   { label: 'Open', query: { done: false, sort: 'dueOn' } },
@@ -38,7 +38,8 @@ const empty: Record<string, { title: string; body?: string }> = {
   All: { title: 'No to-dos yet', body: 'Add one above.' },
 };
 
-export default function Todos() {
+/** All to-dos: add one, filter by open, overdue or done. */
+export function Todos() {
   useScreenContext({ screen: 'todos' });
   const options = chips();
   const [chip, setChip] = useState(options[0]);

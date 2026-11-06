@@ -1,15 +1,22 @@
-import { router } from 'expo-router';
+import { router, usePathname } from 'expo-router';
 import { View } from 'react-native';
+import { matchRoute } from '../framework/compose-app';
 import { EmptyState } from '../framework/EmptyState';
-import { getAppDomain } from '../runtime';
+import { getApp } from '../runtime';
 import { styles } from '../theme';
 
 /**
- * An unknown route. It sends the person `home`: the given one, else the application's
- * `home`, else its first destination.
+ * A path no route file claims. A framework plugin's route (`AppPlugin.routes`) renders here;
+ * anything else is unknown, and sends the person `home`: the given one, else the application's
+ * `home`, else its first destination. The application's `+not-found.tsx` re-exports it.
  */
 export function NotFoundScreen({ home }: { home?: { href: string; label: string } }) {
-  const app = getAppDomain();
+  const app = getApp();
+  const hit = matchRoute(app.routes, usePathname());
+  if (hit) {
+    const Screen = hit.route.screen;
+    return <Screen params={hit.params} />;
+  }
   const first = app.nav[0];
   const target = home ??
     app.home ?? { href: first?.href ?? '/', label: first ? `Go to ${first.label}` : 'Go home' };

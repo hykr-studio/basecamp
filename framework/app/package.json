@@ -27,8 +27,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json -w --preserveWatchOutput",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node scripts/check-tokens.mjs"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "node scripts/check-tokens.mjs && vitest run"
   },
   "dependencies": {
     "@assistant-ui/ai-sdk": "^0.0.11",
@@ -89,6 +89,7 @@
     "react-native-worklets": "0.10.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.3",
-    "uniwind": "^1.12.2"
+    "uniwind": "^1.12.2",
+    "vitest": "^5.0.3"
   }
 }

@@ -4,7 +4,7 @@ import { auth, type SessionUser } from '../api';
 import { Button } from '../components/Button';
 import { Field } from '../framework/Field';
 import { errorMessage } from '../framework/hooks';
-import { getAppDomain } from '../runtime';
+import { getApp } from '../runtime';
 import { space, styles } from '../theme';
 
 export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void }) {
@@ -44,7 +44,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void
   return (
     <View style={[styles.content, { maxWidth: 440, marginTop: 56 }]}>
       <View style={{ gap: space.xs }}>
-        <Text style={styles.title}>{getAppDomain().title}</Text>
+        <Text style={styles.title}>{getApp().title}</Text>
         <Text style={styles.muted}>
           The agentic development stack: an assistant acts for you through the same API, and
           anything risky waits for your approval.
