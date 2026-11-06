@@ -30,7 +30,10 @@ const STEP_55 = { lat: 12.9721, lng: 77.5946 };
 
 const ids: Record<string, string> = {};
 
-const db = () => (server.app?.get(CORE_OPTIONS, { strict: false }) as CoreOptions).db;
+const db = () => {
+  if (!server.app) throw new Error('The app is not booted');
+  return (server.app.get(CORE_OPTIONS, { strict: false }) as CoreOptions).db;
+};
 const inOwner = (p: Person) => (method: string, path: string, body?: unknown) =>
   p.call(method, path, body, { 'x-tenant-id': tenantId });
 const titles = (body: { items: { title: string }[] }) => body.items.map((s) => s.title);

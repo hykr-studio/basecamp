@@ -214,7 +214,11 @@ export const Arrive = defineCommand(ArriveSpec, {
     entityController(SpotDef),
     entityController(SpotArrivalDef),
   ],
-  providers: [...entityHandlers(SpotDef), ...entityHandlers(SpotArrivalDef), commandHandler(Arrive)],
+  providers: [
+    ...entityHandlers(SpotDef),
+    ...entityHandlers(SpotArrivalDef),
+    commandHandler(Arrive),
+  ],
 })
 export class SpotsModule {}
 

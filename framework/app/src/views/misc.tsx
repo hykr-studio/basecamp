@@ -90,9 +90,9 @@ type KpiTile = { label: string; value: number | string; hint?: string };
 function KpiTiles({ items }: { items: readonly KpiTile[] }) {
   return (
     <View className="flex-row flex-wrap gap-2">
-      {items.map((k, i) => (
+      {items.map((k) => (
         <View
-          key={`${i}:${k.label}`}
+          key={k.label}
           className="min-w-28 flex-1 gap-0.5 rounded-card border border-border bg-card p-3"
         >
           <Text variant="title" className="tabular-nums">

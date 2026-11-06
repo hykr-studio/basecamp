@@ -2,15 +2,7 @@
 // reaches, never over a field the reader cannot see; the agent's summarize tool and kpi.row
 // tiles computed from a summary, on the fixture's entries (fixture/src/features/summary).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import {
-  addMember,
-  asAssistant,
-  boot,
-  me,
-  Person,
-  pool,
-  shutdown,
-} from '../../dist/testing.js';
+import { addMember, asAssistant, boot, me, Person, pool, shutdown } from '../../dist/testing.js';
 import { summaryServer } from '../fixture/dist/features/summary/index.js';
 
 const owner = new Person('Owner Summary');
@@ -74,9 +66,25 @@ beforeAll(async () => {
     units: 1,
     bookedAt: '2026-11-05T10:00:00Z',
   });
-  await add(owner, { title: 'Delta', state: 'void', currency: 'USD', amount: { minor: 700 }, units: 3 });
-  await add(staff, { title: 'Staff one', state: 'draft', currency: 'EUR', amount: { minor: 300 }, units: 4 });
-  await add(other, { title: 'Theirs', state: 'done', currency: 'EUR', amount: { minor: 9999 } }, false);
+  await add(owner, {
+    title: 'Delta',
+    state: 'void',
+    currency: 'USD',
+    amount: { minor: 700 },
+    units: 3,
+  });
+  await add(staff, {
+    title: 'Staff one',
+    state: 'draft',
+    currency: 'EUR',
+    amount: { minor: 300 },
+    units: 4,
+  });
+  await add(
+    other,
+    { title: 'Theirs', state: 'done', currency: 'EUR', amount: { minor: 9999 } },
+    false,
+  );
 });
 afterAll(shutdown);
 
@@ -128,7 +136,14 @@ describe('counts and totals', () => {
   it('numbers: sum, average, lowest and highest', async () => {
     const res = await summary(owner, 'sum=units&avg=units&min=units&max=units');
     expect(res.body.totals).toEqual([
-      { key: {}, count: 5, sum: { units: 15 }, avg: { units: 3 }, min: { units: 1 }, max: { units: 5 } },
+      {
+        key: {},
+        count: 5,
+        sum: { units: 15 },
+        avg: { units: 3 },
+        min: { units: 1 },
+        max: { units: 5 },
+      },
     ]);
   });
 
@@ -201,10 +216,7 @@ describe('order, limit and filters', () => {
     expect((await summary(owner, 'amount[gte]=1000')).body.totals[0].count).toBe(2);
     expect((await summary(owner, 'state[in]=done,void')).body.totals[0].count).toBe(3);
     expect((await summary(owner, 'q=alp')).body.totals[0].count).toBe(1);
-    const json = await inOwner(owner)(
-      'GET',
-      `/api/entries/summary?state[ne]=void&groupBy=state`,
-    );
+    const json = await inOwner(owner)('GET', `/api/entries/summary?state[ne]=void&groupBy=state`);
     expect(json.body.groups).toHaveLength(2);
   });
 
@@ -229,8 +241,9 @@ describe('order, limit and filters', () => {
 describe('scope', () => {
   it('another business’s records are never counted', async () => {
     const mine = await summary(owner, 'sum=amount');
-    expect(mine.body.totals.find((t: { key: { currency: string } }) => t.key.currency === 'EUR'))
-      .toMatchObject({ count: 4, sum: { amount: eur(4301) } });
+    expect(
+      mine.body.totals.find((t: { key: { currency: string } }) => t.key.currency === 'EUR'),
+    ).toMatchObject({ count: 4, sum: { amount: eur(4301) } });
     const theirs = await other.call('GET', '/api/entries/summary?sum=amount');
     expect(theirs.body.totals).toEqual([
       { key: { currency: 'EUR' }, count: 1, sum: { amount: eur(9999) } },

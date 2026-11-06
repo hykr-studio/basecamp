@@ -4,8 +4,9 @@
 // people only and `ledgers` by no one (an internal list, so no summary route). A scripted turn
 // asks for entries by state through `summarize-entries`. Only the summary test boots this
 // server (`summaryServer`).
-import { defineModule, defineServer } from '@hykr/api';
+
 import { type AgentModule, call, defineScript, say } from '@hykr/agents/script';
+import { defineModule, defineServer } from '@hykr/api';
 import {
   type Contributions,
   CreatedBy,
@@ -146,8 +147,16 @@ export const LedgerDef = defineEntity(LedgerSpec, {
 });
 
 @Module({
-  controllers: [entityController(EntryDef), entityController(TallyDef), entityController(LedgerDef)],
-  providers: [...entityHandlers(EntryDef), ...entityHandlers(TallyDef), ...entityHandlers(LedgerDef)],
+  controllers: [
+    entityController(EntryDef),
+    entityController(TallyDef),
+    entityController(LedgerDef),
+  ],
+  providers: [
+    ...entityHandlers(EntryDef),
+    ...entityHandlers(TallyDef),
+    ...entityHandlers(LedgerDef),
+  ],
 })
 export class EntriesModule {}
 
