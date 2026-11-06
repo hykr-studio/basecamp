@@ -727,7 +727,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql` and
   `identityProviders` in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
-  `eventFeeds`, `erasureContributors`, `exportContributors` and `authPlugins` in `@hykr/api`.
+  `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `meters` and
+  `creditPurchaseProviders` in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -989,6 +990,8 @@ capabilities, with the roles that hold them by default (its features add their o
 | `channels.manage` | owner, admin | Setting the business's WhatsApp number |
 | `queues.admin` | owner, admin | Bull Board |
 | `models.manage` | owner, admin | Setting the business's model policy, and seeing what models cost (section 7.5) |
+| `credits.view` | owner, admin, ops, staff | Whether the business is paused, and how much of each cap it used (section 7.6) |
+| `credits.manage` | owner, admin | Credit amounts, the ledger, buying credits, the alert threshold (section 7.6) |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -1167,6 +1170,59 @@ The deployment configures its models; each business chooses among them (`docs/de
 - **Evals per model.** `basecamp eval --live --model <ref>` runs the evals on one registered model,
   before a business allows it.
 
+### 7.6 Credits and caps
+
+Every business's use of what costs money is metered, priced and, when its plan says so, capped
+(`docs/decisions/A3.md`). A credit is one minor unit of the deployment's credits currency.
+
+- **Meters.** `tokens` (a turn's input and output, the model as variant), `tool_calls` (one per
+  tool a turn called), `messages` (a WhatsApp message the provider accepted, its template's
+  category as variant) and `voice_seconds` (a reported voice session). Each use is a row in
+  `app.usage_events`, added to its period's counter (`app.usage_counters`). A feature or module adds
+  a meter with `defineMeter({ name, unit, per })` (contributed as `meters`) and records with
+  `CreditsService.record({ tenantId, meter, quantity, source, ref })`; `ref` makes a retried
+  report count once. Turns without a business (Studio) are not metered.
+- **Prices** come from `CREDITS_CONFIG` (JSON): `currency`, `prices` by `<meter>` or
+  `<meter>.<variant>` in credits per pricing unit (tokens per million, voice per minute),
+  `markupPercent` on a model's own `MODEL_PROVIDERS` price (used when no `tokens` price is set and
+  the currencies match), and `defaults`, the plan every business starts on. Malformed JSON stops
+  the start. Unset, uses are metered at no cost and nothing is capped.
+- **The plan** is the settings section `credits`: `enforce`, `allowance` (credits per period),
+  `period` (`day`, `week`, `month` in the business's time zone), `alertAt` (80) and `pauseAt`
+  (100), per-meter `limits`, `prices` and `pauseMessages` (message categories a paused business
+  does not send), each over the deployment's defaults. Only the operator writes it; the business
+  sets only its `alertAt` (`PUT /api/credits/alerts`, `credits.manage`).
+- **Budget and wallet.** On credits, a period's spending uses the allowance first, then the
+  prepaid wallet (`app.credit_wallets`, every change a row in `app.credit_ledger`). Used per cent is
+  spent over spent plus what is left. At `alertAt` of a cap (the budget or a meter's limit) the
+  named event `credits.threshold` (`{ cap, level: 'alert' | 'pause', usedPercent, recipients }`,
+  recipients holding `credits.manage`) is stored in the outbox and published, once per period and
+  level; the application's notification words it. At `pauseAt` the business is paused.
+- **What a pause refuses** (402, rules `credits_exhausted`, `usage_limit_reached`,
+  `credits_suspended`): assistant turns and back-office drafts (the `credits` turn hook), new voice
+  sessions (and a session's `maxSeconds` is cut to what is left), and outbound messages of a
+  category in `pauseMessages` (recorded as failed, never sent). Replies, codes, approvals, handoffs
+  and staff messages always go. A paused business's WhatsApp customer is handed to the team.
+  One action may overshoot the cap; the wallet goes below zero by that much.
+- **The operator** holds `OPERATOR_API_KEY` (header `x-operator-key`; without it the routes are
+  404): `GET /api/credits/operator/:tenantId` (full status) and `/ledger`, `PUT …/settings` (the
+  plan), `PUT …/override` (`{ override: { mode: 'run' | 'pause', until?, reason } }` or `null`) and
+  `POST …/grants` (`{ amount, note }`). Each write runs through `runWrite` as
+  `systemPrincipal({ tenantId, job: 'credits.operator' })`, audited in that business.
+- **People.** `GET /api/credits` (`credits.view`: owner, admin, ops, staff) says whether the
+  business is paused and how much of each cap is used; amounts, `GET /api/credits/ledger`,
+  `GET /api/credits/usage` and purchases need `credits.manage` (owner, admin). People only.
+- **Buying credits.** `POST /api/credits/purchases { amount, provider? }` goes through `runWrite`
+  (a write hook may park it) and records the purchase; its `CreditPurchaseProvider` (contributed
+  as `creditPurchaseProviders`, a payment connector's) starts it and returns a checkout URL or the
+  outcome. The connector's confirmation calls `CreditsService.settlePurchase(id, { status, ref })`,
+  which tops the wallet up once. No provider ships with the framework: without one, 503.
+- **In the app.** List `creditsPlugin` in `<AppShell plugins>`: a `/credits` screen (usage, the
+  pause, the balance, buying, the history) and its destination for people with `credits.view`.
+- **In tests.** The scripted model reports usage (a token per four characters of prompt and
+  reply), so a test can price turns. The fixture's `features/credits/` shows a purchase provider,
+  an alert notification and a write hook that parks a large purchase.
+
 ---
 
 ## 8. Channels, notifications and voice
@@ -1245,7 +1301,7 @@ Either way the send is part of the write, so a rollback sends nothing. The outbo
 
 ### 8.3 Voice
 
-Voice is a framework channel. The worker (`@hykr/voice-worker`, started by `basecamp dev` or `basecamp start voice`) calls `/api/chat` as a relay for the person in the call. Surfaces are forced to `['inline', 'canvas', 'speech']`. A feature needs only:
+Voice is a framework channel. The worker (`@hykr/voice-worker`, started by `basecamp dev` or `basecamp start voice`) calls `/api/chat` as a relay for the person in the call. Each person has a daily limit (`VOICE_DAILY_MINUTES`), and each business's reported seconds count against its credits and its `voice_seconds` limit (section 7.6). Surfaces are forced to `['inline', 'canvas', 'speech']`. A feature needs only:
 
 - `speak` on its views.
 - `labels` with `noun` and `empty` on spoken lists.
@@ -1435,6 +1491,10 @@ These are not built. Each has a workaround for now.
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
 | A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
 | Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |
+| Credits operators | One shared `OPERATOR_API_KEY` stands in for platform operators (B19): no named operators, no screen. Use the operator routes (section 7.6) with the key. |
+| Buying credits | No purchase provider ships: register a `CreditPurchaseProvider` from a payment connector and call `CreditsService.settlePurchase` from its verified webhook. |
+| Credits mid-turn | A turn, a voice session or a message is checked before it starts; one may take a business past its cap. Tool calls are not refused in the middle of a turn. |
+| Metering everything | The guardrail's model calls, embeddings, WhatsApp voice-note transcription and voice sessions whose worker never reported an end are not metered. Call `CreditsService.record` from the feature. |
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
