@@ -137,7 +137,8 @@ setup, changed by people with `settings.manage` (owners and admins) through the 
   it. `managedBy: 'tenant'` lets the business switch it; otherwise only the platform does.
 - **Custom fields.** An entity with the `customFields` trait and a `custom` column takes the
   fields a business defines (`/api/custom-fields`: text, number, yes/no, date, one of a list),
-  checked on every write and filterable in lists.
+  checked on every write and filterable in lists. A required field binds the entity's own create
+  and any write that sets custom values, not a command that makes the record without any.
 - **White label.** Its name, logo and colours (`branding`), and its own web addresses, trusted once
   verified by a DNS TXT record. The settings plugin applies the colours; a screen shows the logo
   and name with `<BrandMark>` (the sample's Today does), since the shell still shows the product's
@@ -149,7 +150,8 @@ setup, changed by people with `settings.manage` (owners and admins) through the 
   wording })` instead of declaring them again; a business words phrases and notification emails
   in its `wording` settings.
 
-The sample's to-dos take custom fields (a business adds its `priority`), and "clear done to-dos"
+The sample's to-dos take custom fields (a business adds its `priority`; the to-dos screen sets it
+in its add form and each row's editor with `<CustomFieldInputs>`), and "clear done to-dos"
 (`todo.clearDone`) sits behind the flag `todos.clear-done`, which the business switches itself.
 
 ## Money, numbers and lines

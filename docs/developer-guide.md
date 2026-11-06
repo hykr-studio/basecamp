@@ -1114,7 +1114,10 @@ does not change a business's setup.
   (`defineCustomFieldType`); the framework's are `text`, `number`, `boolean`, `date` and `select`.
   Values are checked in the write's transaction on every path (400 `custom_field_invalid`, rolled
   back; a parked write when it parks). An update merges its patch; `null` removes a key. Only the
-  values a write sets are checked, so a value kept from a removed field stays until changed.
+  values a write sets are checked, so a value kept from a removed field stays until changed. A
+  required field binds the entity's own create and any write that sets or changes custom values;
+  a record a command makes without any (a meeting's close making to-dos) is made with the field
+  unset, since the command cannot know the business's fields.
   Filters: `custom[priority]=high` or `custom={"estimate":{"gte":3}}` (`eq`, `ne`, `in`, `lt`,
   `lte`, `gt`, `gte`, `contains`), compared by the stored JSON type; a key the business has not
   made filterable is a 400. The assistant gets the business's fields as turn context.
@@ -1148,11 +1151,14 @@ does not change a business's setup.
 - **The apps.** `<AppShell plugins={[settingsPlugin()]} />` (`@hykr/app`) applies the business's
   colours to the theme, its phrases, and hides what is off; `useFeature`, `useBranding`,
   `<BrandMark>`, `useCustomFields(entity)`, `<CustomFieldValues>` and `<CustomFieldInputs>` are for
-  screens. The shell's rail and phone bar still show the product's `title` (section 14), so a
+  screens. `<CustomFieldInputs>` reports patches (`null` clears a value): a create form sends
+  `customForCreate(collected)` (`@hykr/contracts`, the cleared ones left out) and remounts the
+  inputs with a new `key` to start again; an edit sends the patch as `custom`. The shell's rail and phone bar still show the product's `title` (section 14), so a
   screen shows the business's logo and name with `<BrandMark>`: the sample's Today does. The back
   office's header shows them, its sign-in shows a verified domain's, and its `SettingsScreen` edits
-  branding, flags, custom fields and web addresses. The sample's to-dos show a business's
-  `priority` field and the business-managed flag `todos.clear-done`. Tests: `framework/api/test/framework/settings{,.e2e}.test.ts` on the fixture's
+  branding, flags, custom fields and web addresses. The sample's to-dos screen sets a business's
+  fields (such as `priority`) in its add form and each row's editor, filters on a filterable
+  select field, and honours the business-managed flag `todos.clear-done`. Tests: `framework/api/test/framework/settings{,.e2e}.test.ts` on the fixture's
   `features/settings/`, and `application/api/test/domain/todo-settings.e2e.test.ts`.
 
 ---
@@ -1658,7 +1664,7 @@ Both Vitest configs copy the `.env` into `process.env` when they load (the shell
 
 **Fixture tables for a framework feature.** Don't add to the fixture's `src/schema.ts` and its single journal. Give the feature its own migration set: tables in `framework/api/test/fixture/src/features/<f>/schema.ts` (import `app` from `@hykr/db`, don't export it), then `FIXTURE_FEATURE=<f> pnpm --filter @hykr/api fixture:generate --name <f>`, which writes `src/features/<f>/migrations/`. SQL hooks go in `src/features/<f>/sql/{pre,post}`. `migrationSetsIn` (`@hykr/db`) finds the folder, the e2e `globalSetup` applies it after the fixture's own tables, and it is recorded in `drizzle.__fixture_<f>_migrations`. Commit it with the feature. `src/features/par/` and `test/framework/migrations.e2e.test.ts` are the example.
 
-Other helpers: `me(person)`, `addMember(person, tenantId, roles)`, `seedContact(tenantId, name, address)`, `asAssistant(actingFor)` (agent headers), `eventually(check)`, `pool` (direct SQL) and `server` (the running Nest app). `@hykr/api/testing/internals` gives a test the services it drives directly: `NotifyService`, `TemplateSync`, `WHATSAPP` and `DB`.
+Other helpers: `me(person)`, `addMember(person, tenantId, roles)`, `setTenantSettings(tenantId, patch)`, `seedContact(tenantId, name, address)`, `asAssistant(actingFor)` (agent headers), `eventually(check)`, `pool` (direct SQL) and `server` (the running Nest app). Change a business's settings with `setTenantSettings` (each key replaces that section, `null` removes it), never a bare `UPDATE app.tenants`: settings are cached per process for 10 seconds, and any request before the change (`GET /api/me`) would leave the test reading the old ones. `@hykr/api/testing/internals` gives a test the services it drives directly: `NotifyService`, `TemplateSync`, `WHATSAPP` and `DB`.
 
 An eval case lists the tools that must run, in order:
 

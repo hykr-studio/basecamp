@@ -88,6 +88,9 @@ E2E test gotchas:
   guard and fail unless `VOICE_AGENT_KEY` is set in `.env`.
 - Both Vitest configs load the root `.env` into the main process, so `globalSetup` migrates the same database
   the tests use. Turbo runs test tasks uncached and passes them every environment variable.
+- Change a business's settings with `setTenantSettings` (`@hykr/api/testing`), never a bare
+  `UPDATE app.tenants`: settings are cached per process for 10 s, so a request before the change
+  (`me(person)` included) leaves the test reading the old ones.
 - The golden WhatsApp conversations (`application/api/test/whatsapp/`) need `whaloc-test` on :8090, which
   `pnpm infra:up` starts. Without it they skip.
 - `OutboxRelay` only relays outbox rows of its own `BULL_PREFIX`, and each test run uses a fresh one. Two
