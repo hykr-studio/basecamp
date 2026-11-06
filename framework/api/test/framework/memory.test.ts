@@ -29,7 +29,7 @@ describe('anyRole', () => {
       kind: 'grants',
       grants: ['tenant'],
     });
-    expect(accessFor(person(['site_lead']), access, 'write')).toEqual({
+    expect(accessFor(person(['fixture_role']), access, 'write')).toEqual({
       kind: 'grants',
       grants: ['own'],
     });
