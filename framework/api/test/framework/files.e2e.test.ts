@@ -689,6 +689,16 @@ describe('WhatsApp media', () => {
     await service().sweep();
     expect(await fileRow(fileId)).toBeUndefined();
     expect(await service().storage.head(key)).toBeNull();
+    // The card keeps the id; sending its list back unchanged is still a valid write.
+    const [cardRow] = (
+      await pool.query('select id, photos from app.fixture_cards where $1 = any(photos)', [fileId])
+    ).rows;
+    const kept = await owner.call('PATCH', `/api/cards/${cardRow.id}`, {
+      title: 'Porch light, renamed',
+      photos: cardRow.photos,
+    });
+    expect(kept.status).toBe(200);
+    expect(kept.body.value.photos).toEqual([fileId]);
   });
 });
 

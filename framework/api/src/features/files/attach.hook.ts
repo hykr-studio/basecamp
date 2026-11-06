@@ -102,12 +102,16 @@ async function check(
   return rows;
 }
 
-/** The field's files become exactly `wanted`: new ones are claimed, missing ones let go. */
-async function sync(tx: Tx, ctx: WriteCtx, slot: Slot, wanted: string[]) {
+/**
+ * The field's files become exactly `wanted`: new ones are claimed, missing ones let go. An id the
+ * record already had (`prior`, from the row before the write) is not new even when its file is
+ * gone (erased, swept): a client that sends the list back unchanged is not refused for it.
+ */
+async function sync(tx: Tx, ctx: WriteCtx, slot: Slot, wanted: string[], prior: string[]) {
   const p = ctx.principal;
   if (wanted.length > maxFilesOf(slot.policy)) throw unavailable();
   const held = await heldBy(tx, p.tenantId ?? '', slot);
-  const added = wanted.filter((id) => !held.includes(id));
+  const added = wanted.filter((id) => !held.includes(id) && !prior.includes(id));
   const removed = held.filter((id) => !wanted.includes(id));
   const audit = (action: string, row: { id: string; name: string }) =>
     writeAudit(tx, {
@@ -192,12 +196,13 @@ export const filesWriteHook: WriteHook = {
         const held = recordId
           ? await heldBy(tx, p.tenantId ?? '', { type: def.name, id: recordId, field })
           : [];
+        const prior = fileIdsIn((loaded as Values | null)?.[field]);
         const slot = { type: def.name, id: recordId, field, policy };
         await check(
           tx,
           p,
           slot,
-          wanted.filter((id) => !held.includes(id)),
+          wanted.filter((id) => !held.includes(id) && !prior.includes(id)),
         );
       }
       return;
@@ -212,11 +217,16 @@ export const filesWriteHook: WriteHook = {
       }
       const after = t.after as Values | undefined;
       if (!after) continue;
+      const before = t.before as Values | undefined;
       for (const [field, policy] of fields) {
         if (!(field in after)) continue;
-        await sync(tx, ctx, { type: def.name, id: t.id, field, policy }, [
-          ...new Set(fileIdsIn(after[field])),
-        ]);
+        await sync(
+          tx,
+          ctx,
+          { type: def.name, id: t.id, field, policy },
+          [...new Set(fileIdsIn(after[field]))],
+          fileIdsIn(before?.[field]),
+        );
       }
     }
   },
