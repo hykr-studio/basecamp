@@ -215,11 +215,21 @@ describe('a hidden field stays hidden wherever the record leaves', () => {
       inTenant(),
     );
     expect(res.status).toBe(200);
-    expect(res.body.value).toMatchObject({
-      was: 'Staff chore',
-      chore: { title: 'Staff chore, renamed' },
+    expect(res.body.value).toEqual({
+      chore: expect.objectContaining({ title: 'Staff chore, renamed' }),
     });
+    // The entity's projection hid dueOn; the read projector, by the command's name, hid `was`.
     expect(res.body.value.chore).not.toHaveProperty('dueOn');
+    const asAdmin = await admin.call(
+      'POST',
+      `/api/chores/${id}/rename`,
+      { title: 'Staff chore, again' },
+      inTenant(),
+    );
+    expect(asAdmin.body.value).toMatchObject({
+      was: 'Staff chore, renamed',
+      chore: { dueOn: '2026-12-01' },
+    });
   });
 
   it("a parked write's approval, though the stored payload keeps it", async () => {
@@ -234,6 +244,9 @@ describe('a hidden field stays hidden wherever the record leaves', () => {
     const approvalId = res.body.approval.id;
     const seen = await staff.call('GET', `/api/approvals/${approvalId}`, undefined, inTenant());
     expect(seen.body.input).toEqual({ title: 'Staff [ask]' });
+    // The read projector for 'approval' ran too.
+    expect(seen.body).toMatchObject({ id: approvalId, rule: 'chore_title_asks' });
+    expect(seen.body).not.toHaveProperty('reason');
     const listed = await staff.call('GET', '/api/approvals', undefined, inTenant());
     const mine = listed.body.find((a: { id: string }) => a.id === approvalId);
     expect(mine.input).toEqual({ title: 'Staff [ask]' });
@@ -296,6 +309,17 @@ describe('another business', () => {
 
 describe('write hooks', () => {
   it('decide refuses while the gate is closed; the refusal is audited and stores no event', async () => {
+    // This person's refusals: the database outlives a test run.
+    const refusals = async () =>
+      (
+        await pool.query(
+          `select count(*)::int as n from audit.events
+           where action = 'chore.create' and outcome = 'denied' and rule = 'fixture_closed'
+             and actor_id = $1`,
+          [owner.id],
+        )
+      ).rows[0].n;
+    expect(await refusals()).toBe(0);
     gate.closed = true;
     try {
       const res = await chore(owner, { title: 'Closed gate' });
@@ -304,12 +328,10 @@ describe('write hooks', () => {
     } finally {
       gate.closed = false;
     }
-    const { rows } = await pool.query(
-      `select count(*)::int as n from audit.events where action = 'chore.create' and outcome = 'denied' and rule = 'fixture_closed'`,
-    );
-    expect(rows[0].n).toBe(1);
+    expect(await refusals()).toBe(1);
     const stored = await pool.query(
-      `select count(*)::int as n from app.domain_events where row->>'title' = 'Closed gate'`,
+      `select count(*)::int as n from app.domain_events where row->>'title' = 'Closed gate' and actor_id = $1`,
+      [owner.id],
     );
     expect(stored.rows[0].n).toBe(0);
   });

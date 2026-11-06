@@ -24,6 +24,7 @@ import {
   entityHandlers,
   type NamedEvent,
   needsApproval,
+  type ReadProjector,
   type WriteHook,
 } from '@hykr/core';
 import type { Access } from '@hykr/policy';
@@ -227,9 +228,25 @@ export const RenameChore = defineCommand(RenameChoreSpec, {
 })
 export class WritePathModule {}
 
+/**
+ * A read projector, by resource type: staff never see what a chore was called before a rename,
+ * nor why an approval waits.
+ */
+export const staffView: ReadProjector = {
+  name: 'fixture.staff-view',
+  project: (type, value, p) => {
+    if (!p.roles?.includes('staff')) return value;
+    const drop = type === 'chore.rename' ? 'was' : type === 'approval' ? 'reason' : undefined;
+    if (!drop) return value;
+    const { [drop]: _dropped, ...rest } = value;
+    return rest;
+  },
+};
+
 export const writePathContributions: Partial<Contributions> = {
   entityPlugins: [guarded],
   writeHooks: [choreGate],
+  readProjectors: [staffView],
   listFieldSql: [
     {
       name: 'fixtureWords',
