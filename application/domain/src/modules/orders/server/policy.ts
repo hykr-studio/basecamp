@@ -8,12 +8,15 @@ import {
 } from '@hykr/contracts';
 import { allow, needsApproval } from '@hykr/core';
 import { can } from '@hykr/policy';
+import { Levels } from '../../../server/approval-levels.js';
 
 /**
- * What the orders module asks before a save runs. Levels, as this sample means them:
- *   2: the assistant writes an order for someone: that person confirms it.
- *   3: an order above the business's limit, made by someone who may not approve orders, or by
- *      the assistant: an owner decides, in the app, signed in.
+ * What the orders module asks before a save runs:
+ *   - the assistant writes an order for someone: that person confirms it;
+ *   - an order above the business's limit, made by someone who may not approve orders, or by
+ *     the assistant: it waits at the application's `irreversible` level, for someone who may
+ *     approve orders (the person it is for, when their own assistant asked and they may), in
+ *     the app, signed in.
  * The limit is the business's `money.amounts['orders.approval']`; until it sets one, the
  * module's default below. A limit in another currency than the order's counts as exceeded.
  */
@@ -39,16 +42,20 @@ export function saveDecision(
 ): AuthorizeResult {
   const limit = moneyAmount(money, APPROVAL_LIMIT_KEY) ?? DEFAULT_APPROVAL_LIMIT;
   const agent = p.actor.kind === 'agent';
-  if (exceeds(total, limit) && (agent || !can(p, OrdersApprove.name)))
+  const mayApprove = can(p, OrdersApprove.name);
+  if (exceeds(total, limit) && (agent || !mayApprove))
     return needsApproval('order_over_limit', 'An order this large needs an owner to approve it', {
-      tier: 3,
-      amount: total.minor,
-      approver: { roles: ['owner'], channels: ['app'], minAssurance: 'session' },
+      level: Levels.irreversible.name,
+      amount: total,
+      approver: {
+        by: mayApprove ? 'requester' : { capability: OrdersApprove.name },
+        channels: ['app'],
+        minAssurance: 'session',
+      },
     });
   if (agent)
     return needsApproval('agent_saves_order', 'Saving an order for you needs your approval', {
-      tier: 2,
-      amount: total.minor,
+      amount: total,
     });
   return allow('person_saves_order');
 }

@@ -15,6 +15,7 @@ import {
   useEntity,
   useEntityMutation,
   useToast,
+  useUndo,
   useUndoableDelete,
 } from '@hykr/app';
 import { useQueryClient } from '@tanstack/react-query';
@@ -66,17 +67,25 @@ export function TodoRow({
   const toast = useToast();
   /** Ticking can move a to-do out of the current list, so it says so and offers Undo. */
   const client = useQueryClient();
+  const undo = useUndo();
   const toggle = () => {
     const done = !todo.done;
-    update.mutate({ id: todo.id, patch: { done } });
+    // A failed write shows no Undo to act on: it resolves to nothing.
+    const result = update.mutateAsync({ id: todo.id, patch: { done } }).catch(() => undefined);
     // Shown now, not on success: ticking can remove this row (and its callbacks) from the list.
-    // Undo talks to the API directly for the same reason.
+    // Undo talks to the API directly for the same reason: the server's undo when the write
+    // came back with one (the to-do's approval level gives it a window), else the reverse write.
     toast.show({
       message: done ? `Marked “${todo.title}” done` : `Reopened “${todo.title}”`,
       durationMs: 5000,
       action: {
         label: 'Undo',
         onPress: async () => {
+          const written = await result;
+          if (written?.status === 'done' && written.undo) {
+            await undo(written.undo.id, ['todos']);
+            return;
+          }
           await entityApi('todos').update(todo.id, { done: !done });
           await Promise.all([
             client.invalidateQueries({ queryKey: ['todos'] }),

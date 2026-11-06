@@ -1,5 +1,5 @@
 import '../../global.css';
-import { AppShell, livePlugin, pushPlugin, settingsPlugin } from '@hykr/app';
+import { AppShell, livePlugin, pushPlugin, settingsPlugin, webMcpPlugin } from '@hykr/app';
 import { catalog, registry } from '@/catalog';
 import * as modules from '@/modules';
 import { settings } from '@/settings';
@@ -14,10 +14,16 @@ const config = {
 
 /**
  * The framework features the app uses, made once, outside render: the business's flags, branding
- * and phrases, live updates (other people's changes show without a reload) and push notifications
- * (the to-do reminder goes to the phone first).
+ * and phrases, live updates (other people's changes show without a reload), push notifications
+ * (the to-do reminder goes to the phone first) and WebMCP (each screen's read tools, the modules'
+ * `webmcp`, offered to the browser's agent where the browser supports it).
  */
-const plugins = [settingsPlugin(), livePlugin(), pushPlugin({ androidChannel: 'Reminders' })];
+const plugins = [
+  settingsPlugin(),
+  livePlugin(),
+  pushPlugin({ androidChannel: 'Reminders' }),
+  webMcpPlugin(),
+];
 
 export default function RootLayout() {
   return (

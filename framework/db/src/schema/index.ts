@@ -8,3 +8,4 @@ export * from './numbering.js';
 export * from './push.js';
 export * from './settings.js';
 export * from './tenancy.js';
+export * from './undo.js';

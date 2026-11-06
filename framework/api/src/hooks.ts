@@ -22,6 +22,8 @@ export {
   type EntityPlugin,
   entityPlugins,
   identityProviders,
+  type LevelRule,
+  levelRules,
   projectRead,
   type ReadProjector,
   readProjectors,

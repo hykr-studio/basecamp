@@ -1,4 +1,4 @@
-export { allow, deny, needsApproval, RuleDenied } from './authorize.js';
+export { allow, atLevel, deny, needsApproval, RuleDenied } from './authorize.js';
 export {
   type AnyCommandDef,
   AppCommand,
@@ -77,6 +77,7 @@ export {
   type RequestMetaValue,
 } from './http/principal.js';
 export { PrincipalResolver, type Standing } from './http/resolver.js';
+export { UndoController } from './http/undo.controller.js';
 export { nextNumber, numberSeries, type TakenNumber } from './money/numbering.js';
 export {
   defaultCurrency,
@@ -115,11 +116,22 @@ export {
   ApprovalEvent,
   ApprovalService,
   approvalFor,
+  mayDecide,
   registerOp,
   toApproval,
 } from './write/approvals.js';
 export { strongerDecision } from './write/decisions.js';
 export { eventFor, eventQueues, recordEvents, toEnvelope } from './write/events.js';
+export {
+  defineLevelRule,
+  type EffectiveLevel,
+  effectiveLevel,
+  type LevelRule,
+  type LevelRuleArgs,
+  levelRules,
+  matchesOp,
+  settingsIn,
+} from './write/levels.js';
 export {
   auditCtx,
   type RunResult,
@@ -129,3 +141,4 @@ export {
   type WriteOp,
 } from './write/pipeline.js';
 export { presentOutput } from './write/present.js';
+export { UndoService } from './write/undo.js';
