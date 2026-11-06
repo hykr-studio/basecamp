@@ -155,9 +155,18 @@ export class MemoryIndexer implements OnModuleInit, OnApplicationShutdown {
     const ready: Ready[] = [];
     const gone: string[] = [];
     for (const row of rows) {
-      const found = await textOf(tx, row);
-      if (found) ready.push({ row, ...found });
-      else gone.push(row.id);
+      try {
+        // A savepoint: a source that fails to load (a trait that throws) fails alone.
+        const found = await tx.transaction((sp) => textOf(sp, row));
+        if (found) ready.push({ row, ...found });
+        else gone.push(row.id);
+      } catch (e) {
+        log.warn(`${row.sourceType} ${row.sourceId}: cannot be indexed: ${reason(e)}`);
+        await tx
+          .update(memoryIndex)
+          .set({ state: 'failed', error: reason(e).slice(0, 500), updatedAt: sql`now()` })
+          .where(eq(memoryIndex.id, row.id));
+      }
     }
     if (gone.length) await tx.delete(memoryIndex).where(inArray(memoryIndex.id, gone));
     if (!ready.length) return;

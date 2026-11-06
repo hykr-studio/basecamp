@@ -1191,7 +1191,7 @@ The assistant keeps one thread per person across channels, and remembers three m
   // application/domain/src/modules/notes/contracts/note.ts
   traits: {
     memory: {
-      text: (n: NoteView) => (n.body.trim() ? `${n.title}: ${n.body}` : n.title),
+      text: (n: NoteView) => [n.title, n.body?.trim()].filter(Boolean).join(': '),
       about: (n: NoteView) => (n.meetingId ? { type: 'meeting', id: n.meetingId } : null),
     },
   },
@@ -1217,7 +1217,12 @@ has the extension (`framework/db/sql/pre/memory.sql` creates it when offered), o
 `app.memory_cosine` over `real[]`.
 
 **Settings.** The section `memory`: `{ recall: true, conversation: true, limit: 5, minScore: 0.3 }`.
-A business without an embedding model its policy allows gets no recall, and its turns still run.
+`recall: false` stops recall before turns (and keeping what people say); `recall-memory` still
+searches. `conversation: false` leaves people's words out everywhere. A business without an
+embedding model its policy allows gets no recall, and its turns still run.
+
+A trait's `text` sees the record as the reader may see it, so a field hidden from them is missing:
+write it to cope (`n.body?.trim()`). A trait that throws drops that record from recall.
 
 **Personal data.** "Delete my data" removes the vectors of what the person said (a deleted message
 takes its vector with it); for a person with an account, the business memories they wrote go too,

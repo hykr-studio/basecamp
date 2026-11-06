@@ -65,7 +65,7 @@ export const NoteSpec = entitySpec({
   // whoever may read both (the framework loads each again as the reader).
   traits: {
     memory: {
-      text: (n: NoteView) => (n.body.trim() ? `${n.title}: ${n.body}` : n.title),
+      text: (n: NoteView) => [n.title, n.body?.trim()].filter(Boolean).join(': '),
       about: (n: NoteView) => (n.meetingId ? { type: 'meeting', id: n.meetingId } : null),
     },
   },

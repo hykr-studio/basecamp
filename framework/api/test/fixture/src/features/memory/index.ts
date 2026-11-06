@@ -78,7 +78,11 @@ export const MemoSpec = entitySpec({
   },
   traits: {
     memory: {
-      text: (m: Memo) => [m.title, m.body, m.secret].filter(Boolean).join('. '),
+      // A memo titled "explode" breaks its trait: it must fail alone.
+      text: (m: Memo) => {
+        if (m.title === 'explode') throw new Error('this trait cannot read the memo');
+        return [m.title, m.body, m.secret].filter(Boolean).join('. ');
+      },
       about: (m: Memo) => (m.taskId ? { type: 'task', id: m.taskId } : null),
     },
   },

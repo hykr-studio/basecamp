@@ -296,6 +296,24 @@ describe('recall in a turn', () => {
     ]);
   });
 
+  it('a record its trait cannot read fails alone: marked failed, the rest indexed', async () => {
+    const bad = await inAna(ana)('POST', '/api/memos', { title: 'explode', body: 'Red bucket' });
+    const good = await inAna(ana)('POST', '/api/memos', {
+      title: 'Red bucket',
+      body: 'By the door',
+    });
+    const failed = await eventually(async () => {
+      const { rows } = await pool.query(
+        `select state, error from app.memory_index where source_id = $1`,
+        [bad.body.value.id],
+      );
+      return rows[0]?.state === 'failed' ? rows[0] : undefined;
+    });
+    expect(failed.error).toContain('cannot read the memo');
+    await indexed('memo', good.body.value.id);
+    expect(texts(await recall(ana, { q: 'red bucket door' }))).toContain('Red bucket. By the door');
+  });
+
   it('a record deleted behind the index is not recalled', async () => {
     const m = await memo(ana, { title: 'Orange kettle', body: 'In the kitchen' });
     await pool.query(`delete from app.fixture_memos where id = $1`, [m.id]);
@@ -500,7 +518,7 @@ describe("a business's embedding model changes", () => {
     await eventually(async () => {
       const { rows } = await pool.query(
         `select model, state, count(*)::int as n from app.memory_index where tenant_id = $1
-           group by model, state`,
+           and state <> 'failed' group by model, state`,
         [anaTenant],
       );
       return rows.length === 1 && rows[0].model === 'stub/embed' && rows[0].state === 'ready';

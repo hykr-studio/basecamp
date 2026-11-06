@@ -187,11 +187,16 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
     const items: RecallItem[] = [];
     for (const c of candidates) {
       if (items.length >= limit) break;
-      const item =
-        c.kind === 'message'
-          ? await this.message(p, tenantId, c)
-          : await this.record(p, c, req.about);
-      if (item) items.push(item);
+      try {
+        const item =
+          c.kind === 'message'
+            ? await this.message(p, tenantId, c)
+            : await this.record(p, c, req.about);
+        if (item) items.push(item);
+      } catch (e) {
+        // A check that fails (a trait that throws on a hidden field) drops that memory only.
+        log.warn(`${c.sourceType} ${c.sourceId}: not recalled: ${reason(e)}`);
+      }
     }
     return { items, model: embedded.model };
   }
