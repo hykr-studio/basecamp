@@ -24,6 +24,8 @@ export default defineConfig({
       BULL_PREFIX: `test-${Date.now()}`,
       // Files in this process's memory: no object store needed.
       STORAGE_DRIVER: 'memory',
+      // Documents drawn by the fake engine: plain text lines, fast and searchable.
+      DOCUMENTS_ENGINE: 'fake',
     },
   },
 });

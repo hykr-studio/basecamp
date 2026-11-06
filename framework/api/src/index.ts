@@ -2,6 +2,38 @@
 // starts the API, the queue worker or the templates CLI with it. Nothing exported here reads the
 // environment when it loads.
 
+export {
+  type CheckedLayout,
+  channelsOf,
+  createFakeEngine,
+  createPdfEngine,
+  DOCUMENT_ENGINE,
+  DocumentBlock,
+  type DocumentBusiness,
+  type DocumentDef,
+  type DocumentEngine,
+  DocumentLayout,
+  type DocumentLoadContext,
+  type DocumentRenderContext,
+  type DocumentRow,
+  type DocumentSendRequest,
+  type DocumentsConfig,
+  DocumentsService,
+  defineDocument,
+  documents,
+  documentsConfig,
+  fontFile,
+  harfbuzz,
+  layoutLines,
+  layoutOf,
+  loadFonts,
+  pageText,
+  type Rendered,
+  type RenderMeta,
+  reachableDocument,
+  scriptRuns,
+  shaperFor,
+} from './features/documents/public.js';
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
 export {

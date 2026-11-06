@@ -20,8 +20,14 @@ export type SendJob = {
   cursor: number;
 };
 
-const kindOf = (m: OutboundMessage): 'text' | 'template' | 'interactive' =>
-  m.kind === 'text' ? 'text' : m.kind === 'template' ? 'template' : 'interactive';
+const kindOf = (m: OutboundMessage): 'text' | 'template' | 'interactive' | 'media' =>
+  m.kind === 'text'
+    ? 'text'
+    : m.kind === 'template'
+      ? 'template'
+      : m.kind === 'document'
+        ? 'media'
+        : 'interactive';
 
 /**
  * Everything that leaves goes through here: recorded first (so a crash never loses or doubles
