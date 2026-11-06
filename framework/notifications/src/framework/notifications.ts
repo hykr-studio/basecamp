@@ -9,11 +9,16 @@ import { ApprovalOutcome, ApprovalRequest } from './templates.js';
 type ApprovalRow = Row & {
   summary: string | null;
   status: string;
+  ownerId: string | null;
   approverUserId: string | null;
-  approverRoles: string[];
+  approverCapability: string | null;
   approverChannels: string[] | null;
   requesterContactId: string | null;
 };
+
+/** Is someone other than the requester to decide it (a capability's holders, or a named person)? */
+const decidedByOthers = (a: ApprovalRow) =>
+  a.approverUserId ? a.approverUserId !== a.ownerId : !!a.approverCapability;
 
 const OUTCOME: Record<string, Record<Lang, string>> = {
   approved: { en: 'approved', hi: 'मंज़ूर हुआ', te: 'అనుమతించబడింది' },
@@ -22,17 +27,23 @@ const OUTCOME: Record<string, Record<Lang, string>> = {
 };
 
 /**
- * Someone else's request (a customer's) waits for the business: its deciders get it on
- * WhatsApp with Approve and Reject, unless the action may only be decided in the app. A
- * person's own assistant asks them in the conversation instead.
+ * A request someone else decides (a customer's, or one the policy sends to a capability or a
+ * named person): its deciders get it on WhatsApp with Approve and Reject, never the requester,
+ * unless the action may only be decided in the app. A person's own assistant asks them in the
+ * conversation instead.
  */
 export const ApprovalRequestNotification = defineNotification<ApprovalRow>({
   key: 'approval.request',
   topic: 'service',
   send: { on: ['approval.requested'] },
   when: (a) =>
-    !a.approverUserId && (!a.approverChannels || a.approverChannels.includes('whatsapp')),
-  to: (a) => [{ roles: a.approverRoles }],
+    decidedByOthers(a) && (!a.approverChannels || a.approverChannels.includes('whatsapp')),
+  to: (a) =>
+    a.approverUserId
+      ? [{ userId: a.approverUserId }]
+      : a.approverCapability
+        ? [{ capability: a.approverCapability, except: a.ownerId ? [a.ownerId] : [] }]
+        : [],
   channels: ['whatsapp'],
   whatsapp: {
     template: ApprovalRequest,

@@ -1,6 +1,7 @@
 import type { Labels } from '@hykr/i18n';
 import { z } from 'zod';
-import type { Assurance, Principal, TenantRole } from '../principal.js';
+import type { ApproverBy } from '../authorize.js';
+import type { Assurance, Principal } from '../principal.js';
 import type { Channel } from '../voice.js';
 import type { ListConfig } from './list.js';
 import type { CommandTraits, EntityTraits } from './traits.js';
@@ -19,15 +20,19 @@ export type Expose = 'all' | 'human' | 'internal';
 export type EntityAction = 'list' | 'get' | 'create' | 'update' | 'delete';
 export type WriteAction = 'create' | 'update' | 'delete';
 /**
- * Who decides a parked action, and where. By default the person it is for decides (their own
- * assistant's request); a customer's request goes to the business (owner and ops).
- * `channels` limits where it may be decided (['app'] for anything irreversible), and
- * `minAssurance` how sure we must be of the decider ('session' needs a signed-in account).
+ * Who decides a parked action, where, how surely, and what is at stake. By default the person it
+ * is for decides (their own assistant's request); a customer's request goes to the business
+ * (holders of `approvals.decide`). `by` names a capability, a person or an amount band instead
+ * (see `Approver` in authorize.ts). `channels` limits where it may be decided (['app'] for
+ * anything irreversible), `minAssurance` how sure we must be of the decider ('session' needs a
+ * signed-in account), and `level` names the application's approval level it parks at (its
+ * policy then fills in whatever this leaves out: who decides, where, for how long).
  */
 export type ApproverRule = {
-  by?: readonly TenantRole[] | 'self';
+  by?: ApproverBy;
   channels?: readonly Channel[];
   minAssurance?: Assurance;
+  level?: string;
 };
 
 /**

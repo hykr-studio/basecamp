@@ -25,6 +25,7 @@ import {
   type Thread,
   type ThreadMessage,
   toQueryString,
+  type UndoResult,
   type VoiceSessionEnd,
   type VoiceSessionRequest,
   type VoiceSessionResponse,
@@ -361,6 +362,12 @@ export function createApiClient(opts: ApiClientOptions) {
         'POST',
         `/api/approvals/${encodeURIComponent(id)}/${approve ? 'approve' : 'reject'}`,
       ),
+    /**
+     * Undo a write within its undo window: the `undo.id` its result carried (people only, the
+     * person it was for). 409 when it changed since or was undone already; 403 once the window
+     * closed.
+     */
+    undo: (id: string) => call<UndoResult>('POST', `/api/undo/${encodeURIComponent(id)}`),
     chat: (input: ChatRequest) => call<ChatResponse>('POST', '/api/chat/once', input),
     chatStream,
     live,
