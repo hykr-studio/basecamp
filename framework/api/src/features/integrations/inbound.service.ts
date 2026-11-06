@@ -20,7 +20,7 @@ import type { Jobs, ServerContext } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
 import { JOBS } from '../../queues/define.js';
 import { serverContext } from '../../queues/jobs.service.js';
-import { openConnection } from './manage.service.js';
+import { openConnection } from './credentials.js';
 import {
   type ConnectorHandler,
   type ConnectorHandlerContext,

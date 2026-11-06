@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { type Connector, generateWebhookSecret, SecretBoxError } from '@hykr/connectors';
+import { type Connector, generateWebhookSecret } from '@hykr/connectors';
 import type { Principal } from '@hykr/contracts';
 import { requireCapability, runWrite, type WriteOp } from '@hykr/core';
 import {
@@ -49,7 +49,6 @@ import {
   endpointAad,
   PREVIOUS_SECRET_MS,
   requireSecretBox,
-  secretBox,
 } from './settings.js';
 
 /** What a request sends, checked, or 400 with the problems. */
@@ -361,36 +360,5 @@ export class IntegrationsService implements OnModuleInit {
       receivedAt: r.receivedAt.toISOString(),
       processedAt: r.processedAt?.toISOString() ?? null,
     }));
-  }
-}
-
-/**
- * A connection's credentials, opened, for server code that calls the outside system (a
- * connector handler's `ctx.credentials()`, a later sync job). Another business's connection, a
- * missing one or a value that does not open here: null.
- */
-export async function openConnection<C = unknown>(
-  db: Database,
-  tenantId: string,
-  connectionId: string,
-): Promise<{ row: typeof integrationConnections.$inferSelect; credentials: C } | null> {
-  const [row] = await db
-    .select()
-    .from(integrationConnections)
-    .where(
-      and(
-        eq(integrationConnections.id, connectionId),
-        eq(integrationConnections.tenantId, tenantId),
-      ),
-    );
-  if (!row) return null;
-  const box = secretBox();
-  if (!box) return null;
-  try {
-    const plain = box.open(row.credentialsSealed, connectionAad(row.tenantId, row.id));
-    return { row, credentials: JSON.parse(plain) as C };
-  } catch (e) {
-    if (e instanceof SecretBoxError || e instanceof SyntaxError) return null;
-    throw e;
   }
 }
