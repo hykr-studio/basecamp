@@ -1201,8 +1201,12 @@ export default function Pages() {
 
 `_layout.tsx`, `pages/[id].tsx` and `+not-found.tsx` stay as the scaffold made them. They
 render the framework's shell and screens: `_layout.tsx` passes `settings`, the modules barrel
-(`import * as modules from '@/modules'`), `catalog` and `registry` to `<AppShell>`, and
-`+not-found.tsx` also serves the framework plugins' screens. Rename the app in `mobile/app.json` (`name`, `slug`,
+(`import * as modules from '@/modules'`), `catalog` and `registry` to `<AppShell>`, with the
+framework plugins it shows (`creditsPlugin`: the credits screen), and
+`+not-found.tsx` also serves the framework plugins' screens. The scaffold's `account` module words
+the credits alerts and `.env.example`'s `CREDITS_CONFIG` sets the prices and the plan every
+business starts on (developer guide, section 7.6): change both for your product, or remove
+`CREDITS_CONFIG` to measure usage without caps. Rename the app in `mobile/app.json` (`name`, `slug`,
 `scheme`, the iOS `bundleIdentifier` and the Android `package`). If you change `scheme`, change
 it in `_layout.tsx` too.
 
