@@ -116,11 +116,14 @@ Keep these, which you will edit:
   (the lists of modules: step 9)
 - `domain/src/db/index.ts`
 - `domain/src/server/access.ts`
+- `domain/src/server/approval-levels.ts` and `domain/src/server/index.ts` (what each approval
+  level means in your product, and which writes reach it: developer guide 5.8.1)
 - `api/src/server.ts`
 - `mobile/src/modules/index.ts` (the list of app modules), `mobile/src/catalog.ts`,
   `mobile/src/settings.ts` (step 10)
 - `mobile/src/app/_layout.tsx`
 - `mobile/src/app/pages/*`
+- `mobile/src/app/approvals/*` (the approvals list and the `/approvals/<id>` link WhatsApp sends)
 - `mobile/src/app/+not-found.tsx`
 
 > **A shortcut:** `pnpm exec basecamp module add jobs` writes every file of a `jobs` module with
@@ -784,6 +787,7 @@ the assistant does.
 
 import { migrations } from '@application/domain/db';
 import { modules } from '@application/domain/modules';
+import { contributions } from '@application/domain/server';
 import { defineServer } from '@hykr/api';
 
 export const server = defineServer({
@@ -801,6 +805,8 @@ export const server = defineServer({
   },
   modules,
   migrations: [migrations],
+  // Fixit's approval levels, and the level rules that are not one module's.
+  contributes: contributions,
 });
 ```
 

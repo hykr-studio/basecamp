@@ -95,12 +95,13 @@ Every write, from any caller, follows these steps in `runWrite`:
 | Validate | `op.input.parse(rawInput)`, again, even after the controller parsed it | `pipeline.ts` |
 | Idempotency | Same `idempotency-key` and same body returns the stored answer. Same key with a different body is a 409. | `app.idempotency` table |
 | Load | `op.load(tx, p, input)` through scoped repos. A row that is not yours is a 404. | entity repo |
-| Authorize | Returns `allow`, `deny` or `needs_approval`. Then each write hook may refuse or park, never loosen (`strongerDecision`). | `def.decide` or your command's `authorize`, then `writeHooks` |
+| Authorize | Returns `allow`, `deny` or `needs_approval`. Then each write hook may refuse or park, never loosen (`strongerDecision`). Then the application's level rules, and the level's policy: a level that waits parks the write, one that runs gives it an undo window (section 5.8.1). | `def.decide` or your command's `authorize`, then `writeHooks`, then `levelRules` |
 | Deny | The transaction rolls back. A `denied` audit row is written. The caller gets 403 `{ error: 'forbidden', rule, reason }`. | |
-| Park | Inserts an `app.approvals` row (deciders from the decision's `approver`, else the rule) and a `needs_approval` audit row with the tier. Returns `{ status: 'needs_approval', approval }`. | `approvals.ts` |
+| Park | Inserts an `app.approvals` row (who decides: the decision's `approver`, else the operation's `approval`, else the level's policy) and a `needs_approval` audit row with the level. Returns `{ status: 'needs_approval', approval }`. | `approvals.ts` |
 | Run | `op.run(...)` inside the transaction | your command or the entity repo |
 | Audit | One row per touched record, plus one for a command | `audit.events` |
-| Stored events | Each `NamedEvent` (and `approval.requested`) is inserted in `app.domain_events` in the transaction, with the row before and an `available_at` held back by the decision's `undoMs` | `write/events.ts` |
+| Stored events | Each `NamedEvent` (and `approval.requested`) is inserted in `app.domain_events` in the transaction, with the row before, and held back (`available_at`) for the write's undo window when it has one | `write/events.ts` |
+| Undo window | A write that ran with `undoMs`, for a person, touching only entities, records an `app.undo_windows` row; the result carries `undo: { id, until }` | `write/undo.ts` |
 | Write hooks | `afterRun` for a write that ran or parked, in the transaction. Throwing rolls it all back. | `writeHooks` |
 | Events | Published in-process after commit by the CQRS handler | `NamedEvent` |
 
@@ -324,7 +325,8 @@ To follow one assistant turn, take the `x-run-id` response header from `/api/cha
 SELECT at, action, outcome, actor_kind, acting_for, rule, reason, before, after
 FROM audit.events WHERE run_id = '<run-id>' ORDER BY at;
 
-SELECT id, action, status, summary, approver_user_id, approver_roles, expires_at, failure_reason
+SELECT id, action, status, summary, level, approver_user_id, approver_capability, expires_at,
+       failure_reason
 FROM app.approvals WHERE run_id = '<run-id>';
 ```
 
@@ -509,7 +511,7 @@ A row leaves the server only through `def.toRead(row, p)`: the read schema parse
 | Hook | Runs | Use it for |
 |---|---|---|
 | `rules` | wherever the entity's rules run | refusals (a frozen version) |
-| `decide` | on CRUD writes, after the rules, before `spec.approval` | park with a tier and approver, or allow with an undo window |
+| `decide` | on CRUD writes, after the rules, before `spec.approval` | park at a level with an approver, or allow with a level or an undo window |
 | `scope` | every scoped query, read and write | narrowing reach (a parent's scope) |
 | `toValues` | insert and update | server-computed columns (a version, a number). The framework's own columns still win. |
 | `toJson` | reads, before the read schema parses | stored types as JSON (money as a number) |
@@ -677,41 +679,123 @@ On an entity spec, `approval[action]` decides whether a write parks:
 
 ```ts
 type ApprovalCheck = (p: Principal, ctx: { action: string; input: object | null; row: object | null }) => boolean;
+type ApproverBy = 'requester' | { capability: string } | { userId: string } | { band: string };
 type ApprovalRule =
   | 'always' | 'never'
   | ApprovalCheck
-  | { when?: 'always' | ApprovalCheck; by?: string[] | 'self'; channels?: Channel[]; minAssurance?: Assurance };
+  | { when?: 'always' | ApprovalCheck; by?: ApproverBy; channels?: Channel[]; minAssurance?: Assurance; level?: string };
 ```
 
 - The function form is the common one: `(p) => p.actor.kind === 'agent'`. It also sees the payload, so
   `(p, { input }) => Number(input?.amount ?? 0) > 100_000` parks large amounts only. `input` and `row`
   are `null` when they are unknown: a tool's description is written before any call, and a create has
   no row.
-- The object form also says who decides and where. For example, `{ when: (p) => p.actor.kind === 'agent', by: ['owner', 'admin'], channels: ['app'] }`. `channels: ['app']` keeps an irreversible decision off WhatsApp buttons. No sample entity uses the object form yet. The one real example is a command: `approval: { by: ['owner', 'admin'] }` in `framework/api/src/channels/notify/send-template.command.ts`.
+- The object form also says who decides and where. For example, `{ when: (p) => p.actor.kind === 'agent', by: { capability: 'orders.approve' }, channels: ['app'] }`. `channels: ['app']` keeps an irreversible decision off WhatsApp buttons. The framework's example is a command: `approval: { by: { capability: 'marketing.approve' } }` in `framework/api/src/channels/notify/send-template.command.ts`.
 
-Who decides, when `by` is not set: the person the request is for, if they are a user and not only a customer. Otherwise, the business's `owner` and `ops`.
+`by` chooses people by capability, never by role name:
+- `'requester'`: the person the request is for (their own assistant's request);
+- `{ capability }`: anyone in the business holding it, except the requester;
+- `{ userId }`: one named person, a member of the business who is not the requester (otherwise the
+  holders of `approvals.decide` decide instead);
+- `{ band }`: the approver the business's settings name for the amount's band (below).
 
-Approvals expire after 24 hours by default (`CoreModule.forRoot({ approvalTtlMs })`). Expiry is checked when someone tries to decide.
+Who decides, when nothing sets `by`: the person the request is for, if they are a user and not only a
+customer. Otherwise the holders of `approvals.decide` (by default the `owner` and `ops` roles; an
+application gives its own roles the capability, or names its own capability on its levels). Nobody
+decides their own request unless the policy sends it back to them: a request decided by a capability
+is never decidable by its requester. The requester can still open it (`GET /api/approvals/:id`, with
+`canDecide: false`); `POST .../approve` answers 403 `own_request`.
+
+Approvals expire after 24 hours by default (`CoreModule.forRoot({ approvalTtlMs })`), or after their
+level's `expiresInMs`. The framework's `approvals` feature runs a sweeper every minute
+(`approvals.expire`): what nobody decided in time becomes `expired`, audited as the system, and
+`approval.decided` is stored and published, so a customer who asked hears it.
 
 A decision (`AuthorizeResult`) can also say what is at stake. `needsApproval(rule, reason, details)`
 and `allow` / `deny` take the same optional `details`:
-- `tier`: 0 a read, 1 an internal write (undoable), 2 a send to a client or vendor, 3 money, legal or
-  irreversible;
-- `approver`: `{ userId?, roles?, channels?, minAssurance? }`;
-- `amount`: integer minor units (paise);
+- `level`: the name of an approval level the application declares (section 5.8.1);
+- `approver`: `{ by?, channels?, minAssurance? }`;
+- `amount`: `Money`, `{ minor, currency }` (whole minor units and an ISO currency);
 - `undoMs`: the undo window.
 
-The helpers copy only these four fields. Passing an earlier decision as `details`, to keep its tier,
-never changes the new decision, rule or reason.
+The helpers copy only these four fields. Passing an earlier decision as `details`, to keep its level,
+never changes the new decision, rule or reason. `atLevel(level, rule, reason, details?)` is an allow
+that names a level: the level's policy then says whether it waits.
 
 What the write path does with them:
-- A park's deciders come from `approver` when it names a person or roles, and its channels and assurance
-  when it names them. The approval shows `tier` and `amount`, and the park's audit row records the tier.
-- A write that runs with `undoMs` stores its events with `available_at` that much later, so nothing is
-  passed on during the undo window.
-- An approved replay keeps the details on the allow it becomes.
-- Rules, entity plugins and write hooks combine with `strongerDecision`: deny beats needs_approval beats
-  allow, the highest tier and the longest undo window survive.
+- A park's deciders come from `approver`, then the operation's `approval`, then the level's policy:
+  the first that sets `by` decides who, likewise `channels`; `minAssurance` is the strongest asked.
+  The approval shows `level` (`{ name, rank, label }`), `amount`, `decider` and `canDecide`, and the
+  park's audit row records the level.
+- A write that runs with `undoMs` can be undone (section 5.8.2), and its events wait that long.
+- An approved replay keeps the level and the amount, and fails (status `failed`) when it now needs
+  more: a higher level, or a larger amount, than was approved. It opens no undo window.
+- Rules, entity plugins, write hooks and level rules combine with `strongerDecision`: deny beats
+  needs_approval beats allow; the higher-ranked level and the longest undo window survive, and between
+  two decisions of the same kind the one at the higher level gives the rule and reason.
+
+#### 5.8.1 Approval levels
+
+What each level means is the application's, never the framework's. An application declares its
+levels and contributes them (`contributes: { approvalLevels }`):
+
+```ts
+defineApprovalLevel({
+  name: 'irreversible',      // what decisions name
+  rank: 3,                   // 0 to 99, unique: higher means more at stake
+  label: { en: 'Money or irreversible', hi: '…', te: '…' },
+  policy: {
+    parks: true,             // or (p) => boolean. Default: rank 0 runs, any higher rank parks
+    undoMs: 0,               // a write that runs can be undone this long
+    approver: { by: { band: 'money' }, channels: ['app'], minAssurance: 'session' },
+    expiresInMs: 72 * 3600_000,
+    tenantMayLoosen: false,  // may a business switch parking off for it?
+  },
+});
+```
+
+Which writes reach which level is declared too, by level rules (`@hykr/core`, contributed as
+`levelRules`). They see the operation, its input, the row it changes and the business's settings, and
+run in `runWrite` after the write hooks, for entity CRUD and commands alike (approved replays included):
+
+```ts
+defineLevelRule({
+  name: 'orders.levels',
+  on: ['order.*'],           // operation names, prefixes, or '*'
+  decide: ({ op, input, row, settings }) => {
+    const amount = { minor: Number(input?.totalMinor ?? row?.totalMinor), currency: 'EUR' };
+    return overThreshold(settings, 'orders.limit', amount)
+      ? atLevel('irreversible', 'order_over_limit', 'Above your limit', { amount })
+      : atLevel('internal', 'order_within_limit', 'Within your limit', { amount });
+  },
+});
+```
+
+A business adjusts this in its settings, section `approvals` (`@hykr/contracts`):
+- `levels[name]`: `parks: true` makes a level always wait; `parks: false` lets it run only when the
+  level says `tenantMayLoosen`; `undoMs` and `expiresInMs` replace the level's;
+- `thresholds[key]`: `Money` that rules compare with `overThreshold(settings, key, amount)`, which
+  counts a missing threshold, or one in another currency, as exceeded (it fails closed);
+- `bands[key]`: who decides each amount, first match first: `[{ upTo?: Money, approver: { userId } |
+  { capability } }]`, read by `{ by: { band: key } }`. No band fits: holders of `approvals.decide`.
+
+A decision that names a level nobody declared ranks above every level and always parks. Without any
+levels, everything works as before: decisions without a level, and `needsApproval` parks as it did.
+The sample declares `read`, `internal`, `external` and `irreversible` in
+`application/domain/src/server/approval-levels.ts`; the to-dos module maps its writes to `internal`.
+
+#### 5.8.2 Undo
+
+A write that runs with an undo window (its level's `undoMs`, or the decision's own) answers
+`{ status: 'done', value, undo: { id, until } }` when it was for a person and touched only entities.
+Its events wait in the outbox until `until`. `POST /api/undo/:id` (people only, the person it was for;
+`api.undo(id)`, `useUndo()` in the app) reverses it through `runWrite`: a created row is deleted, an
+updated one gets its changed fields back, a deleted one is put back as it was (same id). Every row is
+audited (`rule: 'undo_own_write'`), the held events get `cancelled_at`, and the reversal stores no
+events, so subscribers never see the write. It refuses when the row changed since (409
+`changed_since`), when an event was already passed on (409 `too_late`), after the window (403
+`undo_window_closed`) and the second time (409 `already_undone`); another person's or business's
+undo is a 404. A command can be undone only when its `touched` rows carry `before` and `after`.
 
 ### 5.9 Extension points: traits, contributions and settings sections
 
@@ -723,9 +807,9 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   declares its key on `EntityTraits` or `CommandTraits` in its own file. Its plugin then acts on the
   specs that carry the key.
 - **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
-  Each key is a list, collected by one registry: `roles` and `capabilities` in `@hykr/contracts`
-  (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql` and
-  `identityProviders` in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
+  Each key is a list, collected by one registry: `roles`, `capabilities` (section 6.4) and
+  `approvalLevels` (section 5.8.1) in `@hykr/contracts`; `entityPlugins`, `writeHooks`,
+  `readProjectors`, `listFieldSql`, `levelRules` and `identityProviders` in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors` and `authPlugins` in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
@@ -949,10 +1033,11 @@ When a customer creates a row, the row is owned by the business's default owner 
 4. Your entity `rules`, then the entity plugins' rules: the first deny wins; a park waits.
 5. The entity plugins' `decide`: the first deny wins; a park waits.
 6. `spec.approval[action]` parks: `needs_approval`, rule `<name>_<action>_needs_approval`.
-7. A park from 4 to 6 parks (the first one's rule, the highest tier). Otherwise allow, rule `scoped_access`,
-   with any undo window an allowing rule or plugin gave.
+7. A park from 4 to 6 parks (the first one's rule, the highest level). Otherwise allow, rule `scoped_access`,
+   with any level or undo window an allowing rule or plugin gave.
 
-Then `runWrite` asks the write hooks, which may only tighten it.
+Then `runWrite` asks the write hooks, which may only tighten it, then the level rules and the level's
+policy (section 5.8.1).
 
 ### 6.4 Roles and capabilities
 
@@ -1130,7 +1215,7 @@ export function TodoListComponent({ title, items, act, words }: ViewProps<typeof
 
 ### 8.1 WhatsApp
 
-You do not write WhatsApp code for a feature. Inbound messages become chat turns on the `text` surface. Your views' `text` decides the words. Approvals become signed buttons when `APPROVAL_SECRET` is set and the approver is the person writing. The framework handles keywords (STOP, START, HELP, talk to a person, delete my data, link my account) in English, Hindi and Telugu, plus consent, the 24-hour window, handoff to a person and erasure.
+You do not write WhatsApp code for a feature. Inbound messages become chat turns on the `text` surface. Your views' `text` decides the words. Approvals become signed buttons when `APPROVAL_SECRET` is set and the approver is the person writing; a request someone else decides goes to them as `approval_request_v1`, and every answer links to `/approvals/<id>` in the app. The framework handles keywords (STOP, START, HELP, talk to a person, delete my data, link my account) in English, Hindi and Telugu, plus consent, the 24-hour window, handoff to a person and erasure.
 
 ### 8.2 Templates and notifications
 
@@ -1387,8 +1472,9 @@ These are not built. Each has a workaround for now.
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
 | Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
-| Approval tiers | Deciders follow a decision's `approver`, the approval shows `tier` and `amount`, and `undoMs` holds events back. There are no multi-step tiers, no undo action and no rule against approving your own request. |
-| Withdrawing a stored event | Nothing sets `app.domain_events.cancelled_at` yet (there is no undo action). The outbox feed skips such rows, so the undo action only has to set it before `available_at`. |
+| Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
+| Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. |
+| Deciders and per-business roles | `Recipient { capability }` finds the people to ask through the registered roles only. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
 | Per-turn agent version | A turn hook can pick the model, but audit rows' `agentVersion` still names `AGENT_MODEL`. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
@@ -1398,7 +1484,6 @@ These are not built. Each has a workaround for now.
 | Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter), but no framework feature fills them yet, and WebMCP declarations (`webmcp`) are not registered with the browser. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |
 | Per-module tools for the assistant | The assistant sees every module's tools on every turn. |
-| An approval sweeper | Expiry is checked when someone decides. Expired rows stay `pending` in `GET /api/approvals` until then. |
 | Concurrent duplicate requests | Two requests with the same idempotency key at the same moment can both run. Only the first answer is stored. |
 | Opt-out from a marketing quick reply | The `stop_offers` button is not handled. The STOP keyword is the only working opt-out. |
 | Clearing "unreachable" on WhatsApp | Only the START keyword clears it. |

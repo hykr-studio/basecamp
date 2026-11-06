@@ -185,7 +185,14 @@ role `own`, `customer` or `tenant` per read and write (the sample is in
   its `deny` counts. A command parks through its own `authorize`.
 - Every read leaves through `def.toRead(row, p)`, projected for the principal (entity plugins' `project`,
   then read projectors). Never return a repo row from a controller or service as is.
-- A command's `approval.by` says who decides. Without it, the person decides on their own assistant's request.
+- A command's `approval.by` says who decides, by capability (`{ capability }`), a named person (`{ userId }`) or
+  an amount band in the business's settings (`{ band }`), never by role name. Without it, the person decides
+  on their own assistant's request (a customer's goes to holders of `approvals.decide`). Nobody decides
+  their own request otherwise.
+- What an approval level means is the application's: it declares its levels (`defineApprovalLevel`,
+  contributed as `approvalLevels`) and which writes reach them (`defineLevelRule`, `levelRules`); thresholds
+  and per-band approvers are tenant settings (`approvals`). A write whose level gives an undo window answers
+  with `undo: { id, until }`, and `POST /api/undo/:id` reverses it (developer guide 5.8).
 - Return `deny(...)` with a stable `rule` code and a plain `reason` instead of throwing. The caller gets
   403 `{ error: 'forbidden', rule, reason }`. "Not yours" is a 404, never a 403.
 - WhatsApp templates (`defineTemplate`) are versioned forever. To change the wording, add `_v2`;
