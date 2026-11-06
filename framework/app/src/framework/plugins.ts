@@ -1,4 +1,4 @@
-import { createElement, type ReactNode } from 'react';
+import { createElement, type ReactNode, useEffect } from 'react';
 import type { SessionUser } from '../session';
 import type { AppPlugin, NavItem } from './app-domain';
 
@@ -45,6 +45,27 @@ export function runSignedIn(
       }
     }
   };
+}
+
+/**
+ * Its children, and every plugin's `onSignedIn` for this person while it is mounted (after the
+ * children mount); their cleanups when it unmounts or the person changes. The shell renders one,
+ * keyed by its installation, around everything signed in, so a new installation cleans up the
+ * old plugins' effects before running the new ones. Keep it the only keyed child there: a sibling
+ * with the same key would replace it without unmounting it, and its cleanups would never run.
+ */
+export function SignedIn({
+  user,
+  plugins,
+  children,
+}: {
+  user: SessionUser;
+  plugins: readonly AppPlugin[];
+  children?: ReactNode;
+}) {
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per person; the plugins are fixed while it is mounted (a new installation remounts it)
+  useEffect(() => runSignedIn(plugins, user), [user.id]);
+  return children;
 }
 
 /**

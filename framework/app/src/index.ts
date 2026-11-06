@@ -86,7 +86,13 @@ export { Icon, type IconName } from './framework/Icon';
 export { Loading } from './framework/Loading';
 export { useLang, useT } from './framework/lang';
 export { Markdown } from './framework/Markdown';
-export { filterNav, runSignedIn, useNavFilters, wrapProviders } from './framework/plugins';
+export {
+  filterNav,
+  runSignedIn,
+  SignedIn,
+  useNavFilters,
+  wrapProviders,
+} from './framework/plugins';
 export { ToastProvider, useToast } from './framework/Toast';
 export { TryPrompt } from './framework/TryPrompt';
 export { type Verb, verbOf } from './framework/verbs';

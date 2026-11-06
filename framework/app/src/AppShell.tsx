@@ -44,7 +44,7 @@ import { bindAll, composeApp, type ModuleList, matchRoute } from './framework/co
 import { isFocused, isHovered } from './framework/hover';
 import { Icon } from './framework/Icon';
 import { LangProvider } from './framework/lang';
-import { runSignedIn, useNavFilters, wrapProviders } from './framework/plugins';
+import { SignedIn, useNavFilters, wrapProviders } from './framework/plugins';
 import { ToastProvider } from './framework/Toast';
 import { inApp, webHref } from './framework/web-link';
 import { getApp, setRuntime } from './runtime';
@@ -146,13 +146,6 @@ function install(props: AppShellProps): Installed {
     generation: (installed?.generation ?? 0) + 1,
   };
   return installed;
-}
-
-/** Each plugin's onSignedIn while this person is signed in; their cleanups at sign-out. */
-function SignedInEffects({ user }: { user: SessionUser }) {
-  // biome-ignore lint/correctness/useExhaustiveDependencies: once per person
-  useEffect(() => runSignedIn(getApp().plugins, user), [user.id]);
-  return null;
 }
 
 /** Signed out on a plugin's public route: that screen alone, without the shell. */
@@ -480,17 +473,19 @@ export function AppShell(props: AppShellProps) {
                 />
               ) : (
                 <ChatRuntime key={user.id}>
-                  <SignedInEffects key={generation} user={user} />
-                  <Shell
-                    key={generation}
-                    user={user}
-                    onSignOut={() => {
-                      auth.signOut().finally(() => {
-                        queryClient.clear();
-                        setUser(null);
-                      });
-                    }}
-                  />
+                  {/* Its one child, keyed by installation: a new one unmounts the old shell and
+                      runs the old plugins' sign-out cleanups before the new ones sign in. */}
+                  <SignedIn key={generation} user={user} plugins={getApp().plugins}>
+                    <Shell
+                      user={user}
+                      onSignOut={() => {
+                        auth.signOut().finally(() => {
+                          queryClient.clear();
+                          setUser(null);
+                        });
+                      }}
+                    />
+                  </SignedIn>
                 </ChatRuntime>
               ),
             )}
