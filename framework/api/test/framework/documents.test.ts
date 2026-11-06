@@ -103,9 +103,9 @@ describe('text in Latin, Devanagari and Telugu', () => {
     ]);
     // Leading digits take the script after them; a font without a glyph hands it on.
     expect(scriptRuns('12 కి')).toEqual([{ script: 'telu', text: '12 కి' }]);
-    expect(scriptRuns('हि ₹5', (s, cp) => !(s === 'deva' && cp === 0x20b9))).toEqual([
+    expect(scriptRuns('हि €5', (s, cp) => !(s === 'deva' && cp === 0x20ac))).toEqual([
       { script: 'deva', text: 'हि ' },
-      { script: 'latin', text: '₹' },
+      { script: 'latin', text: '€' },
       { script: 'deva', text: '5' },
     ]);
     expect(scriptRuns('')).toEqual([]);

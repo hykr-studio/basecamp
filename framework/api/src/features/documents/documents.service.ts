@@ -9,6 +9,7 @@ import {
   CORE_OPTIONS,
   type CoreOptions,
   entityDef,
+  projectRead,
   recordEvents,
   systemPrincipal,
 } from '@hykr/core';
@@ -99,6 +100,15 @@ export class DocumentsService implements OnApplicationBootstrap {
 
   /* ── Reading ─────────────────────────────────────────────────────────────── */
 
+  /** A document as p may see it: the read projectors, resource type 'document'. */
+  private project(info: DocumentInfo, p: Principal): DocumentInfo {
+    return projectRead(
+      'document',
+      info as unknown as Record<string, unknown>,
+      p,
+    ) as unknown as DocumentInfo;
+  }
+
   /** One document, with its sends and (for people, once made) a short-lived URL. */
   async get(p: Principal, id: string): Promise<DocumentInfo> {
     const { row } = await reachable(this.db, p, id);
@@ -109,7 +119,7 @@ export class DocumentsService implements OnApplicationBootstrap {
       .where(eq(documentSends.documentId, row.id))
       .orderBy(desc(documentSends.createdAt));
     const info: DocumentInfo = {
-      ...infoOf(row),
+      ...this.project(infoOf(row), p),
       sends: sends.map((s) =>
         sendInfoOf(s.send, s.send.channel === 'whatsapp' ? s.messageStatus : null),
       ),
@@ -142,7 +152,8 @@ export class DocumentsService implements OnApplicationBootstrap {
       .limit(100);
     const seen = new Map<string, boolean>();
     const out: DocumentInfo[] = [];
-    for (const row of rows) if (await reaches(this.db, p, row, seen)) out.push(infoOf(row));
+    for (const row of rows)
+      if (await reaches(this.db, p, row, seen)) out.push(this.project(infoOf(row), p));
     return out;
   }
 

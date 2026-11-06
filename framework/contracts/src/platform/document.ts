@@ -98,7 +98,7 @@ export const RenderDocumentInput = z.object({
     .max(100)
     .describe('The kind of document, as list-documents or the record names it'),
   id: z.string().min(1).max(100).describe('The id of the record it is about'),
-  lang: Lang.optional().describe("Its language: en, hi or te. Default: the person's, else en"),
+  lang: Lang.optional().describe('Its language: en, hi or te. Default: en'),
 });
 export type RenderDocumentInput = z.input<typeof RenderDocumentInput>;
 

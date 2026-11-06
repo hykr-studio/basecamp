@@ -1,5 +1,5 @@
 import type { ChannelAdapter, OutboundMessage } from '@hykr/channels';
-import type { DocumentChannel, DocumentSendInfo } from '@hykr/contracts';
+import type { DocumentChannel } from '@hykr/contracts';
 import { CORE_OPTIONS, type CoreOptions, recordEvents, systemPrincipal } from '@hykr/core';
 import {
   contacts,
@@ -8,7 +8,6 @@ import {
   documentSends,
   documents,
   files,
-  messages,
   user,
   writeAudit,
 } from '@hykr/db';
@@ -24,7 +23,7 @@ import { TemplateSync } from '../../channels/templates/template-sync.js';
 import { WHATSAPP } from '../../channels/whatsapp/adapter.provider.js';
 import { config } from '../../config.js';
 import { FilesService } from '../files/files.service.js';
-import { DocumentEvent, type DocumentRow, type DocumentSendRow, sendInfoOf } from './access.js';
+import { DocumentEvent, type DocumentRow, type DocumentSendRow } from './access.js';
 import type { Snapshot } from './commands.js';
 import { channelsOf, type DocumentDef, documents as documentDefs } from './define.js';
 
@@ -135,7 +134,6 @@ export class DocumentSender {
   private async viaWhatsApp(
     def: DocumentDef,
     doc: DocumentRow,
-    send: DocumentSendRow,
     to: Target,
     file: { bytes: Buffer; mime: string },
   ): Promise<{ address: string; messageId: string } | undefined> {
@@ -179,7 +177,8 @@ export class DocumentSender {
     const [messageId] = await this.service(OutboundService).queue(
       { tenantId: doc.tenantId, contactId: contact.id, from },
       [message],
-      { category: template.category, extra: { document: doc.id, send: send.id } },
+      // No notification meta: a later failure is the message's own status (decisions B2).
+      { category: template.category },
     );
     return { address: contact.address, messageId };
   }
@@ -247,7 +246,7 @@ export class DocumentSender {
       for (const channel of order) {
         const done =
           channel === 'whatsapp'
-            ? await this.viaWhatsApp(def, doc, send, to, file)
+            ? await this.viaWhatsApp(def, doc, to, file)
             : await this.viaEmail(def, doc, send, to, file);
         if (done)
           return this.finish(send, 'sent', {
@@ -320,15 +319,5 @@ export class DocumentSender {
       });
     });
     return status === 'sent' ? `sent by ${a.channel}` : `failed: ${a.error}`;
-  }
-
-  /** A send as `/api/documents` shows it, with WhatsApp's status of its message. */
-  async sendInfo(send: DocumentSendRow): Promise<DocumentSendInfo> {
-    if (!send.messageId) return sendInfoOf(send);
-    const [m] = await this.db
-      .select({ status: messages.status })
-      .from(messages)
-      .where(eq(messages.id, send.messageId));
-    return sendInfoOf(send, m?.status ?? null);
   }
 }

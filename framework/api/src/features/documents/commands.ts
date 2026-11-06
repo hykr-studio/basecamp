@@ -15,6 +15,7 @@ import {
   deny,
   entityDef,
   needsApproval,
+  projectRead,
   type Tx,
   toJson,
 } from '@hykr/core';
@@ -134,7 +135,8 @@ export const RenderDocument = defineCommand(RenderDocumentSpec, {
       const row = await other.repo.find(tx, p, id);
       return row ? (toJson(other.toRead(row, p)) as Values) : null;
     };
-    const children = async (child: ChildEntityDef, parentId = input.id) =>
+    // biome-ignore lint/suspicious/noExplicitAny: any child entity
+    const children = async (child: ChildEntityDef<any, any>, parentId = input.id) =>
       (await child.children.list(tx, p, parentId)).map((r) => toJson(child.toRead(r, p)) as Values);
     const loadedValue = await def.load({
       tx,
@@ -192,7 +194,7 @@ export const RenderDocument = defineCommand(RenderDocumentSpec, {
       events: [new DocumentEvent('document.requested', event)],
     };
   },
-  present: (row: DocumentRow) => infoOf(row),
+  present: (row: DocumentRow, p) => projectRead('document', infoOf(row) as unknown as Values, p),
 });
 
 /* ── document.send ─────────────────────────────────────────────────────────── */
@@ -324,5 +326,5 @@ export const SendDocument = defineCommand(SendDocumentSpec, {
       ],
     };
   },
-  present: (row) => sendInfoOf(row),
+  present: (row, p) => projectRead('documentSend', sendInfoOf(row) as unknown as Values, p),
 });

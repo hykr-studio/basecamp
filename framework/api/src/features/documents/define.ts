@@ -20,6 +20,8 @@ declare module '@hykr/contracts' {
 }
 
 type Values = Record<string, unknown>;
+// biome-ignore lint/suspicious/noExplicitAny: any child entity
+type AnyChildEntityDef = ChildEntityDef<any, any>;
 
 /** The business a document is made in. */
 export interface DocumentBusiness {
@@ -45,7 +47,7 @@ export interface DocumentLoadContext {
   /** Another record, read and projected the same way; null when the principal does not reach it. */
   read(def: AnyEntityDef, id: string): Promise<Values | null>;
   /** A child entity's rows under a parent (default: this record), in tree order, projected. */
-  children(def: ChildEntityDef, parentId?: string): Promise<Values[]>;
+  children(def: AnyChildEntityDef, parentId?: string): Promise<Values[]>;
 }
 
 /** What `render` gets besides the data: the language and formatting in it. */
