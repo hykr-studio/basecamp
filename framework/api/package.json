@@ -42,6 +42,7 @@
     "@hykr/agents": "workspace:*",
     "@hykr/api-client": "workspace:*",
     "@hykr/channels": "workspace:*",
+    "@hykr/connectors": "workspace:*",
     "@hykr/contracts": "workspace:*",
     "@hykr/core": "workspace:*",
     "@hykr/db": "workspace:*",
