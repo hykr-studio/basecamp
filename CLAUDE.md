@@ -78,7 +78,8 @@ E2E test gotchas:
   every source change. `pnpm test` does the build for you through turbo.
 - They need Postgres and Redis up (`pnpm infra:up`). Files run one at a time (`fileParallelism: false`)
   against one database, and turbo runs `@application/api#test` after `@hykr/api#test`.
-- Vitest forces `MODEL_MODE=fake`, `WORKER_INLINE=1` and `THROTTLE=off`. The voice e2e tests have no skip
+- Vitest forces `MODEL_MODE=fake`, `WORKER_INLINE=1`, `THROTTLE=off` and `STORAGE_DRIVER=memory` (files in
+  the test process; the S3 driver's own test runs against MinIO and skips without it). The voice e2e tests have no skip
   guard and fail unless `VOICE_AGENT_KEY` is set in `.env`.
 - Both Vitest configs load the root `.env` into the main process, so `globalSetup` migrates the same database
   the tests use. Turbo runs test tasks uncached and passes them every environment variable.
@@ -205,6 +206,10 @@ role `own`, `customer` or `tenant` per read and write (the sample is in
   (`scripts/check-tokens.mjs`) fails if they drift apart.
 - `framework/create-basecamp/template/` is a copy of `application/` made at pack time. Don't edit it; it is
   git-ignored.
+- Files are reached only through the record that holds them (`/api/files`, `docs/decisions/B1.md`). Put a
+  file on a record by writing its id into the record's file field (`FileRef`, `fileRefs()`, the `files`
+  trait); never write `app.files` yourself. `STORAGE_DRIVER=s3` with MinIO in development (`.env.example`);
+  unset means memory, which loses the worker's files to the API.
 
 A framework change needs its own tests: e2e tests in `framework/api/test/framework` against the fixture
 app in `framework/api/test/fixture`. Framework tests must not depend on the sample domain.
