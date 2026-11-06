@@ -73,7 +73,7 @@ application/               one application on the framework: the sample domain
   domain/         the domain: contracts, db (tables + migrations), server (Nest), views,
                   notifications, agent
   api/            server.ts = defineServer({ ... }); main.ts, worker.ts; the domain's e2e tests
-  mobile/         Expo app: <AppShell> plus the domain's routes and screens
+  mobile/         Expo app: <AppShell> plus the app modules (src/modules) and their routes
   back-office/    Expo web app on @hykr/back-office
 ```
 

@@ -95,5 +95,5 @@ A Basecamp application in ${target}
   pnpm exec basecamp dev
 
 Your domain lives in domain/ (contracts, db, server, views, notifications, agent) and the
-app's screens in mobile/src/domain and mobile/src/app/(domain). The framework is @hykr/*.
+app's modules in mobile/src/modules (routes in mobile/src/app/<module>). The framework is @hykr/*.
 `);

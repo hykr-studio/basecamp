@@ -87,7 +87,9 @@ Other gotchas:
 
 - `framework/` never imports `application/`. The application passes its domain in at exactly two points:
   - the server: `application/api/src/server.ts`, through `defineServer({ domain, module, views, notifications, agent, channel, migrations, contributes })`, started by `startApi` / `startWorker`;
-  - the app: `application/mobile/src/app/_layout.tsx`, through `<AppShell app catalog registry config />`.
+  - the app: `application/mobile/src/app/_layout.tsx`, through `<AppShell app modules catalog registry config />`.
+    Each app module (`defineAppModule` in `application/mobile/src/modules/<name>/index.tsx`) brings its
+    nav, suggestions, `bind`, `hrefFor` and `webmcp`; its routes are one-line files in `src/app/<name>/`.
 - `application/` imports `@hykr/*` by package name and public subpath only. No relative paths into
   `framework/`, and no `src/` or `dist/` paths.
 - Framework libraries never import the runtimes (`api`, `app`, `back-office`, `voice-worker`, `cli`,
@@ -129,7 +131,8 @@ schemas, `fieldLabels`, list filterable/sortable/search, `approval`, `views`), c
 - the typed client (`@hykr/api-client`, built at runtime from the spec, nothing to codegen) and the app hooks
   (`useEntityList`, `useEntity`, `useEntityMutation`, `useCommand` in `framework/app/src/framework/hooks.ts`);
 - the views (`defineView` / `defineScreen` in `application/domain/src/views/`), bound to React components in
-  `application/mobile/src/domain/bindings.tsx`.
+  each app module's `bind` (`application/mobile/src/modules/<name>/index.tsx`). A view or screen bound
+  twice, or bound but missing from the registry, stops the app at startup.
 
 The tables (`application/domain/src/db/schema.ts`) live in the `app` schema. Use `id()`, `tenantColumn()`,
 `customerColumn()` and `user` from `@hykr/db`. Each table needs an owner column plus `createdBy`,

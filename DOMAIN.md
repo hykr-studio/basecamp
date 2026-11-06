@@ -9,8 +9,8 @@ its domain to the framework in two places:
 
 - the server: `application/api/src/server.ts`, `defineServer({ domain, module, views,
   notifications, agent, channel, migrations, contributes })` from `@hykr/api`;
-- the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app catalog registry config />`
-  from `@hykr/app`.
+- the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app modules catalog registry
+  config />` from `@hykr/app`.
 
 Two dependency-cruiser rules, run by `pnpm lint:deps`, keep it that way:
 `framework-never-imports-application` and `application-uses-public-framework-exports` (only
@@ -33,8 +33,9 @@ To bring another domain, replace these folders. Nothing in `framework/` changes.
 | Views | `application/domain/src/views/` | `uiDomain = { views, screens }`, declared with `defineView` / `defineScreen` |
 | Assistant | `application/domain/src/agent/` | `agentDomain: AgentDomain` (`@hykr/agents/script`): persona, domain rules, the scripted model's scripts and help, eval cases (and spoken `voiceEvalCases`) and setup |
 | Server | `application/api/src/server.ts` | `server = defineServer({ ... })`, with the pieces above and `channel.does`: what the assistant helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind (developer guide, section 5.9) |
-| App | `application/mobile/src/domain/` | `appDomain = defineAppDomain({ title, tagline, nav, home, suggestions, bind })` from `@hykr/app`; `bind` calls `bindView` / `bindScreen` for the domain's views and screens; `catalog` and `registry` built with `createCatalog` / `createUiRegistry` |
-| App routes | `application/mobile/src/app/(domain)/` | The domain's screens; the group adds no URL segment. Provide `index.tsx` (the home screen) |
+| App modules | `application/mobile/src/modules/<name>/` and the barrel `src/modules/index.ts` (one line per module) | `defineAppModule({ name, nav, suggestions, bind, hrefFor, webmcp })` from `@hykr/app`, in `index.tsx`: destinations under `/<name>`; `bind` calls `bindView` / `bindScreen` for the module's views and screens; `hrefFor` says where each of its records opens. Other modules import only that `index.tsx` |
+| App | `application/mobile/src/catalog.ts`, `settings.ts`, `home/` | `catalog` and `registry` (`createCatalog` / `createUiRegistry`) with the `Register` declaration; `settings: AppSettings` (`title`, `tagline`, `home`, and the nav and suggestions of the screens that combine modules, such as the home screen) |
+| App routes | `application/mobile/src/app/<name>/` and `src/app/index.tsx` | One-line re-exports of each module's route components (Expo Router only knows files); `index.tsx` is the home screen |
 | Tests | `application/api/test/`, `application/domain/src/**/*.test.ts` | The domain's own e2e, WhatsApp, voice, view and notification tests |
 
 Then:
