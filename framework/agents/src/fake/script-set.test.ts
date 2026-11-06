@@ -29,6 +29,8 @@ describe('script sets', () => {
       'open-page',
       'draft-reply',
       'request-human',
+      'remember',
+      'recall',
       'fail',
     ]);
   });
