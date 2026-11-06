@@ -22,6 +22,8 @@ export default defineConfig({
       // Queue jobs run inside the test app, under their own keys in Redis.
       WORKER_INLINE: '1',
       BULL_PREFIX: `test-${Date.now()}`,
+      // Files in this process's memory: no object store needed.
+      STORAGE_DRIVER: 'memory',
     },
   },
 });

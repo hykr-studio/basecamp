@@ -84,6 +84,7 @@ export {
 export { strongerDecision } from './write/decisions.js';
 export { eventFor, eventQueues, recordEvents, toEnvelope } from './write/events.js';
 export {
+  auditCtx,
   type RunResult,
   runWrite,
   type Touched,

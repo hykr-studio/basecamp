@@ -4,6 +4,7 @@ import {
   EmptyState,
   errorMessage,
   Field,
+  FileField,
   LoadError,
   listRow,
   ScreenTitle,
@@ -24,6 +25,7 @@ function NoteEditor({ note, onDone }: { note?: NoteView; onDone: () => void }) {
   const remove = useUndoableDelete('notes');
   const [title, setTitle] = useState(note?.title ?? '');
   const [body, setBody] = useState(note?.body ?? '');
+  const [photos, setPhotos] = useState<string[]>([...(note?.photos ?? [])]);
   const mutation = note ? update : create;
   return (
     <View style={[styles.card, { marginBottom: space.lg }]}>
@@ -36,6 +38,15 @@ function NoteEditor({ note, onDone }: { note?: NoteView; onDone: () => void }) {
         multiline
         multilineHeight={160}
       />
+      <FileField
+        label="Photos"
+        entity="note"
+        field="photos"
+        recordId={note?.id}
+        value={photos}
+        onChange={(next) => setPhotos(Array.isArray(next) ? next : next ? [next] : [])}
+        hint="Saved with the note."
+      />
       {mutation.error && <Text style={styles.error}>{errorMessage(mutation.error)}</Text>}
       <View style={styles.row}>
         <Button
@@ -44,8 +55,11 @@ function NoteEditor({ note, onDone }: { note?: NoteView; onDone: () => void }) {
           disabled={!title.trim()}
           onPress={async () => {
             if (note)
-              await update.mutateAsync({ id: note.id, patch: { title: title.trim(), body } });
-            else await create.mutateAsync({ title: title.trim(), body });
+              await update.mutateAsync({
+                id: note.id,
+                patch: { title: title.trim(), body, photos },
+              });
+            else await create.mutateAsync({ title: title.trim(), body, photos });
             onDone();
           }}
         />

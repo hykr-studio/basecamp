@@ -14,6 +14,7 @@ export function createDb(url: string) {
   };
 }
 
+export { fileColumn, fileColumns } from './columns/files.js';
 export type { Database, DbOrTx } from './database.js';
 export {
   frameworkMigrations,

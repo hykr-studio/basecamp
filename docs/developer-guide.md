@@ -258,7 +258,7 @@ Things that will trip you up:
 | pgAdmin | http://localhost:5050 | `admin@example.com` / `admin`; server `app` (host `postgres`, user `app`) is preregistered |
 | Mastra Studio | http://localhost:4000 | Try the assistant and its tools, and read traces. `pnpm dev` starts it once the API is up and skips it if ports 4000 or 4111 are taken; it restarts when the agent's code changes. On its own: `cd application && pnpm exec basecamp studio` (needs the API running) |
 | LiveKit | ws://localhost:7880 | Voice rooms (dev keys `devkey` / `secret`) |
-| MinIO | http://localhost:9001 | Runs in compose, but no code uses it yet |
+| MinIO | http://localhost:9001 | File storage (`STORAGE_DRIVER=s3`); the `basecamp` bucket is created when the API starts |
 
 Postgres is on `localhost:5432` (`app` / `app` / `app`). Redis is on `localhost:6379`.
 
@@ -877,6 +877,52 @@ claimed twice, two plugins or two route shapes with one name, a view or screen b
 `Register` takes `{ catalog }` or `{ modules }` (isomorphic `ModuleSpec`s, entities merged).
 The tests are in `framework/app/src/framework/*.test.ts` and `framework/ui-registry/src/react.test.ts`.
 
+### 5.12 Files on records
+
+A record keeps files (photos, documents, voice notes) by id, in **file fields** (`docs/decisions/B1.md`).
+The framework's `files` feature stores the bytes and decides who reaches them.
+
+```ts
+// contracts: the field is a FileRef (one file, nullable) or fileRefs(max) (a list); the trait
+// says what each file field accepts.
+schemas: { read: z.object({ …, photos: fileRefs(10) }), create: z.object({ …, photos: fileRefs(10).optional() }), … },
+traits: { files: { photos: { accept: ['image/*'], maxBytes: 10 * 1024 * 1024, max: 10 } } },
+// db: a column under the field's key
+photos: fileColumns('photos'),   // text[]; fileColumn('cover') for one file
+```
+
+- **Uploading** is three steps: `POST /api/files { name, mime, size, for: { entity, field, id? } }`
+  (people only), a `PUT` of exactly those bytes to the URL it returns (with its headers), then
+  `POST /api/files/:id/confirm`. Presign checks the field's `accept` (`image/*` never matches SVG) and
+  size, then the person's reach: they may update that record now, or create one. Confirm checks the
+  size, and that an image or a PDF starts like one. `api.files.upload(blob, { name, mime, for })` in
+  `@hykr/api-client` does all three; `<FileField entity field value onChange />` in `@hykr/app` picks
+  from the library, the camera or the file picker, and `<FileThumbs ids />` shows a record's files.
+- **Attaching is the record's write.** Put the new id in the field with the entity's create or update
+  (or a command that lists the record in `touched`): the `files` write hook claims each new id in the
+  write's transaction (it must be the writer's own upload, or one this field let go of, and fit the
+  field), lets go of ids that left the field, and of every file of a deleted record. A file that does
+  not fit refuses the whole write: 403 `file_unavailable`, audited as denied. A parked write checks its
+  new ids at once and claims them when the approved write runs.
+- **Reaching a file.** `GET /api/files/:id` and `GET /api/files?ids=a,b` answer only for a file on a
+  record the caller reaches, whose field they still see once the record is projected for them (a hidden
+  field hides its files), or for their own upload not on a record yet. Anything else is 404. The answer
+  carries a download URL valid for `FILES_URL_TTL_S`; the assistant gets none.
+- **Storage.** `STORAGE_DRIVER`: `s3` (MinIO in development; the bucket is created at startup;
+  `S3_PUBLIC_ENDPOINT` is what URLs name, so a phone on the LAN can reach it), `fs` (`STORAGE_DIR`) or
+  `memory` (one process: tests and CI force it). The local drivers' URLs are the API's own
+  (`/api/files/blob/<signed token>`, relative: the client resolves them).
+- **Server code** stores bytes it has with `FilesService.storeBytes(...)` (`@hykr/api`), a ready file on
+  no record, which its uploader (or a system principal, for `uploader: { kind: 'server' }`) attaches.
+- **WhatsApp.** A photo, document or video someone sends is stored as their file by the `files` inbound
+  hook (a business turns it off with the `files.keepInboundMedia` setting), the message row becomes
+  `media`, and the turn reads a line with the file's id, so the assistant can put it on a record with a
+  write. Voice notes are still turned into words and not kept. `POST /api/files/:id/transcribe` (and the
+  assistant's `transcribe-file`) keeps an audio file's words on it.
+- **Personal data and sweeping.** "Delete my data" erases every file the person sent (contributor
+  `files`); the `files.sweep` schedule deletes erased files, uploads never confirmed (a day), and files
+  never put on a record or taken off one (after `FILES_DETACHED_GRACE_H`).
+
 ---
 
 ## 6. Principals and policy
@@ -1275,6 +1321,9 @@ Some app copy is still English only: toasts in `useAct`, tool-line labels in `To
 **…add a field to an existing entity?**
 Add it to the read, create and update schemas. Add the column to the table. Run `pnpm db:generate --name <change>` and `pnpm db:migrate`. If people filter on it, add it to `list.filterable`, and to `list.examples` so the assistant learns it. Add a `fieldLabels` entry.
 
+**…keep photos or documents on a record?**
+Give it a file field (`fileRefs()` or `FileRef`, a `files` trait, a `fileColumns()` column) and use `<FileField>` in its form. Section 5.12.
+
 **…add an entity?**
 Follow section 5.
 
@@ -1418,10 +1467,16 @@ These are not built. Each has a workaround for now.
 |---|---|
 | Invitations to a business | Insert into `app.memberships` with SQL, as `addMember` in `@hykr/api/testing` does |
 | Seed data | Create data through the API or the app. Maestro's demo assumes data exists. |
-| File uploads | MinIO runs in compose, but no code uses it. There is no upload API yet. |
+| Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
+| Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
+| Sending media (WhatsApp documents, email attachments) | Not built (B2). Send a link to the record instead. |
+| A file on two records, versioned files | One file belongs to one record field. Upload the file again for a second record. |
+| Storage quotas, malware scanning | Not built. Keep `FILES_MAX_BYTES` and each field's `maxBytes` small. |
+| Files of a deleted business or of rows deleted outside the write path | Their rows go with the business (cascade) or stay attached; their objects stay in the bucket. |
+| Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, the S3 client, `pdfkit` with `harfbuzzjs` and the Noto fonts, `expo-server-sdk` (in `@hykr/api`), `@mastra/memory` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-notifications`, `expo-device`, `expo-location`, `expo-image-picker` and `expo-document-picker` (in the mobile app). Each feature that uses one adds its code. The Expo modules' config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client. Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `pdfkit` with `harfbuzzjs` and the Noto fonts, `expo-server-sdk` (in `@hykr/api`), `@mastra/memory` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-notifications`, `expo-device` and `expo-location` (in the mobile app). Each feature that uses one adds its code. Their Expo config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client (the image picker's is in, for files). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. |
 | Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |

@@ -56,9 +56,13 @@ describe('contributions', () => {
     for (const [key, registry] of Object.entries(registries)) {
       const [contributed] = seamsContributions[key as keyof typeof registries] ?? [];
       expect(registry.get(NAME), key).toBe(contributed);
-      // The framework registers its own queues too (the channel's, the events queue).
-      if (key === 'queues') expect(registry.all(), key).toContain(contributed);
-      else expect(registry.all(), key).toEqual([contributed]);
+      // The framework's features register their own too (the channel's queues, the events
+      // queue, the files hooks): the application's is the only fixture one.
+      expect(registry.all(), key).toContain(contributed);
+      const fixtures = (registry.all() as readonly { name: string }[]).filter((x) =>
+        x.name.startsWith('fixture.'),
+      );
+      expect(fixtures, key).toEqual([contributed]);
     }
     expect(api.runtime().contributions).toEqual(seamsContributions);
   });

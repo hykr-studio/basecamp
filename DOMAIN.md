@@ -33,8 +33,8 @@ and registers it.
 
 | Layer | In the module | It must export |
 |---|---|---|
-| Contracts | `contracts/` (isomorphic) | Its `entitySpec`s and `commandSpec`s, and `<name>Spec = moduleSpec({ name, dependsOn, entities, commands })` from `@hykr/contracts`, entities keyed by plural |
-| Database | `db/schema.ts` | Drizzle tables in the `app` schema (`app`, `id`, `tenantColumn()`, `customerColumn()`, `user`, `tableRef` from `@hykr/db`), named after the module (`orders`, `orders_lines`), each with `id`, `tenantColumn()`, an owner column, `customerColumn()` (when customers have rows), `createdBy`, `createdAt`, `updatedAt` |
+| Contracts | `contracts/` (isomorphic) | Its `entitySpec`s and `commandSpec`s, and `<name>Spec = moduleSpec({ name, dependsOn, entities, commands })` from `@hykr/contracts`, entities keyed by plural. A field that keeps files is a `FileRef` or `fileRefs(max)`, listed in the spec's `files` trait with what it accepts |
+| Database | `db/schema.ts` | Drizzle tables in the `app` schema (`app`, `id`, `tenantColumn()`, `customerColumn()`, `user`, `tableRef` from `@hykr/db`), named after the module (`orders`, `orders_lines`), each with `id`, `tenantColumn()`, an owner column, `customerColumn()` (when customers have rows), `createdBy`, `createdAt`, `updatedAt`. A file field's column is `fileColumn(<field>)` or `fileColumns(<field>)` |
 | API | `server/` | A Nest module with one `defineEntity` / `defineCommand` per spec (`entityController` / `entityHandlers` / `commandController`); who sees what in `access` (see below). `server/public.ts`: what other modules may call |
 | Notifications | `notifications/` (isomorphic) | Its templates (`defineTemplate`) and notifications (`defineNotification`) |
 | Views | `views/` (isomorphic) | `<name>Views = { name, views, screens }`, declared with `defineView` / `defineScreen` |
@@ -173,6 +173,11 @@ From the contracts declaration alone:
 
 - Saved canvas pages (`pages`), the canvas tools, and the views `approval.card`, `kpi.row`,
   `page.list` and the screen `page.view`.
+- Files (`/api/files`, `app.files`): uploads to object storage through presigned URLs, files kept
+  on records' file fields and reached only through those records, a photo or document sent on
+  WhatsApp kept for its sender (the assistant puts it on a record), transcription of audio, and
+  `<FileField>` / `<FileThumbs>` in the app (developer guide, section 5.12). The sample's notes
+  keep photos.
 - Threads (one saved conversation per person, shared by every channel), voice sessions
   (`/api/voice/*`, LiveKit, the voice worker), and the framework's phrases in `@hykr/i18n`.
 - Businesses, memberships and customers (`/api/me`), and the scope engine behind `access`.
