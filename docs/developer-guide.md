@@ -729,7 +729,10 @@ agent key (`x-agent-key`, `x-agent-id`, `x-acting-for`, `x-run-id`) first, then 
 `identityProviders` entry in order (an MCP bearer token, a run token). The first identity wins. A
 provider that recognises its credential but rejects it throws 401, and nothing else is asked. No
 identity: the session. A contributed provider cannot use a configured agent's id (`assistant`,
-`voice`); without a run id the guard makes one. The assistant may forward only a turn's channel in
+`voice`); without a run id the guard makes one. When the credential fixes a business (its
+`tenantId`) or the request sends `x-tenant-id`, the principal acts in that business or not at all:
+a different header, a person who is not a member, or a contact of another business is 403
+(`tenant_mismatch` or `not_a_member`). The assistant may forward only a turn's channel in
 `x-channel` (`app`, `voice`, `whatsapp`). The identity is on the request as `req.agent`; relay checks
 read `req.agent.relay`.
 

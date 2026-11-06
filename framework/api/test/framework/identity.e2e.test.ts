@@ -22,6 +22,7 @@ import {
   me,
   Person,
   pool,
+  seedContact,
   server,
   shutdown,
 } from '../../dist/testing.js';
@@ -189,6 +190,55 @@ describe('agent identity providers', () => {
     const elsewhere = `tok-elsewhere-${randomUUID()}`;
     fixtureTokens.set(elsewhere, { userId: ana.id, tenantId: strangerTenant });
     expect((await withToken(elsewhere)('GET', '/api/tasks')).status).toBe(403);
+  });
+
+  it('a contact of another business is refused, never acted for in that business', async () => {
+    const address = () => `9198${Math.floor(Math.random() * 1e8)}`;
+    const theirs = await seedContact(strangerTenant, 'Stranger Customer', address());
+    // A credential fixed to Ana's business, naming a contact of the stranger's.
+    const fixedToAna = `tok-contact-${randomUUID()}`;
+    fixtureTokens.set(fixedToAna, { contactId: theirs.contactId, tenantId });
+    const refused = await withToken(fixedToAna)('GET', '/api/tasks');
+    expect(refused.status).toBe(403);
+    expect(refused.body).toMatchObject({ error: 'forbidden', rule: 'tenant_mismatch' });
+    expect((await withToken(fixedToAna)('POST', '/api/tasks', { title: 'Not here' })).status).toBe(
+      403,
+    );
+    // The agent key with a header naming Ana's business: the same.
+    const viaKey = await asAssistant(`contact:${theirs.contactId}`, { 'x-tenant-id': tenantId })(
+      'GET',
+      '/api/tasks',
+    );
+    expect(viaKey.status).toBe(403);
+    expect(viaKey.body).toMatchObject({ rule: 'tenant_mismatch' });
+    // Linked to Ana, who does belong to Ana's business: still the stranger's contact, refused.
+    const linked = await seedContact(strangerTenant, 'Linked Customer', address());
+    await pool.query('update channel.contacts set user_id = $1, linked_at = now() where id = $2', [
+      ana.id,
+      linked.contactId,
+    ]);
+    const linkedToken = `tok-linked-${randomUUID()}`;
+    fixtureTokens.set(linkedToken, { contactId: linked.contactId, tenantId });
+    expect((await withToken(linkedToken)('GET', '/api/tasks')).body).toMatchObject({
+      rule: 'tenant_mismatch',
+    });
+    await pool.query('update channel.contacts set user_id = null where id = $1', [
+      linked.contactId,
+    ]);
+
+    // In its own business it works, writes are audited there, and Ana's rows stay a 404.
+    const own = `tok-own-${randomUUID()}`;
+    fixtureTokens.set(own, { contactId: theirs.contactId, tenantId: strangerTenant });
+    const made = await withToken(own)('POST', '/api/tasks', { title: 'Their own' });
+    expect(made.status).toBe(201);
+    expect((await audit('task.create', made.body.value.id))[0]).toMatchObject({
+      actor_kind: 'agent',
+      acting_for: `contact:${theirs.contactId}`,
+      tenant_id: strangerTenant,
+      channel: 'mcp',
+    });
+    const anas = (await ana.call('POST', '/api/tasks', { title: 'Ana only' })).body.value;
+    expect((await withToken(own)('GET', `/api/tasks/${anas.id}`)).status).toBe(404);
   });
 
   it('a provider cannot pass as a configured agent, or send a bad run id', async () => {

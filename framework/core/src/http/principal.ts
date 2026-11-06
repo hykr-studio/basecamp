@@ -98,15 +98,20 @@ export class PrincipalGuard implements CanActivate {
       ? ({ kind: 'user', userId } as const)
       : ({ kind: 'contact', contactId: contactId ?? '' } as const);
     const channel = identity.channel;
+    const fixed = identity.tenantId ?? asked;
     // Whom it acts for, in which business (one they belong to), with what roles: the server's.
     // A linked WhatsApp contact comes back as its person.
     const standing = await this.resolver
-      .forSubject(named, { tenantId: identity.tenantId ?? asked, channel })
+      .forSubject(named, { tenantId: fixed, channel })
       .catch((e) => {
         if (e instanceof UnauthorizedException)
           throw new UnauthorizedException('x-acting-for names nobody we know');
         throw e;
       });
+    // Whatever the subject (a contact of another business, a linked contact's person), the
+    // principal acts in the business the credential or header fixed, or not at all.
+    if (fixed && standing.tenantId !== fixed)
+      throw new ForbiddenException({ error: 'forbidden', rule: 'tenant_mismatch' });
     return {
       actor: { kind: 'agent', id: identity.agentId },
       actingFor:

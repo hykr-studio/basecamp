@@ -101,10 +101,17 @@ export class PrincipalResolver {
   /**
    * A WhatsApp contact. Linked to an account (and a member of this business): that person,
    * at 'whatsapp_number'. Otherwise the business's customer, seeing only their own records.
+   * A contact belongs to one business: asked for another one (a credential or header that
+   * fixes it), it is refused, never moved there.
    */
-  async forContact(contactId: string, opts: { channel?: Channel } = {}): Promise<Standing> {
+  async forContact(
+    contactId: string,
+    opts: { tenantId?: string; channel?: Channel } = {},
+  ): Promise<Standing> {
     const contact = await contactById(this.options.db, contactId);
     if (!contact) throw new UnauthorizedException('Unknown contact');
+    if (opts.tenantId && opts.tenantId !== contact.tenantId)
+      throw new ForbiddenException({ error: 'forbidden', rule: 'tenant_mismatch' });
     if (contact.userId) {
       const member = await membershipOf(this.options.db, contact.userId, contact.tenantId);
       if (member)

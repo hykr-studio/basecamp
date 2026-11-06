@@ -24,14 +24,14 @@ export const Reports = defineCapability({
   roles: ['owner'],
 });
 
-/** The tokens a test hands out: whom each one acts for, and in which business. */
+/** The tokens a test hands out: whom each one acts for (a person or a contact), and where. */
 export const fixtureTokens = new Map<
   string,
-  { userId: string; tenantId?: string; agentId?: string; runId?: string }
+  { userId?: string; contactId?: string; tenantId?: string; agentId?: string; runId?: string }
 >();
 
 /**
- * `Authorization: Bearer <token>`: an agent acting for the token's person. Not this provider's
+ * `Authorization: Bearer <token>`: an agent acting for the token's person or contact. Not this provider's
  * credential (no bearer header): null. A bearer token it does not know: 401, never a fallback.
  */
 export const fixtureBearer: AgentIdentityProvider = {
@@ -43,7 +43,7 @@ export const fixtureBearer: AgentIdentityProvider = {
     if (!grant) throw new UnauthorizedException('fixture.bearer: unknown token');
     return {
       agentId: grant.agentId ?? 'fixture-mcp',
-      actingFor: { userId: grant.userId },
+      actingFor: grant.contactId ? { contactId: grant.contactId } : { userId: grant.userId },
       tenantId: grant.tenantId,
       channel: 'mcp',
       runId: grant.runId,
