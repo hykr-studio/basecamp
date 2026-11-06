@@ -46,7 +46,7 @@ flowchart LR
   D[application/api/src/server.ts<br/>defineServer: domain, module,<br/>views, notifications, agent]
 
   subgraph API["@hykr/api startApi : NestJS :3000"]
-    G[PrincipalGuard<br/>session or agent key]
+    G[PrincipalGuard<br/>session or agent identity]
     C[Generated controllers<br/>entityController / commandController]
     CH[ChatService<br/>/api/chat]
     RW[runWrite<br/>validate, idempotency, load,<br/>authorize, park or run, audit]
@@ -81,7 +81,7 @@ flowchart LR
 Read the diagram like this:
 
 - The API and the queue worker are `@hykr/api`. The application starts them with its own definition: `application/api/src/main.ts` calls `startApi(server)` and `worker.ts` calls `startWorker(server)`, where `server = defineServer({ ... })`. `basecamp dev` and `basecamp start api|worker` run the same thing.
-- People call the API with a Better Auth session cookie. `PrincipalGuard` turns the request into a `Principal`: who is acting, for whom, in which business, with which roles.
+- People call the API with a Better Auth session cookie. `PrincipalGuard` turns the request into a `Principal`: who is acting, for whom, in which business, with which roles and capabilities.
 - The assistant runs inside the API process (`ChatService` calls Mastra), but its tools go back out over HTTP to the same API, with agent headers. That round trip is on purpose: the assistant passes through every guard, rule and audit row.
 - WhatsApp messages arrive at `POST /webhooks/whatsapp`. They are stored, queued, and processed by the queue worker (`startWorker`), which runs a chat turn and queues the reply.
 - The voice worker is a *relay*: it may only start chat turns (`@RelayAllowed()` routes) for the person in the call.
@@ -237,7 +237,7 @@ Things that will trip you up:
 | API | http://localhost:3000 | `GET /health`; `GET /me` shows the principal the API sees for you |
 | Mobile app (web) | http://localhost:8081 | The product |
 | Back office | http://localhost:8082 | Staff inbox for WhatsApp handoffs |
-| Bull Board | http://localhost:3000/admin/queues | Queues. Sign in to the app as an owner or admin first. Not mounted in production. |
+| Bull Board | http://localhost:3000/admin/queues | Queues. Sign in to the app first, with a role that has `queues.admin` (owner or admin). Not mounted in production. |
 | whaloc | http://localhost:8080 | WhatsApp Cloud API emulator with a chat UI |
 | Mailpit | http://localhost:8025 | Email sent by notifications |
 | pgAdmin | http://localhost:5050 | `admin@example.com` / `admin`; server `app` (host `postgres`, user `app`) is preregistered |
@@ -641,7 +641,7 @@ type ApprovalCheck = (p: Principal, ctx: { action: string; input: object | null;
 type ApprovalRule =
   | 'always' | 'never'
   | ApprovalCheck
-  | { when?: 'always' | ApprovalCheck; by?: TenantRole[] | 'self'; channels?: Channel[]; minAssurance?: Assurance };
+  | { when?: 'always' | ApprovalCheck; by?: string[] | 'self'; channels?: Channel[]; minAssurance?: Assurance };
 ```
 
 - The function form is the common one: `(p) => p.actor.kind === 'agent'`. It also sees the payload, so
@@ -677,22 +677,28 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   declares its key on `EntityTraits` or `CommandTraits` in its own file. Its plugin then acts on the
   specs that carry the key.
 - **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
-  Each key is a list, collected by one registry: `entityPlugins`, `writeHooks`, `readProjectors` and
-  `identityProviders` in `@hykr/core`; `toolContributions` in `@hykr/core/tools`; `deliveryChannels`,
-  `turnHooks`, `inboundHooks`, `queues`, `schedules`, `erasureContributors`, `exportContributors` and
-  `authPlugins` in `@hykr/api`. `@hykr/api` re-exports all of them.
+  Each key is a list, collected by one registry: `roles` and `capabilities` in `@hykr/contracts`
+  (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors` and `identityProviders` in
+  `@hykr/core`; `toolContributions` in `@hykr/core/tools`; `deliveryChannels`, `turnHooks`,
+  `inboundHooks`, `queues`, `schedules`, `erasureContributors`, `exportContributors` and
+  `authPlugins` in `@hykr/api`. `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
   - Registries are process-global, so read them per request, not at import.
   - To add a kind, create its registry with `{ collects: '<key>' }` and declare `<key>` on
     `Contributions` next to it.
 - **Settings sections.** `defineSettingsSection('<key>', schema)` adds a per-business section. Its
-  schema must have a default for every field. `parseTenantSettings(raw)` (used by `TenantsService`)
-  returns the base settings, `features` (switches by key, absent means off) and every section.
+  schema must have a default for every field. `parseTenantSettings(raw)` returns the base settings,
+  `features` (switches by key, absent means off) and every section. Read a business's settings with
+  `TenantConfigService` (`@hykr/core`, global): `get(tenantId)` caches them for 10 seconds per process
+  (`CoreModule.forRoot({ tenantConfigTtlMs })`), `invalidate(tenantId)` after you change them, and
+  `isEnabled(tenantId, key)` is true only for a stored `true` (no business, an unknown one or
+  settings that do not parse are all off).
 
 `ModuleDef` (`@hykr/api`) is the shape of one application module, and `DomainEventEnvelope`
 (`@hykr/contracts`) the shape of a stored event. The module system and the event outbox build on them.
-The fixture's `framework/api/test/fixture/src/features/seams/` shows all of these in use.
+The fixture's `framework/api/test/fixture/src/features/seams/` shows all of these in use, and
+`features/identity/` a role, a capability, an identity provider and an auth plugin.
 
 ---
 
@@ -704,24 +710,40 @@ Every request becomes a `Principal` (`framework/contracts/src/principal.ts`). Th
 
 | Field | Meaning |
 |---|---|
-| `actor` | `{ kind: 'user' \| 'agent', id, role }`. `role` is deprecated; use `roles`. |
+| `actor` | `{ kind, id }`. `kind` is `'user'`, `'agent'`, `'system'` (the server's own work, below) or `'guest'` (a share link; not built yet). |
 | `actingFor` | For an agent: the person it acts for |
 | `subject` | Whose business this is: `{ kind: 'user', userId }` or `{ kind: 'contact', contactId }`. Set by the server only. |
 | `tenantId`, `roles`, `customerId` | The business, your roles in it, and your customer record if you are one |
-| `assurance` | `'whatsapp_number'` (a number alone) or `'session'` (signed in) |
-| `channel` | `'app'`, `'voice'` or `'whatsapp'` |
+| `capabilities` | What your roles allow there, by name (`'backoffice.use'`). Worked out by the server; check it with `can(p, …)` (6.4) |
+| `assurance` | `'whatsapp_number'` (a number alone) < `'otp'` (a one-time code; nothing sets it yet) < `'session'` (signed in) |
+| `channel` | `'app'`, `'voice'`, `'whatsapp'`, `'mcp'`, `'webmcp'`, `'api'`, `'background'` or `'share'`. A session request has none. |
 | `runId`, `agentVersion` | Set on agent calls, and written to audit |
 | `approvedBy` | Set on an approval replay |
 
-Everything comes from server data. Headers only choose: `x-tenant-id` picks among the businesses you belong to, and a WhatsApp channel lowers assurance. Sign-up creates the person's own business, with them as `owner` (a Better Auth `user.create.after` database hook in `framework/api/src/infra/auth.ts`). If that failed, `PrincipalGuard` creates it on their first call (`ensureDefaultTenant`).
+Everything comes from server data. Headers only choose: `x-tenant-id` picks among the businesses you belong to, and a WhatsApp channel lowers assurance. A role in a membership that nobody registered grants nothing (the server logs it once). Sign-up creates the person's own business, with them as `owner` (a Better Auth `user.create.after` database hook in `framework/api/src/infra/auth.ts`). If that failed, `PrincipalGuard` creates it on their first call (`ensureDefaultTenant`).
 
 A WhatsApp customer who has not linked an account acts as `actor.kind: 'user'` with id `contact:<id>`, roles `['customer']`.
+
+**Agents.** `PrincipalGuard` asks a chain of `AgentIdentityProvider`s who the caller is: the built-in
+agent key (`x-agent-key`, `x-agent-id`, `x-acting-for`, `x-run-id`) first, then each contributed
+`identityProviders` entry in order (an MCP bearer token, a run token). The first identity wins. A
+provider that recognises its credential but rejects it throws 401, and nothing else is asked. No
+identity: the session. A contributed provider cannot use a configured agent's id (`assistant`,
+`voice`); without a run id the guard makes one. The assistant may forward only a turn's channel in
+`x-channel` (`app`, `voice`, `whatsapp`). The identity is on the request as `req.agent`; relay checks
+read `req.agent.relay`.
+
+**The system principal.** Background work (a sweeper, a timer, an inbound webhook's job) writes
+through `runWrite` as `systemPrincipal({ tenantId, job, capabilities? })` from `@hykr/core`. It reaches
+every row of its one business, still passes entity rules and approval rules, and is audited as actor
+`system` with channel `background`. Only server code makes one; no header does. It cannot create an
+entity row (no owner) or park (nobody to ask) yet.
 
 Read `p` in your rules with the helpers in `@hykr/policy`: `subjectOf(p)`, `userIdOf(p)`, `subjectKeyOf(p)`.
 
 ### 6.2 Access
 
-`Access` (`framework/policy/src/access.ts`) says, per role, which rows a read or write reaches:
+`Access` (`framework/policy/src/access.ts`) says, per role name, which rows a read or write reaches:
 
 | Grant | Rows |
 |---|---|
@@ -753,6 +775,50 @@ When a customer creates a row, the row is owned by the business's default owner 
 4. Your entity `rules`: the first deny wins.
 5. `spec.approval[action]` parks: `needs_approval`, rule `<name>_<action>_needs_approval`.
 6. Otherwise allow, rule `scoped_access`.
+
+### 6.4 Roles and capabilities
+
+A role (`owner`, `site_lead`) is a name in the role registry. A capability (`backoffice.use`,
+`orders.cost.read`) is something a role may do that is not an entity's rows: a screen, a feature, a
+hidden field. Code checks capabilities, never role names:
+
+```ts
+import { can } from '@hykr/policy';
+import { requireCapability } from '@hykr/core';
+
+if (!can(p, 'orders.cost.read')) …                    // false when absent; throws if nobody defines it
+requireCapability(p, 'orders.cost.read', { rule: 'cost_hidden' });   // or a 403 with that rule
+```
+
+`can` reads `p.capabilities`, which the server works out from the roles when it resolves a request.
+`GET /api/me` returns the same list, so a client checks `me.capabilities` (the back office does).
+
+The framework registers five roles (`owner`, `admin`, `ops`, `staff`, `customer`) and five
+capabilities, with the roles that hold them by default:
+
+| Capability | Roles | What it opens |
+|---|---|---|
+| `backoffice.use` | owner, admin, ops, staff | The back office |
+| `customers.message` | owner, admin, ops, staff | `notify.send`: a template to a customer |
+| `history.all` | admin, ops | The whole business's history |
+| `channels.manage` | owner, admin | Setting the business's WhatsApp number |
+| `queues.admin` | owner, admin | Bull Board |
+
+An application or module adds its own through `contributes`. A capability can name its roles, and a
+role its capabilities, so neither has to edit the other's list:
+
+```ts
+import { defineCapability, defineRole } from '@hykr/contracts';
+
+contributes: {
+  capabilities: [defineCapability({ name: 'orders.cost.read', label, roles: ['owner'] })],
+  roles: [defineRole({ name: 'manager', label, capabilities: ['backoffice.use', 'orders.cost.read'] })],
+}
+```
+
+A role name is lower case (`[a-z][a-z0-9_]`, at most 32). A capability name is dotted (`<area>.<action>`).
+The API refuses to start when a role names a capability nobody defines. A role by itself grants nothing:
+give it rows in an entity's `access` and capabilities here.
 
 ---
 
@@ -1008,7 +1074,7 @@ Change the view's component (app), its `text` (WhatsApp) or its `speak` (voice).
 Define a template and a notification (section 8.2), then run `templates:sync`.
 
 **…call the API from a script or another service?**
-Use `createApiClient({ baseUrl, headers: () => ({ cookie }) })` from `@hykr/api-client`. `headers` is a function, `() => Record<string, string> | Promise<Record<string, string>>`, called on every request; web callers may pass `credentials: 'include'` instead. Then call `api.entity(TodoSpec).list({ done: false })` or `api.command(CloseMeetingSpec, input)`. Writes send a fresh idempotency key unless you pass one. A server-side sign-in through Better Auth also needs an `origin` header. To act as the assistant, send `x-agent-key`, `x-agent-id: assistant`, `x-acting-for` and an `x-run-id` matching `/^[A-Za-z0-9_-]{1,64}$/` (`framework/core/src/http/principal.ts`).
+Use `createApiClient({ baseUrl, headers: () => ({ cookie }) })` from `@hykr/api-client`. `headers` is a function, `() => Record<string, string> | Promise<Record<string, string>>`, called on every request; web callers may pass `credentials: 'include'` instead. Then call `api.entity(TodoSpec).list({ done: false })` or `api.command(CloseMeetingSpec, input)`. Writes send a fresh idempotency key unless you pass one. A server-side sign-in through Better Auth also needs an `origin` header. To act as the assistant, send `x-agent-key`, `x-agent-id: assistant`, `x-acting-for` and an `x-run-id` matching `/^[A-Za-z0-9_-]{1,64}$/` (`framework/core/src/http/identity.ts`).
 
 **…see why something was refused?**
 The 403 body has `rule` and `reason`. The `audit.events` row with `outcome = 'denied'` has the same.
@@ -1122,11 +1188,14 @@ These are not built. Each has a workaround for now.
 | File uploads | MinIO runs in compose, but no code uses it. There is no upload API yet. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| A system principal | `actor.kind` is `user` or `agent` only. Maintenance jobs write audit rows with `actorKind: 'system'` directly. Background domain writes have no principal to run as. |
+| System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. |
+| Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |
+| Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
+| Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
 | Entity rules that park | An entity rule's `needs_approval` is ignored. Only `deny` counts. Use `spec.approval`, or a command whose `authorize` returns `needsApproval`. |
-| Hooks that run | The registries of section 5.9 exist and `contributes` fills them, but nothing reads them yet. A contributed hook is installed and never called. Each consumer lands with its feature. |
+| Hooks that run | The registries of section 5.9 exist and `contributes` fills them. `roles`, `capabilities`, `identityProviders` and `authPlugins` are read; the others are installed and never called yet. Each consumer lands with its feature. |
 | Approval tiers | A decision's `tier`, `approver`, `amount` and `undoMs` are carried, not acted on. Parking, deciders and the audit trail ignore them, and an approved replay drops them. |
 | Application modules | `ModuleDef` is a type only. There is no `defineModule`, and `defineServer` still takes one `domain` and one `module`. |
 | An approval sweeper | Expiry is checked when someone decides. Expired rows stay `pending` in `GET /api/approvals` until then. |
@@ -1171,14 +1240,15 @@ An earlier outline described an API that was never built. Map it like this:
 | **Command** | A named, audited write that may touch several records: `commandSpec` and `defineCommand` |
 | **Spec** | The pure declaration in `@hykr/contracts` that routes, tools, hooks and views are built from |
 | **Principal** | Who is acting, for whom, in which business, with which roles and assurance |
-| **Actor** | The `user` or `agent` making the call |
+| **Actor** | Who makes the call: a `user`, an `agent`, the `system` (background work) or a `guest` |
 | **Subject** | Whose behalf the call is on: a user or a WhatsApp contact |
 | **Tenant** | A business. Every row has a `tenant_id`. |
 | **Membership** | A person's roles in a tenant (`app.memberships`) |
 | **Customer** | A record of a business's customer (`app.customers`). It is not a login. |
 | **Contact** | A WhatsApp number known to a business (`channel.contacts`) |
 | **Grant** | `own`, `customer` or `tenant`: which rows a role reaches |
-| **Assurance** | How sure we are of who it is: `whatsapp_number` < `session` |
+| **Capability** | Something a role may do besides reaching rows (`backoffice.use`), checked with `can(p, …)` |
+| **Assurance** | How sure we are of who it is: `whatsapp_number` < `otp` < `session` |
 | **Expose** | Who can reach an action: `all`, `human` or `internal` |
 | **Rule** | A named check that allows, denies or parks a write. Its name is audited. |
 | **Approval** | A parked write, waiting for a person's yes. It is replayed when approved. |

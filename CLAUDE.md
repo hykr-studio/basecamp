@@ -136,10 +136,12 @@ The tables (`application/domain/src/db/schema.ts`) live in the `app` schema. Use
 `createdAt` and `updatedAt`. The framework's migrations are tracked in `drizzle.__framework_migrations` and
 the application's in `drizzle.__app_migrations`.
 
-Tenancy: every row belongs to a business. The roles are `owner`, `admin`, `ops`, `staff` and `customer`, and
-an entity's `access` grants each role `own`, `customer` or `tenant` per read and write (the sample is in
-`application/domain/src/server/access.ts`). A WhatsApp-only principal can be refused with
-`minAssurance: 'session'`.
+Tenancy: every row belongs to a business. Roles are names in a registry (`roles` in `@hykr/contracts`;
+the framework's are `owner`, `admin`, `ops`, `staff` and `customer`), and an entity's `access` grants each
+role `own`, `customer` or `tenant` per read and write (the sample is in
+`application/domain/src/server/access.ts`). Anything else is a capability: check `can(p, 'backoffice.use')`
+(`@hykr/policy`), never a role name. A WhatsApp-only principal can be refused with `minAssurance: 'session'`.
+Background work writes as `systemPrincipal({ tenantId, job })` from `@hykr/core`.
 
 ### Non-obvious rules (each one has bitten someone)
 
