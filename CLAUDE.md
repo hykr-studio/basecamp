@@ -214,6 +214,12 @@ role `own`, `customer` or `tenant` per read and write (the sample is in
 A framework change needs its own tests: e2e tests in `framework/api/test/framework` against the fixture
 app in `framework/api/test/fixture`. Framework tests must not depend on the sample domain.
 
+A business's setup (developer guide, section 5.12, `framework/api/src/features/settings/`): feature
+flags (`defineFeatureFlag`, contributed as `featureFlags`; off unless the business's settings store
+`true`, and a flag naming something that does not exist stops the start), custom fields (trait
+`customFields`), branding and verified domains, shared records (`defineSharedEntity`,
+`PLATFORM_TENANT_ID`) and wording overrides (`defineServer({ wording })`, never a second declaration).
+
 Extension points (developer guide, section 5.9): spec `traits`, `contributes` lists collected by
 registries (`createHookRegistry`, in `framework/core/src/hooks.ts` and `framework/api/src/hooks.ts`),
 list field types (`defineListFieldType` plus `listFieldSql`), and settings sections

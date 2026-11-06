@@ -877,6 +877,73 @@ claimed twice, two plugins or two route shapes with one name, a view or screen b
 `Register` takes `{ catalog }` or `{ modules }` (isomorphic `ModuleSpec`s, entities merged).
 The tests are in `framework/app/src/framework/*.test.ts` and `framework/ui-registry/src/react.test.ts`.
 
+### 5.12 A business's setup: flags, custom fields, white label, shared records, wording
+
+The `settings` feature (`framework/api/src/features/settings/`, `docs/decisions/A11.md`). Every
+change to a business's setup goes through `runWrite` (validated, idempotent, audited) and needs the
+capability `settings.manage` (owners and admins). None of these commands is a tool: the assistant
+does not change a business's setup.
+
+- **Feature flags, failing closed.** A module declares its flags and what each gates, and
+  contributes them: `defineFeatureFlag({ key: 'todos.clear-done', label, description?, managedBy?,
+  gates: { modules?, entities?, commands?, tools?, nav? } })` in `contributes: { featureFlags }`.
+  A flag is on for a business only when its settings store `features[key] === true`; no business,
+  an unknown key or settings that do not parse are off. Something gated by several flags needs all
+  of them on. What is off:
+  - its routes answer 404 `not_found`, like a missing record (a global interceptor);
+  - every write that runs it or touches its records rolls back with 404, on every path (another
+    module's command, an approval approved after the flag went off, a system job);
+  - its tools are taken from the assistant for the turn (a turn hook's `withoutTools`);
+  - the app hides its destinations (`settingsPlugin`, by the item's `module` or href); `useFeature(key)`
+    hides anything else.
+  A flag that names a module, entity, command or tool the application does not have stops the start.
+  `managedBy: 'platform'` (the default) is switched only from server code
+  (`FeatureFlagsService.set(tenantId, key, on)`, as the system principal); `managedBy: 'tenant'` by
+  the business: `PUT /api/features/:key { on }`. `GET /api/features` lists every flag and its
+  state; `GET /api/me` and `GET /api/settings` list the ones that are on.
+- **Custom fields.** An entity opts in: the trait `customFields: {}`, `custom: CustomFieldValues`
+  in the read schema, `custom: CustomFieldsInput.optional()` in create and update, `custom:
+  'custom'` in `list.filterable`, and `custom: customFieldsColumn()` on the table (`@hykr/db`). A
+  business defines its fields at `/api/custom-fields` (`{ entity, key, type, label, options?,
+  required?, filterable? }`; key, type and entity never change). Types are a registry
+  (`defineCustomFieldType`); the framework's are `text`, `number`, `boolean`, `date` and `select`.
+  Values are checked in the write's transaction on every path (400 `custom_field_invalid`, rolled
+  back; a parked write when it parks). An update merges its patch; `null` removes a key. Only the
+  values a write sets are checked, so a value kept from a removed field stays until changed.
+  Filters: `custom[priority]=high` or `custom={"estimate":{"gte":3}}` (`eq`, `ne`, `in`, `lt`,
+  `lte`, `gt`, `gte`, `contains`), compared by the stored JSON type; a key the business has not
+  made filterable is a 400. The assistant gets the business's fields as turn context.
+- **White label.** The settings section `branding` (`name`, `logoUrl` (https), `colors.primary`,
+  `primaryText`, `rail`): `PATCH /api/settings/branding`. Custom domains:
+  `POST /api/settings/domains { origin }` returns a token; the business publishes it as a TXT record
+  at `_basecamp-verify.<host>`, then `POST /api/settings/domains/:id/verify`. Only a verified origin
+  is trusted, for CORS (`AuthPlugin.originAllowed`) and Better Auth (a dynamic `trustedOrigins`), and
+  `GET /api/branding/public` (no session) serves its branding to the sign-in screen. One origin
+  belongs to one business (409).
+- **Shared records.** An entity opts in with the trait `shared: {}`, `...SharedFields` in its read
+  schema, `...SharedFromInput` in create, `sharedId: sharedFromColumn()` with a unique index on
+  `(tenant_id, shared_id)`, and `defineSharedEntity(spec, config)` instead of `defineEntity`. Rows of
+  the platform's business (`PLATFORM_TENANT_ID`, deployment configuration; unset: nothing is shared)
+  are read by every business with its own (`list`, `get`, tools), each through `toRead(row, p)`, and
+  are read-only to them (403 `shared_read_only`). A business overrides one by creating its own row
+  with `sharedId` (once: 409 `shared_override_exists`), and then reads its own instead. What is
+  shared (a catalog) is application data.
+- **Wording.** The application rewords framework phrases and notifications without declaring them
+  again: `defineServer({ wording: { phrases: { en: { 'channel.handoff': '…' } }, notifications:
+  [overrideNotification('approval.request', { channels, whatsapp, email })] } })`. A phrase must
+  exist and keep its `{placeholders}`; an unknown or twice-overridden key stops the start; a
+  replacement template must be in the catalog. A business words phrases and notification emails
+  its own way in the settings section `wording` (`PATCH /api/settings/wording`): the app shows its
+  phrases (`setTenantPhrases`), `tenantPhrase(settings, lang, key)` reads them on the server, and its
+  email subject and body (`{field}` from the record) replace the application's at send time.
+- **The apps.** `<AppShell plugins={[settingsPlugin()]} />` (`@hykr/app`) applies the business's
+  colours to the theme, its phrases, and hides what is off; `useFeature`, `useBranding`,
+  `<BrandMark>`, `useCustomFields(entity)`, `<CustomFieldValues>` and `<CustomFieldInputs>` are for
+  screens. The back office's `SettingsScreen` edits branding, flags, custom fields and web addresses.
+  The sample's to-dos show a business's `priority` field and the business-managed flag
+  `todos.clear-done`. Tests: `framework/api/test/framework/settings{,.e2e}.test.ts` on the fixture's
+  `features/settings/`, and `application/api/test/domain/todo-settings.e2e.test.ts`.
+
 ---
 
 ## 6. Principals and policy
@@ -1440,7 +1507,15 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter), but no framework feature fills them yet, and WebMCP declarations (`webmcp`) are not registered with the browser. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `settingsPlugin` (section 5.12) fills the provider, sign-in and nav filter slots; WebMCP declarations (`webmcp`) are not registered with the browser. |
+| Data export for a business | Not built (A11's export waits for jobs and files). Read the business's records through the API's lists. |
+| Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
+| A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
+| Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |
+| Platform-managed flags from a screen | `managedBy: 'platform'` flags are switched with `FeatureFlagsService.set` in server code; no operator screen or route exists yet. |
+| Custom domains end to end | Verification, CORS, Better Auth's origin check and the public branding work. Sessions and cookies are not per domain, and TLS certificates are issued outside the framework. |
+| A logo upload | `branding.logoUrl` is an https URL; there is no upload for it yet. |
+| Shared records that follow their source | An override is a full copy: later changes to the platform's row do not reach it. Only the platform business (`PLATFORM_TENANT_ID`) publishes shared rows. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |
 | Per-module tools for the assistant | The assistant sees every module's tools on every turn. |
 | An approval sweeper | Expiry is checked when someone decides. Expired rows stay `pending` in `GET /api/approvals` until then. |
