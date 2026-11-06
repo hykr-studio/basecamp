@@ -1,8 +1,20 @@
 // The orders module end to end: money in minor units (INR in this business's settings), the
 // module's number series, its tax function, a tree of groups and lines saved whole, approval
-// by level and limit, cost hidden by capability, cancel instead of delete.
+// by level and limit, cost hidden by capability, cancel instead of delete; its state machine
+// (draft → submitted → approved → fulfilled), SLAs on submitted, versions, and revisions.
 
-import { addMember, asAssistant, boot, me, Person, pool, shutdown } from '@hykr/api/testing';
+import { SlaService } from '@hykr/api';
+import {
+  addMember,
+  asAssistant,
+  boot,
+  eventually,
+  me,
+  Person,
+  pool,
+  server,
+  shutdown,
+} from '@hykr/api/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { server as application } from '../../dist/server.js';
 
@@ -46,6 +58,9 @@ const save = (person: Person, body: object, headers: Record<string, string> = {}
 
 const numberRe = /^ORD\/\d{4}-\d{2}\/\d{4}$/;
 
+const move = (person: Person, id: string, name: string, body = {}, headers = {}) =>
+  person.call('POST', `/api/transitions/orders/${id}/${name}`, body, headers);
+
 beforeAll(async () => {
   await boot(application);
   for (const p of [owner, staff, admin, stranger]) await p.signUp();
@@ -74,7 +89,14 @@ describe('orders, end to end', () => {
     items = res.body.value.items;
     orderId = order.id;
     expect(order.number).toMatch(numberRe);
-    expect(order).toMatchObject({ currency: 'INR', status: 'open', lineCount: 3 });
+    expect(order).toMatchObject({
+      currency: 'INR',
+      status: 'draft',
+      lineCount: 3,
+      version: 1,
+      revision: 1,
+      seriesId: null,
+    });
     // Lines: 2 × 1500.00, 1 × 800.50, 10 × 45.25; groups add their lines up.
     const byTitle = Object.fromEntries(items.map((i) => [i.title, i]));
     expect(byTitle.Cabinet.amount).toEqual(inr(300_000));
@@ -172,13 +194,192 @@ describe('orders, end to end', () => {
     expect((await owner.call('DELETE', `/api/orders/${orderId}`)).status).toBe(404);
     expect((await owner.call('POST', '/api/orders', { title: 'Direct' })).status).toBe(404);
     expect((await owner.call('POST', '/api/orderItems', { title: 'Loose' })).status).toBe(404);
-    const cancelled = await owner.call('POST', `/api/orders/${orderId}/cancel`, {});
+    const cancelled = await move(owner, orderId, 'cancel', { cancelReason: 'Changed plans' });
     expect(cancelled.body).toMatchObject({ status: 'done' });
-    expect(cancelled.body.value).toMatchObject({ status: 'cancelled' });
-    const again = await owner.call('POST', `/api/orders/${orderId}/cancel`, {});
-    expect(again.body.rule).toBe('order_cancelled');
+    expect(cancelled.body.value).toMatchObject({
+      status: 'cancelled',
+      cancelReason: 'Changed plans',
+    });
+    const again = await move(owner, orderId, 'cancel');
+    expect(again.body.rule).toBe('not_from_state');
     const edit = await save(owner, { orderId, title: 'Revived', items: [] });
-    expect(edit.body.rule).toBe('order_cancelled');
+    expect(edit.body.rule).toBe('record_frozen');
+  });
+});
+
+describe("an order's life", () => {
+  let orderId = '';
+  let number = '';
+
+  it('a save sent with an old version is refused (409)', async () => {
+    const first = await save(owner, { title: 'Versioned', items: rooms });
+    orderId = first.body.value.order.id;
+    number = first.body.value.order.number;
+    const second = await save(owner, { orderId, version: 1, title: 'Versioned', items: [] });
+    expect(second.body.value.order.version).toBe(2);
+    const stale = await save(owner, { orderId, version: 1, title: 'From an old screen', items: [] });
+    expect(stale.status).toBe(409);
+    expect(stale.body.error).toBe('stale');
+    // Back to the full order, from the version read.
+    const items = (await save(owner, { orderId, version: 2, title: 'Versioned', items: rooms }))
+      .body.value;
+    expect(items.order.version).toBe(3);
+  });
+
+  it('submitting freezes it and starts its SLAs', async () => {
+    const submitted = await move(owner, orderId, 'submit');
+    expect(submitted.body.value).toMatchObject({ status: 'submitted', version: 4 });
+    const edit = await save(owner, { orderId, title: 'Too late', items: [] });
+    expect(edit.status).toBe(403);
+    expect(edit.body).toMatchObject({ rule: 'record_frozen' });
+    expect(edit.body.reason).toContain('Revise it');
+    const clocks = (await owner.call('GET', `/api/sla/orders/${orderId}`)).body;
+    expect(clocks.map((c: { sla: string }) => c.sla).sort()).toEqual([
+      'orders.decision',
+      'orders.expiry',
+    ]);
+    expect(clocks.every((c: { status: string }) => c.status === 'running')).toBe(true);
+  });
+
+  it('revising makes v2, a draft with the same items, and supersedes v1', async () => {
+    const res = await owner.call('POST', `/api/orders/${orderId}/revise`, {});
+    expect(res.status).toBe(200);
+    const v2 = res.body.value.order;
+    expect(v2).toMatchObject({
+      number: `${number}-v2`,
+      status: 'draft',
+      revision: 2,
+      seriesId: orderId,
+      version: 1,
+      total: inr(497_051),
+    });
+    expect(res.body.value.items.map((i: Item) => i.title).sort()).toEqual(
+      ['Bathroom', 'Cabinet', 'Kitchen', 'Sink', 'Tiles'],
+    );
+    const v1 = (await owner.call('GET', `/api/orders/${orderId}`)).body;
+    expect(v1).toMatchObject({ status: 'superseded', number });
+    // Leaving submitted ended v1's clocks.
+    const clocks = (await owner.call('GET', `/api/sla/orders/${orderId}`)).body;
+    expect(clocks.every((c: { status: string }) => c.status === 'met')).toBe(true);
+    // v2 is a draft: it changes, then it is submitted, approved and fulfilled.
+    const changed = await save(owner, { orderId: v2.id, title: 'Versioned', items: rooms.slice(0, 3) });
+    expect(changed.body.value.order.lineCount).toBe(2);
+    expect((await move(owner, v2.id, 'submit')).body.value.status).toBe('submitted');
+    const versions = (
+      await owner.call('GET', `/api/history/versions?resourceType=order&resourceId=${v2.id}`)
+    ).body;
+    expect(versions.map((v: { revision: number; state: string }) => [v.revision, v.state])).toEqual([
+      [1, 'superseded'],
+      [2, 'submitted'],
+    ]);
+    // Staff reach only their own orders, and may not approve even those; the owner may.
+    expect((await move(staff, v2.id, 'approve', {}, inTenant())).status).toBe(404);
+    const theirs = (await save(staff, { title: 'Staff own', items: [] }, inTenant())).body.value;
+    await move(staff, theirs.order.id, 'submit', {}, inTenant());
+    const notAllowed = await move(staff, theirs.order.id, 'approve', {}, inTenant());
+    expect(notAllowed.status).toBe(403);
+    expect(notAllowed.body.rule).toBe('transition_not_allowed');
+    const approved = await move(owner, v2.id, 'approve');
+    expect(approved.body.value.status).toBe('approved');
+    // The approved order is the contract: never revised, never saved over.
+    const revise = await owner.call('POST', `/api/orders/${v2.id}/revise`, {});
+    expect(revise.body.rule).toBe('order_revise_submitted');
+    expect((await save(owner, { orderId: v2.id, title: 'No', items: [] })).body.rule).toBe(
+      'record_frozen',
+    );
+    expect((await move(owner, v2.id, 'fulfil')).body.value.status).toBe('fulfilled');
+  });
+
+  it("the assistant's submit waits for the person, its approve for an owner in the app", async () => {
+    const draft = (await save(owner, { title: 'Asked to move', items: rooms })).body.value.order;
+    const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
+    const submit = await asks('POST', `/api/transitions/orders/${draft.id}/submit`, {});
+    expect(submit.body.approval).toMatchObject({ tier: 2, input: { transition: 'submit' } });
+    expect(
+      (await owner.call('POST', `/api/approvals/${submit.body.approval.id}/approve`)).body.status,
+    ).toBe('approved');
+    const approve = await asks('POST', `/api/transitions/orders/${draft.id}/approve`, {});
+    expect(approve.body.approval).toMatchObject({ tier: 3 });
+    const { rows } = await pool.query(
+      'select approver_roles, approver_channels, min_assurance from app.approvals where id = $1',
+      [approve.body.approval.id],
+    );
+    expect(rows[0]).toEqual({
+      approver_roles: ['owner'],
+      approver_channels: ['app'],
+      min_assurance: 'session',
+    });
+  });
+
+  it("a decision overdue past its SLA tells the owners; a week later it expires", async () => {
+    const order = (await save(owner, { title: 'Waiting long', items: rooms })).body.value.order;
+    await move(owner, order.id, 'submit');
+    const clocks = (await owner.call('GET', `/api/sla/orders/${order.id}`)).body as {
+      sla: string;
+      dueAt: string;
+    }[];
+    const decision = clocks.find((c) => c.sla === 'orders.decision') as { dueAt: string };
+    const sweeper = server.app?.get(SlaService, { strict: false }) as SlaService;
+    await sweeper.sweep(new Date(new Date(decision.dueAt).getTime() + 60_000));
+    const breach = await pool.query(
+      "select row from app.domain_events where resource_id = $1 and name = 'order.sla.breached'",
+      [order.id],
+    );
+    expect(breach.rows.map((r) => r.row.sla.name)).toContain('orders.decision');
+    // No phone to push to: the owner hears by email.
+    const mail = await eventually(async () => {
+      const res = await fetch(
+        `http://localhost:8025/api/v1/search?query=${encodeURIComponent(`to:"${owner.email}"`)}`,
+      );
+      const body = (await res.json()) as { messages: { Subject: string }[] };
+      return body.messages.find((m) => m.Subject.includes(order.number));
+    }, 15_000);
+    expect(mail.Subject).toBe(`${order.number} is waiting for a decision`);
+    // A week on, nobody decided: it expires, by the server itself.
+    const expiry = clocks.find((c) => c.sla === 'orders.expiry') as { dueAt: string };
+    await sweeper.sweep(new Date(new Date(expiry.dueAt).getTime() + 60_000));
+    expect((await owner.call('GET', `/api/orders/${order.id}`)).body.status).toBe('expired');
+    const { rows } = await pool.query(
+      "select actor_kind from audit.events where resource_id = $1 and action = 'order.transition' and outcome = 'committed' order by at desc limit 1",
+      [order.id],
+    );
+    expect(rows[0].actor_kind).toBe('system');
+    // An expired order can still be revised.
+    const revised = await owner.call('POST', `/api/orders/${order.id}/revise`, {});
+    expect(revised.body.value.order.status).toBe('draft');
+  });
+
+  it("an assistant's save waiting for approval fails when the draft changed meanwhile", async () => {
+    const draft = (await save(owner, { title: 'Pinned', items: rooms })).body.value.order;
+    const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
+    const parked = await asks('POST', '/api/orders/save', {
+      orderId: draft.id,
+      title: 'Pinned by the assistant',
+      items: [],
+    });
+    expect(parked.body.status).toBe('needs_approval');
+    await save(owner, { orderId: draft.id, title: 'Pinned by the owner', items: rooms });
+    const approved = await owner.call('POST', `/api/approvals/${parked.body.approval.id}/approve`);
+    expect(approved.body.status).toBe('failed');
+    expect((await owner.call('GET', `/api/orders/${draft.id}`)).body.title).toBe(
+      'Pinned by the owner',
+    );
+  });
+
+  it('another business gets 404 for its moves, clocks, versions and a revise', async () => {
+    const order = (await save(owner, { title: 'Ours', items: [] })).body.value.order;
+    await move(owner, order.id, 'submit');
+    expect((await move(stranger, order.id, 'cancel')).status).toBe(404);
+    expect((await stranger.call('GET', `/api/sla/orders/${order.id}`)).status).toBe(404);
+    expect(
+      (
+        await stranger.call(
+          'GET',
+          `/api/history/versions?resourceType=order&resourceId=${order.id}`,
+        )
+      ).status,
+    ).toBe(404);
+    expect((await stranger.call('POST', `/api/orders/${order.id}/revise`, {})).status).toBe(404);
   });
 });
 
@@ -291,9 +492,9 @@ describe('who decides, and who sees the cost', () => {
     const cancel = await owner.chat(`cancel order ${number}`);
     expect(JSON.stringify(cancel.body)).toMatch(/approv/i);
     const { rows } = await pool.query(
-      "select status from app.approvals where action = 'order.cancel' and resource_id = $1",
+      "select status, payload->'input'->>'transition' as move from app.approvals where action = 'order.transition' and resource_id = $1",
       [saved.body.value.order.id],
     );
-    expect(rows).toEqual([{ status: 'pending' }]);
+    expect(rows).toEqual([{ status: 'pending', move: 'cancel' }]);
   });
 });

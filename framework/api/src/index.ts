@@ -17,6 +17,7 @@ export {
   type Uploader,
 } from './features/files/public.js';
 export { type LiveResource, liveResources } from './features/live/resources.js';
+export { SlaService } from './features/sla/sla.service.js';
 export {
   ModelPolicyChanged,
   ModelPolicyService,
