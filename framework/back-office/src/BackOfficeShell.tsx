@@ -10,6 +10,7 @@ import { Link, Slot, usePathname } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
 import { api, auth, reasonOf, type SessionUser } from './api';
+import { BusinessBrand, DomainBrand } from './components/Brand';
 import { Button, ErrorLine } from './components/ui';
 import { type BackOfficeConfig, configure } from './config';
 
@@ -46,7 +47,11 @@ function SignIn({ title, onSignedIn }: { title: string; onSignedIn: (u: SessionU
     <View className="flex-1 items-center justify-center bg-bg px-4">
       <View className="w-full max-w-sm gap-4 rounded-card border border-border bg-card p-6">
         <View className="gap-1">
-          <Text className="text-title font-title text-text">{title} back office</Text>
+          <DomainBrand
+            fallback={title}
+            suffix=" back office"
+            className="text-title font-title text-text"
+          />
           <Text className="text-body text-muted">
             Conversations the assistant handed to your team. Sign in with your app account.
           </Text>
@@ -108,7 +113,7 @@ function Shell({
   return (
     <View className="flex-1 bg-bg">
       <View className="flex-row items-center gap-2 border-b border-divider bg-card px-4 py-2">
-        <Text className="text-heading font-title text-text">{title}</Text>
+        <BusinessBrand fallback={title} className="text-heading font-title text-text" />
         <Text className="mr-4 text-small text-muted">Back office</Text>
         <NavLink href="/" label="Conversations" />
         <NavLink href="/templates" label="Templates" />
@@ -154,7 +159,7 @@ function Gate({ title }: { title: string }) {
 }
 
 export type BackOfficeShellProps = {
-  /** The product's name, in the header and on sign-in. */
+  /** The product's name, in the header and on sign-in, while the business has none of its own. */
   title: string;
   /** What the application read from its environment: the API's address. */
   config?: Partial<BackOfficeConfig>;

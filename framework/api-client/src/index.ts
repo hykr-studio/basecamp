@@ -316,8 +316,17 @@ export function createApiClient(opts: ApiClientOptions) {
       features: () => call<FeatureState[]>('GET', '/api/features'),
       /** The business's web addresses (settings managers only). */
       domains: () => call<TenantDomain[]>('GET', '/api/settings/domains'),
-      /** Branding on a verified custom domain, before signing in (the request's Origin). */
-      publicBranding: () => call<PublicBranding>('GET', '/api/branding/public'),
+      /**
+       * Branding on a verified custom domain, before signing in: of `origin` (a web page passes
+       * its own, `window.location.origin`), else of the request's Origin. 404 anywhere else.
+       */
+      publicBranding: (origin?: string) =>
+        call<PublicBranding>(
+          'GET',
+          origin
+            ? `/api/branding/public?origin=${encodeURIComponent(origin)}`
+            : '/api/branding/public',
+        ),
     },
     /** People only: the agent gets 403. */
     listApprovals: () => call<Approval[]>('GET', '/api/approvals'),
