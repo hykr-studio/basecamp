@@ -11,14 +11,23 @@ import {
   sql,
   type Table,
 } from 'drizzle-orm';
-import { escapeLike, filterSql, toColumnValue } from './field-sql.js';
+import { escapeLike, filterSql, listFieldSql, toColumnValue } from './field-sql.js';
 
 /**
  * Turns a validated ListQuery into SQL pieces. The owner clause is added by the
  * repository before these; filters only narrow within it.
  */
 
-type SortKey = { field: string; dir: 'asc' | 'desc'; expr: SQL | Column; column: Column };
+type SortKey = {
+  field: string;
+  dir: 'asc' | 'desc';
+  expr: SQL | Column;
+  column: Column | undefined;
+  /** The sort expression's value for a value a cursor kept. */
+  at: (value: unknown) => unknown;
+  /** What a cursor keeps for a row. */
+  keep: (row: Record<string, unknown>) => unknown;
+};
 
 /** Nullable sort columns sort as if nulls were a far-off value: always last. */
 function sortExpr(column: Column, dir: 'asc' | 'desc'): SQL | Column {
@@ -105,12 +114,41 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
 
   // id is always the final key, so the order is total and cursors never skip or repeat.
   const id = col('id');
-  const keys: SortKey[] = q.sort.map((s) => ({
-    field: s.field,
-    dir: s.dir,
-    column: col(s.field),
-    expr: sortExpr(col(s.field), s.dir),
-  }));
+  const keys: SortKey[] = q.sort.map((s) => {
+    // A field type with its own order (a point: by distance to its near filter's point).
+    const type = list.filterable[s.field];
+    const own = type ? listFieldSql.get(type)?.order : undefined;
+    if (own) {
+      const order = own({
+        table,
+        field: s.field,
+        column: columns[s.field],
+        dir: s.dir,
+        filters: q.filters.filter((f) => f.field === s.field),
+      });
+      return {
+        field: s.field,
+        dir: s.dir,
+        column: columns[s.field],
+        expr: order.expr,
+        at: order.at,
+        keep: (row) => row[s.field] ?? null,
+      };
+    }
+    const column = col(s.field);
+    return {
+      field: s.field,
+      dir: s.dir,
+      column,
+      expr: sortExpr(column, s.dir),
+      at: (value) => toColumnValue(column, value),
+      keep: (row) => {
+        const value = row[s.field];
+        if (value !== null && value !== undefined) return value;
+        return column.notNull ? value : farValue(column, s.dir === 'asc' ? 'max' : 'min');
+      },
+    };
+  });
   const orderBy: SQL[] = [
     ...keys.map((k) => (k.dir === 'asc' ? sql`${k.expr} asc` : sql`${k.expr} desc`)),
     sql`${id} asc`,
@@ -119,10 +157,8 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
   /** Keyset: rows strictly after the cursor row in this order. */
   function after(cursor: Cursor): SQL {
     const cmp = (k: SortKey, value: unknown) =>
-      k.dir === 'asc'
-        ? sql`${k.expr} > ${toColumnValue(k.column, value)}`
-        : sql`${k.expr} < ${toColumnValue(k.column, value)}`;
-    const same = (k: SortKey, value: unknown) => sql`${k.expr} = ${toColumnValue(k.column, value)}`;
+      k.dir === 'asc' ? sql`${k.expr} > ${k.at(value)}` : sql`${k.expr} < ${k.at(value)}`;
+    const same = (k: SortKey, value: unknown) => sql`${k.expr} = ${k.at(value)}`;
     const branches: SQL[] = keys.map(
       (k, i) =>
         and(...keys.slice(0, i).map((p, j) => same(p, cursor.v[j])), cmp(k, cursor.v[i])) as SQL,
@@ -133,15 +169,7 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
 
   /** The values a cursor stores for a row: what each sort expression evaluates to. */
   function cursorValues(row: Record<string, unknown>): unknown[] {
-    return keys.map((k) => {
-      const value = row[k.field];
-      if (value !== null && value !== undefined) return value;
-      return k.column.notNull
-        ? value
-        : k.dir === 'asc'
-          ? farValue(k.column, 'max')
-          : farValue(k.column, 'min');
-    });
+    return keys.map((k) => k.keep(row));
   }
 
   return { where, orderBy, after, cursorValues, limit: q.limit };

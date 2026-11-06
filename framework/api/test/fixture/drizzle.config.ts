@@ -16,6 +16,7 @@ export default defineConfig(
           table: `__fixture_${feature.replaceAll('-', '_')}_migrations`,
         },
         schemaFilter: ['app'],
+        extensionsFilters: ['postgis'],
       }
     : {
         dialect: 'postgresql',
@@ -23,5 +24,6 @@ export default defineConfig(
         out: './drizzle',
         migrations: { schema: 'drizzle', table: '__fixture_migrations' },
         schemaFilter: ['app'],
+        extensionsFilters: ['postgis'],
       },
 );

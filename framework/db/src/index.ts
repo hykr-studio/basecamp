@@ -14,9 +14,18 @@ export function createDb(url: string) {
   };
 }
 
-// Builders for an application's own tables: the `app` schema, the id column, file and money
-// columns.
+// Builders for an application's own tables: the `app` schema, the id column, file, money and
+// place columns.
 export { fileColumn, fileColumns } from './columns/files.js';
+export {
+  type AddressValue,
+  addressColumn,
+  type GeoPointValue,
+  geoIndex,
+  geoPoint,
+  pointSql,
+  readEwkbPoint,
+} from './columns/geo.js';
 export { currencyColumn, minorUnits } from './columns/money.js';
 export type { Database, DbOrTx } from './database.js';
 export {

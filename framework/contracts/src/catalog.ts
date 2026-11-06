@@ -96,11 +96,14 @@ export const reservedRoutes = (): ReadonlySet<string> => reserved;
 /** The canvas tools' ids: the agent has them wherever a canvas exists. */
 export const CANVAS_TOOLS = ['canvas-open', 'canvas-compose', 'canvas-patch'] as const;
 
-/** The tool ids an entity gives the agent (only its actions exposed to everyone). */
+/**
+ * The tool ids an entity gives the agent (only its actions exposed to everyone): its list gives
+ * `list-<plural>` and `summarize-<plural>` (counts and totals).
+ */
 export function entityToolIds(spec: EntitySpec): string[] {
   const exposed = (a: keyof EntitySpec['expose']) => spec.expose[a] === 'all';
   return [
-    ...(exposed('list') ? [`list-${spec.plural}`] : []),
+    ...(exposed('list') ? [`list-${spec.plural}`, `summarize-${spec.plural}`] : []),
     ...(['get', 'create', 'update', 'delete'] as const)
       .filter(exposed)
       .map((a) => `${a}-${spec.name}`),

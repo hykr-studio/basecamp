@@ -3,7 +3,13 @@ import type { ViewDef } from '@hykr/ui-registry';
 import { getView, wordsOf } from '@hykr/ui-registry/react';
 import { ActivityIndicator, View } from 'react-native';
 import { Text } from '../components/ui/text';
-import { type EntityName, errorMessage, useEntity, useEntityList } from '../framework/hooks';
+import {
+  type EntityName,
+  errorMessage,
+  useEntity,
+  useEntityList,
+  useEntitySummary,
+} from '../framework/hooks';
 import { useLang } from '../framework/lang';
 import { getRegistry } from '../runtime';
 import { colors } from '../theme';
@@ -35,6 +41,19 @@ function ByQuery({ def, query, props }: { def: ViewDef; query?: ViewQuery; props
   ) : null;
 }
 
+/** Counts and totals: the entity's summary for the view's query, with the person's session. */
+function BySummary({ def, query, props }: { def: ViewDef; query?: ViewQuery; props?: object }) {
+  const source = def.source as NonNullable<ViewDef['source']>;
+  const summary = useEntitySummary(source.entity.plural, query ?? {});
+  const Component = getView(def.name);
+  const act = useAct(def.name);
+  const words = wordsOf(def, useLang().lang);
+  if (!summary.data) return <Status loading={summary.isLoading} error={summary.error} />;
+  return Component ? (
+    <Component {...props} {...{ [source.into]: summary.data }} act={act} words={words} />
+  ) : null;
+}
+
 /** One record by id. */
 function ById({ def, props }: { def: ViewDef; props?: Record<string, unknown> }) {
   const source = def.source as NonNullable<ViewDef['source']>;
@@ -48,7 +67,7 @@ function ById({ def, props }: { def: ViewDef; props?: Record<string, unknown> })
   ) : null;
 }
 
-/** Props only (kpi.row, approval.card): the intent carried everything. */
+/** Props only (approval.card, kpi.row): the intent carried everything, or the view fetches. */
 function ByProps({ def, props }: { def: ViewDef; props?: object }) {
   const Component = getView(def.name);
   const act = useAct(def.name);
@@ -66,5 +85,6 @@ export function InlineView({ view, query, props }: Props) {
   if (!def || !getView(view)) return null;
   if (def.source?.by === 'query') return <ByQuery def={def} query={query} props={props} />;
   if (def.source?.by === 'id') return <ById def={def} props={props} />;
+  if (def.source?.by === 'summary') return <BySummary def={def} query={query} props={props} />;
   return <ByProps def={def} props={props} />;
 }

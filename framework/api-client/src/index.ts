@@ -19,6 +19,8 @@ import {
   type PushDevice,
   pathParams,
   type RegisterPushToken,
+  type Summary,
+  type SummaryInput,
   type TemplateStatus,
   type Thread,
   type ThreadMessage,
@@ -113,6 +115,8 @@ export type EntityClient<S extends EntitySpec> = {
     key?: string,
   ): Promise<WriteResult<z.infer<S['schemas']['read']>>>;
   remove(id: string, key?: string): Promise<WriteResult<null>>;
+  /** Counts and totals (GET /api/<plural>/summary): the list's filters, groupBy, sum, avg… */
+  summary(query?: SummaryInput): Promise<Summary>;
 };
 
 export function createApiClient(opts: ApiClientOptions) {
@@ -178,11 +182,17 @@ export function createApiClient(opts: ApiClientOptions) {
     for await (const m of liveMessages(textOf(res.body))) onMessage(m);
   }
 
+  /** An entity's summary by its plural ('orders'), for views that name it (kpi.row's `of`). */
+  function summary(plural: string, query: SummaryInput = {}): Promise<Summary> {
+    return call('GET', `/api/${encodeURIComponent(plural)}/summary${toQueryString(query)}`);
+  }
+
   function entity<S extends EntitySpec>(spec: S): EntityClient<S> {
     const base = `/api/${spec.plural}`;
     const one = (id: string) => `${base}/${encodeURIComponent(id)}`;
     return {
       list: (query) => call('GET', `${base}${toQueryString(query)}`),
+      summary: (query) => summary(spec.plural, query),
       get: (id) => call('GET', one(id)),
       create: (input, key = newKey()) => call('POST', base, input, key),
       update: (id, patch, key = newKey()) => call('PATCH', one(id), patch, key),
@@ -261,6 +271,7 @@ export function createApiClient(opts: ApiClientOptions) {
 
   return {
     entity,
+    summary,
     command,
     /** Files: uploads, and files reached through the records they are on. */
     files,
