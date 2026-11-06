@@ -727,7 +727,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql`,
   `identityProviders` and `numberSeries` (section 5.13) in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
-  `eventFeeds`, `erasureContributors`, `exportContributors` and `authPlugins` in `@hykr/api`.
+  `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources` and
+  `mentionKinds` (section 5.14) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -805,6 +806,13 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   business. Push reaches only devices registered in the notification's business. No device, or Expo
   refusing every device, moves on at once; a receipt error on every device (polled each minute by the
   `push.receipts` schedule) moves on later through `NotifyService.fallback`. A gone device is forgotten.
+- **In-app inbox.** `inapp` is the framework's in-app delivery channel (`features/inbox`, decisions in
+  `docs/decisions/B16.md`). A notification that lists it needs `inapp: { title, body, url?, record? }`.
+  It keeps one item per person and dedupe key in `channel.inbox_items`, in the reader's language, and
+  announces it on the live stream to that person only. A contact without an account has no inbox (the
+  next channel is tried). People read theirs with `GET /api/inbox` and mark items read with
+  `POST /api/inbox/read` (`{ ids }` or `{ all: true }`); the app's `inboxPlugin()` adds the `/inbox`
+  screen.
 - **Live updates.** `GET /api/live` (server-sent events, people only) sends `{ name, type, id }` for
   each committed event about a record the person may read now: an entity's record through its scoped
   read (as `GET`), any other type through a contributed `liveResources` check (`approval` is the
@@ -994,6 +1002,47 @@ sample's `orders` module uses every part.
 - **Large writes.** `runWrite` audits a write's rows in one statement, the JSON body limit is
   `JSON_BODY_LIMIT` (1 MB), and a tree holds at most 1000 nodes and 8 levels (`maxNodes`,
   `maxDepth` on the trait). The approval card sums up long lists.
+
+### 5.14 Comments and mentions
+
+Every record a person can read takes comments (`docs/decisions/B16.md`). The framework's `comments`
+feature keeps them in `app.comments`, keyed by the record's entity and id, and reaches them only
+through that record: whoever may read it now (its entity's scoped read, as `GET`; the assistant also
+needs the entity's `get` exposed) reads its comments, and anyone else gets 404.
+
+- **Writing** is three platform commands, through `runWrite`: `comment.add` (`POST /api/comments
+  { entity, recordId, body, internal?, anchor? }`, the assistant's `add-comment`), `comment.edit`
+  (`PATCH /api/comments/:commentId`, the author only) and `comment.remove` (`DELETE`, the author or
+  `comments.moderate`). Each command's audit row and approval name the record, so its history shows
+  "commented on"; the comment itself is audited as `comment`. Only people with an account comment.
+- **Reading.** `GET /api/comments?entity=&id=` (newest first, `nextCursor` for older ones), each with
+  `can: { edit, remove }` for the caller; the assistant's `list-comments`.
+- **Per entity**, the `comments` trait: `false` turns comments off (`comments_off`); its object form
+  gives an `approval` rule for added comments (checked with the action `comment`, the input and the
+  record; its object form also names who decides) and an `anchor` schema (a version, a point) without
+  which a comment carries no anchor.
+- **Mentions** are tokens in the text, `@[Name](user:<id>)`. The server checks each one: a member
+  of the business who may read the record now (and, for an `internal` comment, holds
+  `comments.internal`). Anyone else refuses the comment (`mention_not_allowed`), so nobody is told of
+  a record they cannot open. Labels become the names the server knows. `GET
+  /api/comments/mentionable?entity=&id=&q=` (and the assistant's `list-mentionable`) offers who may
+  be named. A feature adds a kind of target with `mentionKinds` (`MentionKind`: `resolve`, and
+  `suggest` for the picker); the agents feature adds `agent`.
+- **Events.** `comment.added`, `comment.edited`, `comment.removed`, and one `comment.mentioned` per
+  newly named target (never the author), all in the outbox with the write. A `comment.mentioned`
+  row is `{ id, tenantId, commentId, on: { entity, id }, target: { kind, id, label }, author: { id,
+  name }, internal, excerpt }` (`CommentMentionRow` in `@hykr/notifications`): subscribe to it
+  (`defineSubscriber({ on: ['comment.mentioned'] })`) to act on a mention, or declare a notification
+  on it. The framework's own, `comment.mention`, puts it in the person's in-app inbox; push, email
+  or WhatsApp is the application's own notification (the sample's orders module pushes, then emails).
+- **Team-only comments** (`internal: true`) are written, read and named only by holders of
+  `comments.internal` (the built-in team roles; give your own roles the capability).
+- **Live and erasure.** Comment events reach the streams of people who may read the comment; inbox
+  items, their owner's. Erasing a person deletes their comments and inbox items and turns tokens
+  naming them into `@—`. A record deleted through its entity leaves its comments unreachable.
+- **The app.** `<Comments entity="order" id={id} />` (`@hykr/app`) is the discussion: oldest first,
+  edit and remove where allowed, a composer whose `@` offers the people to name, and a "Team only"
+  switch for those who may. `inboxPlugin()` adds `/inbox`; `<InboxBell />` shows the unread count.
 
 ---
 
@@ -1334,11 +1383,12 @@ export const MeetingReminder = defineTemplate({
 | `whatsapp` | `{ template, params(row, reader) }`. Required when `'whatsapp'` is a channel (and for `onButton`, `approval`). |
 | `email` | `{ subject, body }`. Required when `'email'` is in `channels`. |
 | `push` | `{ title(row, reader), body(row, reader), url?(row) }`: what the phone shows, and the app path a tap opens. Required when `'push'` is in `channels`. |
+| `inapp` | `{ title(row, reader), body(row, reader), url?(row), record?(row) }`: what the person's in-app inbox keeps, and what it opens. Required when `'inapp'` is in `channels`. |
 | `onButton` | `{ [buttonId]: (row) => { reschedule?: Date; reply?: Labels } \| undefined }` |
 | `approval` | `(row) => approvalId`: the quick replies `approve` and `reject` decide that approval |
 | `dedupe` | Required. `(row) => string`: one pending schedule per key |
 
-Event names are `<entity>.created|updated|deleted`, your commands' `NamedEvent`s, and `approval.requested` / `approval.decided`.
+Event names are `<entity>.created|updated|deleted`, your commands' `NamedEvent`s, `approval.requested` / `approval.decided`, and `comment.mentioned` (section 5.14).
 
 Add the template and notification to the module's `<name>Notifications` (the module's `index.ts` passes them to `defineModule`). Template names and notification keys are unique across modules. Then run:
 
@@ -1572,11 +1622,16 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots. Routes, nav and nav filters have no framework feature yet. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `inboxPlugin()` uses routes and nav. Nav filters have no framework feature yet. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
 | Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
 | Live deletions for everyone | A deleted record reaches only streams already told about it and the person who deleted it; others see it go at their next refetch (focus, reconnect, their own write). |
+| Comment attachments, reactions, threads | Not built. Put files on the record itself; reply with a new comment that mentions the person. |
+| Comments from WhatsApp | A contact without an account cannot comment, and a mention is not answerable from WhatsApp. Comment in the app. |
+| Filtering comments by anchor | `GET /api/comments` returns every comment of the record; filter by `anchor` in the client. |
+| Comments of deleted records | No foreign key reaches a record of any type: deleting a record leaves its comments in `app.comments`, unreachable. They go with the business. |
+| An unread badge on the Inbox destination | Nav items have no badge. Put `<InboxBell />` in a screen's header. |
 | Live back office | The back office still polls its inbox (10 s) and an open conversation (5 s): inbound messages and handoffs write no outbox events. |
 | Missed live events | A reconnect refetches every query; `Last-Event-ID` replay is not supported. |
 | WebMCP actions | WebMCP tools only read; the API refuses any write on the `webmcp` channel. There are no declarative forms or write tools for a browser agent, and no read tool for a command. Public and share-link screens offer no tools. |

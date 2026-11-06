@@ -317,6 +317,11 @@ describe('mentions', () => {
       heard.find((e) => (e.row as { target?: { id: string } }).target?.id === 'helper7'),
     );
     expect((await add(ana, 'Over to @[x](helper:other)')).status).toBe(403);
+    // At most 20 different targets in one comment.
+    const many = Array.from({ length: 21 }, (_, i) => `@[h](helper:helper${i})`).join(' ');
+    const tooMany = await add(ana, many);
+    expect(tooMany.status).toBe(400);
+    expect(tooMany.body).toMatchObject({ error: 'too_many_mentions' });
   });
 
   it('an edit tells only the people it newly names', async () => {
