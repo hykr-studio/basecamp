@@ -11,6 +11,8 @@ export { applyCanvasIntent, useCanvas } from './canvas/store';
 export { Button } from './components/Button';
 export { ScreenTitle, SectionHeading } from './components/ScreenTitle';
 export { type AppConfig, appConfig, configure } from './config';
+// Framework features for the shell (`<AppShell plugins>`): one line each in features/index.ts.
+export * from './features';
 export {
   ApprovalCard,
   ApprovalItem,

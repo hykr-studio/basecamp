@@ -1,4 +1,4 @@
-import type { Catalog } from '@hykr/contracts';
+import { agentReads, type Catalog } from '@hykr/contracts';
 import type { Registry } from '@hykr/ui-registry';
 import { bindingAs, boundScreens, boundViews, clearBindings } from '@hykr/ui-registry/react';
 import {
@@ -213,9 +213,15 @@ export function composeApp(input: {
   const declare = (screens: AppSettings['webmcp'], module?: string) => {
     const by = module ? `module ${module}` : 'the app';
     for (const [screen, decl] of Object.entries(screens ?? {})) {
-      for (const plural of decl.reads)
+      for (const plural of decl.reads) {
         if (!Object.hasOwn(catalog.entities, plural))
           throw new Error(`${by}: WebMCP screen ${screen} reads "${plural}", which is no entity`);
+        // A browser agent is an agent: it gets only the reads the spec opens to agents.
+        if (agentReads(catalog.entities[plural]).length === 0)
+          throw new Error(
+            `${by}: WebMCP screen ${screen} reads "${plural}", whose list and get are not open to agents (expose 'all')`,
+          );
+      }
       claimScreen(screen, by);
       webmcp.set(screen, module ? { ...decl, module } : { ...decl });
     }
