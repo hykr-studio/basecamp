@@ -1,4 +1,4 @@
-import type { ApprovalCardView, KpiRowView, PageListView } from '@hykr/ui-registry';
+import type { ApprovalCardView, KpiRowView, MemoryListView, PageListView } from '@hykr/ui-registry';
 import type { ViewProps } from '@hykr/ui-registry/react';
 import { useContext } from 'react';
 import { Pressable, View } from 'react-native';
@@ -12,7 +12,7 @@ import {
 } from '../framework/ApprovalCard';
 import { Icon } from '../framework/Icon';
 import { colors } from '../theme';
-import { OpenRow, Rows, ViewCard } from './parts';
+import { ByAssistant, OpenRow, Rows, ViewCard } from './parts';
 
 const DECIDED = {
   approved: ['check-circle', colors.success, 'Approved by you, and done'],
@@ -104,6 +104,22 @@ export function PageListComponent({ title, items, act, words }: ViewProps<typeof
             <Text className="font-semibold">{p.name}</Text>
             <Text variant="muted">{p.spec.blocks.length} blocks</Text>
           </OpenRow>
+        )}
+      </Rows>
+    </ViewCard>
+  );
+}
+
+/** The business's memories (memory.list): one fact a row, marked when the assistant wrote it. */
+export function MemoryListComponent({ title, items, words }: ViewProps<typeof MemoryListView>) {
+  return (
+    <ViewCard title={title ?? words.title} count={items.length}>
+      <Rows items={items} empty={words.empty}>
+        {(m) => (
+          <View className="gap-1 py-2">
+            <Text>{m.text}</Text>
+            {m.createdBy === 'assistant' ? <ByAssistant /> : null}
+          </View>
         )}
       </Rows>
     </ViewCard>

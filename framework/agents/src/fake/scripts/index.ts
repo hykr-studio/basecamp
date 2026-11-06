@@ -2,5 +2,6 @@
 // per file (a union merge keeps both sides' lines; see .gitattributes). A new feature adds its
 // file and its line here; each set's `order` decides where its scripts run, not this list.
 export { handoffScripts } from './handoff.js';
+export { memoryScripts } from './memory.js';
 export { pagesScripts } from './pages.js';
 export { testingScripts } from './testing.js';
