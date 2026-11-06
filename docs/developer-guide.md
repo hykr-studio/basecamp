@@ -20,7 +20,7 @@ You declare your business once, in a typed spec: its records (entities), its mul
 - An audit row for every write, refusal and decision.
 - History lines, approval cards, and how the assistant shows results on screen, on WhatsApp and in speech.
 
-The template ships with a sample application: meetings, notes and to-dos, as three modules in `application/`. It shows every feature. You replace it with your own (see `DOMAIN.md` at the root), or start a new application from the same sample with `npm create @hykr/basecamp <folder>`. The framework never imports the application: the application passes its modules in, through `defineServer` (`application/api/src/server.ts`) and `<AppShell>` (`application/mobile/src/app/_layout.tsx`).
+The template ships with a sample application: meetings, notes, to-dos and orders, as four modules in `application/`. It shows every feature. You replace it with your own (see `DOMAIN.md` at the root), or start a new application from the same sample with `npm create @hykr/basecamp <folder>`. The framework never imports the application: the application passes its modules in, through `defineServer` (`application/api/src/server.ts`) and `<AppShell>` (`application/mobile/src/app/_layout.tsx`).
 
 ### The three rules
 
@@ -724,8 +724,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   specs that carry the key.
 - **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
   Each key is a list, collected by one registry: `roles` and `capabilities` in `@hykr/contracts`
-  (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql` and
-  `identityProviders` in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
+  (section 6.4); `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql`,
+  `identityProviders` and `numberSeries` (section 5.12) in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors` and `authPlugins` in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
@@ -870,6 +870,51 @@ claimed twice, two plugins or two route shapes with one name, a view or screen b
 
 `Register` takes `{ catalog }` or `{ modules }` (isomorphic `ModuleSpec`s, entities merged).
 The tests are in `framework/app/src/framework/*.test.ts` and `framework/ui-registry/src/react.test.ts`.
+
+### 5.12 Money, number series and records with a parent
+
+The framework moves money one way and keeps documents numbered without gaps; what the money is,
+how numbers read and how tax is worked out are the application's (`docs/decisions/B3B5.md`). The
+sample's `orders` module uses every part.
+
+- **Money.** `Money = { minor, currency }` (`@hykr/contracts`): whole minor units of an ISO 4217
+  currency. Store an amount in a `minorUnits('total')` column (`bigint`, read as a number) beside a
+  `currencyColumn()` (`@hykr/db`), and give the spec the trait `money: { fields: ['total'] }`: reads
+  carry `Money`, writes take `MoneyInput` (`{ minor }`, or a decimal string such as `"1500.00"` read
+  with the currency's exponent), and a record keeps one currency (`currency_mismatch`,
+  `currency_fixed`, `currency_required`, `money_invalid`). Filter a money field with the `money`
+  list type, in minor units. Arithmetic is exact: `mulDiv`, `scaleMoney`, `allocateMinor`,
+  `sumMoney`, with the rounding you name. `moneyText(m, lang)` and `spokenMoney` (`@hykr/i18n`) and
+  `useMoneyText()` (`@hykr/app`) format through Intl.
+- **A business's money.** The `money` settings section: `currency`, `fyStartMonth`, and named
+  `amounts` and `bands` the application reads in its own rules (`moneyAmount`, `exceeds`,
+  `moneyBand`). `tenantMoney(conn, tenantId)` resolves the currency: the business's, else
+  `DEFAULT_CURRENCY`, else `XXX`. `GET /api/money` gives clients the currency, its exponent and the
+  financial year, never the amounts.
+- **Tax.** `defineTaxFunction({ name, compute(lines, { currency, at }) })` is your computation;
+  `applyTax(fn, lines, { currency })` checks its lines (`TaxLine`: code, label, basis, `rateBp`,
+  amount, `included`) and returns the subtotal, tax lines, tax total and total.
+- **Number series.** `defineNumberSeries({ name, format: 'ORD/{fy}/{seq:4}', reset: 'fiscal' })`,
+  contributed as `numberSeries`. In a command's `run`, `nextNumber(tx, p, series)` takes the next
+  number in the write's own transaction: a write that fails gives it back, and a parked write takes
+  none until it is approved. Periods follow the business's time zone and `fyStartMonth`. Never
+  delete a numbered record: cancel it.
+- **Records with a parent.** Give a child spec `traits.parent: { entity, field, nest?, position? }`
+  (`nest`: its own field pointing at the node above, for groups and lines to any depth), list its
+  `field` as filterable `'id'`, put `nest` and `position` in its update schema, and serve it with
+  `defineChildEntity(spec, { table, owner, customer, access, parent: { def, owner, customer } })`,
+  giving it the parent's `access`. Each child carries its parent's owner, customer and currency, so
+  it is reached exactly when its parent is (the `parent` plugin also checks the parent exists in the
+  same business). In a command, `Child.children.replace(tx, p, parentRow, nodes, via)` makes the
+  children exactly a tree of nodes (`{ id?, ...fields, children? }`): new nodes in a few multi-row
+  inserts, changed ones updated, missing ones deleted, each audited. `children.insert` appends;
+  `children.list` reads them in tree order; `buildTree` (`@hykr/contracts`) builds the tree on a
+  client. Plain CRUD never adds, moves or deletes a node of a tree. Add composite foreign keys
+  `(tenant_id, parent_id) → parent (tenant_id, id)` and `(parent_id, nest) → child (parent_id, id)`
+  so the database also refuses a row that points elsewhere.
+- **Large writes.** `runWrite` audits a write's rows in one statement, the JSON body limit is
+  `JSON_BODY_LIMIT` (1 MB), and a tree holds at most 1000 nodes and 8 levels (`maxNodes`,
+  `maxDepth` on the trait). The approval card sums up long lists.
 
 ---
 
@@ -1387,6 +1432,10 @@ These are not built. Each has a workaround for now.
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
 | Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
+| Editing a business's money settings | Nothing in the API changes `money` (currency, `fyStartMonth`, amounts, bands) yet: set it in `app.tenants.settings` with SQL. |
+| Bulk writes for plain entities | Only children of a parent are inserted in bulk (`children.insert`/`replace`); `insertMany` for any other entity is one insert per row. There is no bulk update. |
+| Line-level tools | The assistant saves a whole tree in one call (the sample's `save-order`); there are no tools to add or move one line. |
+| Several currencies in one record | A record and its children have one currency, and there are no exchange rates. |
 | Approval tiers | Deciders follow a decision's `approver`, the approval shows `tier` and `amount`, and `undoMs` holds events back. There are no multi-step tiers, no undo action and no rule against approving your own request. |
 | Withdrawing a stored event | Nothing sets `app.domain_events.cancelled_at` yet (there is no undo action). The outbox feed skips such rows, so the undo action only has to set it before `available_at`. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |

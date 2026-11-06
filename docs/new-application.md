@@ -86,7 +86,7 @@ pnpm exec basecamp infra up             # Postgres, Redis, Mailpit, whaloc, Live
 > **Inside the Basecamp repository** you don't scaffold: `application/` is the application. Run
 > the same steps against it, with `pnpm build`, `pnpm db:migrate` and `pnpm dev` at the root.
 
-The scaffold starts as a copy of the sample application (meetings, notes and to-dos). Build it
+The scaffold starts as a copy of the sample application (meetings, notes, to-dos and orders). Build it
 and run it once, so you know the pieces work before you change anything:
 
 ```bash
@@ -99,11 +99,12 @@ Sign up at http://localhost:8081, then stop it (Ctrl-C).
 
 ## 2. Remove the sample modules
 
-Delete the sample's three modules, their screens and their tests. Everything you delete here is
+Delete the sample's four modules, their screens and their tests. Everything you delete here is
 application code; nothing in `node_modules/@hykr` changes.
 
 ```bash
 rm -rf domain/src/modules/meetings domain/src/modules/notes domain/src/modules/todos \
+       domain/src/modules/orders mobile/src/modules/orders mobile/src/app/orders \
        domain/src/modules/notifications.test.ts domain/src/views/views.test.ts domain/drizzle \
        mobile/src/modules/meetings mobile/src/modules/notes mobile/src/modules/todos \
        mobile/src/home mobile/src/app/meetings mobile/src/app/notes mobile/src/app/todos \

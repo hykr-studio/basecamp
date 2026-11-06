@@ -8,8 +8,8 @@ Basecamp is a framework for full-stack apps where an AI assistant works alongsid
 approvals and audit trail. You declare an entity once (a Zod spec), and the framework generates the REST
 routes, the agent tools, the app data hooks, approval cards, history, and the WhatsApp and voice rendering.
 It is a pnpm + Turborepo monorepo. `framework/` holds the `@hykr/*` packages, which can be published to npm.
-`application/` holds one sample application built on them: meetings, notes and to-dos, as three modules
-(`application/domain/src/modules/<name>/`).
+`application/` holds one sample application built on them: meetings, notes, to-dos and orders, as four
+modules (`application/domain/src/modules/<name>/`).
 
 The long-form references are `docs/developer-guide.md` (architecture, rules, testing, known gaps),
 `docs/tutorial.md` (one feature end to end), `docs/new-application.md` (a new product from scratch) and

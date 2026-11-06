@@ -1,7 +1,7 @@
 # The domain is replaceable
 
 Basecamp, the agentic development stack for full-stack applications, ships with a sample
-application: meetings, notes and to-dos, as three modules. The framework (the API pipeline with
+application: meetings, notes, to-dos and orders, as four modules. The framework (the API pipeline with
 its rules, approvals and audit; the assistant with its tools, surfaces, canvas and WhatsApp;
 saved pages; the app shell) lives in `framework/` and is published as `@hykr/*` packages. The
 application lives in `application/`. The framework never imports the application; the
@@ -105,7 +105,7 @@ hold several roles in a business. The framework registers `owner`, `admin`, `ops
 
 The sample modules give the owner and staff their own rows, admin and ops the whole business,
 and a customer their own customer's rows (`application/domain/src/server/access.ts`, shared by
-the three modules). With
+the modules). With
 `customer: (t) => t.customerId`, a customer's assistant creates rows for that customer, owned by
 the business's default owner.
 
@@ -117,6 +117,24 @@ capabilities for the apps.
 Approvals take an object form, `{ when, by, channels, minAssurance }`: who decides (the person
 it is for by default; a customer's request goes to `owner` and `ops`), and where (`channels:
 ['app']` for anything irreversible keeps it off WhatsApp buttons).
+
+## Money, numbers and lines
+
+The framework has no currency, number format or tax rule of its own; a module declares them
+(the sample's `orders` module does all three, developer guide 5.12):
+
+- **Money** is whole minor units with an ISO 4217 currency (`Money = { minor, currency }`):
+  `minorUnits()` and `currencyColumn()` columns and the spec's `money` trait. A business's
+  currency is its `money.currency` setting, else the deployment's `DEFAULT_CURRENCY`, else `XXX`.
+  Limits and bands a module's rules compare against are named amounts in the same settings.
+- **Number series** (`defineNumberSeries`, contributed as `numberSeries`): the module's format
+  (`ORD/{fy}/{seq:4}`) and reset (none, yearly, or the financial year from `fyStartMonth`);
+  `nextNumber` in a command's `run` keeps them gapless. Numbered records are cancelled, never
+  deleted.
+- **Tax** is the module's function (`defineTaxFunction`); `applyTax` checks its lines and adds them up.
+- **Lines** are a child entity (`traits.parent`, `defineChildEntity`): rows of one parent record,
+  in a tree of any depth, reached exactly when the parent is, and saved whole by a command
+  (`children.replace`) as one write, one approval and one audit statement.
 
 ## What a module adds for WhatsApp: templates and notifications
 
