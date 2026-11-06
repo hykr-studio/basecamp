@@ -1,8 +1,14 @@
 // A business's custom fields in the app (A11): its definitions for an entity, a record's values
 // shown with their labels, and inputs to change them. The server checks every value again.
-import { type CustomField, CustomFieldSpec, type CustomFieldsInput } from '@hykr/contracts';
+import {
+  type CustomField,
+  CustomFieldSpec,
+  type CustomFieldsInput,
+  customValueFromText,
+} from '@hykr/contracts';
 import { pick } from '@hykr/i18n';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { api } from '../../api';
 import { useLang } from '../../framework/lang';
@@ -61,8 +67,43 @@ export function CustomFieldValues({
 }
 
 /**
+ * A text, number or date field: the text as typed is kept here, and each change is reported as
+ * the value it sends (`customValueFromText`). Every keystroke, not on blur: react-native-web
+ * has no `onEndEditing`, and a form's button is pressed before a blur would be seen.
+ */
+function TypedValue({
+  field,
+  label,
+  value,
+  onChange,
+}: {
+  field: Pick<CustomField, 'key' | 'type'>;
+  label: string;
+  value: unknown;
+  onChange: (patch: CustomFieldsInput) => void;
+}) {
+  const [text, setText] = useState(value === undefined || value === null ? '' : String(value));
+  return (
+    <TextInput
+      accessibilityLabel={label}
+      value={text}
+      placeholder={field.type === 'date' ? 'YYYY-MM-DD' : undefined}
+      placeholderTextColor={colors.placeholder}
+      keyboardType={field.type === 'number' ? 'numeric' : 'default'}
+      onChangeText={(next) => {
+        setText(next);
+        onChange({ [field.key]: customValueFromText(field.type, next) });
+      }}
+      style={styles.input}
+    />
+  );
+}
+
+/**
  * Inputs for a record's custom values: a choice for a select or yes/no, text otherwise. It
- * reports a patch (`{ key: value }`, null to clear one), ready for the record's `custom`.
+ * reports a patch (`{ key: value }`, null to clear one), ready for the record's `custom` (a
+ * create sends `customForCreate(collected)`, an update the patch as it is). A text input keeps
+ * what was typed: give the inputs a new `key` to start a form again.
  */
 export function CustomFieldInputs({
   entity,
@@ -116,19 +157,7 @@ export function CustomFieldInputs({
                 })}
               </View>
             ) : (
-              <TextInput
-                accessibilityLabel={label(f)}
-                defaultValue={value === undefined ? '' : String(value)}
-                placeholder={f.type === 'date' ? 'YYYY-MM-DD' : undefined}
-                placeholderTextColor={colors.placeholder}
-                keyboardType={f.type === 'number' ? 'numeric' : 'default'}
-                onEndEditing={(e) => {
-                  const text = e.nativeEvent.text.trim();
-                  if (!text) return onChange({ [f.key]: null });
-                  onChange({ [f.key]: f.type === 'number' ? Number(text) : text });
-                }}
-                style={styles.input}
-              />
+              <TypedValue field={f} label={label(f)} value={value} onChange={onChange} />
             )}
           </View>
         );

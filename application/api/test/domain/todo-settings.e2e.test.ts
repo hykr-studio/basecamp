@@ -1,6 +1,21 @@
-// The to-dos module's settings demo (A11): a business's own `priority` field on to-dos, and the
-// `todos.clear-done` flag that the business switches on before "clear done to-dos" works.
-import { addMember, asAssistant, boot, me, Person, pool, shutdown } from '@hykr/api/testing';
+// The to-dos module's settings demo (A11): a business's own `priority` field on to-dos (set from
+// the app's add form and row editor, through the same typed client the app uses), a required
+// field that a meeting's close does not have to fill, and the `todos.clear-done` flag that the
+// business switches on before "clear done to-dos" works.
+import { CloseMeetingSpec, TodoSpec } from '@application/domain/contracts';
+import {
+  addMember,
+  asAssistant,
+  boot,
+  me,
+  origin,
+  Person,
+  pool,
+  server,
+  shutdown,
+} from '@hykr/api/testing';
+import { createApiClient } from '@hykr/api-client';
+import { customForCreate } from '@hykr/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { server as application } from '../../dist/server.js';
 
@@ -77,6 +92,81 @@ describe('a priority on to-dos (a custom field the business defines)', () => {
       [tenantId],
     );
     expect(rows.length).toBeGreaterThan(0);
+  });
+});
+
+describe('a required field: the app sends it, and a meeting still makes its to-dos', () => {
+  /** The app's own client (`entityApi`, `useCommand`), signed in as this person. */
+  const app = (who: Person) =>
+    createApiClient({ baseUrl: server.base, headers: () => ({ origin, cookie: who.cookie }) });
+  let areaId = '';
+
+  afterAll(async () => {
+    if (areaId) await owner.call('DELETE', `/api/custom-fields/${areaId}`);
+  });
+
+  it('the add form sends what its inputs collected; without the required value it is refused', async () => {
+    const area = await owner.call('POST', '/api/custom-fields', {
+      entity: 'todo',
+      key: 'area',
+      type: 'text',
+      label: { en: 'Area', hi: 'जगह', te: 'ప్రాంతం' },
+      required: true,
+    });
+    expect(area.status).toBe(201);
+    areaId = area.body.value.id;
+    // As Todos.tsx adds one: the inputs' patches (a priority picked, then cleared), the cleared
+    // value left out.
+    const collected = { priority: null, area: 'Kitchen' };
+    const made = await app(owner)
+      .entity(TodoSpec)
+      .create({ title: 'Fix the tap', custom: customForCreate(collected) });
+    expect(made).toMatchObject({ status: 'done', value: { custom: { area: 'Kitchen' } } });
+    await expect(
+      app(owner)
+        .entity(TodoSpec)
+        .create({ title: 'No area', custom: customForCreate({ area: null }) }),
+    ).rejects.toMatchObject({
+      status: 400,
+      body: { error: 'custom_field_invalid', problems: ['area: required'] },
+    });
+  });
+
+  it("the row's editor changes one value and keeps the others; the filter chips find it", async () => {
+    const todos = app(owner).entity(TodoSpec);
+    const made = await todos.create({
+      title: 'Paint the door',
+      custom: customForCreate({ area: 'Hall', priority: 'low' }),
+    });
+    if (made.status !== 'done') throw new Error(`not made: ${made.status}`);
+    const changed = await todos.update(made.value.id, { custom: { priority: 'high' } });
+    expect(changed).toMatchObject({ value: { custom: { area: 'Hall', priority: 'high' } } });
+    await expect(todos.update(made.value.id, { custom: { area: null } })).rejects.toMatchObject({
+      status: 400,
+    });
+    const page = await todos.list({ done: false, custom: { priority: 'high' } });
+    expect(page.items.map((t) => t.title)).toContain('Paint the door');
+    expect(page.items.every((t) => t.custom.priority === 'high')).toBe(true);
+  });
+
+  it('closing a meeting makes its to-dos without the field, which the close cannot know', async () => {
+    const day = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    const meeting = await owner.call('POST', '/api/meetings', {
+      title: 'Kitchen walkthrough',
+      startsAt: `${day}T10:00:00.000Z`,
+      endsAt: `${day}T11:00:00.000Z`,
+      attendees: ['Ravi'],
+    });
+    expect(meeting.status).toBe(201);
+    const closed = await app(owner).command(CloseMeetingSpec, {
+      meetingId: meeting.body.value.id,
+      summary: 'Walked through the kitchen.',
+      actionItems: [{ title: 'Order the tiles' }],
+    });
+    expect(closed).toMatchObject({
+      status: 'done',
+      value: { todos: [expect.objectContaining({ title: 'Order the tiles', custom: {} })] },
+    });
   });
 });
 

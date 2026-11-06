@@ -3,6 +3,8 @@
 // verified origins.
 import {
   CustomFieldKey,
+  customForCreate,
+  customValueFromText,
   customValueProblems,
   defineFeatureFlag,
   entitySpec,
@@ -112,6 +114,27 @@ describe('custom field values', () => {
     expect(CustomFieldKey.safeParse('roomCount').success).toBe(true);
     for (const bad of ['room_count', 'Room', 'in', 'gte', 'a1'])
       expect(CustomFieldKey.safeParse(bad).success).toBe(false);
+  });
+
+  it("a form's typed-in text becomes the value it sends; an empty one clears", () => {
+    expect(customValueFromText('number', ' 3.5 ')).toBe(3.5);
+    expect(customValueFromText('number', '-2')).toBe(-2);
+    // Not a number: sent as typed, so the server says what is wrong instead of dropping it.
+    expect(customValueFromText('number', '0x10')).toBe('0x10');
+    expect(customValueFromText('number', 'three')).toBe('three');
+    expect(customValueFromText('text', ' Kitchen ')).toBe('Kitchen');
+    expect(customValueFromText('date', '2030-01-01')).toBe('2030-01-01');
+    expect(customValueFromText('text', '   ')).toBeNull();
+  });
+
+  it("a new record's values leave out what the form cleared", () => {
+    expect(customForCreate({ priority: 'high', estimate: null, urgent: false })).toEqual({
+      priority: 'high',
+      urgent: false,
+    });
+    expect(customForCreate({ priority: null })).toBeUndefined();
+    expect(customForCreate({})).toBeUndefined();
+    expect(customForCreate(undefined)).toBeUndefined();
   });
 });
 

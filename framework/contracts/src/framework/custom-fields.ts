@@ -92,6 +92,33 @@ export type CustomFieldValues = z.infer<typeof CustomFieldValues>;
 export const CustomFieldsInput = z.record(CustomFieldKey, CustomFieldValue.nullable());
 export type CustomFieldsInput = z.infer<typeof CustomFieldsInput>;
 
+/**
+ * A new record's `custom`, from the patches a form collected (null where a value was cleared):
+ * the cleared keys left out, and undefined when nothing is left, so the create omits it.
+ */
+export function customForCreate(
+  patch: Readonly<CustomFieldsInput> | null | undefined,
+): CustomFieldValues | undefined {
+  const values = Object.fromEntries(
+    Object.entries(patch ?? {}).filter(
+      (e): e is [string, CustomFieldValue] => e[1] !== null && e[1] !== undefined,
+    ),
+  );
+  return Object.keys(values).length ? values : undefined;
+}
+
+/**
+ * What a typed-in value of a field of this type sends: null when empty (it clears the value), a
+ * number for a number field when the text is one, otherwise the text as typed, so the server
+ * says what is wrong with it rather than the form dropping it.
+ */
+export function customValueFromText(type: string, text: string): CustomFieldValue | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if (type === 'number' && /^[-+]?(\d+(\.\d*)?|\.\d+)$/.test(trimmed)) return Number(trimmed);
+  return trimmed;
+}
+
 /** A label in the business's languages; English is required, the others fall back to it. */
 export const FieldLabel = z
   .object({
