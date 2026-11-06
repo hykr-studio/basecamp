@@ -19,9 +19,7 @@ export const CancelOrder = defineCommand(CancelOrderSpec, {
     if (order.status === 'cancelled')
       return deny('order_cancelled', 'This order is already cancelled');
     if (p.actor.kind === 'agent')
-      return needsApproval('agent_cancels_order', 'Cancelling an order needs your approval', {
-        tier: 2,
-      });
+      return needsApproval('agent_cancels_order', 'Cancelling an order needs your approval');
     return allow('person_cancels_order');
   },
   summarize: (_input, order) => `Cancel order ${order.number} (${order.title})`,

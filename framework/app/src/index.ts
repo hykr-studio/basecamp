@@ -26,9 +26,11 @@ export { createInvalidator, liveKeysFor } from './features/live/keys';
 export {
   ApprovalCard,
   ApprovalItem,
+  amountText,
   DecisionScrollView,
   useApprovalStatus,
   useShownInline,
+  useStakes,
 } from './framework/ApprovalCard';
 export { AssistantActivity } from './framework/AssistantActivity';
 export { ASSISTANT_ICON, AssistantMark, ByAssistant } from './framework/AssistantMark';
@@ -107,6 +109,7 @@ export {
 } from './framework/plugins';
 export { ToastProvider, useToast } from './framework/Toast';
 export { TryPrompt } from './framework/TryPrompt';
+export { useUndo } from './framework/undo';
 export { type Verb, verbOf } from './framework/verbs';
 export { WaitingForYou } from './framework/WaitingForYou';
 export { inApp, webHref } from './framework/web-link';
@@ -121,6 +124,8 @@ export {
   setRuntime,
   webMcpFor,
 } from './runtime';
+export { ApprovalScreen } from './screens/ApprovalScreen';
+export { ApprovalsScreen } from './screens/ApprovalsScreen';
 export { NotFoundScreen } from './screens/NotFoundScreen';
 export { PageScreen } from './screens/PageScreen';
 export { PagesScreen } from './screens/PagesScreen';

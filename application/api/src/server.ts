@@ -4,6 +4,7 @@
 
 import { migrations } from '@application/domain/db';
 import { modules } from '@application/domain/modules';
+import { contributions } from '@application/domain/server';
 import { defineServer } from '@hykr/api';
 
 export const server = defineServer({
@@ -21,4 +22,7 @@ export const server = defineServer({
   },
   modules,
   migrations: [migrations],
+  // Its approval levels (read, internal, external, irreversible) and the rules that are not one
+  // module's.
+  contributes: contributions,
 });

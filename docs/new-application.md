@@ -31,7 +31,7 @@ places:
 | Where | What you write | What the framework does with it |
 |---|---|---|
 | `api/src/server.ts` | `defineServer({ name, persona, help, channel, modules, migrations })` | Serves the REST API, runs the write path (rules, approvals, audit), builds the assistant and its tools, sends notifications, runs the WhatsApp channel |
-| `mobile/src/app/_layout.tsx` | `<AppShell app modules catalog registry config />` | Renders the shell: sign-in, navigation, the assistant thread, approvals, the canvas, saved pages and voice. `modules` are your app modules (`defineAppModule`) |
+| `mobile/src/app/_layout.tsx` | `<AppShell app modules plugins catalog registry config />` | Renders the shell: sign-in, navigation, the assistant thread, approvals, the canvas, saved pages and voice. `modules` are your app modules (`defineAppModule`); `plugins` the framework features you use (`livePlugin()`, `pushPlugin()`, `webMcpPlugin()`) |
 
 Everything else in your application is one of these:
 
@@ -117,11 +117,14 @@ Keep these, which you will edit:
   (the lists of modules: step 9)
 - `domain/src/db/index.ts`
 - `domain/src/server/access.ts`
+- `domain/src/server/approval-levels.ts` and `domain/src/server/index.ts` (what each approval
+  level means in your product, and which writes reach it: developer guide 5.8.1)
 - `api/src/server.ts`
 - `mobile/src/modules/index.ts` (the list of app modules), `mobile/src/catalog.ts`,
   `mobile/src/settings.ts` (step 10)
 - `mobile/src/app/_layout.tsx`
 - `mobile/src/app/pages/*`
+- `mobile/src/app/approvals/*` (the approvals list and the `/approvals/<id>` link WhatsApp sends)
 - `mobile/src/app/+not-found.tsx`
 
 > **A shortcut:** `pnpm exec basecamp module add jobs` writes every file of a `jobs` module with
@@ -785,6 +788,7 @@ the assistant does.
 
 import { migrations } from '@application/domain/db';
 import { modules } from '@application/domain/modules';
+import { contributions } from '@application/domain/server';
 import { defineServer } from '@hykr/api';
 
 export const server = defineServer({
@@ -802,6 +806,8 @@ export const server = defineServer({
   },
   modules,
   migrations: [migrations],
+  // Fixit's approval levels, and the level rules that are not one module's.
+  contributes: contributions,
 });
 ```
 
@@ -884,7 +890,8 @@ export const jobs = defineAppModule({
     bindScreen(JobDetailScreen, ({ id }) => <JobDetail id={id} embedded />);
   },
   hrefFor: { job: (id) => `/jobs/${id}` },
-  // Read tools a browser agent may call on these screens (WebMCP), by useScreenContext name.
+  // Read tools a browser agent may call on these screens (WebMCP), by useScreenContext name:
+  // list-jobs and get-job, with the person's access. `webMcpPlugin()` in _layout.tsx offers them.
   webmcp: { jobs: { reads: ['jobs'] }, job: { reads: ['jobs'] } },
 });
 ```
@@ -1203,7 +1210,8 @@ export default function Pages() {
 `_layout.tsx`, `pages/[id].tsx` and `+not-found.tsx` stay as the scaffold made them. They
 render the framework's shell and screens: `_layout.tsx` passes `settings`, the modules barrel
 (`import * as modules from '@/modules'`), `catalog`, `registry` and the framework plugins
-(`livePlugin()` for live updates, `pushPlugin()` for push notifications) to `<AppShell>`, and
+(`livePlugin()` for live updates, `pushPlugin()` for push notifications, `webMcpPlugin()` for a
+browser agent's read tools) to `<AppShell>`, and
 `+not-found.tsx` also serves the framework plugins' screens. Rename the app in `mobile/app.json` (`name`, `slug`,
 `scheme`, the iOS `bundleIdentifier` and the Android `package`). If you change `scheme`, change
 it in `_layout.tsx` too.

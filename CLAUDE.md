@@ -115,7 +115,7 @@ Other gotchas:
 - `framework/` never imports `application/`. The application passes its modules in at exactly two points:
   - the server: `application/api/src/server.ts`, through `defineServer({ name, persona, help, channel, modules, migrations, contributes })`, started by `startApi` / `startWorker`. Each module is `defineModule({ ...moduleSpec, server, views, screens, templates, notifications, agent, tables, contributes })`;
   - the app: `application/mobile/src/app/_layout.tsx`, through `<AppShell app modules plugins catalog registry config />`
-    (`plugins`: framework features such as `livePlugin()` and `pushPlugin()`).
+    (`plugins`: framework features such as `livePlugin()`, `pushPlugin()` and `webMcpPlugin()`).
     Each app module (`defineAppModule` in `application/mobile/src/modules/<name>/index.tsx`) brings its
     nav, suggestions, `bind`, `hrefFor` and `webmcp`; its routes are one-line files in `src/app/<name>/`.
 - `application/` imports `@hykr/*` by package name and public subpath only. No relative paths into
@@ -192,7 +192,14 @@ role `own`, `customer` or `tenant` per read and write (the sample is in
   its `deny` counts. A command parks through its own `authorize`.
 - Every read leaves through `def.toRead(row, p)`, projected for the principal (entity plugins' `project`,
   then read projectors). Never return a repo row from a controller or service as is.
-- A command's `approval.by` says who decides. Without it, the person decides on their own assistant's request.
+- A command's `approval.by` says who decides, by capability (`{ capability }`), a named person (`{ userId }`) or
+  an amount band in the business's settings (`{ band }`), never by role name. Without it, the person decides
+  on their own assistant's request (a customer's goes to holders of `approvals.decide`). Nobody decides
+  their own request otherwise.
+- What an approval level means is the application's: it declares its levels (`defineApprovalLevel`,
+  contributed as `approvalLevels`) and which writes reach them (`defineLevelRule`, `levelRules`); thresholds
+  and per-band approvers are tenant settings (`approvals`). A write whose level gives an undo window answers
+  with `undo: { id, until }`, and `POST /api/undo/:id` reverses it (developer guide 5.8).
 - Money is `Money = { minor, currency }` everywhere (`minorUnits()` columns, the spec's `money` trait), never
   a float or `numeric`. Take a document number with `nextNumber` in a command's `run` (a parked write
   then takes none), and cancel numbered records instead of deleting them. Line items are a child entity

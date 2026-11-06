@@ -11,8 +11,9 @@ application hands its modules to the framework in two places:
   modules, migrations, contributes })` from `@hykr/api`;
 - the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app modules plugins catalog
   registry config />` from `@hykr/app`, with the app's modules (`defineAppModule`), the framework
-  plugins it uses (`livePlugin()`, `pushPlugin()`), and the catalog and registry built from every
-  module's specs and views.
+  plugins it uses (`livePlugin()`, `pushPlugin()`, and `webMcpPlugin()`, which offers each screen's
+  `webmcp` read tools to a browser agent), and the catalog and registry built from every module's
+  specs and views.
 
 Two dependency-cruiser rules, run by `pnpm lint:deps`, keep it that way:
 `framework-never-imports-application` and `application-uses-public-framework-exports` (only
@@ -50,7 +51,7 @@ Around the modules, the application keeps:
 | Aggregates for the apps | `application/domain/src/contracts/index.ts`, `src/views/index.ts` | Every module's specs and views (`moduleSpecs`, `moduleViews`), one line per module. The apps import `@application/domain/contracts` and `/views`, or one module's `@application/domain/modules/<name>/contracts` and `/views` |
 | Migrations | `application/domain/drizzle/`, `src/db/index.ts` | One journal for every module, generated from `src/modules/*/db/schema.ts`; `migrations` |
 | Shared server code | `application/domain/src/server/` | What several modules use, such as `BUSINESS_ACCESS` |
-| Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`: what the product is called, who the assistant is, and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools and delivery channels (developer guide, sections 5.9 and 5.10) |
+| Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`: what the product is called, who the assistant is, and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools and delivery channels (developer guide, sections 5.9 and 5.10), and the application's approval levels and level rules (section 5.8.1; the sample's are in `application/domain/src/server/approval-levels.ts`, passed through `@application/domain/server`) |
 | App modules | `application/mobile/src/modules/<name>/` and the barrel `src/modules/index.ts` (one line per module) | The app half of each module: `defineAppModule({ name, nav, suggestions, bind, hrefFor, webmcp })` from `@hykr/app`, in `index.tsx`: destinations under `/<name>`; `bind` calls `bindView` / `bindScreen` for the module's views and screens; `hrefFor` says where each of its records opens. Other modules import only that `index.tsx` |
 | App | `application/mobile/src/catalog.ts`, `settings.ts`, `home/` | `catalog = createCatalog(...moduleSpecs)` and `registry = createUiRegistry(...moduleViews)` with the `Register` declaration; `settings: AppSettings` (`title`, `tagline`, `home`, and the nav and suggestions of the screens that combine modules, such as the home screen) |
 | App routes | `application/mobile/src/app/<name>/` and `src/app/index.tsx` | One-line re-exports of each module's route components (Expo Router only knows files); `index.tsx` is the home screen |
@@ -121,9 +122,15 @@ record it is `about`; the sample's notes are memory of their meeting. The busine
 the framework's `memory` entity, reached by the capabilities `memory.read`, `memory.write` and
 `memory.manage`: give your own roles those (developer guide 7.6).
 
-Approvals take an object form, `{ when, by, channels, minAssurance }`: who decides (the person
-it is for by default; a customer's request goes to `owner` and `ops`), and where (`channels:
-['app']` for anything irreversible keeps it off WhatsApp buttons).
+Approvals take an object form, `{ when, by, channels, minAssurance, level }`: who decides (the
+person it is for by default; a customer's request goes to holders of `approvals.decide`; `by`
+names a capability, a person or an amount band, never a role), and where (`channels: ['app']` for
+anything irreversible keeps it off WhatsApp buttons). Nobody decides their own request unless the
+policy sends it back to them. What each approval level means (does it wait, who decides, how long
+it can be undone) is the application's: the sample declares `read`, `internal`, `external` and
+`irreversible` (`application/domain/src/server/approval-levels.ts`), and the to-dos module maps its
+writes to `internal` with a level rule. Thresholds and approvers per amount band are each
+business's settings (`approvals`).
 
 ## Money, numbers and lines
 
