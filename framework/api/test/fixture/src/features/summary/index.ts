@@ -1,6 +1,6 @@
 // Summaries (B14), on neutral data: an `entries` module whose entries have a state, a flag,
-// money, a number, a timestamp and a date, a margin only one capability reads (field policy)
-// and units a read projector hides from staff. Over the same table, `tallies` are listed by
+// money, a number, a timestamp and a date, and a margin and units a read projector hides (the
+// margin from staff and ops, the units from staff). Over the same table, `tallies` are listed by
 // people only and `ledgers` by no one (an internal list, so no summary route). A scripted turn
 // asks for entries by state through `summarize-entries`. Only the summary test boots this
 // server (`summaryServer`).
@@ -8,10 +8,8 @@
 import { type AgentModule, call, defineScript, say } from '@hykr/agents/script';
 import { defineModule, defineServer } from '@hykr/api';
 import {
-  type Contributions,
   CreatedBy,
   CurrencyCode,
-  defineCapability,
   entitySpec,
   Money,
   MoneyInput,
@@ -73,10 +71,7 @@ const list = {
   pageSize: { default: 50, max: 100 },
 } as const satisfies Parameters<typeof entitySpec>[0]['list'];
 
-const traits = {
-  money: { fields: ['amount'] },
-  fieldPolicy: { margin: 'fixture.margin.read' },
-};
+const traits = { money: { fields: ['amount'] } };
 
 export const EntrySpec = entitySpec({
   name: 'entry',
@@ -190,30 +185,27 @@ export const entriesModule = defineModule({
   tables: { entries },
 });
 
-/** Staff never see an entry's units, wherever one leaves the server (a projector, not a policy). */
-export const unitsFromStaff: ReadProjector = {
-  name: 'fixture.summary-units',
+/**
+ * Staff never see an entry's units or margin, and ops never its margin, wherever one leaves the
+ * server.
+ */
+export const hiddenFromSome: ReadProjector = {
+  name: 'fixture.summary-hidden',
   project: (type, value, p) => {
-    if (!['entry', 'tally'].includes(type) || !p.roles?.includes('staff')) return value;
-    const { units: _hidden, ...rest } = value;
-    return rest;
+    if (!['entry', 'tally'].includes(type)) return value;
+    const roles = p.roles ?? [];
+    const { units, margin, ...rest } = value;
+    return {
+      ...rest,
+      ...(roles.includes('staff') ? {} : { units }),
+      ...(roles.includes('staff') || roles.includes('ops') ? {} : { margin }),
+    };
   },
-};
-
-export const summaryContributions: Partial<Contributions> = {
-  capabilities: [
-    defineCapability({
-      name: 'fixture.margin.read',
-      label: label('See margins'),
-      roles: ['owner', 'admin'],
-    }),
-  ],
-  readProjectors: [unitsFromStaff],
 };
 
 /** The fixture plus entries. */
 export const summaryServer = defineServer({
   ...fixture.definition,
   modules: [...fixture.definition.modules, entriesModule],
-  contributes: summaryContributions,
+  contributes: { readProjectors: [hiddenFromSome] },
 });

@@ -1,19 +1,9 @@
 // Places on the map (B13), on neutral data: a `spots` module whose spots keep a point and an
 // address, listed near a point or in a box and sorted by distance, and an `arrive` command that
-// takes a check-in only within the spot's radius (`withinMeters`). A spot's point and address
-// are read only with a capability staff lack (field policy). Only the geo test boots this server
-// (`geoApp`).
+// takes a check-in only within the spot's radius (`withinMeters`). A read projector hides a
+// spot's point and address from staff. Only the geo test boots this server (`geoApp`).
 import { defineModule, defineServer } from '@hykr/api';
-import {
-  Address,
-  type Contributions,
-  CreatedBy,
-  commandSpec,
-  defineCapability,
-  entitySpec,
-  GeoPoint,
-  moduleSpec,
-} from '@hykr/contracts';
+import { Address, CreatedBy, commandSpec, entitySpec, GeoPoint, moduleSpec } from '@hykr/contracts';
 import {
   allow,
   commandController,
@@ -24,6 +14,7 @@ import {
   entityController,
   entityHandlers,
   needsApproval,
+  type ReadProjector,
   withinMeters,
 } from '@hykr/core';
 import type { Access } from '@hykr/policy';
@@ -75,7 +66,6 @@ export const SpotSpec = entitySpec({
   },
   approval: { delete: (p) => p.actor.kind === 'agent' },
   fieldLabels: { location: label('Place'), address: label('Address') },
-  traits: { fieldPolicy: { location: 'fixture.spots.where', address: 'fixture.spots.where' } },
 });
 
 export const SpotArrival = z.object({
@@ -232,19 +222,19 @@ export const spotsModule = defineModule({
   tables: { spots, spotArrivals },
 });
 
-export const geoContributions: Partial<Contributions> = {
-  capabilities: [
-    defineCapability({
-      name: 'fixture.spots.where',
-      label: label('See where spots are'),
-      roles: ['owner', 'admin', 'ops'],
-    }),
-  ],
+/** Staff never see where a spot is, wherever one leaves the server. */
+export const placeFromStaff: ReadProjector = {
+  name: 'fixture.geo-place',
+  project: (type, value, p) => {
+    if (type !== 'spot' || !p.roles?.includes('staff')) return value;
+    const { location: _location, address: _address, ...rest } = value;
+    return rest;
+  },
 };
 
 /** The fixture plus spots. */
 export const geoApp = defineServer({
   ...fixture.definition,
   modules: [...fixture.definition.modules, spotsModule],
-  contributes: geoContributions,
+  contributes: { readProjectors: [placeFromStaff] },
 });

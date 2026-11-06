@@ -268,7 +268,7 @@ describe('scope', () => {
 });
 
 describe('hidden fields', () => {
-  it('a field policy: no sum of a margin the reader cannot see', async () => {
+  it('no sum of a margin the reader cannot see', async () => {
     for (const who of [staff, ops]) {
       const res = await summary(who, 'sum=margin');
       expect(res.status).toBe(403);
@@ -286,7 +286,7 @@ describe('hidden fields', () => {
     }
   });
 
-  it('a read projector: staff cannot total the units their records never show', async () => {
+  it('staff cannot total the units their records never show', async () => {
     const record = await inOwner(staff)('GET', '/api/entries');
     expect(record.body.items[0]).not.toHaveProperty('units');
     const res = await summary(staff, 'sum=units');

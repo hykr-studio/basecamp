@@ -1,6 +1,7 @@
 // Places on the map (B13): points read and written as { lat, lng }, the `near` and `within`
 // list filters, the distance sort with keyset cursors, and a geofence check in a command, on
-// the fixture's spots (fixture/src/features/geo). A spot's place is hidden from staff.
+// the fixture's spots (fixture/src/features/geo). A read projector hides a spot's place from
+// staff.
 import { toQueryString } from '@hykr/contracts';
 import { CORE_OPTIONS, type CoreOptions, metersBetween, withinMeters } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -232,21 +233,13 @@ describe('a hidden place', () => {
     expect(res.body).not.toHaveProperty('address');
   });
 
-  it('staff cannot filter or sort by it (it would tell them where it is)', async () => {
-    const near = await inOwner(staff)(
+  it('a list near a point shows staff the spots, still without their place', async () => {
+    const res = await inOwner(staff)(
       'GET',
-      `/api/spots?location[near]=${HERE.lat},${HERE.lng},50`,
+      `/api/spots?location[near]=${HERE.lat},${HERE.lng},500&sort=location`,
     );
-    expect(near.status).toBe(403);
-    expect(near.body.rule).toBe('field_hidden');
-    const box = await inOwner(staff)('GET', '/api/spots?location[within]=0,0,1,1');
-    expect(box.body.rule).toBe('field_hidden');
-  });
-
-  it('staff cannot set it', async () => {
-    const res = await inOwner(staff)('POST', '/api/spots', { title: 'Mine', location: HERE });
-    expect(res.status).toBe(403);
-    expect(res.body.rule).toBe('field_hidden');
+    expect(titles(res.body)).toEqual(['Here', 'North']);
+    for (const spot of res.body.items) expect(spot).not.toHaveProperty('location');
   });
 });
 
