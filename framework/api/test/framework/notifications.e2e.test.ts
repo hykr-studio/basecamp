@@ -16,6 +16,7 @@ import {
   pool,
   seedContact,
   server,
+  settingsChanged,
   shutdown,
 } from '../../dist/testing.js';
 // The framework's fixture application, compiled (Nest's DI needs the decorator metadata).
@@ -129,6 +130,7 @@ beforeAll(async () => {
     `update app.tenants set settings = settings || '{"quietHours":{"from":"00:00","to":"00:00"}}' where id = $1`,
     [tenantId],
   );
+  await settingsChanged(tenantId);
   // Every template approved, as templates:sync leaves them once Meta has reviewed them.
   for (const t of templates)
     for (const lang of ['en', 'hi', 'te'] as const)
