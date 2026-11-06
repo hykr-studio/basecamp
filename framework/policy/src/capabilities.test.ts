@@ -33,22 +33,35 @@ const access: Access = {
 };
 
 describe('the framework roles and capabilities', () => {
-  it('give exactly what the hard-coded role checks gave', () => {
+  it('give exactly what the hard-coded role checks gave, and the comment capabilities', () => {
     expect(capabilitiesOf(['owner'])).toEqual([
       'backoffice.use',
       'channels.manage',
+      'comments.internal',
+      'comments.moderate',
       'customers.message',
       'queues.admin',
     ]);
     expect(capabilitiesOf(['admin'])).toEqual([
       'backoffice.use',
       'channels.manage',
+      'comments.internal',
+      'comments.moderate',
       'customers.message',
       'history.all',
       'queues.admin',
     ]);
-    expect(capabilitiesOf(['ops'])).toEqual(['backoffice.use', 'customers.message', 'history.all']);
-    expect(capabilitiesOf(['staff'])).toEqual(['backoffice.use', 'customers.message']);
+    expect(capabilitiesOf(['ops'])).toEqual([
+      'backoffice.use',
+      'comments.internal',
+      'customers.message',
+      'history.all',
+    ]);
+    expect(capabilitiesOf(['staff'])).toEqual([
+      'backoffice.use',
+      'comments.internal',
+      'customers.message',
+    ]);
     expect(capabilitiesOf(['customer'])).toEqual([]);
   });
 

@@ -32,6 +32,9 @@ describe('script sets', () => {
       'file-words',
       'file-about',
       'file-only',
+      'comments-list',
+      'comments-add',
+      'comments-mentionable',
       'fail',
     ]);
   });
