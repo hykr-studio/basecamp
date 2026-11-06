@@ -61,4 +61,12 @@ export const NoteSpec = entitySpec({
   },
   approval: { delete: (p) => p.actor.kind === 'agent' },
   views: { list: 'note.list', item: 'note.card' },
+  // Notes are memory: the assistant recalls them by meaning, as memory of their meeting, for
+  // whoever may read both (the framework loads each again as the reader).
+  traits: {
+    memory: {
+      text: (n: NoteView) => (n.body.trim() ? `${n.title}: ${n.body}` : n.title),
+      about: (n: NoteView) => (n.meetingId ? { type: 'meeting', id: n.meetingId } : null),
+    },
+  },
 });
