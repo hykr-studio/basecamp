@@ -136,14 +136,33 @@ The framework has no currency, number format or tax rule of its own; a module de
   in a tree of any depth, reached exactly when the parent is, and saved whole by a command
   (`children.replace`) as one write, one approval and one audit statement.
 
+## Documents (PDFs)
+
+A module declares each document of its records with `defineDocument` (`@hykr/api`), contributed
+as `documents` (developer guide, section 5.14). The template and every word in it are the
+module's; the framework draws, stores and sends:
+
+- **`load`** reads what the document shows, as the person who asks (the record and its
+  children arrive projected for them, so a field they do not see is not in it). It is stored
+  with each version.
+- **`render`** lays it out (headings, fields, a table of lines, totals, a header and footer) in
+  the language asked for, with `ctx.money`, `ctx.date` and `ctx.label`.
+- **`send`** says how it goes out: a WhatsApp template with `header: { type: 'document' }` (also
+  in the module's `templates`) and/or email wording.
+- **`capabilities`** names what changes what it shows; `[]` when it shows nothing restricted.
+
+The sample's `orders` module ships `orders.order`, its template `order_document_v1`, and
+scripts that make and send it.
+
 ## What a module adds for WhatsApp: templates and notifications
 
 Outside a customer's 24-hour window WhatsApp delivers only approved templates, so everything a
 module sends on its own initiative is a template, declared in code:
 
 - **`defineTemplate`:** a versioned name (`meeting_reminder_v1`), a category, named parameters
-  with an example each, the body in every language, at most three quick replies. An approved
-  template is never edited: changing the words fails `templates:sync` with "bump the version".
+  with an example each, the body in every language, at most three quick replies, and a
+  document header for a template that carries a PDF. An approved template is never edited:
+  changing the words fails `templates:sync` with "bump the version".
 - **`defineNotification`:** what reaches whom, and when. `schedule: { on, at, cancelOn }`
   follows the entity events (`meeting.created`, `meeting.deleted`) and the module's own: a
   command's event implements `NamedEvent` (`eventName`, `row`) to be one. `to` names the
@@ -196,6 +215,11 @@ From the contracts declaration alone:
   WhatsApp kept for its sender (the assistant puts it on a record), transcription of audio, and
   `<FileField>` / `<FileThumbs>` in the app (developer guide, section 5.12). The sample's notes
   keep photos.
+- Documents (`/api/documents`, `app.documents`): a module's PDFs made in the worker from data
+  read as the person who asked (pdfkit, HarfBuzz and the Noto fonts for English, Hindi and
+  Telugu), stored as files the document holds, reached through their record, and sent by
+  WhatsApp or email (`document.render`, `document.send`, the tools `render-document`,
+  `send-document`, `get-document`, `list-documents`, and `<RecordDocuments>` in the app).
 - Threads (one saved conversation per person, shared by every channel), voice sessions
   (`/api/voice/*`, LiveKit, the voice worker), and the framework's phrases in `@hykr/i18n`.
 - Businesses, memberships and customers (`/api/me`), and the scope engine behind `access`.
