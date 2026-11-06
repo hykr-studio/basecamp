@@ -690,7 +690,7 @@ type ApprovalRule =
   `(p, { input }) => Number(input?.amount ?? 0) > 100_000` parks large amounts only. `input` and `row`
   are `null` when they are unknown: a tool's description is written before any call, and a create has
   no row.
-- The object form also says who decides and where. For example, `{ when: (p) => p.actor.kind === 'agent', by: { capability: 'orders.approve' }, channels: ['app'] }`. `channels: ['app']` keeps an irreversible decision off WhatsApp buttons. The framework's example is a command: `approval: { by: { capability: 'marketing.approve' } }` in `framework/api/src/channels/notify/send-template.command.ts`.
+- The object form also says who decides and where. For example, `{ when: (p) => p.actor.kind === 'agent', by: { capability: 'orders.approve' }, channels: ['app'] }`. `channels: ['app']` keeps an irreversible decision off WhatsApp buttons. An operation's `approval` decides every park of it, including one an approval level makes. When only one reason should go to someone else, name the decider on that decision instead: `framework/api/src/channels/notify/send-template.command.ts` parks a marketing send with `needsApproval('marketing_send', reason, { approver: { by: { capability: 'marketing.approve' } } })`, so a service send that the application's level parks still goes to the person it is for.
 
 `by` chooses people by capability, never by role name:
 - `'requester'`: the person the request is for (their own assistant's request);
@@ -725,6 +725,8 @@ that names a level: the level's policy then says whether it waits.
 What the write path does with them:
 - A park's deciders come from `approver`, then the operation's `approval`, then the level's policy:
   the first that sets `by` decides who, likewise `channels`; `minAssurance` is the strongest asked.
+  The operation's `approval.by` applies to every park, so a decider for one reason belongs on that
+  decision's `approver`.
   The approval shows `level` (`{ name, rank, label }`), `amount`, `decider` and `canDecide`, and the
   park's audit row records the level.
 - A write that runs with `undoMs` can be undone (section 5.8.2), and its events wait that long.
