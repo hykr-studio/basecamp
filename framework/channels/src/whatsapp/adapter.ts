@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type {
   ChannelAdapter,
   InboundMessage,
+  MediaRef,
   OutboundMessage,
   RemoteTemplate,
   StatusUpdate,
@@ -9,6 +10,7 @@ import type {
 } from '../adapter.js';
 import { RetryableError } from '../adapter.js';
 import { graphError } from './errors.js';
+import { SAMPLE_PDF } from './sample.js';
 import { Envelope, type WaMessage } from './schema.js';
 
 export type WhatsAppConfig = {
@@ -20,6 +22,11 @@ export type WhatsAppConfig = {
   appSecret: string;
   /** The WhatsApp Business Account: templates live here. */
   wabaId: string;
+  /**
+   * The Meta app's id: with it, a template with a DOCUMENT header is created with a sample file
+   * (uploaded through the resumable upload API), as Meta's review asks.
+   */
+  appId?: string;
   /** Injected in tests. */
   fetch?: typeof fetch;
   /** Give up on a call after this long: a stuck provider must not hold a worker. */
@@ -40,12 +47,25 @@ export const WHATSAPP_LIMITS = {
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
+/** A file in Graph's terms: an uploaded media id, or a link Meta fetches. */
+const mediaOf = (m: MediaRef) => ('mediaId' in m ? { id: m.mediaId } : { link: m.link });
+
 /** One outbound message as a Graph payload. */
 export function toGraph(msg: OutboundMessage): Record<string, unknown> {
   const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to: msg.to };
   switch (msg.kind) {
     case 'text':
       return { ...base, type: 'text', text: { preview_url: false, body: msg.text } };
+    case 'document':
+      return {
+        ...base,
+        type: 'document',
+        document: {
+          ...mediaOf(msg),
+          filename: msg.filename,
+          ...(msg.caption ? { caption: cut(msg.caption, WHATSAPP_LIMITS.body) } : {}),
+        },
+      };
     case 'buttons':
       return {
         ...base,
@@ -86,6 +106,16 @@ export function toGraph(msg: OutboundMessage): Record<string, unknown> {
       };
     case 'template': {
       const components: Record<string, unknown>[] = [];
+      if (msg.header)
+        components.push({
+          type: 'header',
+          parameters: [
+            {
+              type: 'document',
+              document: { ...mediaOf(msg.header), filename: msg.header.filename },
+            },
+          ],
+        });
       const params = Object.entries(msg.params);
       if (params.length)
         components.push({
@@ -186,20 +216,55 @@ export function createWhatsAppAdapter(cfg: WhatsAppConfig): ChannelAdapter {
   const graph = (path: string) => `${cfg.graphUrl.replace(/\/$/, '')}/${cfg.apiVersion}/${path}`;
   const auth = { authorization: `Bearer ${cfg.accessToken}` };
 
-  async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
+  /** One request to a Graph URL; its JSON answer, or the error it maps to. */
+  async function request<T>(url: string, init: RequestInit): Promise<T> {
     let res: Response;
     try {
-      res = await http(graph(path), {
-        ...init,
-        headers: { ...auth, 'content-type': 'application/json', ...(init.headers ?? {}) },
-        signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
-      });
+      res = await http(url, { ...init, signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000) });
     } catch (e) {
       // The network, not WhatsApp: worth another try.
       throw new RetryableError(`Graph unreachable: ${e instanceof Error ? e.message : e}`);
     }
     if (!res.ok) throw await graphError(res);
     return (await res.json()) as T;
+  }
+
+  function call<T>(path: string, init: RequestInit = {}): Promise<T> {
+    return request<T>(graph(path), {
+      ...init,
+      headers: { ...auth, 'content-type': 'application/json', ...(init.headers ?? {}) },
+    });
+  }
+
+  /** A file as a multipart body (fetch sets the boundary). */
+  const form = (
+    fields: Record<string, string>,
+    file: { bytes: Uint8Array; mime: string; filename: string },
+  ) => {
+    const body = new FormData();
+    for (const [k, v] of Object.entries(fields)) body.append(k, v);
+    body.append('file', new Blob([new Uint8Array(file.bytes)], { type: file.mime }), file.filename);
+    return body;
+  };
+
+  /**
+   * A sample file for a template's review (Meta's resumable upload API): a handle the template's
+   * example names. Needs the app's id; without it, none.
+   */
+  async function sampleHandle(): Promise<string | undefined> {
+    if (!cfg.appId) return undefined;
+    const q = new URLSearchParams({
+      file_name: 'sample.pdf',
+      file_length: String(SAMPLE_PDF.length),
+      file_type: 'application/pdf',
+    });
+    const session = await call<{ id: string }>(`${cfg.appId}/uploads?${q}`, { method: 'POST' });
+    const done = await request<{ h: string }>(graph(session.id), {
+      method: 'POST',
+      headers: { authorization: `OAuth ${cfg.accessToken}`, file_offset: '0' },
+      body: new Uint8Array(SAMPLE_PDF),
+    });
+    return done.h;
   }
 
   return {
@@ -291,6 +356,16 @@ export function createWhatsAppAdapter(cfg: WhatsAppConfig): ChannelAdapter {
       return { bytes: Buffer.from(await res.arrayBuffer()), mime: meta.mime_type };
     },
 
+    async uploadMedia(from, file) {
+      const res = await request<{ id?: string }>(graph(`${from}/media`), {
+        method: 'POST',
+        headers: auth,
+        body: form({ messaging_product: 'whatsapp', type: file.mime }, file),
+      });
+      if (!res.id) throw new RetryableError('Graph accepted the upload but returned no id');
+      return { mediaId: res.id };
+    },
+
     templates: {
       async list() {
         const out: RemoteTemplate[] = [];
@@ -325,7 +400,17 @@ export function createWhatsAppAdapter(cfg: WhatsAppConfig): ChannelAdapter {
       },
       async create(t: TemplateSpec) {
         const names = Object.keys(t.examples);
+        const handle = t.header ? await sampleHandle() : undefined;
         const components: Record<string, unknown>[] = [
+          ...(t.header
+            ? [
+                {
+                  type: 'HEADER',
+                  format: t.header.format,
+                  ...(handle ? { example: { header_handle: [handle] } } : {}),
+                },
+              ]
+            : []),
           {
             type: 'BODY',
             text: t.body,

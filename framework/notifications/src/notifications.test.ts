@@ -41,6 +41,19 @@ describe('defineTemplate refuses what Meta would reject', () => {
     expect(spec.examples).toEqual({ summary: 'Cancel the site visit', outcome: 'approved' });
   });
 
+  it('a document header: in the provider spec and the hash; refused on an authentication template', () => {
+    const plain = defineTemplate(ok);
+    const carrying = defineTemplate({ ...ok, header: { type: 'document' } });
+    expect(toTemplateSpec(carrying, 'en', 'http://app').header).toEqual({ format: 'DOCUMENT' });
+    expect(toTemplateSpec(plain, 'en', 'http://app').header).toBeUndefined();
+    expect(contentHash(carrying, 'en')).not.toBe(contentHash(plain, 'en'));
+    // A template without a header keeps the hash it had before headers existed.
+    expect(contentHash(plain, 'en')).toBe('1df8f97f4ae7ed0a');
+    expect(() =>
+      defineTemplate({ ...ok, category: 'authentication', header: { type: 'document' } }),
+    ).toThrow(/cannot carry a document/);
+  });
+
   it('an application template defined twice is refused', () => {
     const twice = defineTemplate({
       name: 'approval_outcome_v1',
