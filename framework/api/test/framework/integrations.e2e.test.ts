@@ -10,6 +10,7 @@ import { signWebhook, verifyWebhook } from '@hykr/connectors';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DeliveriesService } from '../../dist/features/integrations/deliveries.service.js';
 import { InboundService } from '../../dist/features/integrations/inbound.service.js';
+import { checkSettings } from '../../dist/features/integrations/settings.js';
 import {
   addMember,
   asAssistant,
@@ -35,6 +36,8 @@ type Received = { path: string; headers: IncomingHttpHeaders; body: string };
 const received: Received[] = [];
 /** Statuses a path answers with, in order; the last repeats. Default 200. */
 const answers = new Map<string, number[]>();
+/** What a path answers with. Default `answer <status>`. */
+const bodies = new Map<string, string>();
 let receiver: Server;
 let base = '';
 
@@ -86,6 +89,34 @@ const auditOf = async (action: string, resourceId?: string) =>
 
 const parse = (r: Received) => JSON.parse(r.body);
 
+const sweeper = () => server.app?.get(DeliveriesService, { strict: false }) as DeliveriesService;
+
+/** A delivery of a visit event, stored as a worker would have left it. */
+const storedDelivery = async (
+  endpointId: string,
+  set: { status: string; attempts: number; leaseUntil: string },
+) =>
+  (
+    await pool.query(
+      `insert into app.integration_deliveries
+         (tenant_id, endpoint_id, event_id, event_name, resource_type, body, status, attempts,
+          lease_until, next_attempt_at, queues)
+       values ($1, $2, $3, 'visit.created', 'visit', $4, $5, $6, now() + $7::interval,
+               now() - interval '5 minutes', $8)
+       returning id`,
+      [
+        anaTenant,
+        endpointId,
+        `evt-${randomUUID()}`,
+        JSON.stringify({ type: 'visit.created', data: { row: { id: 'v' } } }),
+        set.status,
+        set.attempts,
+        set.leaseUntil,
+        process.env.BULL_PREFIX,
+      ],
+    )
+  ).rows[0].id as string;
+
 beforeAll(async () => {
   receiver = createServer((req, res) => {
     let body = '';
@@ -97,7 +128,9 @@ beforeAll(async () => {
       received.push({ path, headers: req.headers, body });
       const list = answers.get(path) ?? [200];
       const status = list.length > 1 ? (list.shift() as number) : list[0];
-      res.writeHead(status, { 'content-type': 'text/plain' }).end(`answer ${status}`);
+      res
+        .writeHead(status, { 'content-type': 'text/plain' })
+        .end(bodies.get(path) ?? `answer ${status}`);
     });
   });
   await new Promise<void>((r) => receiver.listen(0, '127.0.0.1', r));
@@ -504,8 +537,7 @@ describe('an endpoint reads as it is now', () => {
        returning id`,
       [anaTenant, owned.id, `evt-${randomUUID()}`, made.id, waiting, process.env.BULL_PREFIX],
     );
-    const sweeper = server.app?.get(DeliveriesService, { strict: false }) as DeliveriesService;
-    await sweeper.sweep();
+    await sweeper().sweep();
     const w = await eventually(() =>
       at('/ok/replay-thief').find((x) => x.headers['webhook-id'] === queued[0].id),
     );
@@ -529,8 +561,7 @@ describe('an endpoint reads as it is now', () => {
        returning id`,
       [anaTenant, owned.id, `evt-${randomUUID()}`, memo, process.env.BULL_PREFIX],
     );
-    const sweeper = server.app?.get(DeliveriesService, { strict: false }) as DeliveriesService;
-    await sweeper.sweep();
+    await sweeper().sweep();
     const d = await eventually(async () =>
       (await deliveryRows(owned.id)).find((x) => x.id === rows[0].id && x.status === 'cancelled'),
     );
@@ -556,14 +587,107 @@ describe('the sweeper', () => {
        returning id`,
       [anaTenant, id, `evt-${randomUUID()}`, body, process.env.BULL_PREFIX],
     );
-    const sweeper = server.app?.get(DeliveriesService, { strict: false }) as DeliveriesService;
-    expect(await sweeper.sweep()).toBeGreaterThanOrEqual(1);
+    expect(await sweeper().sweep()).toBeGreaterThanOrEqual(1);
     const r = await eventually(() => at('/ok/swept')[0]);
     expect(r.headers['webhook-id']).toBe(rows[0].id);
     expect(verifyWebhook({ secret, headers: r.headers, body: r.body }).ok).toBe(true);
     await eventually(async () =>
       (await deliveryRows(id)).find((d) => d.status === 'delivered' && d.attempts === 1),
     );
+  });
+});
+
+describe('a try that goes wrong after the send', () => {
+  it('a receiver that answers 200 with a NUL byte gets one request; the delivery ends delivered', async () => {
+    bodies.set('/ok/nul', 'ok\u0000!');
+    const { id } = await endpoint(ana, { url: `${base}/ok/nul`, events: ['task.created'] });
+    await task(ana, { title: 'Binary answer' });
+    const [d] = await eventually(async () => {
+      const rows = (await deliveryRows(id)).filter((r) => r.status === 'delivered');
+      return rows.length ? rows : undefined;
+    });
+    expect(d).toMatchObject({ attempts: 1, last_status: 200, last_error: null });
+    // The log keeps the answer without the NUL, which Postgres text cannot hold.
+    const log = await ana.call('GET', `/api/integrations/deliveries/${d.id}`);
+    expect(log.body.attempts).toEqual([
+      expect.objectContaining({ attempt: 1, status: 200, error: null, response: 'ok!' }),
+    ]);
+    // Nothing is left for the sweeper to send again.
+    await sweeper().sweep();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(at('/ok/nul')).toHaveLength(1);
+    expect((await deliveryRows(id))[0]).toMatchObject({ status: 'delivered', attempts: 1 });
+  });
+
+  it('a try whose lease ran out counts: it is logged, and the next try is sent', async () => {
+    const { id } = await endpoint(ana, { url: `${base}/ok/lost`, events: ['visit.created'] });
+    const lost = await storedDelivery(id, {
+      status: 'sending',
+      attempts: 1,
+      leaseUntil: '-1 minute',
+    });
+    // A try still within its lease is left alone.
+    const held = await storedDelivery(id, {
+      status: 'sending',
+      attempts: 1,
+      leaseUntil: '1 hour',
+    });
+    expect(await sweeper().sweep()).toBeGreaterThanOrEqual(1);
+    await eventually(async () =>
+      (await deliveryRows(id)).find(
+        (d) => d.id === lost && d.status === 'delivered' && d.attempts === 2,
+      ),
+    );
+    expect(at('/ok/lost').map((r) => r.headers['webhook-id'])).toEqual([lost]);
+    const log = await ana.call('GET', `/api/integrations/deliveries/${lost}`);
+    expect(log.body.attempts).toEqual([
+      expect.objectContaining({
+        attempt: 1,
+        status: null,
+        error: expect.stringContaining('did not finish'),
+      }),
+      expect.objectContaining({ attempt: 2, status: 200, error: null }),
+    ]);
+    expect((await deliveryRows(id)).find((d) => d.id === held)).toMatchObject({
+      status: 'sending',
+      attempts: 1,
+    });
+  });
+
+  it('at the end of the schedule a try that did not finish ends the delivery failed, unsent', async () => {
+    const { id } = await endpoint(ana, { url: `${base}/ok/lost-last`, events: ['visit.created'] });
+    // The schedule has 3 waits: try 4 is the last.
+    const lost = await storedDelivery(id, {
+      status: 'sending',
+      attempts: 4,
+      leaseUntil: '-1 minute',
+    });
+    await sweeper().sweep();
+    const [d] = await deliveryRows(id);
+    expect(d).toMatchObject({ id: lost, status: 'failed', attempts: 4, last_status: null });
+    expect(d.last_error).toContain('did not finish');
+    // Swept again, it stays failed; nothing was sent.
+    await sweeper().sweep();
+    await new Promise((r) => setTimeout(r, 500));
+    expect((await deliveryRows(id))[0]).toMatchObject({ status: 'failed', attempts: 4 });
+    expect(at('/ok/lost-last')).toHaveLength(0);
+    const log = await ana.call('GET', `/api/integrations/deliveries/${lost}`);
+    expect(log.body.attempts).toEqual([
+      expect.objectContaining({ attempt: 4, error: expect.stringContaining('did not finish') }),
+    ]);
+  });
+
+  it('a retry schedule that does not parse stops the feature at start', () => {
+    const was = process.env.INTEGRATIONS_RETRY_SCHEDULE;
+    process.env.INTEGRATIONS_RETRY_SCHEDULE = '5s,soon';
+    try {
+      expect(() => checkSettings()).toThrow(
+        'INTEGRATIONS_RETRY_SCHEDULE: "soon" is not a duration',
+      );
+    } finally {
+      process.env.INTEGRATIONS_RETRY_SCHEDULE = was;
+    }
+    expect(() => checkSettings()).not.toThrow();
   });
 });
 
