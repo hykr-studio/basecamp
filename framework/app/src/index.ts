@@ -21,6 +21,7 @@ export {
   useFiles,
   useFileUpload,
 } from './features/files';
+export { JobProgress, useCancelJob, useJob, useJobs } from './features/jobs';
 export {
   ApprovalCard,
   ApprovalItem,
