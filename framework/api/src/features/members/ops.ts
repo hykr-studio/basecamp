@@ -507,13 +507,15 @@ export const acceptInvite = (inviteId: string) =>
         .select()
         .from(memberships)
         .where(and(eq(memberships.tenantId, invite.tenantId), eq(memberships.userId, p.actor.id)));
-      return { invite, member };
+      // Only roles the business still has: one deleted since the invitation gives nothing.
+      const { roles } = await lockSettings(tx, invite.tenantId);
+      return { invite, member, given: standingIn(invite.roles, { roles }).roles };
     },
     authorize: () => allow('invite_accepted', 'Joins the business it was invited to'),
     summarize: (_i, { invite }) => `Join with the roles ${invite.roles.join(', ')}`,
-    async run({ tx, principal, loaded: { invite, member } }) {
+    async run({ tx, principal, loaded: { invite, member, given } }) {
       const userId = principal.actor.id;
-      const roles = [...new Set([...(member?.roles ?? []), ...invite.roles])];
+      const roles = [...new Set([...(member?.roles ?? []), ...given])];
       // One default business per person: this one now.
       await tx
         .update(memberships)
