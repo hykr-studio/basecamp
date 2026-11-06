@@ -1,7 +1,8 @@
 // The settings feature in use (A11): a `gadgets` module whose entity takes custom fields and is
 // shared from the platform's business, with a command a platform flag gates; an `extras` module
-// a business-managed flag switches off as a whole; and a gadgets command that writes an extra
-// (the write hook's cross-module case). Only the settings test's server (`settingsApp`) adds
+// a business-managed flag switches off as a whole; a gadgets command that writes an extra
+// (the write hook's cross-module case); and one that makes a gadget itself, as a meeting's close
+// makes to-dos (a required custom field is not the command's to fill). Only the settings test's server (`settingsApp`) adds
 // these modules; the other tests never load this file.
 import { defineModule, defineServer } from '@hykr/api';
 import {
@@ -97,6 +98,16 @@ export const SpawnExtraSpec = commandSpec({
   touches: ['extra'],
 });
 
+export const CopyGadgetSpec = commandSpec({
+  name: 'gadget.copy',
+  description: 'Copy a gadget: a new one with its title, and its custom values when asked.',
+  input: z.object({ gadgetId: z.uuid(), withCustom: z.boolean().optional() }),
+  output: z.object({ id: z.string() }),
+  http: { method: 'POST', path: '/api/gadgets/:gadgetId/copy' },
+  expose: 'human',
+  touches: ['gadget'],
+});
+
 export const Extra = z.object({ id: z.string(), title, createdAt: z.iso.datetime() });
 export const ExtraSpec = entitySpec({
   name: 'extra',
@@ -174,6 +185,28 @@ export const SpawnExtra = defineCommand(SpawnExtraSpec, {
   },
 });
 
+export const CopyGadget = defineCommand(CopyGadgetSpec, {
+  resource: { type: 'gadget', id: (input) => input.gadgetId },
+  load: (tx, p, input) => GadgetDef.repo.get(tx, p, input.gadgetId),
+  authorize: () => allow('owner_copies'),
+  summarize: (_input, gadget) => `Copy ${gadget.title}`,
+  run: async ({ tx, principal, input, loaded: gadget, via }) => {
+    const copy = await GadgetDef.repo.insert(
+      tx,
+      principal,
+      {
+        title: `${gadget.title} (copy)`,
+        ...(input.withCustom ? { custom: gadget.custom as Record<string, string> } : {}),
+      },
+      via,
+    );
+    return {
+      value: { id: copy.id },
+      touched: [{ type: 'gadget', id: copy.id, change: 'created', after: copy }],
+    };
+  },
+});
+
 @Module({ controllers: [entityController(ExtraDef)], providers: [...entityHandlers(ExtraDef)] })
 class ExtrasModule {}
 
@@ -182,11 +215,13 @@ class ExtrasModule {}
     entityController(GadgetDef),
     commandController(PolishGadget),
     commandController(SpawnExtra),
+    commandController(CopyGadget),
   ],
   providers: [
     ...entityHandlers(GadgetDef),
     commandHandler(PolishGadget),
     commandHandler(SpawnExtra),
+    commandHandler(CopyGadget),
   ],
 })
 class GadgetsModule {}
@@ -227,7 +262,7 @@ const gadgetsModule = defineModule({
     name: 'gadgets',
     dependsOn: ['extras'],
     entities: { gadgets: GadgetSpec },
-    commands: [PolishGadgetSpec, SpawnExtraSpec],
+    commands: [PolishGadgetSpec, SpawnExtraSpec, CopyGadgetSpec],
   }),
   server: GadgetsModule,
   tables: { gadgets },

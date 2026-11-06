@@ -154,6 +154,11 @@ const invalid = (problems: string[]) =>
  * Every write that stores custom values (CRUD, commands, approved replays, system jobs) is checked
  * in its transaction against the business's definitions; a problem rolls the write back with a 400.
  * A parked write's input is checked when it parks, so nobody approves values that cannot be saved.
+ *
+ * A required field is enforced only where the writer could supply it: the entity's own create,
+ * and any write that sets custom values on the record. A record another operation makes without
+ * custom values (a command that turns a meeting's action items into to-dos) is not refused for a
+ * field that operation cannot know about; it shows the field as unset until someone fills it.
  */
 export const customFieldsHook: WriteHook = {
   name: 'custom-fields',
@@ -163,9 +168,9 @@ export const customFieldsHook: WriteHook = {
     if (result.status === 'needs_approval') {
       const def = op.kind === 'entity' ? entityDef(op.resourceType) : undefined;
       const patch = (input as Values | null)?.custom as Values | undefined;
-      if (!def || !hasCustomFields(def.spec) || !patch) return;
       const creating = op.name.endsWith('.create');
-      const values = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== null));
+      if (!def || !hasCustomFields(def.spec) || (!patch && !creating)) return;
+      const values = Object.fromEntries(Object.entries(patch ?? {}).filter(([, v]) => v !== null));
       const fields = await customFieldsOf(tx, tenantId, def.name);
       const problems = customValueProblems(fields, values, { checkRequired: creating });
       if (problems.length) throw invalid(problems);
@@ -178,19 +183,23 @@ export const customFieldsHook: WriteHook = {
       const after = ((t.after as Values | undefined)?.custom ?? {}) as Values;
       const before = ((t.before as Values | undefined)?.custom ?? {}) as Values;
       const same = (k: string) => JSON.stringify(after[k]) === JSON.stringify(before[k]);
-      if (t.change !== 'created' && Object.keys({ ...after, ...before }).every(same)) continue;
+      const created = t.change === 'created';
+      if (!created && Object.keys({ ...after, ...before }).every(same)) continue;
       // Only the values this write set are checked: one kept from before its field was removed
-      // (or its option dropped) stays as it is until someone changes or clears it. Required
-      // fields must hold a value whenever custom values change.
-      const set = Object.fromEntries(
-        Object.entries(after).filter(([k]) => t.change === 'created' || !same(k)),
-      );
+      // (or its option dropped) stays as it is until someone changes or clears it.
+      const set = Object.fromEntries(Object.entries(after).filter(([k]) => created || !same(k)));
+      // Required fields must hold a value on the entity's own create and whenever this write
+      // sets custom values; not on a record another operation made without any.
+      const ownCreate = op.kind === 'entity' && op.name === `${t.type}.create`;
+      const checkRequired = !created || ownCreate || Object.keys(set).length > 0;
       const fields = await customFieldsOf(tx, tenantId, def.name);
       const problems = [
         ...customValueProblems(fields, set, { checkRequired: false }),
-        ...fields
-          .filter((f) => f.required && (after[f.key] === undefined || after[f.key] === ''))
-          .map((f) => `${f.key}: required`),
+        ...(checkRequired
+          ? fields
+              .filter((f) => f.required && (after[f.key] === undefined || after[f.key] === ''))
+              .map((f) => `${f.key}: required`)
+          : []),
       ];
       if (problems.length) throw invalid(problems);
     }

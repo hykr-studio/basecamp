@@ -370,6 +370,53 @@ describe('custom fields', () => {
     );
   });
 
+  it('a command that makes a record without custom values is not refused for a required field', async () => {
+    const bare = await owner.call('POST', '/api/gadgets', { title: 'Bare' });
+    const valued = await owner.call('POST', '/api/gadgets', {
+      title: 'Valued',
+      custom: { estimate: 2 },
+    });
+    const code = await owner.call('POST', '/api/custom-fields', {
+      entity: 'gadget',
+      key: 'code',
+      type: 'text',
+      label: { en: 'Code' },
+      required: true,
+    });
+    expect(code.status).toBe(201);
+    try {
+      // The command cannot know the business's fields: its gadget is made, the code unset.
+      const copied = await owner.call('POST', `/api/gadgets/${bare.body.value.id}/copy`, {});
+      expect(copied.status).toBe(200);
+      expect(copied.body).toMatchObject({ status: 'done' });
+      const copy = await owner.call('GET', `/api/gadgets/${copied.body.value.id}`);
+      expect(copy.body).toMatchObject({ title: 'Bare (copy)', custom: {} });
+      // A command that sets custom values sets the required ones too, or rolls back.
+      const copies = async () =>
+        (
+          await pool.query(
+            "select count(*)::int as n from app.fixture_gadgets where title = 'Valued (copy)'",
+          )
+        ).rows[0].n;
+      const before = await copies();
+      const refused = await owner.call('POST', `/api/gadgets/${valued.body.value.id}/copy`, {
+        withCustom: true,
+      });
+      expect(refused.status).toBe(400);
+      expect(refused.body).toMatchObject({
+        error: 'custom_field_invalid',
+        problems: ['code: required'],
+      });
+      expect(await copies()).toBe(before);
+      // The record's own create still needs it, and so does a parked one, when it parks.
+      expect((await owner.call('POST', '/api/gadgets', { title: 'No code' })).status).toBe(400);
+      const agent = asAssistant(`user:${owner.id}`, { 'x-tenant-id': tenantId });
+      expect((await agent('POST', '/api/gadgets', { title: 'No code either' })).status).toBe(400);
+    } finally {
+      await owner.call('DELETE', `/api/custom-fields/${code.body.value.id}`);
+    }
+  });
+
   it('a value kept from a removed field stays until someone changes or clears it', async () => {
     const size = await owner.call('POST', '/api/custom-fields', {
       entity: 'gadget',
