@@ -25,8 +25,9 @@ import { QueuesModule } from './queues/queues.module.js';
     AuthModule.forRoot({
       auth: getAuth(),
       disableTrustedOriginsCors: true,
-      // Webhooks are verified by an HMAC over the exact bytes received.
-      bodyParser: { rawBody: true },
+      // Webhooks are verified by an HMAC over the exact bytes received. JSON bodies up to
+      // JSON_BODY_LIMIT (1mb): a whole order of a few hundred lines in one request.
+      bodyParser: { rawBody: true, json: { limit: config.jsonBodyLimit } },
     }),
     ThrottlerModule.forRoot({
       throttlers: [{ name: 'default', ttl: 60_000, limit: 120 }],
