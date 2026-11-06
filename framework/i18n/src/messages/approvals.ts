@@ -16,6 +16,7 @@ export const approvalMessages = defineMessages({
     'approval.notYours': "This button isn't for this number.",
     'approval.decideInApp': 'This one is decided in the app, signed in: {url}',
     'approval.askedTeam': "I've asked the team to confirm. I'll tell you here when they do.",
+    'approval.someoneElse': 'Someone else decides this one. You can follow it in the app: {url}',
   },
   hi: {
     'approval.waiting': 'आपकी मंज़ूरी का इंतज़ार',
@@ -31,6 +32,7 @@ export const approvalMessages = defineMessages({
     'approval.notYours': 'यह बटन इस नंबर के लिए नहीं है।',
     'approval.decideInApp': 'यह ऐप में, साइन इन करके तय होता है: {url}',
     'approval.askedTeam': 'मैंने टीम से पुष्टि करने को कहा है। जब वे करेंगे, मैं आपको यहाँ बताऊँगा।',
+    'approval.someoneElse': 'इसे कोई और तय करेगा। आप ऐप में इसे देख सकते हैं: {url}',
   },
   te: {
     'approval.waiting': 'మీ అనుమతి కోసం వేచి ఉంది',
@@ -46,5 +48,6 @@ export const approvalMessages = defineMessages({
     'approval.notYours': 'ఈ బటన్ ఈ నంబర్ కోసం కాదు.',
     'approval.decideInApp': 'ఇది యాప్‌లో, సైన్ ఇన్ చేసి నిర్ణయించబడుతుంది: {url}',
     'approval.askedTeam': 'నేను టీమ్‌ను నిర్ధారించమని అడిగాను. వారు చేసినప్పుడు ఇక్కడ చెబుతాను.',
+    'approval.someoneElse': 'దీన్ని వేరొకరు నిర్ణయిస్తారు. మీరు దీన్ని యాప్‌లో చూడవచ్చు: {url}',
   },
 });

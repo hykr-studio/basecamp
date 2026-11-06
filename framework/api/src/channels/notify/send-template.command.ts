@@ -1,4 +1,4 @@
-import { FrameworkCapabilities, SendTemplateSpec } from '@hykr/contracts';
+import { ApprovalCapabilities, FrameworkCapabilities, SendTemplateSpec } from '@hykr/contracts';
 import { allow, defineCommand, deny, needsApproval } from '@hykr/core';
 import { schema } from '@hykr/db';
 import { can } from '@hykr/policy';
@@ -45,7 +45,8 @@ export const SendTemplate = defineCommand(SendTemplateSpec, {
     return allow('staff_sends_service');
   },
   summarize: (input) => `Send ${input.template} to a customer`,
-  approval: { by: ['owner', 'admin'] },
+  // Holders of marketing.approve decide, never the person who asked.
+  approval: { by: { capability: ApprovalCapabilities.marketing.name } },
   run: async ({ tx, principal, input }) => {
     await tx.insert(schema.outbox).values({
       tenantId: principal.tenantId ?? '',
