@@ -1,4 +1,4 @@
-export type { AgentDomain, EvalCase, VoiceEvalCase } from './agent-domain.js';
+export type { AgentDomain, AgentModule, EvalCase, VoiceEvalCase } from './agent-domain.js';
 export { AGENT_KEYS, type Agents, createAgents, profileFor } from './agents.js';
 export { type ApiFor, createApiFor } from './context.js';
 export {

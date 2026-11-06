@@ -40,3 +40,12 @@ export interface AgentDomain {
     api: (method: string, path: string, body?: unknown) => Promise<unknown>,
   ) => Promise<void>;
 }
+
+/**
+ * What one application module teaches the assistant: its rules, its one-line help, the scripted
+ * model's scripts for its verbs, and its own eval cases and setup. The application keeps the
+ * persona. Module order decides the merge (F1 builds it).
+ */
+export type AgentModule = Partial<
+  Pick<AgentDomain, 'rules' | 'help' | 'scripts' | 'evalCases' | 'voiceEvalCases' | 'evalSetup'>
+>;

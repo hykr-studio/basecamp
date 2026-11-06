@@ -86,7 +86,7 @@ Other gotchas:
 ### Framework / application boundary (enforced by `pnpm lint:deps`, `.dependency-cruiser.cjs`)
 
 - `framework/` never imports `application/`. The application passes its domain in at exactly two points:
-  - the server: `application/api/src/server.ts`, through `defineServer({ domain, module, views, notifications, agent, channel, migrations })`, started by `startApi` / `startWorker`;
+  - the server: `application/api/src/server.ts`, through `defineServer({ domain, module, views, notifications, agent, channel, migrations, contributes })`, started by `startApi` / `startWorker`;
   - the app: `application/mobile/src/app/_layout.tsx`, through `<AppShell app catalog registry config />`.
 - `application/` imports `@hykr/*` by package name and public subpath only. No relative paths into
   `framework/`, and no `src/` or `dist/` paths.
@@ -167,6 +167,11 @@ an entity's `access` grants each role `own`, `customer` or `tenant` per read and
 
 A framework change needs its own tests: e2e tests in `framework/api/test/framework` against the fixture
 app in `framework/api/test/fixture`. Framework tests must not depend on the sample domain.
+
+Extension points (developer guide, section 5.9): spec `traits`, `contributes` lists collected by
+registries (`createHookRegistry`, in `framework/core/src/hooks.ts` and `framework/api/src/hooks.ts`),
+and settings sections (`defineSettingsSection`). Each is extended by declaration merging. Add a new
+kind in your own file instead of editing a central one. Decisions per unit are in `docs/decisions/`.
 
 ## Tooling notes
 

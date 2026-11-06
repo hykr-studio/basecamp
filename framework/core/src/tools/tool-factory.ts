@@ -81,7 +81,8 @@ const agentPrincipal: Principal = {
 };
 
 function needsApproval(spec: EntitySpec, action: 'create' | 'update' | 'delete') {
-  return parksFor(spec.approval[action], agentPrincipal);
+  // No payload yet: a check on the input or the row sees null.
+  return parksFor(spec.approval[action], agentPrincipal, { action, input: null, row: null });
 }
 
 const APPROVAL =

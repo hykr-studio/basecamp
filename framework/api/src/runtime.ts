@@ -1,5 +1,12 @@
 import { type AgentDomain, type Agents, createAgents } from '@hykr/agents';
-import { type Catalog, createCatalog, type Domain } from '@hykr/contracts';
+import {
+  type Catalog,
+  type Contributions,
+  createCatalog,
+  type Domain,
+  installContributions,
+  mergeContributions,
+} from '@hykr/contracts';
 import type { MigrationSet } from '@hykr/db';
 import type { Labels } from '@hykr/i18n';
 import {
@@ -9,6 +16,8 @@ import {
 } from '@hykr/notifications';
 import { createUiRegistry, type Registry, type UiDomain } from '@hykr/ui-registry';
 import type { DynamicModule, Type } from '@nestjs/common';
+// The registries every contribution key goes to: loaded before any app is installed.
+import './hooks.js';
 
 /**
  * Everything an application gives the server: its domain (entities and commands), the Nest
@@ -30,6 +39,11 @@ export interface ServerDefinition {
   channel?: { does: Labels };
   /** The application's migrations, applied after the framework's (`basecamp db migrate`). */
   migrations?: MigrationSet[];
+  /**
+   * Hooks and plugins the application adds, by kind (see `Contributions` in @hykr/contracts
+   * and the registries in hooks.ts). Installed once, when the process starts serving it.
+   */
+  contributes?: Partial<Contributions>;
 }
 
 /** An application as the server runs it: its definition, built into the framework's parts. */
@@ -38,6 +52,8 @@ export interface Basecamp {
   catalog: Catalog;
   registry: Registry;
   notifications: NotificationCatalog;
+  /** Everything it contributes, merged: installed into the registries by `setRuntime`. */
+  contributions: Partial<Contributions>;
   /** The assistant, built on first use (the templates CLI and migrations never need it). */
   readonly agents: Agents;
 }
@@ -51,6 +67,7 @@ export function defineServer(definition: ServerDefinition): Basecamp {
     catalog,
     registry,
     notifications: createNotificationCatalog(definition.notifications),
+    contributions: mergeContributions(definition.contributes),
     get agents() {
       agents ??= createAgents({ catalog, registry, domain: definition.agent });
       return agents;
@@ -71,7 +88,10 @@ export function runtime(): Basecamp {
   return current;
 }
 
+/** Serve this application in this process, and install its contributions into the registries. */
 export function setRuntime(app: Basecamp) {
-  if (current && current !== app) throw new Error('Another application is already registered');
+  if (current === app) return;
+  if (current) throw new Error('Another application is already registered');
+  installContributions(app.contributions);
   current = app;
 }

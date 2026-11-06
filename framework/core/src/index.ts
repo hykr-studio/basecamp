@@ -27,6 +27,21 @@ export {
   toJson,
 } from './entity/define-entity.js';
 export { entityHandlers, entityOp } from './entity/handlers.js';
+export {
+  type AgentIdentity,
+  type AgentIdentityProvider,
+  type EntityPlugin,
+  type EntityPluginTarget,
+  entityPlugins,
+  type IdentityRequest,
+  identityProviders,
+  projectRead,
+  type ReadProjector,
+  readProjectors,
+  type WriteHook,
+  type WriteHookArgs,
+  writeHooks,
+} from './hooks.js';
 export { ApprovalsController } from './http/approvals.controller.js';
 export { commandController, entityController } from './http/controller-factory.js';
 export {

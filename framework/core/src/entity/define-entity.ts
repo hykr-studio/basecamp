@@ -381,7 +381,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       }
       // Then approval: who must confirm this action.
       const approval = spec.approval[action];
-      if (parksFor(approval, p)) {
+      if (parksFor(approval, p, { action, input, row: row as Record<string, unknown> | null })) {
         return {
           decision: 'needs_approval',
           rule: `${spec.name}_${action}_needs_approval`,
