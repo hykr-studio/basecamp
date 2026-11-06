@@ -119,6 +119,16 @@ export function transitionInput(def: AnyEntityDef, t: TransitionDecl | undefined
   return z.object(fields);
 }
 
+/**
+ * What the transition operation takes: the transition's fields, and its own name (filled in
+ * when left out), so a parked request says which move it is (the approval card draws it).
+ */
+const operationInput = (def: AnyEntityDef, t: TransitionDecl | undefined, name: string) =>
+  transitionInput(def, t)
+    .extend({ transition: z.literal(name).default(name) })
+    // Anything else is a mistake: refused (400), never silently dropped.
+    .strict();
+
 /** The update a transition makes, its touched row and its event. */
 async function apply(
   tx: Tx,
@@ -242,7 +252,7 @@ export function transitionOp(
     kind: 'command',
     resourceType: def.name,
     resourceId: () => id || null,
-    input: transitionInput(def, t) as unknown as z.ZodType<Values>,
+    input: operationInput(def, t, name) as unknown as z.ZodType<Values>,
     get args() {
       return { id, transition: name, ...(pins ? { pins } : {}) };
     },

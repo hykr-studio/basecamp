@@ -142,7 +142,11 @@ export async function reviseWithChildren(
   p: Principal,
   def: AnyEntityDef,
   row: Values,
-  opts: { via: RuleContext; values?: Values },
+  opts: {
+    via: RuleContext;
+    /** Columns of the new revision over the copy; a function gets its revision number. */
+    values?: Values | ((revision: number) => Values);
+  },
 ): Promise<Revision> {
   const trait = versionedOf(def.spec);
   const rev = trait ? revisionFields(trait) : undefined;
@@ -164,11 +168,12 @@ export async function reviseWithChildren(
   const values: Values = { ...row };
   for (const s of STAMPS) delete values[s];
   withoutFiles(def.spec, columns, values);
+  const revision = Number(top?.n ?? row[rev.number] ?? 1) + 1;
   Object.assign(values, {
     id: randomUUID(),
     [versionField(trait)]: 1,
     [rev.series]: series,
-    [rev.number]: Number(top?.n ?? row[rev.number] ?? 1) + 1,
+    [rev.number]: revision,
   });
   const states = statesOf(def.spec);
   if (states) values[states.field] = states.initial;
@@ -184,7 +189,8 @@ export async function reviseWithChildren(
     rev.number,
     versionField(trait),
   ]);
-  for (const [k, v] of Object.entries(opts.values ?? {}))
+  const own = typeof opts.values === 'function' ? opts.values(revision) : (opts.values ?? {});
+  for (const [k, v] of Object.entries(own))
     if (columns[k] && !fixed.has(k)) values[k] = v;
   const [made] = (await tx
     .insert(def.table as Table)

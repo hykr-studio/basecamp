@@ -206,6 +206,8 @@ export function checkStates(spec: EntitySpec): void {
         problems.push(`the transition "${t.name}" requires "${f}": list it in its fields too`);
     if ((t.fields ?? []).includes(trait.field))
       problems.push(`the transition "${t.name}" may not set the state field itself`);
+    if ((t.fields ?? []).includes('transition'))
+      problems.push(`the transition "${t.name}" sets "transition", the name a request carries`);
     const event = transitionEvent(spec.name, t);
     if (CRUD.has(event.split('.').at(-1) ?? '') && event.startsWith(`${spec.name}.`))
       problems.push(`the transition "${t.name}" would store "${event}", a CRUD event's name`);
