@@ -9,6 +9,7 @@ import {
   eventFor,
   fieldPolicyProblems,
   PrincipalResolver,
+  TenantConfigService,
   toEnvelope,
 } from '@hykr/core';
 import { domainEvents } from '@hykr/db';
@@ -241,6 +242,22 @@ describe("a business's own roles", () => {
     ).toBe('last_manager');
     await ana.call('PATCH', '/api/members/roles/owner', { capabilities: null });
     expect((await ana.call('GET', '/api/me')).body.capabilities).toContain('members.manage');
+  });
+
+  it('settings that do not parse leave the roles but no capability (fail closed)', async () => {
+    const config = server.app?.get(TenantConfigService) as TenantConfigService;
+    await pool.query(
+      `update app.tenants set settings = '{"marketingPerWeek": "lots"}' where id = $1`,
+      [strangerTenant],
+    );
+    config.invalidate(strangerTenant);
+    expect((await stranger.call('GET', '/api/me')).body).toMatchObject({
+      roles: ['owner', 'admin'],
+      capabilities: [],
+    });
+    await pool.query(`update app.tenants set settings = '{}' where id = $1`, [strangerTenant]);
+    config.invalidate(strangerTenant);
+    expect((await stranger.call('GET', '/api/me')).body.capabilities).toContain('members.manage');
   });
 
   it("another business never sees or changes this one's roles and members", async () => {

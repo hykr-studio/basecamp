@@ -49,14 +49,15 @@ const warned = new Set<string>();
  * (with the application's overrides and the business's edits) and the business's own. A name
  * it does not have grants nothing, and is logged once.
  */
-function standingOf(values: readonly string[], settings: TenantConfig | undefined) {
-  const { roles, capabilities, unknown } = standingIn(values, settings);
+function standingOf(values: readonly string[], settings: TenantConfig | null) {
+  const { roles, capabilities, unknown } = standingIn(values, settings ?? undefined);
   for (const r of unknown)
     if (!warned.has(r)) {
       warned.add(r);
       logger.warn(`Role "${r}" is in a membership but nobody declared it: it grants nothing`);
     }
-  return { roles, capabilities };
+  // Settings that do not parse may hide an edit that took capabilities away: allow none.
+  return { roles, capabilities: settings ? capabilities : [] };
 }
 
 /**
@@ -77,15 +78,16 @@ export class PrincipalResolver {
   }
 
   /**
-   * A business's settings, for its roles. Settings that do not parse give the declared roles
-   * only (the business's own grant nothing), never an error on every request.
+   * A business's settings, for its roles. Settings that do not parse are null: the declared
+   * roles still reach their rows, but nobody holds a capability there until they are fixed
+   * (fail closed: a business's edit may have taken some away).
    */
-  private async settingsOf(tenantId: string): Promise<TenantConfig | undefined> {
+  private async settingsOf(tenantId: string): Promise<TenantConfig | null> {
     try {
       return (await this.tenants.get(tenantId)).settings;
     } catch (e) {
-      logger.warn(`Settings of business ${tenantId} do not parse; only declared roles count: ${e}`);
-      return undefined;
+      logger.error(`Settings of business ${tenantId} do not parse; no capabilities there: ${e}`);
+      return null;
     }
   }
 
