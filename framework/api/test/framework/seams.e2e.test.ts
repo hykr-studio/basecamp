@@ -56,8 +56,10 @@ describe('contributions', () => {
     for (const [key, registry] of Object.entries(registries)) {
       const [contributed] = seamsContributions[key as keyof typeof registries] ?? [];
       expect(registry.get(NAME), key).toBe(contributed);
-      // The framework registers its own queues too (the channel's, the events queue).
-      if (key === 'queues') expect(registry.all(), key).toContain(contributed);
+      // The framework registers its own queues and schedules too (the channel's, the events
+      // queue, the approvals sweeper).
+      if (key === 'queues' || key === 'schedules')
+        expect(registry.all(), key).toContain(contributed);
       else expect(registry.all(), key).toEqual([contributed]);
     }
     expect(api.runtime().contributions).toEqual(seamsContributions);

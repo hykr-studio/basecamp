@@ -123,6 +123,16 @@ function canonical(value: unknown): string {
   return JSON.stringify(sort(toJson(value)));
 }
 
+/**
+ * Is the row as the write left it? Every column but `updatedAt`, which only says when it was
+ * last written (an undo of a later write puts the values back, not the time).
+ */
+function unchanged(current: unknown, after: Values): boolean {
+  const { updatedAt: _now, ...rest } = (toJson(current) ?? {}) as Values;
+  const { updatedAt: _then, ...was } = after;
+  return canonical(rest) === canonical(was);
+}
+
 const changedSince = () =>
   new ConflictException({
     error: 'changed_since',
@@ -172,7 +182,7 @@ async function reverse(
 
   if (t.change === 'created' || t.change === 'updated') {
     const current = await def.repo.find(tx, p, t.id);
-    if (!current || canonical(current) !== canonical(after)) throw changedSince();
+    if (!current || !unchanged(current, after)) throw changedSince();
     if (t.change === 'created') {
       const gone = await def.repo.delete(tx, p, current, via);
       return {
