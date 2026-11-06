@@ -9,5 +9,7 @@ import { MoneyController } from './money.controller.js';
 export const moneyFeature = defineFeature({
   name: 'money',
   controllers: [MoneyController],
-  contributes: { entityPlugins: [moneyPlugin, parentPlugin] },
+  // The parent's refusals first: a child written outside its tree is refused for that, whatever
+  // its money says.
+  contributes: { entityPlugins: [parentPlugin, moneyPlugin] },
 });

@@ -35,6 +35,7 @@ export {
   type EntityRule,
   type RuleContext,
   subjectOrThrow,
+  tenantOf,
   toJson,
 } from './entity/define-entity.js';
 export { entityHandlers, entityOp } from './entity/handlers.js';
