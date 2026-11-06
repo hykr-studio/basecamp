@@ -1134,7 +1134,7 @@ GET /api/orders/summary?status=open&groupBy=createdAt:month&sum=total&sort=-key&
   in the business's time zone (`timeZone` setting); a week is keyed by its Monday. No rows: one
   zero bucket with the measures `null`. `more` says groups were cut at `limit`.
 - **Scope and hiding.** A summary covers exactly the rows the list would for the reader (the
-  list's own WHERE). A field the reader cannot see (field policy, a plugin's refusal, a read
+  list's own WHERE). A field the reader cannot see (removed by a plugin's `project` or a read
   projector) in a filter, a group or a measure is a 403 `field_hidden`. The route follows the
   list's `expose`.
 - **Clients.** `api.entity(spec).summary(q)` and `api.summary(plural, q)` (`@hykr/api-client`);
