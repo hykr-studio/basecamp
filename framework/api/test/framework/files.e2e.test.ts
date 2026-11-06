@@ -5,6 +5,7 @@
 // of file field (fixture/src/features/files). Storage is the memory driver (vitest.config.ts).
 import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
+import { createApiClient } from '@hykr/api-client';
 import type { CoreOptions } from '@hykr/core';
 import { CORE_OPTIONS, TenantConfigService } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -20,6 +21,7 @@ import {
   eventually,
   type Json,
   me,
+  origin,
   Person,
   pool,
   seedContact,
@@ -262,6 +264,25 @@ describe('uploading and reaching a file', () => {
       'file.confirm',
       'file.attach',
     ]);
+  });
+
+  it('the API client uploads in one call and gives absolute URLs', async () => {
+    const client = createApiClient({
+      baseUrl: server.base,
+      headers: () => ({ cookie: owner.cookie, origin }),
+    });
+    const file = await client.files.upload(new Blob([new Uint8Array(png(64, 32))]), {
+      name: 'client.png',
+      mime: 'image/png',
+      for: { entity: 'card', field: 'cover' },
+    });
+    expect(file).toMatchObject({ status: 'ready', width: 64, height: 32 });
+    expect(file.url?.startsWith(`${server.base}/api/files/blob/`)).toBe(true);
+    expect((await fetch(file.url as string)).status).toBe(200);
+    const [again] = await client.files.getMany([file.id]);
+    expect(again.url?.startsWith(server.base)).toBe(true);
+    await client.files.remove(file.id);
+    await expect(client.files.get(file.id)).rejects.toMatchObject({ status: 404 });
   });
 
   it('a signed URL works for its own method, key and time only', async () => {
