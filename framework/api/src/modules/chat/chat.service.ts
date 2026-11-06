@@ -9,12 +9,15 @@ import type {
   Surface,
   ToolCallSummary,
 } from '@hykr/contracts';
+import { toolsFor } from '@hykr/core/tools';
 import { LANG_ENGLISH_NAMES } from '@hykr/i18n';
 import { subjectKeyOf, userIdOf } from '@hykr/policy';
 import { RequestContext } from '@mastra/core/request-context';
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
+import type { TurnInfo, TurnOutcome } from '../../hooks.js';
 import { runtime } from '../../runtime.js';
 import { type SavedPart, ThreadsService, threadOwnerOf } from '../threads/threads.service.js';
+import { afterTurn, gateTurn, type TurnShape } from './turn-hooks.js';
 
 /** One turn's input, whatever the channel: the app's stream, a JSON caller, WhatsApp, voice. */
 export type Turn = {
@@ -127,19 +130,62 @@ export function summarize(results: unknown[]): ToolCallSummary[] {
 
 const log = new Logger('Chat');
 
+/** A fresh run id that doubles as a trace id (32 hex chars). */
+const newRunId = () => randomUUID().replaceAll('-', '');
+
+/** What the turn hooks decided, where the agent reads it (assistant.ts). */
+function applyShape(requestContext: RequestContext, shape: TurnShape) {
+  if (shape.context.length) requestContext.set('turnContext', shape.context);
+  if (shape.model) requestContext.set('model', shape.model);
+  if (shape.withoutTools.length) requestContext.set('withoutTools', shape.withoutTools);
+}
+
+type Usage = { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
+
+/** A finished (or failed) turn, as the hooks' `after` sees it. */
+const outcomeOf = (
+  text: string,
+  results: unknown[],
+  usage: Usage,
+  interrupted = false,
+): TurnOutcome => ({
+  text,
+  toolCalls: summarize(results).map((c) => c.tool),
+  ...(usage
+    ? {
+        usage: {
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          totalTokens: usage.totalTokens,
+        },
+      }
+    : {}),
+  interrupted,
+});
+
 /**
  * A person (or a relay acting for one) sends a message; the agent runs one turn for that
  * person. Its tool calls go back through the API under its own key, so every rule and audit
- * row applies. Every channel goes through here: the same agent, context, history and logging.
+ * row applies. Every channel goes through here: the same agent, context, history, turn hooks
+ * and logging.
  */
 @Injectable()
-export class ChatService {
+export class ChatService implements OnApplicationBootstrap {
   constructor(private readonly threads: ThreadsService) {}
 
+  /**
+   * Every tool the agent could get, built once: a tool id defined twice (a contribution named
+   * like a generated tool) stops the start instead of one silently replacing the other.
+   */
+  onApplicationBootstrap() {
+    const { catalog, registry } = runtime();
+    const clientFor = () => {
+      throw new Error('Tools built at startup are only checked, never called');
+    };
+    toolsFor({ clientFor, registry }, catalog, { canvas: true });
+  }
+
   private async prepare(p: Principal, turn: Turn) {
-    if (process.env.MODEL_MODE !== 'fake' && !process.env.OPENROUTER_API_KEY) {
-      throw new ServiceUnavailableException('Set OPENROUTER_API_KEY in .env to use the assistant');
-    }
     // Who the agent acts for comes from the server-side principal, never the request body.
     const subject = subjectOf(p);
     const channel: Channel = p.channel ?? 'app';
@@ -147,6 +193,21 @@ export class ChatService {
     const thread = turn.threadId
       ? await this.threads.owned(turn.threadId, owner)
       : await this.threads.current(owner);
+    // The run id doubles as the trace id (32 hex chars), so an audit row's run_id opens the
+    // matching trace in Studio. A relay (voice) names the run it already started.
+    const runId = p.runId ?? newRunId();
+    const info: TurnInfo = {
+      kind: 'chat',
+      principal: p,
+      runId,
+      threadId: thread.id,
+      message: turn.message,
+      channel,
+      surfaces: turn.surfaces,
+      ...(turn.lang ? { lang: turn.lang } : {}),
+    };
+    // Before anything is saved: a refused turn leaves the thread as it was.
+    const shape = await gateTurn(info);
     const history = await this.threads.history(thread.id, HISTORY - 1);
     await this.threads.append({
       threadId: thread.id,
@@ -156,9 +217,6 @@ export class ChatService {
       lang: turn.lang,
     });
 
-    // The run id doubles as the trace id (32 hex chars), so an audit row's run_id opens the
-    // matching trace in Studio. A relay (voice) names the run it already started.
-    const runId = p.runId ?? randomUUID().replaceAll('-', '');
     const requestContext = new RequestContext();
     // Whom the agent's tools act for, in which business: the API checks both again.
     requestContext.set('actingFor', subject);
@@ -178,6 +236,7 @@ export class ChatService {
       if (turn.context.record) requestContext.set('record', turn.context.record);
       if (turn.context.canvas) requestContext.set('canvas', turn.context.canvas);
     }
+    applyShape(requestContext, shape);
     // Literal roles: Mastra's message types reject a plain 'user' | 'assistant' union.
     const messages = [...history, { role: 'user' as const, text: turn.message }].map((m) =>
       m.role === 'user'
@@ -206,6 +265,7 @@ export class ChatService {
       runId,
       threadId: thread.id,
       save,
+      info,
     };
   }
 
@@ -243,41 +303,58 @@ export class ChatService {
     conversation: { role: string; text: string }[],
     lang?: Lang,
   ): Promise<string> {
-    const requestContext = new RequestContext();
-    requestContext.set('actingFor', subjectOf(p));
-    requestContext.set('tenantId', p.tenantId);
-    requestContext.set('channel', 'whatsapp');
-    requestContext.set('surfaces', ['text']);
-    if (lang) requestContext.set('lang', lang);
     const transcript = conversation
       .map((m) => `${m.role === 'user' ? 'Customer' : 'Business'}: ${m.text}`)
       .join('\n');
+    const message = `Draft a reply to this customer for the business to send. Write only the message, short and polite${lang ? `, in ${LANG_ENGLISH_NAMES[lang]}` : ''}.\n\n${transcript}`;
+    // A draft spends tokens too: it passes the same hooks, with no thread.
+    const info: TurnInfo = {
+      kind: 'draft',
+      principal: p,
+      runId: newRunId(),
+      message,
+      channel: 'whatsapp',
+      surfaces: ['text'],
+      ...(lang ? { lang } : {}),
+    };
+    const shape = await gateTurn(info);
+    const requestContext = new RequestContext();
+    requestContext.set('actingFor', subjectOf(p));
+    requestContext.set('tenantId', p.tenantId);
+    requestContext.set('runId', info.runId);
+    requestContext.set('channel', 'whatsapp');
+    requestContext.set('surfaces', ['text']);
+    if (lang) requestContext.set('lang', lang);
+    applyShape(requestContext, shape);
     const result = await runtime()
       .agents.agentFor(['text'])
-      .generate(
-        [
-          {
-            role: 'user' as const,
-            content: `Draft a reply to this customer for the business to send. Write only the message, short and polite${lang ? `, in ${LANG_ENGLISH_NAMES[lang]}` : ''}.\n\n${transcript}`,
-          },
-        ],
-        { requestContext, maxSteps: 1, toolChoice: 'none' },
-      );
+      .generate([{ role: 'user' as const, content: message }], {
+        requestContext,
+        maxSteps: 1,
+        toolChoice: 'none',
+      })
+      .catch(async (e) => {
+        await afterTurn(info, outcomeOf('', [], undefined, true));
+        throw e;
+      });
+    await afterTurn(info, outcomeOf(result.text, [], result.totalUsage));
     return result.text.trim();
   }
 
   /** The whole turn as one JSON answer: tests, scripts and channels without streaming. */
   async once(p: Principal, turn: Turn): Promise<ChatResponse> {
-    const { agent, messages, options, runId, threadId, save } = await this.prepare(p, turn);
+    const { agent, messages, options, runId, threadId, save, info } = await this.prepare(p, turn);
     const started = Date.now();
     const result = await agent.generate(messages, options).catch(async (e) => {
       await save(INTERRUPTED, []).catch(() => {});
+      await afterTurn(info, outcomeOf(INTERRUPTED, [], undefined, true));
       throw e;
     });
     const results = result.toolResults ?? [];
     await save(result.text, results);
     const toolCalls = summarize(results);
     this.record(p, runId, toolCalls, result.totalUsage?.totalTokens, started);
+    await afterTurn(info, outcomeOf(result.text, results, result.totalUsage));
     return { reply: result.text, runId, threadId, toolCalls };
   }
 
@@ -287,18 +364,20 @@ export class ChatService {
    * so whoever reads the thread next (the app reloading, the next voice turn) finds the reply.
    */
   async stream(p: Principal, turn: Turn, abortSignal?: AbortSignal) {
-    const { agent, messages, options, runId, threadId, save } = await this.prepare(p, turn);
+    const { agent, messages, options, runId, threadId, save, info } = await this.prepare(p, turn);
     const started = Date.now();
     const output = await agent.stream(messages, { ...options, abortSignal });
     const saved = Promise.all([output.text, output.toolResults, output.totalUsage])
       .then(async ([text, results, usage]) => {
         await save(text, results);
         this.record(p, runId, summarize(results), usage?.totalTokens, started);
+        await afterTurn(info, outcomeOf(text, results, usage));
       })
       .catch(async (e) => {
         // Failed or cut off: the thread still says so, rather than two questions in a row.
         log.warn(`run=${runId} interrupted: ${e instanceof Error ? e.message : e}`);
         await save(INTERRUPTED, []).catch(() => {});
+        await afterTurn(info, outcomeOf(INTERRUPTED, [], undefined, true));
       });
     return { output, runId, threadId, saved };
   }

@@ -9,4 +9,4 @@ export {
   type ToolContext,
   type ToolKit,
 } from './tool-factory.js';
-export { toolsFor } from './tools-for.js';
+export { generatedTools, type ToolSet, toolsFor, withContributions } from './tools-for.js';
