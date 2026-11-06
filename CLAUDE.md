@@ -93,6 +93,8 @@ E2E test gotchas:
 - `OutboxRelay` only relays outbox rows of its own `BULL_PREFIX`, and each test run uses a fresh one. Two
   processes with the same prefix on one database (two `pnpm dev` workers, both `bull`) still take each other's
   rows: give each checkout its own `BULL_PREFIX`.
+- A business's settings are cached for 10 s and read on every request. A test that changes them with SQL
+  calls `settingsChanged(tenantId)` (`@hykr/api/testing`) right after, or the server keeps the old ones.
 
 Other gotchas:
 - `basecamp` is compiled, so it only works after `pnpm build`.
