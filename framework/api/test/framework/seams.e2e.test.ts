@@ -10,12 +10,11 @@ import {
   type Principal,
   parseTenantSettings,
 } from '@hykr/contracts';
-import { TenantConfigService } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { TenantsService } from '../../dist/channels/tenants.service.js';
 import * as api from '../../dist/index.js';
-import { boot, me, Person, pool, server, shutdown } from '../../dist/testing.js';
+import { boot, me, Person, server, setTenantSettings, shutdown } from '../../dist/testing.js';
 import { TaskSpec } from '../fixture/dist/contracts.js';
 import {
   NotedSpec,
@@ -144,12 +143,9 @@ describe('tenant settings', () => {
     const tenants = server.app?.get(TenantsService, { strict: false });
     const { tenantId } = await me(ana);
     expect((await tenants?.get(tenantId))?.settings.fixtureSeams).toEqual({ limit: 5 });
-    await pool.query(`update app.tenants set settings = $2 where id = $1`, [
-      tenantId,
-      { fixtureSeams: { limit: 7 } },
-    ]);
-    // Settings are cached per process (F4): a change made outside the service invalidates it.
-    server.app?.get(TenantConfigService).invalidate(tenantId);
+    // Settings are cached per process (F4): a change made outside the service invalidates it,
+    // as setTenantSettings does.
+    await setTenantSettings(tenantId, { fixtureSeams: { limit: 7 } });
     expect((await tenants?.get(tenantId))?.settings.fixtureSeams).toEqual({ limit: 7 });
   });
 

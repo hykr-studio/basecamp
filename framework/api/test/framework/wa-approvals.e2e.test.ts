@@ -15,6 +15,7 @@ import {
   pool,
   seedContact,
   server,
+  setTenantSettings,
   shutdown,
 } from '../../dist/testing.js';
 // The framework's fixture application, compiled (Nest's DI needs the decorator metadata).
@@ -110,10 +111,7 @@ beforeAll(async () => {
   expect(
     (await ana.call('POST', '/api/channels/whatsapp/number', { phoneNumberId: NUMBER })).status,
   ).toBe(201);
-  await pool.query(
-    `update app.tenants set settings = settings || '{"quietHours":{"from":"00:00","to":"00:00"}}' where id = $1`,
-    [tenantId],
-  );
+  await setTenantSettings(tenantId, { quietHours: { from: '00:00', to: '00:00' } });
   for (const t of templates)
     for (const lang of ['en', 'hi', 'te'] as const)
       await pool.query(

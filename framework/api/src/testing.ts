@@ -131,6 +131,24 @@ export async function me(person: Person): Promise<{ tenantId: string; roles: str
   return (await person.call('GET', '/api/me')).body;
 }
 
+/**
+ * Change a business's settings straight in the database, as an operator would, then drop this
+ * process's cached copy (`TenantConfigService`), so the next request reads the change at once.
+ * Each key of `patch` replaces that whole section (`{ quietHours: {...} }`); null removes it.
+ * Use it instead of a bare UPDATE: any request before it (`GET /api/me`) caches the settings
+ * for a few seconds, and a stale copy makes a test depend on the hour or the timing.
+ */
+export async function setTenantSettings(tenantId: string, patch: Record<string, unknown>) {
+  const removed = Object.keys(patch).filter((k) => patch[k] === null);
+  const merged = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== null));
+  await pool.query(
+    'update app.tenants set settings = (settings || $2::jsonb) - $3::text[] where id = $1',
+    [tenantId, JSON.stringify(merged), removed],
+  );
+  const { TenantConfigService } = await import('@hykr/core');
+  server.app?.get(TenantConfigService, { strict: false }).invalidate(tenantId);
+}
+
 /** Give a person roles in another business (the invitation flow is not built yet). */
 export async function addMember(person: Person, tenantId: string, roles: string[]) {
   await pool.query(

@@ -4,7 +4,6 @@
 // policy (a hook's too), the agent version naming the turn's model, the guardrail and embeddings
 // on the business's models, and nothing ever falling back to another model.
 import { costOf, modelRegistry } from '@hykr/agents';
-import { TenantConfigService } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ModelPolicyService, ModelRefused } from '../../dist/index.js';
 import {
@@ -15,6 +14,7 @@ import {
   Person,
   pool,
   server,
+  setTenantSettings,
   shutdown,
 } from '../../dist/testing.js';
 import { type StubGateway, startGateway } from '../fixture/dist/features/models/gateway.js';
@@ -343,12 +343,7 @@ describe('each turn runs on the model the policy chose (scripted model)', () => 
   });
 
   it('settings that do not parse refuse the turn and the overview', async () => {
-    const config = server.app?.get(TenantConfigService) as TenantConfigService;
-    await pool.query(
-      `update app.tenants set settings = jsonb_set(settings, '{models}', '{"allowed": "every"}') where id = $1`,
-      [raviTenant],
-    );
-    config.invalidate(raviTenant);
+    await setTenantSettings(raviTenant, { models: { allowed: 'every' } });
     try {
       const res = await ravi.chat('which model');
       expect(res.status).toBe(503);
@@ -358,10 +353,7 @@ describe('each turn runs on the model the policy chose (scripted model)', () => 
       expect((await setPolicy(ravi, { allowed: [], regions: [] })).status).toBe(200);
       expect((await ravi.chat('which model')).status).toBe(200);
     } finally {
-      await pool.query(`update app.tenants set settings = settings - 'models' where id = $1`, [
-        raviTenant,
-      ]);
-      config.invalidate(raviTenant);
+      await setTenantSettings(raviTenant, { models: null });
     }
   });
 });

@@ -2,7 +2,16 @@
 // module's number series, its tax function, a tree of groups and lines saved whole, approval
 // by level and limit, cost hidden by capability, cancel instead of delete.
 
-import { addMember, asAssistant, boot, me, Person, pool, shutdown } from '@hykr/api/testing';
+import {
+  addMember,
+  asAssistant,
+  boot,
+  me,
+  Person,
+  pool,
+  setTenantSettings,
+  shutdown,
+} from '@hykr/api/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { server as application } from '../../dist/server.js';
 
@@ -54,12 +63,9 @@ beforeAll(async () => {
   await addMember(admin, tenantId, ['admin']);
   // The business counts in INR, its financial year starts in April, and it sets its own
   // approval limit (10,000.00).
-  await pool.query(`update app.tenants set settings = settings || $2::jsonb where id = $1`, [
-    tenantId,
-    JSON.stringify({
-      money: { currency: 'INR', fyStartMonth: 4, amounts: { 'orders.approval': inr(1_000_000) } },
-    }),
-  ]);
+  await setTenantSettings(tenantId, {
+    money: { currency: 'INR', fyStartMonth: 4, amounts: { 'orders.approval': inr(1_000_000) } },
+  });
 });
 afterAll(shutdown);
 
