@@ -123,34 +123,38 @@ export async function runMigrations(url: string, application: MigrationSet[] = [
   if (twice) throw new Error(`Two migration sets record into drizzle.${twice}`);
 
   const pool = new Pool({ connectionString: url, max: 1 });
-  const client = await pool.connect();
   try {
-    await client.query('select pg_advisory_lock($1)', [MIGRATE_LOCK]);
+    // One connection for everything: the advisory lock belongs to the session that took it.
+    const client = await pool.connect();
     try {
-      for (const set of sets) {
-        const skipped = await skippedIn(client, set);
-        if (skipped.length)
-          throw new Error(
-            `${set.folder} has migrations older than the last one applied to this database, ` +
-              `which drizzle would skip: ${skipped.join(', ')}. Regenerate them so they come ` +
-              'last (drop them and run generate again), or recreate the database.',
-          );
-      }
-      const db = drizzle(client);
-      for (const set of sets) {
-        await runHooks(client, set, 'pre');
-        await migrate(db, {
-          migrationsFolder: set.folder,
-          migrationsSchema: 'drizzle',
-          migrationsTable: set.table,
-        });
-        await runHooks(client, set, 'post');
+      await client.query('select pg_advisory_lock($1)', [MIGRATE_LOCK]);
+      try {
+        for (const set of sets) {
+          const skipped = await skippedIn(client, set);
+          if (skipped.length)
+            throw new Error(
+              `${set.folder} has migrations older than the last one applied to this database, ` +
+                `which drizzle would skip: ${skipped.join(', ')}. Regenerate them so they come ` +
+                'last (drop them and run generate again), or recreate the database.',
+            );
+        }
+        const db = drizzle(client);
+        for (const set of sets) {
+          await runHooks(client, set, 'pre');
+          await migrate(db, {
+            migrationsFolder: set.folder,
+            migrationsSchema: 'drizzle',
+            migrationsTable: set.table,
+          });
+          await runHooks(client, set, 'post');
+        }
+      } finally {
+        await client.query('select pg_advisory_unlock($1)', [MIGRATE_LOCK]).catch(() => {});
       }
     } finally {
-      await client.query('select pg_advisory_unlock($1)', [MIGRATE_LOCK]).catch(() => {});
+      client.release();
     }
   } finally {
-    client.release();
     await pool.end();
   }
 }
