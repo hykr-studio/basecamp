@@ -58,13 +58,14 @@ const manage = (p: Principal) =>
     ? allow('settings_manager')
     : deny('needs_settings_manage', "Only someone who manages the business's settings can do this");
 
-const tenantOf = (p: Principal) => {
+/** The principal's business, or 404: there is no business to set up. */
+export const tenantOf = (p: Principal) => {
   if (!p.tenantId) throw new NotFoundException({ error: 'not_found', message: 'No business' });
   return p.tenantId;
 };
 
 /** The business's stored settings, locked for this write. */
-async function storedSettings(tx: Tx, tenantId: string): Promise<Values> {
+export async function storedSettings(tx: Tx, tenantId: string): Promise<Values> {
   const [row] = await tx
     .select({ settings: schema.tenants.settings })
     .from(schema.tenants)
@@ -75,7 +76,7 @@ async function storedSettings(tx: Tx, tenantId: string): Promise<Values> {
 }
 
 /** Replace one top-level section of the stored settings, leaving the others as they are. */
-async function writeSection(tx: Tx, tenantId: string, section: string, value: unknown) {
+export async function writeSection(tx: Tx, tenantId: string, section: string, value: unknown) {
   await tx
     .update(schema.tenants)
     .set({
@@ -84,7 +85,8 @@ async function writeSection(tx: Tx, tenantId: string, section: string, value: un
     .where(eq(schema.tenants.id, tenantId));
 }
 
-const touchedTenant = (tenantId: string, before: unknown, after: unknown) => ({
+/** The business as a write's touched record: its settings before and after. */
+export const touchedTenant = (tenantId: string, before: unknown, after: unknown) => ({
   type: 'tenant',
   id: tenantId,
   change: 'updated' as const,

@@ -247,6 +247,12 @@ export {
   retentionTargets,
 } from './features/privacy/public.js';
 export { FeatureFlagsService } from './features/settings/flags.service.js';
+export {
+  defineSettingsCheck,
+  type SettingsCheck,
+  type SettingsCheckContext,
+  settingsChecks,
+} from './features/settings/section-checks.js';
 export { SlaService } from './features/sla/sla.service.js';
 export {
   type AgentIdentity,
