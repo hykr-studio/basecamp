@@ -16,6 +16,17 @@ export {
   StorageUnavailable,
   type Uploader,
 } from './features/files/public.js';
+export { IntegrationsCapability } from './features/integrations/capability.js';
+export { openConnection } from './features/integrations/credentials.js';
+export {
+  type ConnectorHandler,
+  type ConnectorHandlerContext,
+  connectorHandlers,
+  connectors,
+  defineConnectorHandler,
+  type InboundEventRecord,
+} from './features/integrations/registry.js';
+export { outboundPolicy } from './features/integrations/settings.js';
 export { type LiveResource, liveResources } from './features/live/resources.js';
 export {
   anyRole,

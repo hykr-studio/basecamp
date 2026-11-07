@@ -161,11 +161,13 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/ui-registry/src/` | `defineView`, `createUiRegistry`, platform views; `react.ts` for `bindView` / `bindScreen` |
 | `framework/i18n/src/` | `LANGS`, `Labels`, the framework's phrases (`messages.ts`), date and plural formatting |
 | `framework/channels/src/` | WhatsApp transport only: adapter, render, split, keywords, approval tokens |
+| `framework/connectors/src/` | Talking to other systems, transport only: Standard Webhooks signing, HMAC checks, the secret box, the egress guard (`safeRequest`), the `Connector` interface (section 5.14) |
 | `framework/notifications/src/` | `defineTemplate`, `defineNotification`, `createNotificationCatalog`, quiet hours and marketing cap rules |
 | `framework/api-client/src/` | `createApiClient`: `entity(spec)`, `command(spec, input)`, and typed calls for every framework route |
 | `framework/api/src/runtime.ts`, `start.ts` | `defineServer`, `startApi`, `startWorker`, `migrate`, `runTemplates`, `runEval`, `startStudio`. `testing.ts` is `@hykr/api/testing`. `hooks.ts` holds the server's extension points (section 5.9), `module.ts` `defineModule`, and `module-checks.ts` the boot checks across modules (section 5.11). |
 | `framework/api/src/channels/` | WhatsApp webhook, queues, sending, notifications dispatch, template sync, handoff, back office API, erasure |
 | `framework/api/src/modules/` | Chat, threads, history, me, voice, pages |
+| `framework/api/src/features/` | Framework features, one folder each (`defineFeature`), among them `events` (the outbox relay), `files`, `money`, `push`, `approvals` and `integrations` (webhooks out and in, section 5.14) |
 | `framework/app/src/` | `AppShell`, `defineAppModule` and the plugin types (`framework/app-domain.ts`), their merge (`framework/compose-app.ts`) and plugin slots (`framework/plugins.ts`), data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; framework features as plugins in `features/<x>/` (live, push, WebMCP); primitives in `@hykr/app/ui` |
 | `framework/cli/` | The `basecamp` command (`module-add.ts` scaffolds a module, `db-rebase.ts` regenerates migrations after a rebase), plus the `compose.yaml` and `infra/` it starts |
 
@@ -187,6 +189,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `db-policy-not-to-mastra` | `db` and `policy` know nothing about the model. |
 | `ui-registry-no-runtime` | The registry imports only contracts and i18n. React bindings live in `@hykr/ui-registry/react`. |
 | `channels-is-transport`, `notifications-are-definitions` | These packages hold no database, queue, Nest or policy code. Sending and consent live in `@hykr/api`. |
+| `connectors-is-transport` | `@hykr/connectors` imports only `@hykr/i18n`, zod and Node: no database, contracts, core, Nest or queue. The clients and the isomorphic layers never import it. |
 | `clients-hold-no-server-code` | `@hykr/app`, `@hykr/back-office` and `@hykr/voice-worker` talk to the API over HTTP only. |
 
 ---
@@ -208,6 +211,7 @@ The `.env` stays at the repository root: the `basecamp` command loads the neares
 - `AGENT_API_KEY`
 - `VOICE_AGENT_KEY` (must differ from `AGENT_API_KEY`; the API refuses to start otherwise, because audit tells them apart)
 - `APPROVAL_SECRET` (signs WhatsApp approval buttons; without it approvals are decided in the app only)
+- `SECRETS_KEY` (seals integration credentials and webhook signing secrets; without it webhook endpoints and connections cannot be saved, section 5.14)
 
 To run without any model or speech keys, set:
 
@@ -814,7 +818,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `readProjectors`, `listFieldSql`, `levelRules`, `identityProviders` and `numberSeries`
   (section 5.13) in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
-  `eventFeeds`, `erasureContributors`, `exportContributors` and `authPlugins` in `@hykr/api`.
+  `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `connectors` and
+  `connectorHandlers` in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -1081,6 +1086,66 @@ sample's `orders` module uses every part.
 - **Large writes.** `runWrite` audits a write's rows in one statement, the JSON body limit is
   `JSON_BODY_LIMIT` (1 MB), and a tree holds at most 1000 nodes and 8 levels (`maxNodes`,
   `maxDepth` on the trait). The approval card sums up long lists.
+
+### 5.14 Integrations: webhooks out and in
+
+The `integrations` feature (`framework/api/src/features/integrations/`, decisions in
+`docs/decisions/B10.md`) connects a business to other systems. Which events leave, where they go
+and which systems send in are the business's data; what an inbound event does is the
+application's handler. Set `SECRETS_KEY` (32+ characters) first: secrets are stored only sealed
+with it.
+
+- **Who.** People with the capability `integrations.manage` (owner and admin by default) use
+  `/api/integrations/*`. Agents never reach it. Every change goes through `runWrite` (audited,
+  parked when a write hook asks, replayed after approval).
+- **Outbound.** `POST /api/integrations/endpoints { url, events: ['task.*'], capabilities? }`
+  returns the signing secret once. Each committed entity event becomes one delivery per matching
+  endpoint: the record projected as the endpoint may read it (it reads as the business's system
+  principal with the `capabilities` it was given, so a field that needs a capability stays
+  hidden), signed the Standard Webhooks way (`webhook-id`, `webhook-timestamp`,
+  `webhook-signature`), sent only to public addresses (`INTEGRATIONS_ALLOWED_HOSTS` lets a
+  development host through), and retried on `INTEGRATIONS_RETRY_SCHEDULE` (checked at start).
+  Every try counts when it is claimed, so a try that never finishes (a worker that died) uses up
+  its place: the sweeper logs it and moves the delivery on, or ends it `failed`. The log is
+  `GET /api/integrations/endpoints/:id/deliveries` and `GET /api/integrations/deliveries/:id`;
+  `POST .../retry` sends one again. Each try sends the stored body projected again for the
+  endpoint as it is then, so a capability taken away leaves retries and redeliveries too.
+  Changing an endpoint's URL or capabilities, or retrying its delivery, needs every capability
+  it reads with. An entity opts out with `traits: { webhooks: false }`.
+  Receivers verify with `verifyWebhook` from `@hykr/connectors` or any Standard Webhooks library.
+- **Inbound.** A connector is a kind of sender (`defineConnector`, or `hmacConnector({ name,
+  header, prefix })` for one that signs the body in a header; `standard-webhooks` is built in),
+  contributed as `connectors`. A business adds a connection (`POST /api/integrations/connections
+  { connector, credentials? }`; credentials are checked and sealed, generated ones returned once).
+  The sender posts to `/webhooks/<connector>/<connection id>`: verified with that connection's
+  credentials, each event stored once (a redelivery is a no-op) and queued. In the worker, each
+  `connectorHandlers` entry whose `on` matches runs as `systemPrincipal({ tenantId, job:
+  'integrations.<connector>', runId: <stored event id> })`:
+
+```ts
+contributes: {
+  connectorHandlers: [
+    defineConnectorHandler({
+      name: 'orders.paid',
+      connector: 'standard-webhooks',
+      on: ['payment.captured'],
+      handle: async (event, ctx) => {
+        const { orderId } = Paid.parse(event.data); // the sender's data is input: validate it
+        await ctx.write(entityOp(Order, 'update', { id: orderId }), { paid: true });
+      },
+    }),
+  ],
+}
+```
+
+  `ctx.write(op, input)` is `runWrite` with an idempotency key per event, handler and call. A
+  4xx refusal (another business's record is a 404) fails the event for good; other errors retry.
+  `GET /api/integrations/connections/:id/inbound` is the log.
+- **Server code** that calls a sender back opens a connection's credentials with
+  `openConnection(db, tenantId, id)`, and makes any request to a business-given address with
+  `safeRequest(url, init, outboundPolicy())`.
+
+The fixture's `framework/api/test/fixture/src/features/integrations/` uses each part.
 
 ---
 
@@ -1703,7 +1768,13 @@ These are not built. Each has a workaround for now.
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
 | Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `pdfkit` with `harfbuzzjs` and the Noto fonts, `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.6), the React Query persister (in `@hykr/app`), and `expo-location` (in the mobile app). Each feature that uses one adds its code. Their Expo config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client (the image picker's is in, for files, and `expo-notifications`', for push). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
-| System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. |
+| System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. An inbound webhook's handler that creates a row fails with `no_access` until then. |
+| Integration screens | Endpoints, connections and the delivery log have an HTTP API only (`/api/integrations/*`): no app or back-office screen, and no typed `@hykr/api-client` methods. |
+| Webhooks for approvals and other non-entity records | Only entity events are sent (their read schema projects them). |
+| Webhook delivery order, auto-pause, alerts | Deliveries of one record can arrive out of order; an endpoint that keeps failing is not paused and nobody is told. |
+| One inbound URL per connector | Each connection has its own URL. Routing a provider's single URL by its account id is not built (decisions B10, 20). |
+| Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
+| OAuth connectors | Credentials are stored as given; no OAuth flow or token refresh yet (B17 adds the first). |
 | Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |
 | Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |

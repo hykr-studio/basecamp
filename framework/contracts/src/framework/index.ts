@@ -1,6 +1,7 @@
 export * from './domain.js';
 export * from './events.js';
 export * from './files.js';
+export * from './integrations.js';
 export * from './list.js';
 export * from './memory.js';
 export * from './module.js';

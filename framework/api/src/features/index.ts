@@ -4,6 +4,7 @@
 export { approvalsFeature } from './approvals/index.js';
 export { eventsFeature } from './events/index.js';
 export { filesFeature } from './files/index.js';
+export { integrationsFeature } from './integrations/index.js';
 export { liveFeature } from './live/index.js';
 export { memoryFeature } from './memory/index.js';
 export { modelsFeature } from './models/index.js';
