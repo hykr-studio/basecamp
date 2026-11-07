@@ -29,7 +29,7 @@ import {
 const csv = (text: string, max = 100) => parseFile(Buffer.from(text), 'csv', max);
 
 describe('reading CSV', () => {
-  it('splits records, with quotes, escaped quotes and line breaks inside quotes', () => {
+  it('splits records, with quoted values, "" inside them and line breaks inside them', () => {
     expect(csvRecords('a,b\r\n"x, y","say ""hi"""\n"two\nlines",z\n')).toEqual([
       { line: 1, cells: ['a', 'b'] },
       { line: 2, cells: ['x, y', 'say "hi"'] },

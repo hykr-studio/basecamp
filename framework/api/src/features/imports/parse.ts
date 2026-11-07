@@ -60,7 +60,7 @@ export function parseFile(bytes: Buffer, format: ImportFormat, maxRows: number):
 
 /* ── CSV ─────────────────────────────────────────────────────────────────── */
 
-/** The separator a header uses: the most frequent of comma, semicolon and tab outside quotes. */
+/** The separator a header uses: the most frequent of comma, semicolon and tab outside quoted text. */
 export function separatorOf(text: string): string {
   const counts: Record<string, number> = { ',': 0, ';': 0, '\t': 0 };
   let quoted = false;
@@ -73,8 +73,8 @@ export function separatorOf(text: string): string {
 }
 
 /**
- * RFC 4180 records: fields split by the separator, quoted with `"` (a quote inside is `""`),
- * line breaks (LF, CRLF or CR) inside quotes kept. Each record with the line it starts on.
+ * RFC 4180 records: fields split by the separator, quoted with `"` (a `"` inside is written `""`),
+ * line breaks (LF, CRLF or CR) inside quoted values kept. Each record with the line it starts on.
  */
 export function csvRecords(text: string, sep = ','): { line: number; cells: string[] }[] {
   const out: { line: number; cells: string[] }[] = [];
