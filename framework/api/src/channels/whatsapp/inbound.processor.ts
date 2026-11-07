@@ -153,7 +153,11 @@ export class InboundProcessor extends WorkerHost {
       );
       return;
     }
-    const contact = await this.contacts.findOrCreate(tenantId, from, last.profileName);
+    const business = await this.tenants.get(tenantId);
+    // Someone new: the business's customer, or only a contact if it says so (parties settings).
+    const contact = await this.contacts.findOrCreate(tenantId, from, last.profileName, {
+      customer: business.settings.parties.unknownSenders === 'customer',
+    });
     // Voice notes become their words; the audio is dropped once heard.
     let unheard = false;
     for (const [i, m] of burst.entries()) {
@@ -184,7 +188,6 @@ export class InboundProcessor extends WorkerHost {
       .trim();
     const lang = await this.languageOf(contact, text);
     const target = { tenantId, contactId: contact.id, from: phoneNumberId };
-    const business = await this.tenants.get(tenantId);
     const say = (line: string) =>
       this.outbound.queue(target, [{ kind: 'text', to: from, text: line }]);
     if (unheard) await say(t(lang, 'channel.notHeard'));

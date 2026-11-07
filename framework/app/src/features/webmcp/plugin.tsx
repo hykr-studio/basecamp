@@ -1,11 +1,11 @@
 import { type ApiClient, createApiClient } from '@hykr/api-client';
 import { CHANNEL_HEADER } from '@hykr/contracts';
 import { type ReactNode, useEffect, useSyncExternalStore } from 'react';
+import { authHeaders, credentials } from '../../api';
 import { appConfig } from '../../config';
 import type { AppPlugin } from '../../framework/app-domain';
 import { useAssistant } from '../../framework/assistant-context';
 import { getCatalog, webMcpFor } from '../../runtime';
-import { authHeaders, credentials } from '../../session';
 import {
   findModelContext,
   type Log,

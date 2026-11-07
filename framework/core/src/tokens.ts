@@ -36,6 +36,11 @@ export interface CoreOptions {
    * standard's "no currency".
    */
   defaultCurrency?: string;
+  /**
+   * Does a person who signs up get a business of their own, as its creator? Default true. False:
+   * they are in no business until someone invites them or puts them on a record (a participant).
+   */
+  createBusinessOnSignUp?: boolean;
 }
 
 /** A transaction handle: what every write and every command's repository calls receive. */

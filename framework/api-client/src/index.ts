@@ -9,7 +9,10 @@ import {
   AcceptSpec,
   type AddCommentInput,
   AddCommentSpec,
+  type AddedPartyMember,
   type AddGrantInput,
+  type AddParticipantInput,
+  type AddPartyMemberInput,
   type Approval,
   type BusinessRoles,
   type ChatRequest,
@@ -21,6 +24,7 @@ import {
   type CommentPage,
   type CreatedInvite,
   type CreateInviteInput,
+  type CreatePartyInput,
   type CreditPurchase,
   type CreditsStatus,
   type DefineRoleInput,
@@ -29,6 +33,7 @@ import {
   type DocumentKindInfo,
   type DocumentRecipient,
   EditCommentSpec,
+  type EditPartyInput,
   type EditRoleInput,
   type EntitySpec,
   type ESignStartInput,
@@ -50,6 +55,11 @@ import {
   type Member,
   type MentionablePage,
   type Page,
+  type ParticipantRoleView,
+  type Participation,
+  type PartiesQuery,
+  type Party,
+  type PartyMember,
   type PresignFileInput,
   type PresignFileResult,
   type PublicBranding,
@@ -451,8 +461,14 @@ export function createApiClient(opts: ApiClientOptions) {
     comments,
     /** The signed-in person's in-app inbox. */
     inbox,
-    /** Who is signed in, in which business, with which roles. */
+    /**
+     * Who is signed in, in which business (as a member or a participant), with which roles, and
+     * every business they are in. Send `x-tenant-id` (the client's `headers`) to work in another.
+     */
     me: () => call<Me>('GET', '/api/me'),
+    /** Work in this business by default (one of the person's memberships). */
+    setDefaultBusiness: (tenantId: string, key = newKey()) =>
+      call<WriteResult<{ tenantId: string }>>('PUT', '/api/me/default', { tenantId }, key),
     /** The back office: conversations staff have taken from the assistant (staff only). */
     backoffice: {
       inbox: () => call<Inbox>('GET', '/api/backoffice/inbox'),
@@ -541,6 +557,66 @@ export function createApiClient(opts: ApiClientOptions) {
       /** Join the business an invitation is for, signed in with the email it was sent to. */
       acceptInvite: (token: string, key = newKey()) =>
         call<WriteResult<AcceptedInvite>>('POST', '/api/members/invites/accept', { token }, key),
+    },
+    /**
+     * The people and organisations the business works with (people only). Reading needs
+     * `parties.read`, changing anything `parties.manage`.
+     */
+    parties: {
+      list: (query: PartiesQuery = {}) =>
+        call<Party[]>('GET', `/api/parties${toQueryString(query as Record<string, unknown>)}`),
+      get: (id: string) => call<Party>('GET', `/api/parties/${encodeURIComponent(id)}`),
+      create: (input: CreatePartyInput, key = newKey()) =>
+        call<WriteResult<Party>>('POST', '/api/parties', input, key),
+      edit: (id: string, input: EditPartyInput, key = newKey()) =>
+        call<WriteResult<Party>>('PATCH', `/api/parties/${encodeURIComponent(id)}`, input, key),
+      remove: (id: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/parties/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+      /** By WhatsApp number, or by email: an invitation's answer carries its token, this once. */
+      addMember: (id: string, input: AddPartyMemberInput) =>
+        call<WriteResult<AddedPartyMember>>(
+          'POST',
+          `/api/parties/${encodeURIComponent(id)}/members`,
+          input,
+        ),
+      removeMember: (id: string, memberId: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/parties/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
+          undefined,
+          key,
+        ),
+      /** Join the party an invitation is for, signed in with the email it was sent to. */
+      join: (token: string, key = newKey()) =>
+        call<WriteResult<{ member: PartyMember; tenantId: string }>>(
+          'POST',
+          '/api/parties/join',
+          { token },
+          key,
+        ),
+    },
+    /** Who participates in a record, and as what (participant roles are the application's). */
+    participants: {
+      roles: () => call<ParticipantRoleView[]>('GET', '/api/participants/roles'),
+      list: (resourceType: string, resourceId: string) =>
+        call<Participation[]>(
+          'GET',
+          `/api/participants?resourceType=${encodeURIComponent(resourceType)}&resourceId=${encodeURIComponent(resourceId)}`,
+        ),
+      add: (input: AddParticipantInput, key = newKey()) =>
+        call<WriteResult<Participation>>('POST', '/api/participants', input, key),
+      remove: (id: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/participants/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
     },
     /** Who reaches one record by a grant (`records.grant`), and giving or taking it. */
     grants: {

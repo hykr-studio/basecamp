@@ -54,6 +54,12 @@ export interface ServerDefinition {
    */
   tablePrefix?: string;
   /**
+   * What signing up gives a person. `createBusiness` (default true): a business of their own,
+   * as its creator. False: none; they are in no business until someone invites them (members)
+   * or makes them a party member (a participant somewhere).
+   */
+  signUp?: { createBusiness?: boolean };
+  /**
    * The application's own words for what the framework says and sends (A11): framework phrases
    * (`phrases`, installed when the process starts serving it) and rewordings of declared
    * notifications (`overrideNotification`). A business may word them again in its settings.
@@ -137,6 +143,9 @@ export function defineServer(definition: ServerDefinition): Basecamp {
 }
 
 let current: Basecamp | undefined;
+
+/** Does signing up give a person a business of their own? (`signUp.createBusiness`, default yes.) */
+export const createsBusinessOnSignUp = () => runtime().definition.signUp?.createBusiness !== false;
 
 /**
  * The application this process serves. Set once, before the Nest modules load (startApi,
