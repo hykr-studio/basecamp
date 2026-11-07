@@ -13,6 +13,7 @@ import {
   RecordAcceptance,
   RecordDocuments,
   SectionHeading,
+  ShareLinks,
   SlaBadge,
   StateBadge,
   space,
@@ -176,6 +177,8 @@ export function OrderDetail({ id, embedded = false }: { id: string; embedded?: b
       <RecordDocuments entity="order" id={o.id} />
       {/* Its customer accepts the newest PDF by a one-time code (OrderAcceptance). */}
       <RecordAcceptance entity="order" id={o.id} />
+      {/* A link for its customer: the order, its lines and PDF, accepted with a code on WhatsApp. */}
+      <ShareLinks target={{ entity: 'order', id: o.id }} to={{ recordCustomer: true }} />
       <Comments entity="order" id={o.id} />
       <History type="order" id={o.id} />
     </DecisionScrollView>

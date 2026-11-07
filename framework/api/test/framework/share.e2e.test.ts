@@ -346,7 +346,8 @@ describe('a gated link to an agreement', () => {
     // Agreements may be shared for 30 days at most.
     const target = { entity: 'agreement', id: agreementId };
     expect((await share(owner, { target, expiresInDays: 31 })).body.rule).toBe('too_long');
-    link = await shared(owner, { target, to: { contactId: contact.contactId }, otp: 'whatsapp' });
+    // The agreement's own customer: their contact's number.
+    link = await shared(owner, { target, to: { recordCustomer: true }, otp: 'whatsapp' });
     expect(link).toMatchObject({
       otp: { channel: 'whatsapp', sentTo: `•••• ${phone.slice(-4)}` },
       to: { contactId: contact.contactId, customerId: contact.customerId, email: null },

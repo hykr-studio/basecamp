@@ -23,6 +23,7 @@ import {
   ShareGuard,
   type ShareRequest,
   shareOf,
+  tenantMoney,
   type WriteOp,
 } from '@hykr/core';
 import {
@@ -253,6 +254,11 @@ export class SharedController {
     for (const key of form.fields)
       if (answers.data.values[key] !== undefined) values[key] = answers.data.values[key];
     Object.assign(values, form.fixed ?? {});
+    // A form's amounts are in the business's currency (its money settings).
+    const money = def.spec.traits?.money;
+    const currencyKey = money?.currency ?? 'currency';
+    if (money && values[currencyKey] === undefined && currencyKey in def.spec.schemas.create.shape)
+      values[currencyKey] = (await tenantMoney(this.options.db, link.tenantId)).currency;
     const custom = customForCreate(answers.data.custom);
     if (custom && (form.custom ?? def.spec.traits?.customFields !== undefined))
       values.custom = custom;

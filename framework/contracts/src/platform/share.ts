@@ -282,6 +282,8 @@ export const ShareRecipient = z.union([
   z.object({ contactId: z.string().uuid() }).strict(),
   z.object({ customerId: z.string().uuid() }).strict(),
   z.object({ email: z.email().max(320) }).strict(),
+  /** The shared record's own customer (its `customerId`), when it has one; else nobody. */
+  z.object({ recordCustomer: z.literal(true) }).strict(),
 ]);
 export type ShareRecipient = z.infer<typeof ShareRecipient>;
 

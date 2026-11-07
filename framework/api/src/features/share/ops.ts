@@ -138,9 +138,16 @@ async function recipientOf(
   tx: Tx,
   tenantId: string,
   to: z.output<typeof CreateShareInput>['to'],
+  /** The shared record as stored, for `{ recordCustomer: true }`. */
+  row?: Values,
 ): Promise<Recipient | null> {
   if (!to) return null;
   if ('email' in to) return { contactId: null, customerId: null, whatsapp: null, email: to.email };
+  // The record's own customer, when it has one: a link for nobody in particular otherwise.
+  if ('recordCustomer' in to) {
+    const customerId = typeof row?.customerId === 'string' ? row.customerId : undefined;
+    return customerId ? recipientOf(tx, tenantId, { customerId }) : null;
+  }
   if ('contactId' in to) {
     const [c] = await tx
       .select()
@@ -149,7 +156,7 @@ async function recipientOf(
     if (!c) throw notFound('contact');
     return { contactId: c.id, customerId: c.customerId, whatsapp: c.address, email: null };
   }
-  const [row] = await tx
+  const [c] = await tx
     .select({
       id: customers.id,
       contactId: customers.contactId,
@@ -160,12 +167,12 @@ async function recipientOf(
     .leftJoin(contacts, eq(contacts.id, customers.contactId))
     .leftJoin(user, eq(user.id, customers.userId))
     .where(and(eq(customers.id, to.customerId), eq(customers.tenantId, tenantId)));
-  if (!row) throw notFound('customer');
+  if (!c) throw notFound('customer');
   return {
-    contactId: row.contactId,
-    customerId: row.id,
-    whatsapp: row.address ?? null,
-    email: row.email ?? null,
+    contactId: c.contactId,
+    customerId: c.id,
+    whatsapp: c.address ?? null,
+    email: c.email ?? null,
   };
 }
 
@@ -174,8 +181,9 @@ async function reachedRecord(tx: Tx, p: Principal, entity: string, id: string) {
   const shareable = shareables.get(entity);
   const def = shareable ? entityDef(entity) : undefined;
   if (!shareable || !def) throw notFound('record to share');
-  if (!(await def.repo.find(tx, p, id))) throw notFound(def.spec.label);
-  return { def, shareable };
+  const row = (await def.repo.find(tx, p, id)) as Values | undefined;
+  if (!row) throw notFound(def.spec.label);
+  return { def, shareable, row };
 }
 
 export function createOp(): WriteOp<
@@ -193,20 +201,25 @@ export function createOp(): WriteOp<
     load: async (tx, p, input) => {
       const tenantId = tenantOf(p);
       const settings = (await settingsIn(tx, tenantId)).shares;
-      const recipient = await recipientOf(tx, tenantId, input.to);
       const t = input.target;
       if ('entity' in t) {
-        const { def, shareable } = await reachedRecord(tx, p, t.entity, t.id);
+        const { def, shareable, row } = await reachedRecord(tx, p, t.entity, t.id);
         return {
           kind: 'record',
           resourceType: def.name,
           resourceId: t.id,
           form: null,
           policy: shareable,
-          recipient,
+          recipient: await recipientOf(tx, tenantId, input.to, row),
           settings,
         };
       }
+      if (input.to && 'recordCustomer' in input.to)
+        throw new BadRequestException({
+          error: 'no_customer',
+          message: 'Only a record has a customer to share it with',
+        });
+      const recipient = await recipientOf(tx, tenantId, input.to);
       if ('page' in t) {
         const page = entityDef('page');
         if (!page || !(await page.repo.find(tx, p, t.page))) throw notFound('page');

@@ -10,6 +10,7 @@ import {
   livePlugin,
   pushPlugin,
   settingsPlugin,
+  sharePlugin,
   webMcpPlugin,
 } from '@hykr/app';
 import { catalog, registry } from '@/catalog';
@@ -34,7 +35,8 @@ const config = {
  * credits (usage, the pause, buying more: `/credits`), the person's calendars (connect Google,
  * feed links: `/calendar`), the in-app inbox (mentions in comments), exporting the business's
  * data (`/export`, for people who may: owners, unless the business grants it to another role)
- * and the AI apps a person connected over MCP (`/connections`). The switcher goes first:
+ * the AI apps a person connected over MCP (`/connections`), and share links (`/share/:token`: what
+ * a link shows, on its own, for anyone holding it, signed in or not). The switcher goes first:
  * switching starts everything after it again in the other business.
  */
 const plugins = [
@@ -48,6 +50,7 @@ const plugins = [
   inboxPlugin(),
   exportPlugin,
   connectionsPlugin,
+  sharePlugin(),
 ];
 
 export default function RootLayout() {
