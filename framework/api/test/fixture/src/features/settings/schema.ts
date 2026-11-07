@@ -1,4 +1,4 @@
-// The settings feature's fixture tables (A11), in their own migration set:
+// The settings feature's fixture tables (A11, H2), in their own migration set:
 // `FIXTURE_FEATURE=settings pnpm fixture:generate --name settings`. Import `app`, never export it.
 import { app, customFieldsColumn, id, sharedFromColumn, tenantColumn, user } from '@hykr/db';
 import { index, integer, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
@@ -39,4 +39,14 @@ export const gadgets = app.table(
 export const extras = app.table('fixture_extras', {
   ...common(),
   title: text('title').notNull(),
+});
+
+/** Claims (H2): an amount that a threshold puts at a level, and SLAs on their open state. */
+export const claims = app.table('fixture_claims', {
+  ...common(),
+  title: text('title').notNull(),
+  amountMinor: integer('amount_minor').notNull().default(0),
+  currency: text('currency').notNull(),
+  /** Its state: the claims' state machine moves it, never plain CRUD. */
+  status: text('status').notNull().default('open'),
 });
