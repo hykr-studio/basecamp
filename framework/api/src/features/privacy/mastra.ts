@@ -76,11 +76,16 @@ function theirs(ids: Identities, runs: readonly string[]): SQL {
   return byRun ? sql`(${byRun} or ${byPerson})` : byPerson;
 }
 
-/** Delete what Mastra keeps of the person: their runs' traces and snapshots, their memory. */
+/**
+ * Delete what Mastra keeps of the person: their runs' traces and snapshots, and their memory.
+ * Mastra's memory is keyed by subject, not by business: a contact's key is this business's, a
+ * person's only once they are in no other business (`everywhere`).
+ */
 export async function eraseMastra(
   tx: Tx,
   ids: Identities,
   runs: readonly string[],
+  everywhere: boolean,
 ): Promise<number> {
   let n = 0;
   for (const [table] of OBSERVED) {
@@ -104,7 +109,8 @@ export async function eraseMastra(
     );
   // Mastra's own memory, keyed by resource: the framework keeps conversations itself, but an
   // agent with memory would key them by the subject.
-  const resources = ids.keys;
+  const resources = everywhere ? ids.keys : ids.keys.filter((k) => k.startsWith('contact:'));
+  if (!resources.length) return n;
   if (await exists(tx, 'mastra.mastra_messages'))
     n += rowsOf(
       await tx.execute(

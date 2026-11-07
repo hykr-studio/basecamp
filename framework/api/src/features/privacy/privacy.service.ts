@@ -23,7 +23,15 @@ import {
   tenantOf,
   type WriteOp,
 } from '@hykr/core';
-import { contacts, type Database, files, privacyRequests, tenants, writeAudit } from '@hykr/db';
+import {
+  contacts,
+  type Database,
+  files,
+  memberships,
+  privacyRequests,
+  tenants,
+  writeAudit,
+} from '@hykr/db';
 import { type Lang, pick } from '@hykr/i18n';
 import {
   HttpException,
@@ -34,7 +42,7 @@ import {
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { EventBus } from '@nestjs/cqrs';
-import { and, asc, eq, inArray, isNull, lte } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lte, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   type ErasedContact,
@@ -189,13 +197,14 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
         ),
       )
       .limit(1);
+    const id = randomUUID();
     const row =
       open ??
       (await this.systemWrite<RequestRow>({
         tenantId: a.tenantId,
         name: 'privacy.request',
         resourceType: PRIVACY_REQUEST,
-        resourceId: a.contactId,
+        resourceId: id,
         summary: "Erase a person's personal data",
         run: async (tx, p) => {
           const policy = effectivePolicy(await settingsIn(tx, a.tenantId));
@@ -204,6 +213,7 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
           const [created] = await tx
             .insert(privacyRequests)
             .values({
+              id,
               tenantId: a.tenantId,
               kind: 'erase',
               status: waits ? 'received' : 'in_progress',
@@ -485,7 +495,15 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
               resourceType: 'contact',
               resourceId: contactId,
             });
-          const assistant = await eraseMastra(tx, ids, runs);
+          // Mastra's memory is keyed across businesses: a person's goes only with their login.
+          const elsewhere = ids.userId
+            ? await tx
+                .select({ t: memberships.tenantId })
+                .from(memberships)
+                .where(and(eq(memberships.userId, ids.userId), ne(memberships.tenantId, tenantId)))
+                .limit(1)
+            : [];
+          const assistant = await eraseMastra(tx, ids, runs, elsewhere.length === 0);
           const redacted = await redactCopies(tx, tenantId, records.erased);
           // Their earlier requests stay as the business's evidence, without notes or archives.
           const earlier = await tx
