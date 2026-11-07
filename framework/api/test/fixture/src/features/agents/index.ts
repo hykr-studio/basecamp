@@ -40,6 +40,9 @@ const recordOf = (text: string): string | undefined => {
  *   Add a follow-up task.            create-task "Follow up <title>" for the event's task
  *   Tidy the task in the data.       delete-task (waits for approval); once approved,
  *                                    create-task "Tidied <title>" → "Tidied <title>."
+ *   Tidy both tasks in the data.     the note is two task ids: two delete-task calls in one
+ *                                    step (each waits for its own approval); once both are
+ *                                    decided → "Both decided: <how> and <how>."
  */
 const scripts = [
   defineScript({
@@ -79,6 +82,20 @@ const scripts = [
       const r = turn.result('create-task');
       if (!r) return [call('create-task', { title: `Follow up ${title}` })];
       return [say(written(r, () => `Added a follow-up for ${title}.`, turn))];
+    },
+  }),
+  defineScript({
+    name: 'bots-tidy-both',
+    match: (text) => (/^tidy both tasks in the data\.?$/i.test(first(text)) ? text : undefined),
+    step: (text, turn) => {
+      const removed = turn.steps.filter((s) => s.toolName === 'delete-task');
+      if (removed.length) {
+        const how = removed.map((s) => decided(s.outcome) ?? 'waiting');
+        return [say(`Both decided: ${how.join(' and ')}.`)];
+      }
+      const ids = (recordOf(text) ?? '').split(/\s+/).filter(Boolean);
+      if (ids.length !== 2) return [say('Not two tasks in the data.')];
+      return ids.map((id) => call('delete-task', { id }));
     },
   }),
   defineScript({

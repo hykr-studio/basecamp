@@ -5,7 +5,7 @@ import { AgentScope, AgentTrigger, type Principal } from '@hykr/contracts';
 import type { AgentIdentityProvider, Tx } from '@hykr/core';
 import { schema } from '@hykr/db';
 import { Logger } from '@nestjs/common';
-import { and, eq, ilike, inArray, sql } from 'drizzle-orm';
+import { and, eq, exists, ilike, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ErasureContributor, ExportContributor, InboundHook, TurnHook } from '../../hooks.js';
 import type { MentionContext, MentionKind } from '../comments/mention-kinds.js';
@@ -13,7 +13,7 @@ import type { LiveResource } from '../live/resources.js';
 import { agentsService } from './agents.service.js';
 import { toolsOutside } from './scope.js';
 
-const { agents, agentRuns } = schema;
+const { agents, agentRuns, approvals } = schema;
 const log = new Logger('Agents');
 
 /** A run's token, at the door (`x-agent-run` with `x-run-id`). */
@@ -24,7 +24,8 @@ export const AgentRunIdentity: AgentIdentityProvider = {
 
 /**
  * A resumed run that is one of the agents' (A7 resumes it): checked again (the agent active, its
- * budget), given only its scope's tools, and metered into its log.
+ * budget), given only its scope's tools, and metered into its log. It is `running` while it
+ * resumes, and `waiting` again after when another of its approvals is still pending.
  */
 export const AgentsTurnHook: TurnHook = {
   name: 'agents',
@@ -54,15 +55,38 @@ export const AgentsTurnHook: TurnHook = {
   },
   after: async (turn, outcome) => {
     const svc = agentsService();
-    if (!svc || turn.kind !== 'resume' || !outcome.usage) return;
-    await svc.database
+    if (!svc || turn.kind !== 'resume') return;
+    const db = svc.database;
+    const lost = (what: string) => (e: unknown) =>
+      log.warn(`run=${turn.runId}: ${what} not kept: ${(e as Error).message}`);
+    if (outcome.usage)
+      await db
+        .update(agentRuns)
+        .set({
+          inputTokens: sql`${agentRuns.inputTokens} + ${outcome.usage.inputTokens ?? 0}`,
+          outputTokens: sql`${agentRuns.outputTokens} + ${outcome.usage.outputTokens ?? 0}`,
+        })
+        .where(eq(agentRuns.runId, turn.runId))
+        .catch(lost('usage'));
+    // A resume that leaves the run waiting for another of its approvals: waiting again, not
+    // running. When it said nothing new, no `thread.continued` comes to close it, and a run left
+    // `running` would hold one of the agent's open runs and be failed as stale.
+    await db
       .update(agentRuns)
-      .set({
-        inputTokens: sql`${agentRuns.inputTokens} + ${outcome.usage.inputTokens ?? 0}`,
-        outputTokens: sql`${agentRuns.outputTokens} + ${outcome.usage.outputTokens ?? 0}`,
-      })
-      .where(eq(agentRuns.runId, turn.runId))
-      .catch((e) => log.warn(`run=${turn.runId}: usage not kept: ${(e as Error).message}`));
+      .set({ status: 'waiting' })
+      .where(
+        and(
+          eq(agentRuns.runId, turn.runId),
+          eq(agentRuns.status, 'running'),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(approvals)
+              .where(and(eq(approvals.runId, turn.runId), eq(approvals.status, 'pending'))),
+          ),
+        ),
+      )
+      .catch(lost('status'));
   },
 };
 

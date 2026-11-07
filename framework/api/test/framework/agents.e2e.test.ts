@@ -23,6 +23,7 @@ import {
   origin,
   Person,
   pool,
+  runtime,
   server,
   shutdown,
 } from '../../dist/testing.js';
@@ -465,6 +466,62 @@ describe('a run', () => {
       `task.delete/committed/agent:${tidy.id}`,
       `task.create/committed/agent:${tidy.id}`,
     ]);
+  });
+
+  it('two writes that wait: after the first decision it is waiting again, never stale', async () => {
+    const piles = [await task(ana, 'First pile'), await task(ana, 'Second pile')];
+    const both = await agent(ana, {
+      name: 'Both tidier',
+      instructions: 'Tidy both tasks in the data.',
+      scope: { tools: ['delete-task'] },
+    });
+    const run = await settled(ana, await runNow(ana, both.id, piles.map((t) => t.id).join(' ')));
+    expect(run.status).toBe('waiting');
+    const parked = run.toolCalls.filter((c) => c.tool === 'delete-task');
+    expect(parked.map((c) => c.outcome)).toEqual(['parked', 'parked']);
+    const [first, second] = parked.map((c) => c.approvalId as string);
+
+    const left = async () =>
+      (
+        await Promise.all(
+          piles.map(
+            async (t) => (await ana.call('GET', `/api/tasks/${t.id}`, undefined, inA())).status,
+          ),
+        )
+      ).filter((s) => s === 200).length;
+
+    // The first decision (either task: the calls park in no set order): the run resumes, says
+    // nothing new (the other still waits), and is waiting again, not left running.
+    const approved = await ana.call('POST', `/api/approvals/${first}/approve`, undefined, inA());
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    await eventually(
+      async () =>
+        (await runtime().agents.findSuspension({ runId: run.runId, approvalId: first }))
+          ? undefined
+          : true,
+      20_000,
+    );
+    const between = await eventually(async () => {
+      const res = await ana.call('GET', `/api/agent-runs/${run.id}`, undefined, inA());
+      return res.body?.status === 'waiting' ? (res.body as Run) : undefined;
+    }, 20_000);
+    expect(between.reason).not.toBe('The run stopped without finishing');
+    expect(await left()).toBe(1);
+    // Long after (the clock fails a run `running` for 15 minutes): still waiting.
+    await pool.query(
+      `update app.agent_runs set updated_at = now() - interval '1 hour' where id = $1`,
+      [run.id],
+    );
+    await svc().tick();
+    expect((await runsOf(both.id)).map((r) => r.status)).toEqual(['waiting']);
+
+    // The second decision: the run goes on once, and is done.
+    const next = await ana.call('POST', `/api/approvals/${second}/approve`, undefined, inA());
+    expect(next.status, JSON.stringify(next.body)).toBe(200);
+    const done = await settled(ana, run.id, ['done', 'failed', 'refused']);
+    expect(done.status).toBe('done');
+    expect(done.reply).toBe('Both decided: approved and approved.');
+    expect(await left()).toBe(0);
   });
 
   it('refused: a paused agent, a used-up budget, an owner who left', async () => {
