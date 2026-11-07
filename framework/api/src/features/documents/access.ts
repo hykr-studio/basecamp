@@ -84,6 +84,7 @@ export function infoOf(row: DocumentRow): DocumentInfo {
     document: row.name,
     record: { entity: row.resourceType, id: row.resourceId },
     version: row.version,
+    recordVersion: row.recordVersion,
     lang: row.lang as DocumentInfo['lang'],
     status: row.status,
     name: row.fileName,

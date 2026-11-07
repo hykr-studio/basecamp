@@ -62,6 +62,8 @@ export const DocumentInfo = z.object({
   record: z.object({ entity: z.string(), id: z.string() }),
   /** 1, 2, …: each render of a record's document is a new version. */
   version: z.number().int(),
+  /** The record's version it was made from (a versioned entity): what an acceptance binds to. */
+  recordVersion: z.number().int().nullable().optional(),
   lang: Lang,
   status: DocumentStatus,
   /** The file's name: 'A-0001.pdf'. */

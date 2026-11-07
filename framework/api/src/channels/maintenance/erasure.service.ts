@@ -15,6 +15,7 @@ const {
   inboundEvents,
   linkCodes,
   messages,
+  otpChallenges,
   numbers,
   threadMessages,
   threads,
@@ -24,8 +25,8 @@ const log = new Logger('Erasure');
 /**
  * "Delete my data" (DPDP). Everything that ties the business to this number goes, in one
  * transaction: the contact (and with it consents, messages, handoffs and its own thread), the
- * raw webhook payloads from it on every one of the business's numbers, link codes and their
- * sends, the requests it left waiting for approval, and, for a person with an account, the
+ * raw webhook payloads from it on every one of the business's numbers, link and one-time codes
+ * and their sends, the requests it left waiting for approval, and, for a person with an account, the
  * WhatsApp side of their thread. A customer record stays only as an anonymous business record
  * (their bookings remain the business's); a linked person's account keeps theirs. Audit rows
  * stay and never held the number. Every erasure contributor (a feature's own records about
@@ -65,6 +66,16 @@ export class ErasureService {
         .delete(linkCodes)
         .where(
           and(eq(linkCodes.tenantId, contact.tenantId), eq(linkCodes.address, contact.address)),
+        );
+      // One-time codes sent to the number, whoever asked (decisions B8, 22). Acceptance
+      // evidence stays: it is append-only, kept as a legal record.
+      await tx
+        .delete(otpChallenges)
+        .where(
+          and(
+            eq(otpChallenges.tenantId, contact.tenantId),
+            eq(otpChallenges.address, contact.address),
+          ),
         );
       // Sends before they were a contact (a link code) carry the number in their body.
       await tx

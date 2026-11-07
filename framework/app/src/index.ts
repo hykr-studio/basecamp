@@ -11,6 +11,16 @@ export { applyCanvasIntent, useCanvas } from './canvas/store';
 export { Button } from './components/Button';
 export { ScreenTitle, SectionHeading } from './components/ScreenTitle';
 export { type AppConfig, appConfig, configure } from './config';
+export {
+  AcceptDocument,
+  RecordAcceptance,
+  useAccept,
+  useAcceptanceKinds,
+  useAcceptanceStatus,
+  useAcceptances,
+  useRequestAcceptanceCode,
+  useStartESign,
+} from './features/acceptance';
 export { CreditsScreen, creditsPlugin, formatCredits, parseCredits } from './features/credits';
 export {
   RecordDocuments,

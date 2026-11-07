@@ -5,6 +5,8 @@ import {
   parseTenantSettings,
   RenderDocumentSpec,
   SendDocumentSpec,
+  versionedOf,
+  versionField,
 } from '@hykr/contracts';
 import {
   type AnyEntityDef,
@@ -70,14 +72,9 @@ export async function businessOf(conn: Conn, tenantId: string): Promise<Document
   return { id: tenantId, name: t.name, timeZone: parseTenantSettings(t.settings).timeZone };
 }
 
-/** The layout a definition gives for this data, checked (a template's mistake throws). */
-export function layoutOf(
-  def: DocumentDef,
-  value: unknown,
-  lang: Lang,
-  business: DocumentBusiness,
-): CheckedLayout {
-  const ctx: DocumentRenderContext = {
+/** How a document writes in a language: labels, amounts, dates in the business's zone. */
+export function renderContextOf(lang: Lang, business: DocumentBusiness): DocumentRenderContext {
+  return {
     lang,
     business,
     label: (labels) => pick(labels, lang),
@@ -87,6 +84,16 @@ export function layoutOf(
         new Date(v),
       ),
   };
+}
+
+/** The layout a definition gives for this data, checked (a template's mistake throws). */
+export function layoutOf(
+  def: DocumentDef,
+  value: unknown,
+  lang: Lang,
+  business: DocumentBusiness,
+): CheckedLayout {
+  const ctx = renderContextOf(lang, business);
   const parsed = DocumentLayout.safeParse(def.render(value, ctx));
   if (!parsed.success)
     throw new Error(`Document ${def.name} laid out a page wrong: ${parsed.error.message}`);
@@ -103,6 +110,15 @@ interface RenderLoaded {
   entity: AnyEntityDef;
   record: Values;
   business: DocumentBusiness;
+  /** The row's version, for a versioned entity (decisions B8, 6). */
+  recordVersion: number | null;
+}
+
+/** A versioned row's version, as stored; null for an entity without versions. */
+function versionOf(entity: AnyEntityDef, row: Values): number | null {
+  const trait = versionedOf(entity.spec);
+  const v = trait ? row[versionField(trait)] : undefined;
+  return typeof v === 'number' ? v : null;
 }
 
 /**
@@ -121,7 +137,13 @@ export const RenderDocument = defineCommand(RenderDocumentSpec, {
     const row = await entity.repo.find(tx, p, input.id);
     if (!row) throw notReached(entity.spec.label);
     const record = toJson(entity.toRead(row, p)) as Values;
-    return { def, entity, record, business: await businessOf(tx, p.tenantId ?? '') };
+    return {
+      def,
+      entity,
+      record,
+      business: await businessOf(tx, p.tenantId ?? ''),
+      recordVersion: versionOf(entity, row as Values),
+    };
   },
   authorize: (p, { def, record }) =>
     def.authorize?.render?.(p, record) ??
@@ -129,7 +151,7 @@ export const RenderDocument = defineCommand(RenderDocumentSpec, {
   summarize: (input, { def, entity }) =>
     `Make ${pick(def.label, 'en')} for ${entity.spec.label} ${input.id}`,
   run: async ({ tx, principal: p, input, loaded }) => {
-    const { def, entity, record, business } = loaded;
+    const { def, entity, record, business, recordVersion } = loaded;
     const lang: Lang = input.lang ?? 'en';
     const read = async (other: AnyEntityDef, id: string) => {
       if (p.actor.kind === 'agent' && other.spec.expose.get !== 'all') return null;
@@ -181,6 +203,7 @@ export const RenderDocument = defineCommand(RenderDocumentSpec, {
         lang,
         status: 'pending',
         data: snapshot,
+        recordVersion,
         seenAs: seenAsOf(p),
         requestedBy: subject?.kind === 'user' ? subject.userId : null,
         requestedByContact: subject?.kind === 'contact' ? subject.contactId : null,
