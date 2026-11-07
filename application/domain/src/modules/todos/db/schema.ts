@@ -7,6 +7,7 @@ import {
   tableRef,
   tenantColumn,
   user,
+  versionColumn,
 } from '@hykr/db';
 import { boolean, date, index, integer, text, timestamp } from 'drizzle-orm/pg-core';
 
@@ -30,6 +31,8 @@ export const todos = app.table(
     }),
     /** The business's own fields: keys and types from its custom field definitions. */
     custom: customFieldsColumn(),
+    /** Counts changes: a change made on a phone offline is sent with the version it saw. */
+    version: versionColumn(),
     /** Who made the row: the person, or the assistant acting for them. Set by the framework. */
     createdBy: text('created_by', { enum: ['person', 'assistant'] })
       .notNull()

@@ -5,7 +5,6 @@ import {
   CustomFieldInputs,
   CustomFieldValues,
   colors,
-  entityApi,
   errorMessage,
   hrefFor,
   Icon,
@@ -20,6 +19,7 @@ import {
   useToast,
   useUndo,
   useUndoableDelete,
+  writeEntity,
 } from '@hykr/app';
 import type { CustomFieldsInput } from '@hykr/contracts';
 import { useQueryClient } from '@tanstack/react-query';
@@ -113,8 +113,9 @@ export function TodoRow({
     // A failed write shows no Undo to act on: it resolves to nothing.
     const result = update.mutateAsync({ id: todo.id, patch: { done } }).catch(() => undefined);
     // Shown now, not on success: ticking can remove this row (and its callbacks) from the list.
-    // Undo talks to the API directly for the same reason: the server's undo when the write
-    // came back with one (the to-do's approval level gives it a window), else the reverse write.
+    // Undo writes without the row's hooks for the same reason: the server's undo when the write
+    // came back with one (the to-do's approval level gives it a window), else the reverse write
+    // (kept on the phone with the tick when it was made offline).
     toast.show({
       message: done ? `Marked “${todo.title}” done` : `Reopened “${todo.title}”`,
       durationMs: 5000,
@@ -126,7 +127,16 @@ export function TodoRow({
             await undo(written.undo.id, ['todos']);
             return;
           }
-          await entityApi('todos').update(todo.id, { done: !done });
+          let back: Awaited<ReturnType<typeof writeEntity>> | undefined;
+          try {
+            back = await writeEntity(client, 'todos', 'update', {
+              id: todo.id,
+              input: { done: !done },
+            });
+          } catch (e) {
+            toast.show({ tone: 'error', message: errorMessage(e) });
+          }
+          if (back?.status === 'queued') return;
           await Promise.all([
             client.invalidateQueries({ queryKey: ['todos'] }),
             client.invalidateQueries({ queryKey: ['history'] }),

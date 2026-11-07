@@ -12,6 +12,7 @@ import {
   isValidDate,
   LoadError,
   listRow,
+  PendingWriteRow,
   ScreenTitle,
   space,
   styles,
@@ -22,6 +23,7 @@ import {
   useEntityMutation,
   useFeature,
   useFieldLabel,
+  usePendingWrites,
   useScreenContext,
 } from '@hykr/app';
 import { type CustomFieldsInput, customForCreate } from '@hykr/contracts';
@@ -46,10 +48,23 @@ const empty: Record<string, { title: string; body?: string }> = {
   All: { title: 'No to-dos yet', body: 'Add one above.' },
 };
 
+/** To-dos added on this phone that the server has not seen yet (offline), or that it refused. */
+function NotSynced() {
+  const pending = usePendingWrites('todos', ['create']);
+  if (!pending.length) return null;
+  return (
+    <View style={[styles.card, { gap: space.md }]} accessibilityLabel="To-dos not synced yet">
+      {pending.map((item) => (
+        <PendingWriteRow key={item.id} item={item} />
+      ))}
+    </View>
+  );
+}
+
 /**
  * All to-dos: add one (with the business's own fields, such as a priority), import many from a
  * file (people who may import), filter by open, overdue or done, and by a field the business
- * made filterable.
+ * made filterable. Added without a network, a to-do waits on the phone (listed until it syncs).
  */
 export function Todos() {
   useScreenContext({ screen: 'todos' });
@@ -128,6 +143,7 @@ export function Todos() {
             />
             {create.error && <Text style={styles.error}>{errorMessage(create.error)}</Text>}
           </View>
+          <NotSynced />
           {/* For people who may import (imports.run): to-dos from the old system's CSV export,
               keyed by its legacy_id, so importing it again updates them (import/todos.csv). */}
           <ImportRecords
@@ -174,6 +190,12 @@ export function Todos() {
       ListEmptyComponent={
         list.error ? (
           <LoadError what="to-dos" onRetry={list.refresh} />
+        ) : list.offline ? (
+          <EmptyState
+            icon="wifi-off"
+            title="Offline"
+            body="Your to-dos show here once they have loaded. To-dos you add now sync later."
+          />
         ) : list.loading ? (
           <Text style={styles.muted}>Loading…</Text>
         ) : (

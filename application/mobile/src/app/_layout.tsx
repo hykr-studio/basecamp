@@ -9,6 +9,7 @@ import {
   exportPlugin,
   inboxPlugin,
   livePlugin,
+  offlinePlugin,
   privacyPlugin,
   pushPlugin,
   settingsPlugin,
@@ -40,8 +41,10 @@ const config = {
  * the AI apps a person connected over MCP (`/connections`), the business's agents (`/agents`:
  * the meetings module's ready-made ones among them), "Your data" (`/privacy`: a copy of what
  * the business keeps about you, or erasure) and share links (`/share/:token`: what a link shows,
- * on its own, for anyone holding it, signed in or not). The switcher goes first: switching
- * starts everything after it again in the other business.
+ * on its own, for anyone holding it, signed in or not) and offline capture (to-dos added or
+ * ticked without a network are kept on the device and synced when it is back; screens show what
+ * was read last; `/offline` lists what waits). The switcher goes first: switching starts
+ * everything after it again in the other business.
  */
 const plugins = [
   businessesPlugin,
@@ -57,6 +60,7 @@ const plugins = [
   agentsPlugin(),
   privacyPlugin,
   sharePlugin(),
+  offlinePlugin(),
 ];
 
 export default function RootLayout() {

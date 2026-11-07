@@ -59,7 +59,7 @@ describe('present intents', () => {
     expect(parked.present).toEqual({
       kind: 'inline',
       view: 'approval.card',
-      props: { approvalId: parked.approvalId, summary: 'Delete "Order tiles"' },
+      props: { approvalId: parked.approvalId, summary: 'Delete "Order tiles" (version 1)' },
     });
   });
 });
