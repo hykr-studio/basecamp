@@ -41,6 +41,13 @@ export const Job = z.object({
   createdAt: z.iso.datetime(),
 });
 
+/** Deciding the assistant's changes to a job: owners and crew, who do not read the cost. */
+export const ApproveJobs = defineCapability({
+  name: 'fixture.jobs.approve',
+  label: label('Approve job changes'),
+  roles: ['owner', 'fixture_crew'],
+});
+
 export const JobSpec = entitySpec({
   name: 'job',
   label: 'job',
@@ -59,7 +66,9 @@ export const JobSpec = entitySpec({
     pageSize: { default: 50, max: 100 },
   },
   // The assistant's changes wait for an owner or a crew member.
-  approval: { update: { when: (p) => p.actor.kind === 'agent', by: ['owner', 'fixture_crew'] } },
+  approval: {
+    update: { when: (p) => p.actor.kind === 'agent', by: { capability: ApproveJobs.name } },
+  },
   traits: { fieldPolicy: { cost: { read: 'fixture.cost.read', write: 'fixture.cost.write' } } },
 });
 
@@ -209,6 +218,7 @@ export const membersContributions: Partial<Contributions> = {
     }),
     // Not given to any declared role: a business's own role reaches every job through it.
     defineCapability({ name: 'fixture.jobs.all', label: label('Every job') }),
+    ApproveJobs,
   ],
   roles: [Crew, Estimator, Client],
   // The application relabels the framework's staff and replaces what it may do.
