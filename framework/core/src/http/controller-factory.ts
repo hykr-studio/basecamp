@@ -34,6 +34,8 @@ import {
   PrincipalGuard,
   RequestMeta,
   type RequestMetaValue,
+  RequireScope,
+  type RouteScope,
 } from './principal.js';
 
 const writeCtx = (p: Principal, meta: RequestMetaValue): WriteCtx => ({
@@ -49,6 +51,8 @@ interface Route {
   params: { decorator: ParamDecorator; type: unknown }[];
   status?: number;
   human: boolean;
+  /** What a scoped credential needs here (its module's read or write scope). */
+  scope: RouteScope;
   // biome-ignore lint/suspicious/noExplicitAny: bound to the generated controller
   fn: (this: { commands: CommandBus; queries: QueryBus }, ...args: any[]) => unknown;
 }
@@ -66,6 +70,7 @@ function addRoute(proto: object, name: string, route: Route) {
   );
   route.verb(route.path)(proto, name, descriptor);
   UseGuards(PrincipalGuard, ...(route.human ? [HumanOnlyGuard] : []))(proto, name, descriptor);
+  RequireScope(route.scope)(proto, name, descriptor);
   if (route.status) HttpCode(route.status)(proto, name, descriptor);
 }
 
@@ -100,12 +105,17 @@ export function entityController(def: AnyEntityDef): Type {
   const CreateDto = createZodDto(spec.schemas.create);
   const UpdateDto = createZodDto(spec.schemas.update);
   const human = (action: keyof typeof spec.expose) => spec.expose[action] === 'human';
+  // Read when the request is made: a spec may be stamped with its module after this runs.
+  const module = () => spec.module;
+  const read: RouteScope = { access: 'read', module };
+  const write: RouteScope = { access: 'write', module };
 
   const all: Record<string, Route> = {
     list: {
       verb: Get,
       path: '',
       human: human('list'),
+      scope: read,
       params: [principal, { decorator: Query() as ParamDecorator, type: ListDto }],
       fn(p: Principal, q: ListQuery) {
         return this.queries.execute(new cqrs.ListQuery(p, q));
@@ -116,6 +126,7 @@ export function entityController(def: AnyEntityDef): Type {
       verb: Get,
       path: 'summary',
       human: human('list'),
+      scope: read,
       params: [principal, { decorator: Query() as ParamDecorator, type: SummaryDto }],
       fn(p: Principal, q: SummaryQuery) {
         return this.queries.execute(new cqrs.SummaryQuery(p, q));
@@ -125,6 +136,7 @@ export function entityController(def: AnyEntityDef): Type {
       verb: Get,
       path: ':id',
       human: human('get'),
+      scope: read,
       params: [principal, idParam],
       fn(p: Principal, id: string) {
         return this.queries.execute(new cqrs.GetQuery(p, id));
@@ -134,6 +146,7 @@ export function entityController(def: AnyEntityDef): Type {
       verb: Post,
       path: '',
       human: human('create'),
+      scope: write,
       params: [principal, { decorator: Body() as ParamDecorator, type: CreateDto }, meta],
       fn(p: Principal, body: unknown, m: RequestMetaValue) {
         return this.commands.execute(new cqrs.CreateCommand(writeCtx(p, m), body));
@@ -143,6 +156,7 @@ export function entityController(def: AnyEntityDef): Type {
       verb: Patch,
       path: ':id',
       human: human('update'),
+      scope: write,
       params: [principal, idParam, { decorator: Body() as ParamDecorator, type: UpdateDto }, meta],
       fn(p: Principal, id: string, body: unknown, m: RequestMetaValue) {
         return this.commands.execute(new cqrs.UpdateCommand(writeCtx(p, m), id, body));
@@ -152,6 +166,7 @@ export function entityController(def: AnyEntityDef): Type {
       verb: Delete,
       path: ':id',
       human: human('delete'),
+      scope: write,
       params: [principal, idParam, meta],
       fn(p: Principal, id: string, m: RequestMetaValue) {
         return this.commands.execute(new cqrs.DeleteCommand(writeCtx(p, m), id));
@@ -181,6 +196,7 @@ export function commandController(def: AnyCommandDef): Type {
     verb: verbs[spec.http.method as keyof typeof verbs],
     path: spec.http.path.replace(/^\/?api\//, ''),
     human: spec.expose === 'human',
+    scope: { access: 'write', module: () => spec.module },
     status: 200,
     params: [
       principal,
