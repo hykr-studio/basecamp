@@ -4,12 +4,12 @@
 // (MCP_URL), limited to the modules the person allowed, in the business they consented in.
 import { oauthProvider } from '@better-auth/oauth-provider';
 import { moduleScopes } from '@hykr/contracts';
-import { ensureDefaultTenant, membershipOf, oauthTables } from '@hykr/db';
+import { ensureDefaultTenant, latestParticipation, membershipOf, oauthTables } from '@hykr/db';
 import type { BetterAuthPlugin } from 'better-auth';
-import { createAuthMiddleware } from 'better-auth/api';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
 import type { AuthPlugin } from '../../hooks.js';
 import { sharedDb } from '../../infra/db.js';
-import { runtime } from '../../runtime.js';
+import { createsBusinessOnSignUp, runtime } from '../../runtime.js';
 import { ACCESS_PREFIX, mcpConfig, REFRESH_PREFIX } from './config.js';
 
 /** Refresh tokens, for a client that stays connected. */
@@ -25,15 +25,31 @@ export const SIGN_IN_PATH = '/oauth/sign-in';
 export const CONSENT_PATH = '/oauth/consent';
 
 /**
- * The business a person's token acts in: their default business when they consent. A person
- * without one yet gets one, as the resolver gives them.
+ * The business a person's token acts in, as the API's resolver picks one for them when none is
+ * named: their default business, else the one they most recently became a participant in. A
+ * person in none gets their own, as on sign-up, unless the application gives none
+ * (`signUp.createBusiness: false`): then none, and they cannot connect a client. `create: false`
+ * only looks (the consent screen naming it).
  */
-async function businessOf(user: { id: string; name?: string | null } | undefined) {
-  if (!user?.id) throw new Error('No person to consent');
-  const membership =
-    (await membershipOf(sharedDb.db, user.id)) ??
-    (await ensureDefaultTenant(sharedDb.db, user.id, user.name ?? ''));
-  return membership.tenantId;
+export async function businessOf(
+  userId: string,
+  opts: { name?: string; create: boolean },
+): Promise<string | undefined> {
+  const membership = await membershipOf(sharedDb.db, userId);
+  if (membership) return membership.tenantId;
+  const participating = await latestParticipation(sharedDb.db, userId);
+  if (participating) return participating;
+  if (!opts.create || !createsBusinessOnSignUp()) return undefined;
+  return (await ensureDefaultTenant(sharedDb.db, userId, opts.name ?? '')).tenantId;
+}
+
+/** The business a consent is given in (Better Auth's referenceId): never none. */
+async function consentBusiness(user: { id: string; name?: string | null } | undefined) {
+  if (!user?.id) throw new APIError('UNAUTHORIZED', { message: 'No person to consent' });
+  const tenantId = await businessOf(user.id, { name: user.name ?? '', create: true });
+  if (!tenantId)
+    throw new APIError('FORBIDDEN', { message: 'You are in no business to connect a client in' });
+  return tenantId;
 }
 
 function build(): BetterAuthPlugin {
@@ -52,11 +68,11 @@ function build(): BetterAuthPlugin {
     resources: [{ identifier: c.resource, name: runtime().definition.name }],
     clientRegistrationDefaultResources: [c.resource],
     prefix: { opaqueAccessToken: ACCESS_PREFIX, refreshToken: REFRESH_PREFIX },
-    // The business is the server's fact: the person's default one, named on the consent screen.
+    // The business is the server's fact (`businessOf`), named on the consent screen.
     postLogin: {
       page: `${c.base}${CONSENT_PATH}`,
       shouldRedirect: () => false,
-      consentReferenceId: async ({ user }) => businessOf(user),
+      consentReferenceId: async ({ user }) => consentBusiness(user),
     },
   }) as unknown as BetterAuthPlugin;
 }

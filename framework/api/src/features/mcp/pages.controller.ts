@@ -4,7 +4,7 @@
 import { verifyOAuthQueryParams } from '@better-auth/oauth-provider';
 import { parseScope } from '@hykr/contracts';
 import { TenantConfigService } from '@hykr/core';
-import { membershipOf, oauthClient } from '@hykr/db';
+import { oauthClient } from '@hykr/db';
 import { langOf, t } from '@hykr/i18n';
 import { Controller, Get, Inject, Req, Res } from '@nestjs/common';
 import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
@@ -13,7 +13,7 @@ import type { Request, Response } from 'express';
 import { config } from '../../config.js';
 import { sharedDb } from '../../infra/db.js';
 import { runtime } from '../../runtime.js';
-import { CONSENT_PATH, OFFLINE_SCOPE, SIGN_IN_PATH } from './oauth.js';
+import { businessOf, CONSENT_PATH, OFFLINE_SCOPE, SIGN_IN_PATH } from './oauth.js';
 import { type ConsentScope, consentPage, messagePage, PAGE_HEADERS, signInPage } from './pages.js';
 
 type PageRequest = Request & { session?: { user?: { id: string; name?: string } } | null };
@@ -76,10 +76,10 @@ export class McpPagesController {
       );
     const user = req.session?.user;
     if (!user?.id) return send(res, 401, messagePage(lang, app, t(lang, 'mcp.consent.signedOut')));
-    // The business the token will act in: the person's default one (the plugin's referenceId).
-    const membership = await membershipOf(sharedDb.db, user.id);
-    const business = membership
-      ? (await this.tenants.get(membership.tenantId).catch(() => undefined))?.name
+    // The business the token will act in (the plugin's referenceId).
+    const tenantId = await businessOf(user.id, { create: false });
+    const business = tenantId
+      ? (await this.tenants.get(tenantId).catch(() => undefined))?.name
       : undefined;
     const asked = (params.get('scope') ?? '').split(' ').filter(Boolean);
     return send(
