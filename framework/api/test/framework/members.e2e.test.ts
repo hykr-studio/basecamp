@@ -572,6 +572,26 @@ describe('field policy', () => {
     expect((await ana.call('GET', '/api/jobs?cost[gt]=100')).status).toBe(200);
   });
 
+  it('refuses a summary that names it, even to someone who reaches no record', async () => {
+    for (const q of ['sum=cost', 'avg=cost&groupBy=title', 'cost[gt]=100', 'max=cost']) {
+      const res = await inAna(crew)('GET', `/api/jobs/summary?${q}`);
+      expect(res.status, q).toBe(403);
+      expect(res.body.rule, q).toBe('field_hidden');
+    }
+    // Staff reach only their own jobs, and have none: still refused, not zeros.
+    const none = await inAna(staffer)('GET', '/api/jobs/summary?sum=cost');
+    expect(none.status).toBe(403);
+    expect(none.body.rule).toBe('field_hidden');
+    // A summary that does not name it counts what the crew member reaches.
+    const counted = await inAna(crew)('GET', '/api/jobs/summary');
+    expect(counted.status).toBe(200);
+    expect(counted.body.totals[0].count).toBeGreaterThanOrEqual(1);
+    // Its holder sums it.
+    const held = await ana.call('GET', '/api/jobs/summary?sum=cost&title=Costed%20job');
+    expect(held.status).toBe(200);
+    expect(held.body.totals[0].sum).toEqual({ cost: 1200 });
+  });
+
   it('refuses a write to it, on CRUD and inside a command, and audits the refusal', async () => {
     const crud = await inAna(crew)('PATCH', `/api/jobs/${job.id}`, { cost: 1 });
     expect(crud.status).toBe(403);
