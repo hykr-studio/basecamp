@@ -424,14 +424,15 @@ describe('who decides, and who sees the cost', () => {
       amount: inr(5_000_000),
       rule: 'order_over_limit',
     });
-    // Staff cannot decide it; the owner can.
+    // Staff may look at their own request but not decide it (403 own_request); the owner can.
     const byStaff = await staff.call(
       'POST',
       `/api/approvals/${parked.body.approval.id}/approve`,
       undefined,
       inTenant(),
     );
-    expect(byStaff.status).toBe(404);
+    expect(byStaff.status).toBe(403);
+    expect(byStaff.body.rule).toBe('own_request');
     const byOwner = await owner.call('POST', `/api/approvals/${parked.body.approval.id}/approve`);
     expect(byOwner.body.status).toBe('approved');
     // The owner holds orders.approve: the same order saves at once.
