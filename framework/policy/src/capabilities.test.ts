@@ -38,7 +38,7 @@ describe('the framework roles and capabilities', () => {
     // Plus the members feature's (A4): the team reads members, owner and admin manage them,
     // and owner, admin and ops give access to single records. Owners export the business's
     // data (A11X). And the parties' (B7): the team reads them, owner, admin and ops manage them.
-    // Owners and admins import records from files (B20).
+    // Owners and admins import records from files (B20), and handle privacy requests (B18).
     expect(capabilitiesOf(['owner'])).toEqual([
       'approvals.decide',
       'backoffice.use',
@@ -53,6 +53,7 @@ describe('the framework roles and capabilities', () => {
       'members.read',
       'parties.manage',
       'parties.read',
+      'privacy.manage',
       'records.grant',
       'settings.manage',
     ]);
@@ -69,6 +70,7 @@ describe('the framework roles and capabilities', () => {
       'members.read',
       'parties.manage',
       'parties.read',
+      'privacy.manage',
       'records.grant',
       'settings.manage',
     ]);
