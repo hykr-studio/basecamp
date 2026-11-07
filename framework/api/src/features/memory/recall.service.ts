@@ -8,6 +8,7 @@ import {
   type RecallKind,
   type RecallResult,
   subjectKey,
+  type UsageRefusal,
 } from '@hykr/contracts';
 import {
   type AnyEntityDef,
@@ -18,7 +19,7 @@ import {
   TenantConfigService,
 } from '@hykr/core';
 import { threadMessages, threads } from '@hykr/db';
-import { subjectOf } from '@hykr/policy';
+import { subjectKeyOf, subjectOf } from '@hykr/policy';
 import {
   Inject,
   Injectable,
@@ -31,6 +32,9 @@ import { ModuleRef } from '@nestjs/core';
 import { embed } from 'ai';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { TurnGate, TurnInfo, TurnOutcome } from '../../hooks.js';
+import { metering } from '../../metering.js';
+import { creditsPaused } from '../credits/agent-guard.js';
+import { FrameworkMeters } from '../credits/meters.js';
 import { ModelPolicyService, ModelRefused } from '../models/model-policy.service.js';
 import { type Candidate, keepMessage, nearest, recentMessages } from './store.js';
 
@@ -100,6 +104,22 @@ export interface RecallRequest {
 
 type Embedded = { model: string; vector: number[] };
 
+/** Who an embedding was made for, for the meter (H3). */
+export interface EmbedUse {
+  /** 'user:<id>' or 'contact:<id>'. */
+  subject?: string | null;
+  runId?: string;
+  channel?: string;
+}
+
+/** A business paused at its cap embeds nothing (H3): recall then runs without it, or is 402. */
+export class EmbeddingPaused extends Error {
+  constructor(readonly refusal: UsageRefusal) {
+    super(`The business is paused: ${refusal.reason}`);
+    this.name = 'EmbeddingPaused';
+  }
+}
+
 let service: RecallService | undefined;
 
 /**
@@ -156,19 +176,39 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * The text's vector with the business's embedding model, made within `timeoutMs` (default
-   * RECALL_TIMEOUT_MS) in one try. Throws ModelRefused when the policy refuses the model, and an
-   * error when the provider fails or does not answer in time.
+   * RECALL_TIMEOUT_MS) in one try, its tokens metered for the business (H3). Throws
+   * EmbeddingPaused when the business is paused at its cap (nothing is sent), ModelRefused when
+   * the policy refuses the model, and an error when the provider fails or does not answer in time.
    */
-  async embed(tenantId: string, text: string, timeoutMs = RECALL_TIMEOUT_MS): Promise<Embedded> {
+  async embed(
+    tenantId: string,
+    text: string,
+    timeoutMs = RECALL_TIMEOUT_MS,
+    use: EmbedUse = {},
+  ): Promise<Embedded> {
+    const meter = metering();
+    const paused = await meter?.check({ tenantId, meter: FrameworkMeters.tokens.name });
+    if (paused) throw new EmbeddingPaused(paused);
     const models = this.ref.get(ModelPolicyService, { strict: false });
     const { ref, model } = await models.embeddingFor(tenantId);
     const timeout = AbortSignal.timeout(timeoutMs);
     try {
-      const { embedding } = await embed({
+      const { embedding, usage } = await embed({
         model,
         value: text,
         maxRetries: 0,
         abortSignal: timeout,
+      });
+      await meter?.record({
+        tenantId,
+        meter: FrameworkMeters.tokens.name,
+        quantity: usage?.tokens ?? 0,
+        variant: ref,
+        subject: use.subject ?? null,
+        runId: use.runId ?? null,
+        channel: use.channel ?? null,
+        source: 'memory.recall',
+        ref: use.runId ? `memory.recall:${use.runId}` : null,
       });
       return { model: ref, vector: embedding };
     } catch (e) {
@@ -190,9 +230,14 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
     let embedded = req.embedded;
     if (!embedded) {
       try {
-        embedded = await this.embed(tenantId, req.query);
+        embedded = await this.embed(tenantId, req.query, RECALL_TIMEOUT_MS, {
+          subject: subjectKeyOf(p) ?? null,
+          ...(p.runId ? { runId: p.runId } : {}),
+          ...(p.channel ? { channel: p.channel } : {}),
+        });
       } catch (e) {
         if (e instanceof ModelRefused) return { items: [], model: null };
+        if (e instanceof EmbeddingPaused) throw creditsPaused(e.refusal);
         log.warn(`Recall in business ${tenantId} failed: ${reason(e)}`);
         throw new ServiceUnavailableException({
           error: 'recall_unavailable',
@@ -323,7 +368,11 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
     const policy = await this.policyOf(p.tenantId);
     if (!policy?.recall || policy.limit === 0) return null;
     try {
-      const embedded = await this.embed(p.tenantId, turn.message, recallTimeoutMs(turn.channel));
+      const embedded = await this.embed(p.tenantId, turn.message, recallTimeoutMs(turn.channel), {
+        subject: subjectKeyOf(p) ?? null,
+        runId: turn.runId,
+        channel: turn.channel,
+      });
       if (policy.conversation && turn.threadId)
         this.made.set(turn.runId, { ...embedded, at: Date.now() });
       const { items } = await this.recall(p, {
@@ -339,7 +388,9 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
         context: items.map((item) => contextLine(item, entityDef(item.type)?.spec.label)),
       };
     } catch (e) {
-      if (!(e instanceof ModelRefused)) log.warn(`run=${turn.runId} recall failed: ${reason(e)}`);
+      // Paused (the credits hook refuses the turn itself), or no embedding model: no recall.
+      if (!(e instanceof ModelRefused) && !(e instanceof EmbeddingPaused))
+        log.warn(`run=${turn.runId} recall failed: ${reason(e)}`);
       return null;
     }
   }

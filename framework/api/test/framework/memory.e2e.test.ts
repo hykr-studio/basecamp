@@ -518,6 +518,85 @@ describe('personal data', () => {
   });
 });
 
+describe('credits (H3)', () => {
+  const pat = new Person('Pat Memory'); // owner of a business that gets paused
+  let patTenant = '';
+  const usesOf = async (tenantId: string, source: string) =>
+    (
+      await pool.query(
+        `select meter, variant, quantity::int, source, ref, subject, run_id from app.usage_events
+         where tenant_id = $1 and source = $2 order by at, id`,
+        [tenantId, source],
+      )
+    ).rows;
+  const indexer = () => server.app?.get(api.MemoryIndexer, { strict: false }) as api.MemoryIndexer;
+
+  beforeAll(async () => {
+    await pat.signUp();
+    patTenant = (await me(pat)).tenantId;
+  });
+
+  it('the indexer’s embeddings are metered for the business, a use per batch', async () => {
+    const m = await memo(ana, { title: 'Metered crate', body: 'In the loft' });
+    expect(m.id).toBeTruthy();
+    const batches = await usesOf(anaTenant, 'memory.index');
+    expect(batches.length).toBeGreaterThan(0);
+    expect(batches.at(-1)).toMatchObject({ meter: 'tokens', variant: 'fake/embedding' });
+    expect(batches.at(-1).quantity).toBeGreaterThan(0);
+    expect(batches.at(-1).ref).toMatch(/^memory\.index:/);
+    // Another business pays for none of it.
+    expect(await usesOf(raviTenant, 'memory.index')).toEqual([]);
+  });
+
+  it('recall’s embedding is metered: in a turn, and through the API', async () => {
+    const turn = await chatInAna(bob, 'show context about the metered crate');
+    expect(turn.status).toBe(200);
+    const inTurn = (await usesOf(anaTenant, 'memory.recall')).filter((u) => u.run_id);
+    expect(inTurn.at(-1)).toMatchObject({
+      meter: 'tokens',
+      variant: 'fake/embedding',
+      subject: `user:${bob.id}`,
+    });
+    // Six words: the fake embedding counts one token a word.
+    expect(inTurn.at(-1).quantity).toBe(6);
+    expect(inTurn.at(-1).ref).toBe(`memory.recall:${inTurn.at(-1).run_id}`);
+    const before = (await usesOf(anaTenant, 'memory.recall')).length;
+    expect((await recall(bob, { q: 'metered crate' })).status).toBe(200);
+    const after = await usesOf(anaTenant, 'memory.recall');
+    expect(after).toHaveLength(before + 1);
+    expect(after.at(-1)).toMatchObject({ quantity: 2, subject: `user:${bob.id}` });
+  });
+
+  it('a paused business embeds nothing: recall is 402 and its memories wait', async () => {
+    let memoId = '';
+    await settings(patTenant, 'credits', { override: { mode: 'pause', reason: 'test pause' } });
+    try {
+      const res = await recall(pat, { q: 'anything at all' }, patTenant);
+      expect(res.status).toBe(402);
+      expect(res.body).toMatchObject({ error: 'credits_paused', rule: 'credits_suspended' });
+      const made = await pat.call('POST', '/api/memos', { title: 'Paused shed', body: 'Waits' });
+      expect(made.status).toBe(201);
+      memoId = made.body.value.id;
+      // The indexer looks every second; the memo's row stays pending, no attempt counted.
+      await new Promise((r) => setTimeout(r, 2500));
+      const { rows } = await pool.query(
+        `select state, attempts, claim from app.memory_index where source_id = $1`,
+        [made.body.value.id],
+      );
+      expect(rows).toEqual([{ state: 'pending', attempts: 0, claim: null }]);
+      expect(await usesOf(patTenant, 'memory.index')).toEqual([]);
+      expect(await usesOf(patTenant, 'memory.recall')).toEqual([]);
+    } finally {
+      await unset(patTenant, 'credits');
+    }
+    // Credits again: the indexer is told (or looks again within a minute) and embeds it.
+    indexer().wake(patTenant);
+    await indexed('memo', memoId);
+    expect((await usesOf(patTenant, 'memory.index')).length).toBe(1);
+    expect((await recall(pat, { q: 'paused shed' }, patTenant)).status).toBe(200);
+  });
+});
+
 describe("a business's embedding model changes", () => {
   let gateway: StubGateway;
 

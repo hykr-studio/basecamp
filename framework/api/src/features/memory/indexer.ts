@@ -20,8 +20,10 @@ import {
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { embedMany } from 'ai';
-import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
+import { metering } from '../../metering.js';
+import { FrameworkMeters } from '../credits/meters.js';
 import { ModelPolicyService, ModelRefused } from '../models/model-policy.service.js';
 import { backfill, forget, markPending, reindexAll } from './store.js';
 
@@ -38,6 +40,8 @@ const ATTEMPTS = 5;
 const EMBED_TIMEOUT_MS = 30_000;
 /** A claim older than this is taken over: its run died. Well past `EMBED_TIMEOUT_MS`. */
 const LEASE_SECONDS = 120;
+/** How long a business paused at its credit cap is left alone before the indexer looks again. */
+export const PAUSED_WAIT_MS = 60_000;
 
 /**
  * Every write that touches a record of an entity with the `memory` trait (plain CRUD and
@@ -101,7 +105,9 @@ async function textOf(tx: Conn, row: Row): Promise<Omit<Ready, 'row'> | null> {
  * that marked the row pending again in the meantime wins, and the row is embedded again. A claim
  * older than the lease (a run that died) is taken over. A source that is gone leaves the index. A
  * business whose policy refuses every embedding model has its rows marked `failed` (a policy
- * change retries them); a provider error or timeout retries with backoff, then fails.
+ * change retries them); a provider error or timeout retries with backoff, then fails. A business
+ * paused at its credit cap embeds nothing: its rows wait, and the indexer looks again after
+ * PAUSED_WAIT_MS (H3). Each batch's tokens are metered for its business.
  */
 @Injectable()
 export class MemoryIndexer implements OnModuleInit, OnApplicationShutdown {
@@ -109,6 +115,8 @@ export class MemoryIndexer implements OnModuleInit, OnApplicationShutdown {
   private running = false;
   private stopped = false;
   private readonly stop = new AbortController();
+  /** Businesses paused at their credit cap, until when this process leaves their rows alone. */
+  private readonly paused = new Map<string, number>();
 
   constructor(
     @Inject(CORE_OPTIONS) private readonly core: CoreOptions,
@@ -123,6 +131,15 @@ export class MemoryIndexer implements OnModuleInit, OnApplicationShutdown {
     this.stopped = true;
     clearInterval(this.timer);
     this.stop.abort();
+  }
+
+  /**
+   * Look at a paused business (or every one) again on the next batch, rather than after
+   * PAUSED_WAIT_MS: for a caller that knows it has credits again.
+   */
+  wake(tenantId?: string) {
+    if (tenantId) this.paused.delete(tenantId);
+    else this.paused.clear();
   }
 
   /** Embed until nothing is pending (one batch at a time); errors are logged. */
@@ -142,7 +159,9 @@ export class MemoryIndexer implements OnModuleInit, OnApplicationShutdown {
   async batch(): Promise<number> {
     const db = this.core.db as Database;
     const claim = randomUUID();
-    const rows = await claimRows(db, claim);
+    const now = Date.now();
+    for (const [tenantId, until] of this.paused) if (until <= now) this.paused.delete(tenantId);
+    const rows = await claimRows(db, claim, [...this.paused.keys()]);
     const byTenant = new Map<string, Row[]>();
     for (const r of rows) byTenant.set(r.tenantId, [...(byTenant.get(r.tenantId) ?? []), r]);
     for (const [tenantId, group] of byTenant) await this.embedFor(db, claim, tenantId, group);
@@ -170,18 +189,42 @@ export class MemoryIndexer implements OnModuleInit, OnApplicationShutdown {
       else await db.delete(memoryIndex).where(claimed(row.id, claim));
     }
     if (!ready.length) return;
+    // A business paused at its credit cap embeds nothing (H3): its rows go back as they were
+    // (no attempt counted), and this process leaves it alone for a while.
+    const meter = metering();
+    const refused = await meter?.check({ tenantId, meter: FrameworkMeters.tokens.name });
+    if (refused) {
+      log.log(`business ${tenantId}: paused (${refused.rule}), ${ready.length} memories wait`);
+      this.paused.set(tenantId, Date.now() + PAUSED_WAIT_MS);
+      for (const r of ready)
+        await db
+          .update(memoryIndex)
+          .set({ claim: null, claimedAt: null, updatedAt: sql`${memoryIndex.updatedAt}` })
+          .where(claimed(r.row.id, claim));
+      return;
+    }
     let model: string;
     let vectors: number[][];
     try {
       const models = this.ref.get(ModelPolicyService, { strict: false });
       const chosen = await models.embeddingFor(tenantId);
       model = chosen.ref;
-      ({ embeddings: vectors } = await embedMany({
+      const out = await embedMany({
         model: chosen.model,
         values: ready.map((r) => r.text),
         maxRetries: 1,
         abortSignal: AbortSignal.any([AbortSignal.timeout(EMBED_TIMEOUT_MS), this.stop.signal]),
-      }));
+      });
+      vectors = out.embeddings;
+      // What the batch cost the business: one use per business and batch.
+      await meter?.record({
+        tenantId,
+        meter: FrameworkMeters.tokens.name,
+        quantity: out.usage?.tokens ?? 0,
+        variant: model,
+        source: 'memory.index',
+        ref: `memory.index:${claim}`,
+      });
     } catch (e) {
       // Shutting down: the claims lapse with the lease, and another run takes the rows over.
       if (this.stopped) return;
@@ -216,9 +259,14 @@ const claimed = (id: string, claim: string) =>
 
 /**
  * Up to `BATCH` of this process's pending rows, past their backoff and not claimed by a live run,
- * claimed with `claim` in a transaction of their own that commits at once.
+ * claimed with `claim` in a transaction of their own that commits at once. Rows of the businesses
+ * in `skip` (paused at their credit cap) are left where they are.
  */
-export function claimRows(db: Database, claim: string): Promise<Row[]> {
+export function claimRows(
+  db: Database,
+  claim: string,
+  skip: readonly string[] = [],
+): Promise<Row[]> {
   return db.transaction(async (tx) => {
     const free = await tx
       .select({ id: memoryIndex.id })
@@ -227,6 +275,7 @@ export function claimRows(db: Database, claim: string): Promise<Row[]> {
         and(
           eq(memoryIndex.queues, eventQueues()),
           eq(memoryIndex.state, 'pending'),
+          skip.length ? notInArray(memoryIndex.tenantId, [...skip]) : undefined,
           // Backoff: a row that failed n times waits 2^n - 1 seconds.
           sql`${memoryIndex.updatedAt} <= now() - make_interval(secs => power(2, ${memoryIndex.attempts}) - 1)`,
           or(
