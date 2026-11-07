@@ -1953,6 +1953,8 @@ export const BriefForm = definePublicForm({
   `PageHost`; a form through `<PublicForm>`. `<ShareLinks target to? maxUses? />` (hooks
   `useShares`, `useCreateShare`, `useRevokeShare`, `useCanShare`) is the team's side. A guest's
   client: `createShareClient({ baseUrl, token, session })` (`@hykr/api-client`).
+- **Privacy.** A contact's "delete my data" revokes the links made for them and forgets where
+  their code went; their data export lists those links.
 - **No SSR or SEO.** Share pages are the single-page web app: not indexed, no link previews.
 
 ---
