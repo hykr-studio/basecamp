@@ -17,6 +17,7 @@ export const OrderStatus = z.enum([
   'draft',
   'submitted',
   'approved',
+  'accepted',
   'fulfilled',
   'cancelled',
   'superseded',
@@ -84,9 +85,10 @@ const agentAsks = (p: { actor: { kind: string } }) => p.actor.kind === 'agent';
 /**
  * An order's life: a draft is saved and changed freely; submitted, it is frozen and waits for a
  * decision (an owner is told after 24 business hours, and it expires after a week); approved,
- * it is the contract until it is fulfilled. To change a submitted order, revise it: v2 is a
- * draft, and v1 is superseded. The assistant's moves wait for the person; its approve waits for
- * an owner, signed in to the app.
+ * it is the contract until it is fulfilled; accepted, its customer accepted its PDF with a
+ * one-time code (OrderAcceptance: only an acceptance moves it there). To change a submitted
+ * order, revise it: v2 is a draft, and v1 is superseded. The assistant's moves wait for the
+ * person; its approve waits for an owner, signed in to the app.
  */
 export const ORDER_STATES: StatesTrait = {
   field: 'status',
@@ -95,6 +97,7 @@ export const ORDER_STATES: StatesTrait = {
     draft: { label: label('Draft', 'ड्राफ़्ट', 'డ్రాఫ్ట్') },
     submitted: { label: label('Submitted', 'भेजा गया', 'సమర్పించబడింది') },
     approved: { label: label('Approved', 'मंज़ूर', 'ఆమోదించబడింది') },
+    accepted: { label: label('Accepted', 'स्वीकार किया गया', 'అంగీకరించబడింది') },
     fulfilled: { label: label('Fulfilled', 'पूरा', 'పూర్తయింది'), terminal: true },
     cancelled: { label: label('Cancelled', 'रद्द', 'రద్దు చేయబడింది'), terminal: true },
     superseded: { label: label('Superseded', 'बदला गया', 'భర్తీ చేయబడింది'), terminal: true },
@@ -125,16 +128,18 @@ export const ORDER_STATES: StatesTrait = {
         level: 'irreversible',
       },
     },
+    // The customer accepted the approved order's PDF (OrderAcceptance): nobody asks for it.
+    { name: 'accept', from: 'approved', to: 'accepted', expose: 'system' },
     {
       name: 'fulfil',
-      from: 'approved',
+      from: ['approved', 'accepted'],
       to: 'fulfilled',
       label: label('Mark fulfilled', 'पूरा करें', 'పూర్తి చేయి'),
       expose: 'human',
     },
     {
       name: 'cancel',
-      from: ['draft', 'submitted', 'approved'],
+      from: ['draft', 'submitted', 'approved', 'accepted'],
       to: 'cancelled',
       label: label('Cancel', 'रद्द करें', 'రద్దు చేయి'),
       fields: ['cancelReason'],
@@ -162,10 +167,18 @@ export const ORDER_STATES: StatesTrait = {
   ],
 };
 
-/** Frozen once submitted: v2 is made by revising; an approved order is the contract. */
+/** Frozen once submitted: v2 is made by revising; an approved (and accepted) order is the contract. */
 export const ORDER_VERSIONS: VersionedTrait = {
   frozenWhen: {
-    status: ['submitted', 'approved', 'fulfilled', 'cancelled', 'superseded', 'expired'],
+    status: [
+      'submitted',
+      'approved',
+      'accepted',
+      'fulfilled',
+      'cancelled',
+      'superseded',
+      'expired',
+    ],
   },
   revisions: {},
 };
