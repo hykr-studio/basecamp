@@ -1933,8 +1933,9 @@ audited there with `on_behalf_of = operator:<id>`.
   person who has an account: they own it (default owner, the creator's roles), and it is their
   default only if they had none. It is audited in the new business (`tenant.provision`) and
   stores the event `tenant.provisioned` (`{ id, name, ownerId, operatorId }`): subscribe to it to
-  set a new business up. An application whose businesses operators make sets
-  `signUp: { createBusiness: false }` (section 6.5).
+  set a new business up. A retry with the same `idempotency-key` answers the first answer and
+  makes no second business (the new id is derived from the operator and the key). An application
+  whose businesses operators make sets `signUp: { createBusiness: false }` (section 6.5).
 - **Support access.** An operator asks one business: `POST /api/platform/support { tenantId,
   reason, roles, capabilities?, access?: 'read' | 'write', minutes }`. Nothing is reached until a
   person there holding `support.consent` (the owner, by default) consents:
@@ -1946,7 +1947,8 @@ audited there with `on_behalf_of = operator:<id>`.
   `supportWithheld`), read-only access answers GET only (403 `support_read_only`), it never decides
   an approval (403 `support_cannot_decide`), and it ends at once when revoked, ended, expired or
   the operator is disabled. Every write is audited as the operator with `on_behalf_of =
-  support:<grant>`; every request, reads included, is logged for the business
+  support:<grant>`; every request, reads included and refusals too (a write a guard refused under
+  read-only access is logged with its 403), is logged for the business
   (`GET /api/support-access/:id/activity`). A business says whether operators may ask, and for how
   long at most, in its `support` settings (`PUT /api/support-access/settings`).
 - **Platform scope.** An operator holding `platform.shared` who asks for the platform's business
