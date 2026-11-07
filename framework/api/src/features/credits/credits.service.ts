@@ -48,7 +48,6 @@ import {
   resolvePlan,
 } from './config.js';
 import { creditPurchaseProviders, FrameworkMeters, type MeterDef, meters } from './meters.js';
-import { checkOperatorKey } from './operator.guard.js';
 import {
   CREDIT_OPS,
   CreditPurchaseRequested,
@@ -177,10 +176,9 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       });
   }
 
-  /** A malformed CREDITS_CONFIG or a weak OPERATOR_API_KEY stops the start here. */
+  /** A malformed CREDITS_CONFIG stops the start here. */
   onModuleInit() {
     const config = creditsConfig();
-    checkOperatorKey();
     for (const [name, factory] of Object.entries(CREDIT_OPS)) registerOp(name, factory, OWNER);
     setMetering(this);
     setCredits(this);
