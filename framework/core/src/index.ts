@@ -80,6 +80,8 @@ export {
   RelayAllowed,
   RequestMeta,
   type RequestMetaValue,
+  RequireScope,
+  type RouteScope,
 } from './http/principal.js';
 export { PrincipalResolver, type Standing } from './http/resolver.js';
 export {

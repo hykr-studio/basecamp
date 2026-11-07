@@ -261,6 +261,31 @@ sample's `orders` module does, developer guide 5.20):
 A state column can also get a CHECK in the module's `sql/post` hook (the sample's
 `orders-states.sql`); keep it in step with the states.
 
+## Calendars and calls
+
+A module puts its records with a time in people's calendars with one trait (developer guide,
+5.24):
+
+- **`traits.schedulable`** names the read-schema fields of the title, start and end (and the
+  place and description), the table's columns of the people whose calendars it goes on (default
+  the owner) and `hiddenWhen` (the values, such as cancelled, that take it off). Each person's
+  connected Google calendar, their ICS feed and the record's invites then follow it, read as
+  each person may see it.
+- **What a move in a calendar means** is the module's: the framework stores
+  `calendar.event_moved` and `calendar.event_removed` (`CalendarEventChange`) and writes nothing
+  back. The sample's `meetings` module subscribes and reschedules the meeting as the person who
+  moved it (`server/calendar-moved.subscriber.ts`, with `memberPrincipal` and `writeAs`).
+- **What an invite's outcome means** is the module's too: each send is stored as
+  `calendar.invite_sent`, `calendar.invite_cancelled` or `calendar.invite_failed`
+  (`CalendarInviteOutcome`), for a subscriber or a notification. A dial's steps update the call
+  (`call.updated`).
+- **Free time** keeps to the business's `businessHours` (its open week and holidays) unless the
+  caller asks for hours, and to every hour when the business has none. Set `businessHours` for a
+  business that should only be booked when it is open.
+- **A telephony provider** (`defineTelephonyProvider`, contributed as `telephonyProviders`) is
+  the application's; none ships, so the call log works and click-to-call is refused until one is
+  added.
+
 ## What a module adds for WhatsApp: templates and notifications
 
 Outside a customer's 24-hour window WhatsApp delivers only approved templates, so everything a
@@ -335,11 +360,23 @@ From the contracts declaration alone:
   service reports back by signed callback or is polled, and its result files are kept on the job
   and reached through the record it is about. `<JobProgress>` and `useJob` in the app (developer
   guide, section 5.17). The fixture's `drawings` shows one; the sample has none yet.
+- Bulk import (`/api/imports`, `basecamp import <entity> <file>`, `app.import_keys`): a CSV, JSON
+  or NDJSON file of one entity's records written row by row through the write path by a job, as
+  the person who imports it (`imports.run`); each row's id in the other system is kept, so the same
+  import run again updates instead of adding, and the rows it could not write come back in an
+  error report file. A module opts an entity out with `traits: { imports: false }` (developer
+  guide, section 5.23). The sample's to-dos ship `import/todos.csv` and `<ImportRecords>`.
 - Documents (`/api/documents`, `app.documents`): a module's PDFs made in the worker from data
   read as the person who asked (pdfkit, HarfBuzz and the Noto fonts for English, Hindi and
   Telugu), stored as files the document holds, reached through their record, and sent by
   WhatsApp or email (`document.render`, `document.send`, the tools `render-document`,
   `send-document`, `get-document`, `list-documents`, and `<RecordDocuments>` in the app).
+- Calendars and calls (`/api/calendar`, `/api/calls`): per-person Google Calendar connections
+  (OAuth, sealed tokens, push notices through the integration bus), schedulable records synced
+  into them, busy and free time (`find-free-time`), invites by email with an `.ics` that follow
+  the record (`send-calendar-invite`), private ICS feeds, and a call log on records with
+  click-to-call through the application's telephony provider (`log-call`, `dial-call`,
+  `list-calls`). `calendarPlugin()`, `<RecordInvites>` and `<RecordCalls>` in the app.
 - Comments on any record a person can read (`/api/comments`, `app.comments`), with @-mentions
   checked against who may read the record, team-only comments, the `comment.mentioned` event,
   and the in-app inbox (`/api/inbox`, the `inapp` delivery channel) where mentions land;
@@ -381,6 +418,12 @@ From the contracts declaration alone:
   (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
   (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
   sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+- Outside AI clients over MCP (developer guide, section 7.8): an OAuth 2.1 server (Better Auth's
+  oauth-provider, with its sign-in and consent pages), the `/mcp` endpoint with two tools per
+  module (`<module>_read`, `<module>_write`), scopes per module that the API enforces on every
+  route, a parked write answered with its `/approvals/<id>` link in the app, and the person's
+  connections (`/api/mcp/connections`, the app's `connectionsPlugin`). The modules give the scopes
+  and the tools; the deployment gives the addresses (`MCP_URL`, `APP_URL`).
 - Exporting a business's data (`POST /api/exports`, `data.export`, owners by default): a job that
   reads every entity as the person who asked (their access and hidden fields) and keeps one zip of
   JSON and CSV files on the job; a module adds data no entity serves as a `dataExportSources`

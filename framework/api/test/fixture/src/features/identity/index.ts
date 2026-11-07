@@ -47,7 +47,8 @@ export const fixtureBearer: AgentIdentityProvider = {
       tenantId: grant.tenantId,
       channel: 'mcp',
       runId: grant.runId,
-      scopes: ['tasks:read'],
+      // A scoped credential reaches only what its scopes open (A1): both modules, here.
+      scopes: ['tasks:write', 'visits:write'],
     };
   },
 };

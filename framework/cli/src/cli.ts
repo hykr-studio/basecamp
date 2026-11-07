@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { dropBranchMigrations } from './db-rebase.js';
+import { IMPORT_OPTIONS, IMPORT_USAGE, type ImportFlags, importArgs } from './import-args.js';
 import { moduleAdd } from './module-add.js';
 
 /** The "basecamp" block of the application's package.json. */
@@ -37,6 +38,14 @@ const HELP = `basecamp: run an application on the Basecamp framework
                                      generate them again on top of b's
   basecamp module add <name> [--entity e]
                                      a new module: both halves and the lines that register it
+  basecamp import <entity> <file> --as <email> [--dry-run] [options]
+                                     import a CSV, JSON or NDJSON file of records through the
+                                     write path, as that member (the worker runs it); rows
+                                     imported before (same key, --source) are updated, not
+                                     made again; rows not written go to an error report
+                                     (--tenant, --key, --format, --existing update|skip,
+                                     --empty omit|null, --map col=field, --ref field=entity,
+                                     --report path)
   basecamp templates sync|check      WhatsApp templates at the provider
   basecamp operator add <email> [--capabilities a,b]
                                      make an account a platform operator (every operator
@@ -179,6 +188,7 @@ async function main() {
       capabilities: { type: 'string' },
       base: { type: 'string', default: 'main' },
       help: { type: 'boolean', short: 'h', default: false },
+      ...IMPORT_OPTIONS,
     },
   });
   const [command, sub] = positionals;
@@ -282,6 +292,17 @@ async function main() {
         fail(error instanceof Error ? error.message : String(error));
       }
       return;
+    }
+    case 'import': {
+      let options: ReturnType<typeof importArgs>;
+      try {
+        options = importArgs(positionals.slice(1), values as ImportFlags);
+      } catch (error) {
+        fail(error instanceof Error ? error.message : `usage: basecamp ${IMPORT_USAGE}`);
+      }
+      const { api, server: app } = await loadServer(root, config);
+      process.exit(await api.runImport(app, options));
+      break;
     }
     case 'templates': {
       if (sub !== 'sync' && sub !== 'check') fail('templates sync or templates check');

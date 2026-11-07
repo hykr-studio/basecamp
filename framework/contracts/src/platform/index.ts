@@ -10,11 +10,14 @@ import { SendTemplateSpec } from './notify.js';
 import { SavedPageSpec } from './page.js';
 
 export * from './backoffice.js';
+export * from './calendar.js';
+export * from './calls.js';
 export * from './comment.js';
 export * from './document.js';
 export * from './export.js';
 export * from './file.js';
 export * from './handoff.js';
+export * from './imports.js';
 export * from './job.js';
 export * from './members.js';
 export * from './memory.js';

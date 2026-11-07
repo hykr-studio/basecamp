@@ -167,7 +167,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/api/src/runtime.ts`, `start.ts` | `defineServer`, `startApi`, `startWorker`, `migrate`, `runTemplates`, `runEval`, `startStudio`. `testing.ts` is `@hykr/api/testing`. `hooks.ts` holds the server's extension points (section 5.9), `module.ts` `defineModule`, and `module-checks.ts` the boot checks across modules (section 5.11). |
 | `framework/api/src/channels/` | WhatsApp webhook, queues, sending, notifications dispatch, template sync, handoff, back office API, erasure |
 | `framework/api/src/modules/` | Chat, threads, history, me, voice, pages |
-| `framework/api/src/features/` | Framework features, one folder each (`defineFeature`), among them `events` (the outbox relay), `files`, `money`, `push`, `approvals` and `integrations` (webhooks out and in, section 5.14) |
+| `framework/api/src/features/` | Framework features, one folder each (`defineFeature`), among them `events` (the outbox relay), `files`, `money`, `push`, `approvals`, `integrations` (webhooks out and in, section 5.14) and `mcp` (outside AI clients, section 7.8) |
 | `framework/app/src/` | `AppShell`, `defineAppModule` and the plugin types (`framework/app-domain.ts`), their merge (`framework/compose-app.ts`) and plugin slots (`framework/plugins.ts`), data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; framework features as plugins in `features/<x>/` (live, push, WebMCP); primitives in `@hykr/app/ui` |
 | `framework/cli/` | The `basecamp` command (`module-add.ts` scaffolds a module, `db-rebase.ts` regenerates migrations after a rebase), plus the `compose.yaml` and `infra/` it starts |
 
@@ -871,8 +871,9 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources`,
   `fileHolders` (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
-  `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21) and
-  `dataExportSources` (section 5.22) in `@hykr/api`.
+  `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21),
+  `dataExportSources` (section 5.22), `uploadTargets` (section 5.23) and `telephonyProviders`
+  (section 5.24) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -1209,7 +1210,8 @@ contributes: {
 
   `ctx.write(op, input)` is `runWrite` with an idempotency key per event, handler and call. A
   4xx refusal (another business's record is a 404) fails the event for good; other errors retry.
-  `GET /api/integrations/connections/:id/inbound` is the log.
+  `GET /api/integrations/connections/:id/inbound` is the log. A connector whose sender posts
+  no body (Google Calendar's push notices) sets `inbound.bodyless`; its `verify` reads headers.
 - **Server code** that calls a sender back opens a connection's credentials with
   `openConnection(db, tenantId, id)`, and makes any request to a business-given address with
   `safeRequest(url, init, outboundPolicy())`.
@@ -1643,6 +1645,154 @@ export const AuditSource: DataExportSource = {
   section for them.
 - The fixture's `features/export` and `test/framework/export.e2e.test.ts` show a switched-off
   module, a hidden field, an export source and a business role that may export.
+
+### 5.23 Bulk import
+
+Records from another system (a spreadsheet, another product's export) come in through the
+**imports** feature (`docs/decisions/B20.md`): a CSV, JSON or NDJSON file of one entity's records,
+written row by row **through the write path**, as the person who imports it. Nothing to declare:
+every served entity can be imported, unless its spec says `traits: { imports: false }` (a record
+with a parent is saved through its parent's command and is never imported on its own).
+
+```bash
+# From application/, once built, with the worker running (basecamp dev, or basecamp start worker):
+pnpm exec basecamp import todo domain/src/modules/todos/import/todos.csv \
+  --as owner@example.com --key legacy_id --source legacy --dry-run
+# Options: --tenant <id>, --format csv|json|ndjson, --existing update|skip, --empty omit|null,
+# --map <column>=<field> (or <column>= to leave it out), --ref <field>=<entity>, --report <path>
+```
+
+- **Who.** A person holding `imports.run` (owners and admins; re-grant it with `roleOverrides` or
+  a business role) who may create the entity. The assistant cannot start one. Starting is the
+  command `import.start` (`POST /api/imports`), so it is audited and an application's level rule
+  on `import.start` can make imports wait for someone.
+- **The file.** Upload it with `for: { entity: 'import', field: 'file' }` (`IMPORT_UPLOAD`; CSV,
+  JSON, NDJSON or plain text), then start: `api.imports.upload(bytes, { name, mime })` and
+  `api.imports.start({ entity, file, key, source, ... })` in `@hykr/api-client`. The CLI stores the
+  file itself. Non-entity upload targets like this one are an `uploadTargets` contribution.
+- **The job.** An import is a job of kind `imports.records` (section 5.17) that the worker runs as
+  its starter. Rows are written in batches (`IMPORTS_BATCH_SIZE`, 100 per transaction, one savepoint
+  per row): each is the entity's own `create` (then an `update` for fields only the update schema
+  has, such as a to-do's `done`) or `update` through `runWrite`, so access, rules, plugins, field
+  policy, feature flags, level rules, undo windows and audit all apply. Each record's audit row
+  carries the job's id as its run id. A row whose write would wait for an approval is not written
+  (`needs_approval`): an import never parks rows, and an approved import does not approve them.
+- **Keys.** Every row needs its id in the other system (the `key` column, default `id`). Which record
+  each key became is kept per business, entity and `source` (`app.import_keys`), so running the same
+  import again updates those records (`existing: 'update'`), or leaves them (`'skip'`), and a row
+  that would change nothing counts as `unchanged`. A key whose record was deleted is `not_found`: a
+  re-run never brings it back. `refs: { shelfId: 'shelf' }` says a column holds another entity's
+  keys in the same source; each becomes that record's id.
+- **Values.** Columns are fields by name, or by `columns: { 'Old name': 'field' }` (`null` leaves a
+  column out); columns starting with `_` are ignored; any other unknown column fails the import
+  before it writes anything. A CSV cell is given to the field's schema as text, or as the number,
+  `true`/`false` or JSON it spells when the schema refuses the text. An empty cell leaves the field
+  out (`empty: 'null'` sets null).
+- **The result.** The job's output is the counts (`ImportResult`: created, updated, unchanged,
+  skipped, failed, errors by code). Rows not written are in the job's result file
+  `<name>.errors.csv` (or `.ndjson`): `_row`, `_code`, `_field`, `_message`, then the row as given.
+  Fix the rows in the report and import the report itself. A **dry run** (`dryRun: true`,
+  `--dry-run`) does everything in transactions it rolls back: the counts and the report say what a
+  real run would do. Its refusals are still audited as refused writes.
+- **In the app.** `<ImportRecords entity="todo" options={{ key: 'legacy_id' }} />` (people with
+  `imports.run` only): check a file, import it, follow `<JobProgress>`. `useStartImport()` and
+  `useCanImport()` under it. The sample's to-dos screen shows it; `import/todos.csv` is its file.
+- **Limits.** `IMPORTS_MAX_ROWS` (50 000), `IMPORTS_BATCH_SIZE` (100), `IMPORTS_REPORT_ROWS`
+  (10 000), `IMPORTS_TIMEOUT_S` (14 400); the file's size is `FILES_MAX_BYTES`.
+
+### 5.24 Calendars and calls
+
+Records with a time reach people's calendars, and calls are logged on records
+(`docs/decisions/B17.md`). Which entities are events, whose calendars they go on and what a
+move in a calendar means are the application's. The sample's `meetings` module uses them.
+
+- **The trait.** `traits.schedulable: { title, startsAt, endsAt, location?, description?,
+  people?, hiddenWhen? }` names read-schema fields (`location` is text or an `Address`),
+  `people` the table's columns holding user ids (one or a list; default the owner column), and
+  `hiddenWhen: { field, in }` the values that take a record off every calendar. The server
+  checks it at start: a field or column that does not exist stops it.
+- **Google Calendar** (`@hykr/connectors/google-calendar`, transport only). Each person
+  connects their own account: `POST /api/calendar/connections { provider: 'google', returnTo? }`
+  returns the authorization URL (PKCE, offline access, scopes `calendar.events` and
+  `calendar.freebusy`). The `state` is a random token; the server keeps who started the sign-in,
+  in which business, and the PKCE verifier (sealed), for ten minutes. Google returns to
+  `GET /api/calendar/google/callback`, which exchanges nothing: it sends the browser on to the
+  app (`CALENDAR_RETURN_URL`, or `CALENDAR_APP_RETURN_URL` for `returnTo: 'app'`) with `code`
+  and `state`, and the app calls `POST /api/calendar/google/complete { code, state }` under its
+  session. Only the person who started it, in that business, finishes it; anyone else's try is
+  403 (`calendar_sign_in_not_yours`, `calendar_sign_in_other_business`) and uses the sign-in up,
+  so a consent link sent to someone else connects nothing. Tokens are stored sealed; a refused
+  refresh marks the connection `needs_reauth`. People only (the assistant cannot connect).
+  `connectGoogleCalendar(person)` (`@hykr/api/testing`) does the round trip on the fake.
+  `GET /api/calendar/connections`
+  lists yours; `DELETE /api/calendar/connections/:id` takes our events out of Google and revokes
+  the grant.
+- **Sync** is one way, records to Google. The subscriber `calendar.records` queues
+  `calendar.sync` for every stored event about a schedulable record; the job reads the record
+  **as each person** it belongs on (scoped repository, `toRead`): reachable and not hidden →
+  upsert, otherwise → delete. A field hidden from them never reaches their calendar, and someone
+  who loses access loses the event. Google reports changes through a watch channel that posts
+  to the B10 inbound webhook (`/webhooks/google-calendar/:connection`; it needs an https
+  `CALENDAR_PUBLIC_URL`, elsewhere `calendar.maintain` polls every 10 minutes). A change to one
+  of our events stores `calendar.event_moved` or `calendar.event_removed`
+  (`CalendarEventChange`: the entity, record, person and times); the framework writes nothing
+  back. A module that wants the move subscribes and writes as the person: the sample's
+  `meetings.calendar-moved` runs `meeting.reschedule` with `writeAs(ctx, { principal, requestId,
+  idempotencyKey }, op, input)`, the principal from `memberPrincipal(ctx.get, { userId,
+  tenantId })` (both from `@hykr/api`).
+- **Free time.** `GET /api/calendar/busy?from&to[&userId]` (busy intervals, no titles) and
+  `GET /api/calendar/free?from&to&minutes[&step&hoursFrom&hoursTo&userId]` (slots, in the
+  business's time zone; `freeSlots` in `@hykr/contracts` is the pure version). With
+  `hoursFrom`/`hoursTo`, slots keep inside those local hours. Without them, slots keep to the
+  business's `businessHours` week and holidays (section 5.20; a slot may run past midnight where
+  it stays open), and to every hour when it has none: the framework has no working day of its
+  own. Another member's needs `calendar.availability.read`. The assistant's tool is
+  `find-free-time`. Not connected: `{ connected: false }`.
+- **Invites.** `POST /api/calendar/invites { entity, id, to: [{ email, name? } | { userId }],
+  lang? }` (`calendar.invite`, tool `send-calendar-invite`) emails an `.ics` (METHOD:REQUEST,
+  also as the mail's calendar part). To yourself: allowed; to others: `customers.message`, and
+  the assistant's invite waits for approval. The record is read as the person who invites.
+  Later changes send an update (SEQUENCE + 1), a deleted or hidden record a CANCEL, from the
+  worker, one send of an invite at a time. Each outcome is audited and stored as
+  `calendar.invite_sent`, `calendar.invite_cancelled` or `calendar.invite_failed` (resource type
+  `calendarInvite`, row `CalendarInviteOutcome`, as the system principal `calendar.invites`): a
+  module subscribes to act on one. `GET /api/calendar/invites?entity&id` lists a record's.
+- **One job at a time.** Every job that sends a record's events holds an advisory lock on the
+  record, and every send of an invite one on the invite, so the last change wins. The locks have
+  their own small pool (4 connections per process; a job waits 60 s for one, then 60 s for the
+  lock, then fails and retries), so holders never starve the main pool. The main pool fails a
+  query that waits 30 s for a connection.
+- **Feeds.** `POST /api/calendar/feeds { label? }` returns a private URL once
+  (`/api/calendar/feed/<token>.ics`; only the token's hash is stored); `DELETE
+  /api/calendar/feeds/:id` revokes it. A feed lists the person's own records (the trait's
+  `people`) from 90 days back to a year ahead, each read as them now.
+- **Calls** (`features/calls`). `POST /api/calls` logs one (`call.log`, tool `log-call`; on a
+  record or about none), `PATCH /api/calls/:callId` changes its notes, status or times, and
+  `GET /api/calls?entity&id` lists a record's (whoever reads the record reads its calls; a call
+  about no record: who logged it, the member on it and `calls.read_all`). `POST /api/calls/dial
+  { to, entity?, id? }` (`call.dial`, tool `dial-call`; the assistant's dial waits for approval)
+  asks the business's telephony provider, from the worker, to connect it. Each step of the dial
+  (`started`, once; `placed`; `failed`) is the system op `call.dial_outcome` through `runWrite`:
+  audited on the call, with `call.updated` stored. `GET /api/calls/provider` says whether the
+  business has one it may use.
+- **A telephony provider** is the application's: `defineTelephonyProvider({ name, label,
+  connector?, dial(request, { credentials }) })` (`@hykr/connectors`), contributed as
+  `telephonyProviders`. With `connector`, it gets the business's active B10 connection's
+  credentials. None ships: without one, `call.dial` is refused with `no_telephony_provider`.
+  The provider's status webhook is a B10 connector handler that calls
+  `ctx.write(callProviderUpdate(), { provider, externalId, status, … })`.
+- **In the app** `calendarPlugin()` adds `/calendar` (connect or disconnect Google; make, copy
+  and revoke feeds), `<RecordInvites entity id />` a record's invites and `<RecordCalls entity
+  id />` its calls (log one; "Call" when the business has a provider). The hooks are
+  `useCalendarConnections`, `useConnectCalendar`, `useCompleteCalendar` (the `/calendar` screen
+  finishes a sign-in it is handed), `useDisconnectCalendar`, `useCalendarFeeds`,
+  `useCreateFeed`, `useRevokeFeed`, `useInvites`, `useSendInvite`, `useCalls`,
+  `useCallProvider`, `useLogCall` and `useDialCall`.
+- **Configuration**: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (unset: Google is not
+  offered), `GOOGLE_CALENDAR_TRANSPORT=fake` (the in-memory Google, `fakeGoogle()` in
+  `@hykr/api/testing`; production refuses it), `CALENDAR_PUBLIC_URL`, `CALENDAR_RETURN_URL`,
+  `CALENDAR_APP_RETURN_URL` (a native app's link, such as `agenticstack://calendar`) and
+  `CALENDAR_SYNC_DAYS` (`application/.env.example`).
 
 ---
 
@@ -2264,6 +2414,66 @@ write it to cope (`n.body?.trim()`). A trait that throws drops that record from 
 takes its vector with it); for a person with an account, the business memories they wrote go too,
 and their export lists them.
 
+### 7.8 Outside AI clients: MCP and OAuth
+
+A person connects Claude, ChatGPT or an IDE to the application over the Model Context Protocol
+(`framework/api/src/features/mcp`, `docs/decisions/A1.md`). Nothing to declare: the modules give
+the scopes and the tools. `MCP=off` turns it off for a deployment.
+
+- **Addresses are configuration.** `MCP_URL` is the endpoint's public URL and the tokens' audience
+  (default `<BETTER_AUTH_URL>/mcp`; a domain of its own can proxy to the API's `/mcp`). The
+  authorization server is Better Auth under `<BETTER_AUTH_URL>/api/auth`; approval links use
+  `APP_URL`.
+- **Discovery.** `/mcp` without a valid token answers 401 with `WWW-Authenticate: Bearer
+  resource_metadata="…/.well-known/oauth-protected-resource/mcp"`. That document names the
+  authorization server and the scopes; `/.well-known/oauth-authorization-server/api/auth` (and at
+  the root) is Better Auth's metadata.
+- **OAuth 2.1** (`@better-auth/oauth-provider`): a client registers itself (`POST
+  /api/auth/oauth2/register`; one whose redirects are all loopback or app schemes is registered
+  as a native app), sends the person to `/api/auth/oauth2/authorize` with PKCE (`S256`), and trades
+  the code at `/api/auth/oauth2/token`. The API serves the sign-in page (`/oauth/sign-in`) and the
+  consent screen (`/oauth/consent`) in the person's language: the client as it named itself, the
+  business, and each module asked for, read or change, which the person may narrow. Consent is
+  remembered per client, person and business. Tokens are opaque (`mcp_at_…`, refresh `mcp_rt_…`),
+  stored hashed: one hour, thirty days.
+- **Who it is.** The `mcp` identity provider makes a token an agent (`mcp:<client id>`) acting for
+  its person, in the business they consented in (their default one, else the one they last became
+  a participant in; a person in none gets their own unless `signUp.createBusiness` is `false`, and
+  then cannot connect), on the `mcp` channel, with
+  the token's scopes cut down to what the person's consent allows now. A token works only while
+  that consent exists, so a token the provider mints during or after a disconnect is dead.
+  Everything else is the API's: access, field hiding, approvals, audit. A person who left the
+  business gets 403. The throttle counts each client for its person and business (any
+  contributed identity provider's credential gets its own bucket, as the agent key does), not
+  the address: every tool call reaches the API from the API's own process.
+- **Scopes** are `<module>:read` and `<module>:write` for each application module (`write` covers
+  `read`), plus `offline_access`. `PrincipalGuard` enforces them for any scoped credential (any
+  identity provider that returns `scopes`): it reaches only routes that declare a scope
+  (`RequireScope`; the generated entity routes declare their module's read or write scope, a
+  command route its module's write, `/api/transitions/:plural` the write scope of the records'
+  module, read from the request), and only with that scope. Every other route is 403
+  `out_of_scope`. Sessions and the agent key are not scoped.
+- **Tools** are two per module: `<module>_read` (`{ entity, id }`, `{ entity, query }` with the
+  list grammar, or `{ entity, summary }` for counts and totals) and `<module>_write` (`{ action,
+  input }`, the action being one of the module's agent tool ids: `create-<name>`,
+  `update-<name>`, `delete-<name>`, a command's `tool`, or `transition-<plural>` for an entity
+  with states (`{ id, transition, ...its fields }`, the moves with `expose: 'all'`)). Only what is
+  exposed to agents. A token lists only the modules its scopes reach. Each call goes to the HTTP
+  API with the token, and answers text (a sentence, then the API's JSON); a refusal is an error
+  result. The framework features' own tools (files, documents, jobs, memory, comments) are not
+  offered over MCP yet (section 14).
+- **Approvals.** A write that parks answers with who decides it, its level, and the link
+  `<APP_URL>/approvals/<id>`, where a person decides it in the app. An MCP client never decides.
+  Which writes wait (the PRD's tier 3) is the application's approval levels.
+- **Credits.** Each tool call is a `tool_calls` use (variant `mcp`); a paused business refuses it.
+- **Connections.** `GET /api/mcp/connections` (people only) lists the clients the person connected
+  in this business; `DELETE /api/mcp/connections/:clientId` disconnects one (consent deleted, which
+  ends every token of it at once, tokens revoked too, audited as `mcp.connection.revoke`). In the app, list
+  `connectionsPlugin` in `<AppShell plugins>`: a `/connections` screen with both (the sample does).
+- **In tests.** `framework/api/test/framework/mcp.e2e.test.ts` runs the whole flow with
+  `MCPClient` from `@mastra/mcp`, `mcp-states.e2e.test.ts` the transitions;
+  `application/api/test/domain/mcp.e2e.test.ts` runs the sample modules' tools.
+
 ---
 
 ## 8. Channels, notifications and voice
@@ -2380,6 +2590,9 @@ Add it to the read, create and update schemas. Add the column to the table. Run 
 
 **…keep photos or documents on a record?**
 Give it a file field (`fileRefs()` or `FileRef`, a `files` trait, a `fileColumns()` column) and use `<FileField>` in its form. Section 5.12.
+
+**…bring in records from another system?**
+Export them as CSV or JSON with each record's old id, then `basecamp import <entity> <file> --as <email> --key <id column> --source <system> --dry-run`, read the report, and run it again without `--dry-run`. Section 5.23.
 
 **…make a PDF of a record and send it?**
 Declare it with `defineDocument` in the module's `server/` (what it reads, how it lays out, how it is named and sent), contribute it as `documents`, add its WhatsApp template (with `header: { type: 'document' }`) to the module's templates, and show `<RecordDocuments entity id />` on the record's screen. Section 5.19; the sample's `orders/server/document.ts`.
@@ -2561,9 +2774,13 @@ These are not built. Each has a workaround for now.
 | Retention of finished jobs | Jobs and their result files are kept until "delete my data" (jobs about no record only). |
 | A result file on a record | Result files stay on their job; `complete` puts a copy on a record (`ctx.copyFile`). |
 | Every job of a business | `GET /api/jobs` lists a record's jobs or the caller's own; there is no operations view. |
+| Importing children, owners and dates | An import writes top-level records only (a record with a parent comes in with its parent's command), owned by the importer, with today's `createdAt`. Set owners afterwards with the entity's own writes. |
+| Files inside imported rows, Excel files | A row cannot carry a file to fetch into a file field, and `.xlsx` is not read: export CSV. |
+| Reading or forgetting an import's keys | `app.import_keys` has no API: a source's keys stay as long as the business. Import under a new `source` to start over. |
+| Importing with no worker | `basecamp import` starts the job and follows it; the worker runs it. With no worker running it waits (and says so). Large JSON files through the local storage drivers (memory, fs) also pass the API's JSON body limit (`JSON_BODY_LIMIT`) on upload; S3 has no such limit. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.7) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.7) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that park | `systemPrincipal()` creates (owned by the business's default owner), updates and deletes rows of its business, but cannot park (nobody decides). Maintenance jobs still write their audit rows directly. |
 | Impersonation, break-glass access | An operator works in a business only through support access it consented to, as themselves. There is no acting as one of its people, and no access without consent. |
@@ -2578,9 +2795,21 @@ These are not built. Each has a workaround for now.
 | Webhook delivery order, auto-pause, alerts | Deliveries of one record can arrive out of order; an endpoint that keeps failing is not paused and nobody is told. |
 | One inbound URL per connector | Each connection has its own URL. Routing a provider's single URL by its account id is not built (decisions B10, 20). |
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
-| OAuth connectors | Credentials are stored as given; no OAuth flow or token refresh yet (B17 adds the first). |
+| OAuth connectors | Business connections store credentials as given; only the calendar's per-person Google connection has an OAuth flow and token refresh (section 5.24). |
+| Other calendars (Microsoft 365, CalDAV), a calendar other than the primary one | Only Google, into each person's primary calendar. Others subscribe to their ICS feed. |
+| Changes made in Google written back | Sync is one way; a move or deletion in Google is stored as `calendar.event_moved` / `calendar.event_removed` for a module's subscriber to act on (the sample's meetings do). |
+| Invite replies | Attendees' accept or decline is not read (no inbound mail); invites go out with `RSVP=FALSE`. |
+| Confirming invite updates | A change to an invited record emails every recipient an update at once; nobody confirms it first. |
+| Telling someone an invite failed | `calendar.invite_failed` is stored and audited; no notification is declared on it. |
+| A calendar sign-in across the app's own sign-in | Google's code is finished only in an app already signed in as the person who started, in that business. The app's sign-in screen does not keep it: someone signed out there (a phone's browser, say) starts again. One web and one native return address per deployment. |
+| A team feed | A feed lists one person's own records. |
+| A telephony provider, call recordings | None ships: contribute a `telephonyProviders` entry. Recordings and transcripts are not stored (no consent flow). |
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
-| Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
+| Identity provider scopes | Enforced (section 7.8): a scoped credential reaches only routes that declare a scope. Only the generated entity and command routes declare one, so a feature's own routes are out of reach for scoped credentials until they say which scope they need. |
+| MCP: several businesses | A token acts in the business the person is in by default when they consent (their default membership, else their latest participation); the consent screen cannot choose another. Hiding the tools of a module a business's feature flag switches off is not done (the API answers 404 for its calls). |
+| MCP: older clients, other client registration | `@mastra/mcp` 2.x serves MCP revision 2026-07-28 only. Client ID metadata documents, the device grant, JWT access tokens and DPoP are not enabled. A client registered before a module existed registers again to ask for its scopes. Browser-based MCP clients from other origins are refused by CORS. |
+| MCP: screens | The app's `connectionsPlugin` lists and disconnects a person's clients; the back office has no view of every client in a business. The consent screen shows the application's name, not a business's branding. MCP Apps cards, resources and prompts are not served. |
+| MCP: framework features' tools | The MCP tools cover each module's entities, commands and state transitions. The framework features' own assistant tools (files, documents, jobs, memory recall, comments, handoff) are not offered, and their routes declare no scope, so a token gets 403 `out_of_scope` there. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
 | Agent tools for parties | `/api/parties` and `/api/participants` are people-only routes; the assistant cannot add someone to a record. |
 | A participant who decides | A participant reaches records (and writes them, in the roles `as` names) but is never a named approver: A5's named approvers are members. Capabilities per participant role are not built either. |

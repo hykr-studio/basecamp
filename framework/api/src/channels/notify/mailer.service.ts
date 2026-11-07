@@ -13,6 +13,14 @@ export interface MailAttachment {
   contentType: string;
 }
 
+/** A calendar invite the email is (iTIP over email): mail clients show it with their own buttons. */
+export interface MailCalendarEvent {
+  method: 'REQUEST' | 'CANCEL' | 'PUBLISH';
+  filename: string;
+  /** The iCalendar text. */
+  content: string;
+}
+
 /** Email, for notifications WhatsApp can't deliver. Mailpit in development (localhost:8025). */
 @Injectable()
 export class MailerService implements OnApplicationShutdown {
@@ -30,7 +38,12 @@ export class MailerService implements OnApplicationShutdown {
    */
   async send(
     to: { email: string; tenantId: string; contactId?: string | null },
-    mail: { subject: string; text: string; attachments?: MailAttachment[] },
+    mail: {
+      subject: string;
+      text: string;
+      attachments?: MailAttachment[];
+      icalEvent?: MailCalendarEvent;
+    },
     meta: { notification?: string; extra?: Record<string, unknown> } = {},
   ): Promise<string> {
     const attachments = mail.attachments ?? [];
@@ -40,6 +53,7 @@ export class MailerService implements OnApplicationShutdown {
       subject: mail.subject,
       text: mail.text,
       ...(attachments.length ? { attachments } : {}),
+      ...(mail.icalEvent ? { icalEvent: mail.icalEvent } : {}),
     });
     const [row] = await this.db
       .insert(schema.messages)

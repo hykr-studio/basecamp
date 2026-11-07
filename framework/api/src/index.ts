@@ -3,6 +3,24 @@
 // environment when it loads.
 
 export {
+  contentOf,
+  type EventContent,
+  googleSettings,
+  memberPrincipal,
+  schedulable,
+  schedulables,
+  uidOf,
+  writeAs,
+} from './features/calendar/public.js';
+export {
+  type CallRow,
+  callInfoOf,
+  callProviderUpdate,
+  type ProviderUpdate,
+  reachableCall,
+  telephonyProviders,
+} from './features/calls/public.js';
+export {
   type MentionContext,
   type MentionKind,
   mentionKinds,
@@ -100,7 +118,20 @@ export {
   type StorageDriver,
   StorageUnavailable,
   type Uploader,
+  type UploadTarget,
+  uploadTargets,
 } from './features/files/public.js';
+export {
+  failureText,
+  type ImportFileOptions,
+  ImportJob,
+  type ImportOutcome,
+  type ImportsConfig,
+  importFile,
+  importSummary,
+  importsConfig,
+  StartImport,
+} from './features/imports/public.js';
 export { IntegrationsCapability } from './features/integrations/capability.js';
 export { openConnection } from './features/integrations/credentials.js';
 export {
@@ -242,6 +273,7 @@ export {
   migrate,
   operators,
   runEval,
+  runImport,
   runTemplates,
   startApi,
   startStudio,
