@@ -8,3 +8,4 @@ export { liveFeature } from './live/index.js';
 export { modelsFeature } from './models/index.js';
 export { moneyFeature } from './money/index.js';
 export { pushFeature } from './push/index.js';
+export { integrationsFeature } from './integrations/index.js';

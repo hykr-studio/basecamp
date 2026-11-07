@@ -42,6 +42,7 @@ jobs:
       AGENT_API_KEY: ci-agent-api-key-0123456789abcdef0123
       VOICE_AGENT_KEY: ci-voice-agent-key-0123456789abcdef01
       APPROVAL_SECRET: ci-approval-secret-0123456789abcdef0123
+      SECRETS_KEY: ci-secrets-key-0123456789abcdef0123456789
       # The scripted model: no OpenRouter key, no cost, same answers every run.
       MODEL_MODE: fake
       VOICE_MODE: fake
