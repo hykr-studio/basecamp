@@ -86,8 +86,16 @@ export function defineServer(definition: ServerDefinition): Basecamp {
   const { modules } = definition;
   const problems: string[] = [];
   const catalog = collect(problems, () => createCatalog(...modules));
+  // With each module's entities, so views that name one (kpi.row's `of`) are checked on the server.
   const registry = collect(problems, () =>
-    createUiRegistry(...modules.map((m) => ({ name: m.name, views: m.views, screens: m.screens }))),
+    createUiRegistry(
+      ...modules.map((m) => ({
+        name: m.name,
+        views: m.views,
+        screens: m.screens,
+        entities: m.entities,
+      })),
+    ),
   );
   const notifications = collect(problems, () =>
     createNotificationCatalog(

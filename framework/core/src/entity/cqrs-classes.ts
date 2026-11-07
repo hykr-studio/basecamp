@@ -1,4 +1,4 @@
-import type { ListQuery, Principal } from '@hykr/contracts';
+import type { ListQuery, Principal, SummaryQuery } from '@hykr/contracts';
 import type { WriteCtx } from '../write/pipeline.js';
 
 /**
@@ -70,6 +70,17 @@ export function defineEntityCqrs(pascal: string, plural: string) {
         }
       },
       `List${Plural}Query`,
+    ),
+    SummaryQuery: named(
+      class extends EntityQuery {
+        constructor(
+          readonly principal: Principal,
+          readonly query: SummaryQuery,
+        ) {
+          super();
+        }
+      },
+      `Summarize${Plural}Query`,
     ),
     GetQuery: named(
       class extends EntityQuery {

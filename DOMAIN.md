@@ -145,6 +145,17 @@ The framework has no currency, number format or tax rule of its own; a module de
   in a tree of any depth, reached exactly when the parent is, and saved whole by a command
   (`children.replace`) as one write, one approval and one audit statement.
 
+## Places and totals
+
+- **Places** (developer guide 5.15): a `geoPoint()` column (PostGIS) and an `addressColumn()`,
+  the `geo` list type (`near`, `within`, nearest-first sort), and `withinMeters` for a geofence a
+  command checks. The radius, and what a check-in means, are the module's: the sample's meetings
+  take a check-in within their `CHECK_IN_RADIUS_M`.
+- **Totals** (developer guide 5.16): every listed entity has `GET /api/<plural>/summary` (counts,
+  sums, averages, lowest and highest, grouped by up to two fields) under its list's scope, and
+  the assistant a `summarize-<plural>` tool. `kpi.row` tiles with `of` are computed from a
+  summary for whoever looks; the sample's orders screen shows totals by status and by month.
+
 ## What a module adds for WhatsApp: templates and notifications
 
 Outside a customer's 24-hour window WhatsApp delivers only approved templates, so everything a
@@ -190,8 +201,9 @@ From the contracts declaration alone:
 
 - REST routes with the list grammar (filters, search, sort, keyset pages), validation and
   OpenAPI shapes.
-- Agent tools (`list-*`, `get-*`, `create-*`, `update-*`, `delete-*`, one per command), with
-  approvals where the spec asks for them.
+- Agent tools (`list-*`, `summarize-*`, `get-*`, `create-*`, `update-*`, `delete-*`, one per
+  command), with approvals where the spec asks for them.
+- `GET /api/<plural>/summary`: counts and totals under the list's scope and filters.
 - The app's data hooks (`useEntityList`, `useEntity`, mutations, commands) and
   query-cache refresh after the assistant writes (commands declare `touches`).
 - History for every entity (`GET /api/history`), approval cards and history lines worded from

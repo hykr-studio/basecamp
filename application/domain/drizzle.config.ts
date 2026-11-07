@@ -15,4 +15,6 @@ export default defineConfig({
   dbCredentials: { url },
   migrations: { schema: 'drizzle', table: '__app_migrations' },
   schemaFilter: ['app'],
+  // PostGIS's own objects are the extension's, never a migration's.
+  extensionsFilters: ['postgis'],
 });

@@ -1,4 +1,4 @@
-import type { FieldType, FilterOp } from '@hykr/contracts';
+import type { FieldType, FilterOp, ListFilter } from '@hykr/contracts';
 import { createHookRegistry } from '@hykr/contracts';
 import {
   type Column,
@@ -32,6 +32,26 @@ export interface ListFieldFilter {
   value: unknown;
 }
 
+/** Sorting by a field of a type with its own order (a point, by distance to a `near` point). */
+export interface ListFieldSort {
+  table: Table;
+  field: string;
+  column: Column | undefined;
+  dir: 'asc' | 'desc';
+  /** The list's filters on this field (the `near` point a distance is measured from). */
+  filters: readonly ListFilter[];
+}
+
+/**
+ * What a sorted field orders by. `expr` must never be null (coalesce nulls to a far value), so
+ * keyset cursors neither skip nor repeat rows. `at(value)` is the same expression for the value
+ * a cursor kept: the row's own field value, or null.
+ */
+export interface ListFieldOrder {
+  expr: SQL;
+  at(value: unknown): SQL;
+}
+
 /**
  * The SQL half of a list field type (its grammar is `defineListFieldType` in @hykr/contracts).
  * A filterable field of a type without SQL fails the request rather than filter nothing.
@@ -41,6 +61,11 @@ export interface ListFieldSql {
   name: FieldType;
   /** The condition for one filter. */
   where(filter: ListFieldFilter): SQL;
+  /**
+   * How a field of this type sorts, when it is in `sortable`. Absent: by its column's value.
+   * Throw a 400 when the list cannot be sorted by it as asked (no `near` point).
+   */
+  order?(sort: ListFieldSort): ListFieldOrder;
 }
 
 /** Each list field type's SQL, built-in and contributed (`contributes: { listFieldSql }`). */

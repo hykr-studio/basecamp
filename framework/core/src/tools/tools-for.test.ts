@@ -46,9 +46,11 @@ describe('the agent’s tools', () => {
       'delete-note',
       'get-note',
       'list-notes',
+      'summarize-notes',
       'update-note',
     ]);
     expect(set.owners.get('list-notes')).toBe('entity note');
+    expect(set.owners.get('summarize-notes')).toBe('entity note');
   });
 
   it('a command named like an entity tool is refused', () => {

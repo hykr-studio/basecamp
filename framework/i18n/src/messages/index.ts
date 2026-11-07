@@ -4,4 +4,5 @@ export { approvalMessages } from './approvals.js';
 export { assistantMessages } from './assistant.js';
 export { channelMessages } from './channels.js';
 export { creditsMessages } from './credits.js';
+export { summaryMessages } from './summary.js';
 export { voiceMessages } from './voice.js';
