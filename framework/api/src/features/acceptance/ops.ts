@@ -21,7 +21,7 @@ import type { Lang } from '@hykr/i18n';
 import { subjectOf } from '@hykr/policy';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
-import type { OtpRow, OtpService } from '../../channels/otp/otp.service.js';
+import type { OtpOutcome, OtpRow, OtpService } from '../../channels/otp/otp.service.js';
 import {
   ACCEPTANCE_PURPOSE,
   acceptable,
@@ -323,6 +323,38 @@ export function challengeOp(
 
 /* ── acceptance.accept ─────────────────────────────────────────────────────── */
 
+const noCode = () =>
+  new BadRequestException({
+    error: 'no_code',
+    message: 'This code is used or has expired: ask for a new one',
+  });
+
+/**
+ * A guess at an acceptance's code, before any write (decisions B8, 11): the challenge is read and
+ * the attempt spent on the pool, one statement each, with no transaction open. Inside the
+ * accepting write's transaction the spend would need a second connection while the first waits
+ * for it, so enough guesses at once would hold every connection and the API would stop
+ * answering. Not the principal's own challenge (or a signing at a provider): 404. A wrong guess
+ * is refused here (`wrong_code`), and its attempt stays spent. A used or expired code is refused
+ * here too (`no_code`), unless the request may repeat one that accepted (`repeat`: it carries an
+ * idempotency key), which the write then answers with what it answered first.
+ */
+export async function guessCode(
+  otp: OtpService,
+  p: Principal,
+  input: Pick<z.output<typeof AcceptInput>, 'challengeId' | 'code'>,
+  opts: { repeat?: boolean } = {},
+): Promise<OtpOutcome> {
+  const ch = await otp.get(input.challengeId);
+  if (!theirs(ch, p, ACCEPTANCE_PURPOSE) || ch.channel === 'esign')
+    throw new NotFoundException({ error: 'not_found', message: 'No such code' });
+  const outcome = await otp.guess(ch, input.code);
+  if (outcome === 'wrong')
+    throw new BadRequestException({ error: 'wrong_code', message: "That code isn't right" });
+  if (outcome === 'none' && !opts.repeat) throw noCode();
+  return outcome;
+}
+
 interface AcceptLoaded {
   ch: OtpRow;
   binding: Binding;
@@ -332,14 +364,15 @@ interface AcceptLoaded {
 }
 
 /**
- * acceptance.accept: the code received, for the PDF it was sent for. The guess spends an attempt
- * on its own connection first (a refusal rolls this write back; the attempt must stay spent);
- * the code is used in this transaction, with the evidence, the record's move and the
- * application's own work.
+ * acceptance.accept: the code received, for the PDF it was sent for. The guess was made before
+ * the write (`guessCode`, `guessed`): only a right one accepts; anything else is `no_code` (a
+ * repeat of an accepted request, by its idempotency key, is answered before this loads). The
+ * challenge is read again in this transaction, and the code is used there, with the evidence,
+ * the record's move and the application's own work.
  */
 export function acceptOp(
   otp: OtpService,
-  request: { client: ClientInfo; requestId: string },
+  request: { client: ClientInfo; requestId: string; guessed: OtpOutcome },
 ): WriteOp<z.output<typeof AcceptInput>, AcceptLoaded, EvidenceRow> {
   return {
     name: 'acceptance.accept',
@@ -349,17 +382,10 @@ export function acceptOp(
     resourceId: (_input, loaded) => loaded?.binding.documentId ?? null,
     input: AcceptInput,
     load: async (tx, p, input) => {
+      if (request.guessed !== 'ok') throw noCode();
       const ch = await otp.get(input.challengeId, tx);
       if (!theirs(ch, p, ACCEPTANCE_PURPOSE) || ch.channel === 'esign')
         throw new NotFoundException({ error: 'not_found', message: 'No such code' });
-      const outcome = await otp.guess(ch, input.code);
-      if (outcome === 'none')
-        throw new BadRequestException({
-          error: 'no_code',
-          message: 'This code is used or has expired: ask for a new one',
-        });
-      if (outcome === 'wrong')
-        throw new BadRequestException({ error: 'wrong_code', message: "That code isn't right" });
       const binding = ch.binding as unknown as Binding;
       const r = await resolveFor(tx, p, binding.documentId, { lock: true });
       const signer = await signerOf(tx, p);
@@ -369,11 +395,7 @@ export function acceptOp(
     authorize: (p, l) => stillBound(l) ?? decide(p, l.r, l),
     summarize: (_input, l) => `Accept ${l.r.doc.fileName}`,
     run: async ({ tx, principal: p, input, loaded: l }) => {
-      if (!(await otp.consume(tx, l.ch.id)))
-        throw new BadRequestException({
-          error: 'no_code',
-          message: 'This code is used or has expired: ask for a new one',
-        });
+      if (!(await otp.consume(tx, l.ch.id))) throw noCode();
       const signer = l.signer as Signer;
       const meta = l.ch.meta as unknown as ChallengeMeta;
       const now = new Date();

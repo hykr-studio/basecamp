@@ -200,11 +200,14 @@ export class OtpService {
   }
 
   /**
-   * Spend one attempt on a guess, in its own statement on the database (never the caller's
-   * transaction, which a refusal rolls back). False when none is left, or it is used, expired,
+   * Spend one attempt on a guess, in its own statement on the pool. Never call it inside a
+   * transaction of the caller's: a refusal there rolls the attempt back, and the statement would
+   * wait for a second connection while the transaction holds one (enough of them at once and the
+   * pool has none left). Returns the code's hash as it was when the attempt was spent (a code is
+   * only replaced while nobody has tried it), or null when none is left, or it is used, expired,
    * or has no code yet.
    */
-  async spend(id: string): Promise<boolean> {
+  async spend(id: string): Promise<Pick<OtpRow, 'id' | 'codeHash'> | null> {
     const [spent] = await this.db
       .update(otpChallenges)
       .set({ attempts: sql`${otpChallenges.attempts} + 1` })
@@ -216,8 +219,8 @@ export class OtpService {
           live(),
         ),
       )
-      .returning({ id: otpChallenges.id });
-    return !!spent;
+      .returning({ id: otpChallenges.id, codeHash: otpChallenges.codeHash });
+    return spent ?? null;
   }
 
   /** Is this the challenge's code? Constant time. */
@@ -228,10 +231,14 @@ export class OtpService {
     return expected.length === given.length && timingSafeEqual(expected, given);
   }
 
-  /** Spend an attempt, then compare: what a guess came to (nothing used yet). */
-  async guess(row: Pick<OtpRow, 'id' | 'codeHash'>, code: string): Promise<OtpOutcome> {
-    if (!(await this.spend(row.id))) return 'none';
-    return this.matches(row, code) ? 'ok' : 'wrong';
+  /**
+   * Spend an attempt, then compare with the code it was spent on: what a guess came to (nothing
+   * used yet). On the pool, never in a transaction (`spend`).
+   */
+  async guess(row: Pick<OtpRow, 'id'>, code: string): Promise<OtpOutcome> {
+    const spent = await this.spend(row.id);
+    if (!spent) return 'none';
+    return this.matches(spent, code) ? 'ok' : 'wrong';
   }
 
   /**
@@ -248,7 +255,7 @@ export class OtpService {
   }
 
   /** Guess and, when right, use it: for a flow with no transaction of its own (linking). */
-  async verify(row: Pick<OtpRow, 'id' | 'codeHash'>, code: string): Promise<OtpOutcome> {
+  async verify(row: Pick<OtpRow, 'id'>, code: string): Promise<OtpOutcome> {
     const outcome = await this.guess(row, code);
     if (outcome !== 'ok') return outcome;
     return (await this.consume(this.db, row.id)) ? 'ok' : 'none';

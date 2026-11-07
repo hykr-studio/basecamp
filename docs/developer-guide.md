@@ -1714,7 +1714,8 @@ export const OrderAcceptance = defineAcceptance<OrderDocumentData>({
   statement: ({ order }, ctx) => `I accept order ${order.number} for ${ctx.money(order.total)}, as shown in this PDF.`,
   by: 'customer',                       // or { capability: '…' }, or (p, row) => boolean
   channels: ['whatsapp', 'email'],      // where codes may go, in order
-  transition: 'accept',                 // the record's move when accepted (expose: 'system')
+  when: (row) => (row.status === 'approved' ? null : { rule: 'order_not_approved', reason: '…' }),
+  // transition: 'accept',              // optional: the record's move when accepted (expose: 'system')
 });
 ```
 
@@ -1731,13 +1732,18 @@ export const OrderAcceptance = defineAcceptance<OrderDocumentData>({
   window. Refusals: `not_signer`, `no_whatsapp_number`, `no_email`, `channel_unavailable`,
   `already_accepted`, the transition's own (`not_from_state`). `api.acceptances.*` in the client.
 - **Codes** (`OtpService`, `channel.otp_challenges`, which WhatsApp linking also uses): 6 digits,
-  only their hash stored, 10 minutes, 5 attempts spent before each guess is compared (a wrong
-  guess counts even though the write rolls back), used once, 5 an hour per person and per
+  only their hash stored, 10 minutes, 5 attempts spent before each guess is compared, used once, 5 an hour per person and per
   address for each purpose (429 `too_many_codes`). A code goes only to an address the business
   holds for the signer: their contact's number, the number linked to their account here, or
   their account email. It is made and sent in the worker (`otp.requested`, the subscriber
   `acceptance.otp`): WhatsApp's `verification_code_v1` authentication template, or the
   `otp.email.*` phrases by email. `otp: { ttlMinutes, attempts }` changes the defaults.
+- **A guess is spent before the write.** The controller reads the challenge and spends the
+  attempt on the pool (`guessCode`), with no transaction open, and refuses a wrong code there
+  (`wrong_code`), so it counts. Only a right one reaches `runWrite`, which uses the code in its
+  transaction. Never call `OtpService.spend`, `guess` or `verify` inside a transaction: they run
+  on the pool, so they would wait for a second connection while the transaction holds one, and
+  enough of them at once leave the pool empty and the API answering nobody.
 - **When accepted**, in one transaction: the code is used, the evidence row written, the record
   moved along `transition` (as the business's system principal, with `via: '<entity>.transition'`)
   and `accepted(ctx)` runs (more work of the module's, returning touched rows and events). The
@@ -2618,7 +2624,8 @@ These are not built. Each has a workaround for now.
 | Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. A contact without an account cannot accept a document in the app until share links (B9) give them a principal; the acceptance routes take only signed-in people (`HumanOnlyGuard`). |
 | An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
-| Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders allow cancelling an accepted order). |
+| Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders allow cancelling an approved order, accepted or not). |
+| An accepted order's state | The sample's `OrderAcceptance` has no transition (the orders entity files were not B8's to edit): an accepted order stays `approved`, which is frozen, and only its acceptances tell it from one that is not accepted. |
 | The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set Express's `trust proxy` (not done by the framework). |
 | Acceptance tools for the assistant | The assistant can neither ask for a code nor accept (on purpose), and has no tool to read acceptances yet. |
 | Retiring `channel.link_codes` | Linking codes now live in `channel.otp_challenges`; the old table stays, unused, until a migration may drop it. |

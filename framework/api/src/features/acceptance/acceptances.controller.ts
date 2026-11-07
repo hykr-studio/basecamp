@@ -2,6 +2,7 @@ import {
   type AcceptanceInfo,
   type AcceptanceKindInfo,
   type AcceptanceStatus,
+  AcceptInput,
   type ESignStarted,
   Lang,
   type Principal,
@@ -43,7 +44,14 @@ import { FilesService } from '../files/files.service.js';
 import { AcceptanceService } from './acceptance.service.js';
 import { type Binding, signerOf } from './checks.js';
 import { esignProviders } from './esign.js';
-import { acceptOp, type ChallengeMeta, type ClientInfo, challengeOp, esignOp } from './ops.js';
+import {
+  acceptOp,
+  type ChallengeMeta,
+  type ClientInfo,
+  challengeOp,
+  esignOp,
+  guessCode,
+} from './ops.js';
 
 type Incoming = {
   ip?: string;
@@ -154,16 +162,24 @@ export class AcceptancesController {
     return this.write(p, meta, challengeOp(this.otp), body);
   }
 
-  /** The code received: the PDF is accepted (acceptance.accept). */
+  /**
+   * The code received: the PDF is accepted (acceptance.accept). The guess is made first, with no
+   * transaction open (decisions B8, 11): a wrong one never reaches the write, and no request
+   * holds two connections.
+   */
   @Post()
   @HttpCode(200)
-  accept(
+  async accept(
     @CurrentPrincipal() p: Principal,
     @Body() body: unknown,
     @RequestMeta() meta: RequestMetaValue,
     @Req() req: Incoming,
-  ) {
-    const op = acceptOp(this.otp, { client: clientOf(req), requestId: meta.requestId });
+  ): Promise<WriteResult> {
+    const input = AcceptInput.safeParse(body ?? {});
+    if (!input.success)
+      throw new BadRequestException({ error: 'invalid', issues: input.error.issues });
+    const guessed = await guessCode(this.otp, p, input.data, { repeat: !!meta.idempotencyKey });
+    const op = acceptOp(this.otp, { client: clientOf(req), requestId: meta.requestId, guessed });
     return this.write(p, meta, op, body);
   }
 

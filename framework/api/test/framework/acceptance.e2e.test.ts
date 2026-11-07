@@ -116,8 +116,13 @@ const challenge = (p: Person, documentId: string, channel?: string) =>
     { documentId, ...(channel ? { channel } : {}) },
     as(p),
   );
-const accept = (p: Person, challengeId: string, code: string, extra: object = {}) =>
-  p.call('POST', '/api/acceptances', { challengeId, code, ...extra }, as(p));
+const accept = (
+  p: Person,
+  challengeId: string,
+  code: string,
+  extra: object = {},
+  headers: Record<string, string> = {},
+) => p.call('POST', '/api/acceptances', { challengeId, code, ...extra }, { ...as(p), ...headers });
 const other = (code: string) => (code === '000000' ? '111111' : '000000');
 
 /** Mailpit's verification emails to this address, newest first. */
@@ -162,6 +167,19 @@ async function emailed(p: Person, documentId: string) {
   const { asked, code } = await emailedAfter(p.email, () => challenge(p, documentId, 'email'));
   expect(asked.status).toBe(200);
   return { id: asked.body.value.id as string, code };
+}
+
+/** The promise's answer, or a failure after `ms`: an API that hangs answers nothing. */
+async function within<T>(ms: number, what: string, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what}: no answer in ${ms} ms`)), ms);
+  });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const audit = async (action: string, resourceId?: string) =>
@@ -467,6 +485,77 @@ describe('refusals', () => {
     const expired = await accept(buyer, fresh.id, fresh.code ?? '');
     expect(expired.status).toBe(400);
     expect(expired.body.error).toBe('no_code');
+  });
+
+  it('more guesses at once than the pool has connections leave the API answering', async () => {
+    const id = await offered('Plan G2');
+    const doc = await pdf(id);
+    const { id: challengeId, code } = await emailed(buyer, doc.id);
+    // The API's pool has 10 connections. A guess spent inside the write's transaction held one
+    // while it waited for another, so this many at once left none for anybody (60 did not always
+    // overlap enough to show it; 200 did).
+    const guesses = await within(
+      20_000,
+      '200 guesses at once',
+      Promise.all(Array.from({ length: 200 }, () => accept(buyer, challengeId, other(code ?? '')))),
+    );
+    expect(guesses.every((g) => g.status === 400)).toBe(true);
+    expect(guesses.filter((g) => g.body.error === 'wrong_code')).toHaveLength(5);
+    const { rows } = await pool.query(
+      'select attempts, consumed_at from channel.otp_challenges where id = $1',
+      [challengeId],
+    );
+    expect(rows[0]).toMatchObject({ attempts: 5, consumed_at: null });
+    // Wrong guesses never reach the write: nothing of theirs is audited.
+    expect(await audit('acceptance.accept', doc.id)).toEqual([]);
+    const read = await within(5_000, 'a later read', owner.call('GET', `/api/agreements/${id}`));
+    expect(read.status).toBe(200);
+  });
+
+  it('many right guesses at once accept once', async () => {
+    const id = await offered('Plan G3');
+    const doc = await pdf(id);
+    const { id: challengeId, code } = await emailed(buyer, doc.id);
+    const tries = await within(
+      20_000,
+      '30 right guesses at once',
+      Promise.all(Array.from({ length: 30 }, () => accept(buyer, challengeId, code ?? ''))),
+    );
+    expect(tries.filter((t) => t.status === 200)).toHaveLength(1);
+    // The rest: no attempt left or used (400), or the record moved under them (403).
+    expect(tries.every((t) => t.status === 200 || t.status === 400 || t.status === 403)).toBe(true);
+    const { rows } = await pool.query(
+      'select count(*)::int as n from audit.acceptances where resource_id = $1',
+      [id],
+    );
+    expect(rows[0].n).toBe(1);
+    expect((await agreement(id)).status).toBe('accepted');
+  });
+
+  it('a repeat of an accepted request (its idempotency key) answers as it did', async () => {
+    const id = await offered('Plan G4');
+    const doc = await pdf(id);
+    const { id: challengeId, code } = await emailed(buyer, doc.id);
+    const key = { 'idempotency-key': `accept-${challengeId}` };
+    const first = await accept(buyer, challengeId, code ?? '', {}, key);
+    expect(first.status).toBe(200);
+    const again = await accept(buyer, challengeId, code ?? '', {}, key);
+    expect(again.status).toBe(200);
+    expect(again.body.value.id).toBe(first.body.value.id);
+    // Another key is another request: the code is used.
+    const fresh = await accept(
+      buyer,
+      challengeId,
+      code ?? '',
+      {},
+      { 'idempotency-key': `new-${challengeId}` },
+    );
+    expect(fresh.status).toBe(400);
+    expect(fresh.body.error).toBe('no_code');
+    const { rows } = await pool.query('select attempts from channel.otp_challenges where id = $1', [
+      challengeId,
+    ]);
+    expect(rows[0].attempts).toBe(1);
   });
 
   it('at most 5 codes an hour per person', async () => {
