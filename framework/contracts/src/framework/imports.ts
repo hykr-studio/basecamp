@@ -10,10 +10,16 @@ declare module './traits.js' {
   }
 }
 
-/** Why an entity cannot be imported, or undefined when it can. */
+/**
+ * Why an entity cannot be imported, or undefined when it can: it opted out, its records are
+ * saved with a parent, or people cannot create or update it themselves (`expose: 'internal'`):
+ * an import never writes what a person could not write one record at a time.
+ */
 export function notImportable(spec: EntitySpec): string | undefined {
   if (spec.traits?.imports === false) return `${spec.label} records are not imported from files`;
   if (spec.traits?.parent)
     return `${spec.label} records are saved with their ${spec.traits.parent.entity}`;
+  if (spec.expose.create === 'internal' || spec.expose.update === 'internal')
+    return `${spec.label} records are written by the server only`;
   return undefined;
 }

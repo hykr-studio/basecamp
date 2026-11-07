@@ -1,6 +1,6 @@
 // Bulk import (B20), without booting the app: reading CSV, JSON and NDJSON, choosing the format,
 // turning CSV text into the values a field's schema takes, planning columns, and the report.
-import { entitySpec, ImportOptions } from '@hykr/contracts';
+import { entitySpec, ImportOptions, notImportable } from '@hykr/contracts';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { importsConfig } from '../../dist/features/imports/config.js';
@@ -186,6 +186,21 @@ describe('columns to fields', () => {
     });
     expect(() => o({ source: 'Old CRM' })).toThrow();
     expect(() => o({ entity: 'Widget!' } as never)).toThrow();
+  });
+
+  it('an entity that opted out, has a parent, or that people cannot write is not imported', () => {
+    expect(notImportable(spec)).toBeUndefined();
+    const like = (more: object) => ({ ...spec, ...more }) as typeof spec;
+    expect(notImportable(like({ traits: { imports: false } }))).toMatch(/not imported/);
+    expect(notImportable(like({ traits: { parent: { entity: 'box', field: 'boxId' } } }))).toMatch(
+      /saved with their box/,
+    );
+    expect(notImportable(like({ expose: { ...spec.expose, create: 'internal' } }))).toMatch(
+      /server only/,
+    );
+    expect(notImportable(like({ expose: { ...spec.expose, update: 'internal' } }))).toMatch(
+      /server only/,
+    );
   });
 });
 

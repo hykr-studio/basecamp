@@ -37,3 +37,9 @@ export const items = app.table('fixture_shelves_items', {
   done: boolean('done').notNull().default(false),
   tags: text('tags').array(),
 });
+
+/** Bins: never imported (`traits.imports: false`). */
+export const bins = app.table('fixture_shelves_bins', {
+  ...common(),
+  title: text('title').notNull(),
+});

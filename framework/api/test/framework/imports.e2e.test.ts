@@ -351,9 +351,15 @@ describe('a file that cannot be imported fails before anything is written', () =
     expect((await importText(owner, 'item', 'id,title\n1,"open\n')).error.code).toBe('unreadable');
   });
 
-  it('an entity that is not here, or a column mapped to no field', async () => {
+  it('an entity that is not here, opted out, or a column mapped to no field', async () => {
     const { id } = await upload(owner, 'id,title\n');
     expect((await start(owner, { entity: 'nothing', file: id })).status).toBe(404);
+    const bins = await start(owner, { entity: 'bin', file: id });
+    expect(bins.status).toBe(400);
+    expect(bins.body).toMatchObject({
+      error: 'not_importable',
+      message: 'bin records are not imported from files',
+    });
     const bad = await start(owner, { entity: 'item', file: id, columns: { Name: 'colour' } });
     expect(bad.status).toBe(400);
     expect(bad.body.error).toBe('unknown_field');

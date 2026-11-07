@@ -1,4 +1,5 @@
 // The imports feature in use (B20): a `shelves` module with shelves and items an import fills.
+// - A bin's spec opts out of imports (`traits.imports: false`).
 // - An item names its shelf (`shelfId`): an import gives the shelf's key with `refs`.
 // - An item's `cost` is read and written only with `fixture.items.cost` (owners).
 // - An item's `done` is in its update schema only: an import sets it after the create.
@@ -28,7 +29,7 @@ import type { Access } from '@hykr/policy';
 import { Module } from '@nestjs/common';
 import { z } from 'zod';
 import { fixture } from '../../index.js';
-import { items, shelves } from './schema.js';
+import { bins, items, shelves } from './schema.js';
 
 const label = (en: string) => ({ en, hi: en, te: en });
 const title = z.string().min(1).max(200);
@@ -132,6 +133,25 @@ export const ItemSpec = entitySpec({
   traits: { fieldPolicy: { cost: ItemCost.name } },
 });
 
+/** Bins: their spec opts out of imports. */
+export const BinSpec = entitySpec({
+  name: 'bin',
+  label: 'bin',
+  description: 'Bins: a title. Never imported from a file.',
+  schemas: {
+    read: z.object({ id: z.string(), title, createdBy: CreatedBy, createdAt: z.iso.datetime() }),
+    create: z.object({ title }),
+    update: z.object({ title: title.optional() }),
+  },
+  list: {
+    filterable: {},
+    sortable: ['createdAt'],
+    defaultSort: [['createdAt', 'asc']],
+    pageSize: { default: 50, max: 200 },
+  },
+  traits: { imports: false },
+});
+
 /** A rule on titles: "Refused…" is refused, "Wait…" waits for an approval. */
 const titleRule = (
   _p: unknown,
@@ -154,6 +174,13 @@ export const ShelfDef = defineEntity(ShelfSpec, {
   access: ACCESS,
 });
 
+export const BinDef = defineEntity(BinSpec, {
+  table: bins,
+  owner: (t) => t.ownerId,
+  customer: (t) => t.customerId,
+  access: ACCESS,
+});
+
 export const ItemDef = defineEntity(ItemSpec, {
   table: items,
   owner: (t) => t.ownerId,
@@ -163,8 +190,8 @@ export const ItemDef = defineEntity(ItemSpec, {
 });
 
 @Module({
-  controllers: [entityController(ShelfDef), entityController(ItemDef)],
-  providers: [...entityHandlers(ShelfDef), ...entityHandlers(ItemDef)],
+  controllers: [entityController(ShelfDef), entityController(ItemDef), entityController(BinDef)],
+  providers: [...entityHandlers(ShelfDef), ...entityHandlers(ItemDef), ...entityHandlers(BinDef)],
 })
 export class ShelvesModule {}
 
@@ -172,11 +199,11 @@ export const shelvesModule = defineModule({
   ...moduleSpec({
     name: 'shelves',
     dependsOn: [],
-    entities: { shelves: ShelfSpec, items: ItemSpec },
+    entities: { shelves: ShelfSpec, items: ItemSpec, bins: BinSpec },
     commands: [],
   }),
   server: ShelvesModule,
-  tables: { shelves, items },
+  tables: { shelves, items, bins },
 });
 
 /** An importer's imports wait for someone who decides approvals; owners and admins do not. */
