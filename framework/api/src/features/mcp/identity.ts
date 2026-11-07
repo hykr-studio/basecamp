@@ -5,7 +5,7 @@ import { type AgentIdentityProvider, RUN_ID } from '@hykr/core';
 import { UnauthorizedException } from '@nestjs/common';
 import { sharedDb } from '../../infra/db.js';
 import { mcpConfig } from './config.js';
-import { isAccessToken, verifyAccessToken } from './tokens.js';
+import { isAccessToken, type McpGrant, verifyAccessToken } from './tokens.js';
 
 /** The agent id an MCP client is audited as. */
 export const mcpAgentId = (clientId: string) => `mcp:${clientId}`;
@@ -18,6 +18,23 @@ export function bearerOf(headers: Record<string, unknown>): string | undefined {
   return m?.[1];
 }
 
+const checked = new WeakMap<object, { token: string; grant: Promise<McpGrant | null> }>();
+
+/**
+ * The grant behind a request's MCP access token, or null (none, not ours, or not valid). Checked
+ * once per request: the throttle, PrincipalGuard and the MCP endpoint all ask, with the same
+ * request's headers.
+ */
+export function grantOf(headers: Readonly<Record<string, unknown>>): Promise<McpGrant | null> {
+  const token = bearerOf(headers);
+  if (!token || !isAccessToken(token)) return Promise.resolve(null);
+  const seen = checked.get(headers);
+  if (seen?.token === token) return seen.grant;
+  const grant = verifyAccessToken(sharedDb.db, token, mcpConfig().resource);
+  checked.set(headers, { token, grant });
+  return grant;
+}
+
 /** What the client says it is, short enough for an audit row. */
 const versionOf = (name: string) => name.replace(/\s+/g, ' ').trim().slice(0, 64);
 
@@ -27,7 +44,7 @@ export const mcpIdentityProvider: AgentIdentityProvider = {
     const token = bearerOf(req.headers);
     // Not an MCP access token (no bearer, or another provider's): the next provider is asked.
     if (!token || !isAccessToken(token)) return null;
-    const grant = await verifyAccessToken(sharedDb.db, token, mcpConfig().resource);
+    const grant = await grantOf(req.headers);
     if (!grant) throw new UnauthorizedException('mcp: the token is not valid');
     // The MCP server names each tool call's run; a direct call gets one from the guard.
     const runId = req.headers['x-run-id'];

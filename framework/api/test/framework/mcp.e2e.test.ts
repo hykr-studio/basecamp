@@ -618,3 +618,33 @@ describe('credits', () => {
     });
   });
 });
+
+describe('throttling', () => {
+  it('counts each client for its person and business, never every MCP call as one address', async () => {
+    const anas = await connectMcp(ana, 'tasks:read');
+    const bos = await connectMcp(bo, 'tasks:read');
+    const asAna = withToken(anas.accessToken);
+    // On for this test only (the suite runs with THROTTLE=off): 120 calls a minute per route.
+    process.env.THROTTLE = 'on';
+    try {
+      const statuses: number[] = [];
+      for (let i = 0; i < 121; i++)
+        statuses.push((await asAna('GET', '/api/tasks?limit=1')).status);
+      expect(statuses.slice(0, 120).every((s) => s === 200)).toBe(true);
+      expect(statuses[120]).toBe(429);
+      // Another business's client, its tools, and the person in the app are not held back:
+      // every MCP call reaches the API from this process, so one bucket per address would be.
+      expect((await withToken(bos.accessToken)('GET', '/api/tasks?limit=1')).status).toBe(200);
+      expect((await bos.call('tasks_read', { entity: 'tasks' })).isError).toBe(false);
+      expect((await ana.call('GET', '/api/tasks?limit=1')).status).toBe(200);
+      // Ana's own client stays limited, through its tools too.
+      const held = await anas.call('tasks_read', { entity: 'tasks' });
+      expect(held.isError).toBe(true);
+      expect(held.text).toContain('429');
+    } finally {
+      process.env.THROTTLE = 'off';
+      await anas.close();
+      await bos.close();
+    }
+  });
+});

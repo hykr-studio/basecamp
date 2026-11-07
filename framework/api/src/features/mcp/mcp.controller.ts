@@ -15,13 +15,11 @@ import {
 import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 import type { Request, Response } from 'express';
 import { getAuth } from '../../infra/auth.js';
-import { sharedDb } from '../../infra/db.js';
 import { runtime } from '../../runtime.js';
 import { MCP_PATH, mcpConfig, resourceMetadataUrl } from './config.js';
-import { bearerOf } from './identity.js';
+import { bearerOf, grantOf } from './identity.js';
 import { mcpScopes } from './oauth.js';
 import { type McpAuthInfo, McpServers } from './server.js';
-import { verifyAccessToken } from './tokens.js';
 
 /** The challenge a client without a valid token gets: where to learn how to sign in. */
 function challenge(res: Response, error?: 'invalid_token') {
@@ -49,7 +47,7 @@ export class McpController {
     const c = mcpConfig();
     const token = bearerOf(req.headers);
     if (!token) return challenge(res);
-    const grant = await verifyAccessToken(sharedDb.db, token, c.resource);
+    const grant = await grantOf(req.headers);
     if (!grant) return challenge(res, 'invalid_token');
     // Still a member of the business the token acts in (the API checks it again on every call).
     try {
