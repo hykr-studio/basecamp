@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { priceOf as modelPrice, type TokenUsage } from '@hykr/agents';
+import { priceOf as modelPrice, setModelUsageSink, type TokenUsage } from '@hykr/agents';
 import {
   type CreditPurchase,
   CreditsManageCapability,
@@ -115,6 +115,14 @@ const UNAVAILABLE: UsageRefusal = {
 
 const reasonOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** A tokens use's input and output: as reported, or all of it input (an embedding has no output). */
+function splitOf(use: UsageInput): TokenUsage {
+  const t = use.tokens;
+  return t && (t.inputTokens ?? 0) + (t.outputTokens ?? 0) > 0
+    ? { inputTokens: t.inputTokens ?? 0, outputTokens: t.outputTokens ?? 0 }
+    : { inputTokens: use.quantity, outputTokens: 0 };
+}
+
 /**
  * Credits and caps for every business: it meters what each one uses (the channels report through
  * the `Metering` slot, the turn hook through `turnHook`), prices it, debits the wallet past the
@@ -182,6 +190,20 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
     for (const [name, factory] of Object.entries(CREDIT_OPS)) registerOp(name, factory, OWNER);
     setMetering(this);
     setCredits(this);
+    // The model calls a turn makes besides its reply (the guardrail's), for the turn's business.
+    setModelUsageSink((u) =>
+      this.record({
+        tenantId: u.tenantId,
+        meter: FrameworkMeters.tokens.name,
+        quantity: u.inputTokens + u.outputTokens,
+        variant: u.model,
+        tokens: { inputTokens: u.inputTokens, outputTokens: u.outputTokens },
+        subject: u.subject ?? null,
+        runId: u.runId ?? null,
+        channel: u.channel ?? null,
+        source: u.source,
+      }),
+    );
     log.log(
       `Credits: ${config.currency ?? 'no currency (metered at no cost)'}; ${
         config.defaults.enforce
@@ -206,6 +228,7 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
     this.subscription?.unsubscribe();
     setMetering(undefined);
     setCredits(undefined);
+    setModelUsageSink(undefined);
   }
 
   /* ── Plans and assessments ───────────────────────────────────────────── */
@@ -404,10 +427,12 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
         const def = this.meter(use.meter) as MeterDef;
         const cost =
           use.cost ??
-          (() => {
-            const price = priceFor(plan.prices, def.name, use.variant);
-            return price === undefined ? 0 : creditsFor(price, use.quantity, def.per);
-          })();
+          (def.name === FrameworkMeters.tokens.name
+            ? this.tokenCost(plan, use.variant ?? undefined, splitOf(use))
+            : (() => {
+                const price = priceFor(plan.prices, def.name, use.variant);
+                return price === undefined ? 0 : creditsFor(price, use.quantity, def.per);
+              })());
         const [row] = await tx
           .insert(usageEvents)
           .values({
@@ -699,6 +724,7 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       .where(and(eq(creditPurchases.id, id), eq(creditPurchases.status, 'requested')))
       .returning();
     if (!row) return;
+    const of = { tenantId: row.tenantId, provider: row.provider, purchaseId: row.id };
     const provider = creditPurchaseProviders.get(row.provider);
     let started: Awaited<ReturnType<NonNullable<typeof provider>['start']>>;
     try {
@@ -714,7 +740,7 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       });
     } catch (e) {
       log.error(`purchase ${id}: ${reasonOf(e)}`);
-      await this.settlePurchase(id, { status: 'failed', reason: reasonOf(e).slice(0, 500) });
+      await this.settlePurchase(of, { status: 'failed', reason: reasonOf(e).slice(0, 500) });
       return;
     }
     await this.db
@@ -725,7 +751,7 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       })
       .where(eq(creditPurchases.id, id));
     if (started.status)
-      await this.settlePurchase(id, {
+      await this.settlePurchase(of, {
         status: started.status,
         ...(started.ref ? { ref: started.ref } : {}),
         ...(started.reason ? { reason: started.reason } : {}),
@@ -735,13 +761,21 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
   /**
    * A purchase's outcome, from its provider (a connector's verified webhook calls this): paid
    * tops the wallet up, failed does not. Through runWrite as the provider (system), audited.
-   * Settling one that is settled already returns it as it is.
+   * The purchase must be this business's and made with this provider: a webhook that came in on
+   * one business's connection never settles another's (404, as if it did not exist). Settling one
+   * that is settled already returns it as it is.
    */
   async settlePurchase(
-    id: string,
+    of: { tenantId: string; provider: string; purchaseId: string },
     outcome: { status: 'paid' | 'failed'; ref?: string; reason?: string },
   ): Promise<CreditPurchase> {
-    const [row] = await this.db.select().from(creditPurchases).where(eq(creditPurchases.id, id));
+    const id = of.purchaseId;
+    const mine = and(
+      eq(creditPurchases.id, id),
+      eq(creditPurchases.tenantId, of.tenantId),
+      eq(creditPurchases.provider, of.provider),
+    );
+    const [row] = await this.db.select().from(creditPurchases).where(mine);
     if (!row) throw new NotFoundException({ error: 'not_found', message: 'No such purchase' });
     if (row.status === 'paid' || row.status === 'failed') return toPurchase(row);
     try {
@@ -759,7 +793,7 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       // Settled by someone else in between: it is as they left it.
       if (!(e instanceof ConflictException)) throw e;
     }
-    const [after] = await this.db.select().from(creditPurchases).where(eq(creditPurchases.id, id));
+    const [after] = await this.db.select().from(creditPurchases).where(mine);
     return toPurchase(after);
   }
 }
