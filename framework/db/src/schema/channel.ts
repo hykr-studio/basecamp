@@ -210,7 +210,10 @@ export const handoffs = channel.table(
   ],
 );
 
-/** A one-time code sent to a number to link it to an account (login_code_v1). */
+/**
+ * Linking codes before `OtpService` (decisions B8, 12): unused now that they live in
+ * `channel.otp_challenges` (purpose `channel.link`); kept until a migration may drop it.
+ */
 export const linkCodes = channel.table('link_codes', {
   id: id(),
   userId: text('user_id')
