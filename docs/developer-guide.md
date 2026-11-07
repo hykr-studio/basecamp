@@ -1731,7 +1731,8 @@ the application's.
   as route `scopes`. Every audit row carries the run id and `agent:<id>@<model>#<hash>`.
 - **Waiting.** A write that waits for approval suspends the run (section 5.8.3); the owner decides
   it, and the run goes on in the agent's thread (`threads.kind: 'agent'`, never the person's
-  conversation).
+  conversation). It is `running` while it resumes and `waiting` again while another of its
+  approvals is pending.
 - **Budgets and guards.** `budget: { period, runs?, tokens?, credits?, maxSteps }`: at 100% a run is
   refused (`agent_budget_exhausted`). An agent's own events never start it again, a chain of agents
   stops at depth 3, and an agent has at most 10 runs open.
@@ -1741,7 +1742,9 @@ the application's.
   /api/agents/:agentId/run` (`run-agent`), with an optional `note` the run gets as data: only the
   owner's (403 `agent_note_owner_only` for a manager), since the run acts with the owner's rights.
 - **Editing** keeps each unchanged trigger's row (its id, when it fires next, a condition's records
-  seen), compared key by key: a rename, a pause or a resume fires nothing again.
+  seen), compared key by key and wherever it moved: a rename, a pause, a resume, a new order or a
+  removal fires nothing again. A past time is refused only for a `once` the edit adds or changes,
+  so an agent whose time fired can still be edited.
 - **Templates** are the application's: `defineAgentTemplate({ key, name, description,
   instructions, triggers, scope, budget })`, contributed as `agentTemplates`, listed at `GET
   /api/agent-templates` (with the tools an agent may use here). The sample's meetings module offers
