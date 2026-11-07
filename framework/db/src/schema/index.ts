@@ -4,6 +4,7 @@ export * from './auth.js';
 export * from './channel.js';
 export * from './events.js';
 export * from './files.js';
+export * from './integrations.js';
 export * from './numbering.js';
 export * from './push.js';
 export * from './tenancy.js';

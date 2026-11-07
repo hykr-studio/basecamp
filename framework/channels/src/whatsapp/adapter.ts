@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { verifyHmac } from '@hykr/connectors';
 import type {
   ChannelAdapter,
   InboundMessage,
@@ -212,13 +212,14 @@ export function createWhatsAppAdapter(cfg: WhatsAppConfig): ChannelAdapter {
       media: true,
     },
 
+    // HMAC-SHA256 of the exact bytes received, hex after 'sha256=', compared in constant time.
     verify(rawBody, headers) {
-      const header = headers['x-hub-signature-256'];
-      const signature = Array.isArray(header) ? header[0] : header;
-      if (!cfg.appSecret || !signature?.startsWith('sha256=')) return false;
-      const expected = createHmac('sha256', cfg.appSecret).update(rawBody).digest();
-      const given = Buffer.from(signature.slice('sha256='.length), 'hex');
-      return given.length === expected.length && timingSafeEqual(given, expected);
+      return verifyHmac({
+        secret: cfg.appSecret,
+        payload: rawBody,
+        signature: headers['x-hub-signature-256'],
+        prefix: 'sha256=',
+      });
     },
 
     parse(body) {
