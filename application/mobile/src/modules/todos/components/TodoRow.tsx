@@ -110,8 +110,12 @@ export function TodoRow({
   const undo = useUndo();
   const toggle = () => {
     const done = !todo.done;
-    // A failed write shows no Undo to act on: it resolves to nothing.
-    const result = update.mutateAsync({ id: todo.id, patch: { done } }).catch(() => undefined);
+    // A refused write says why (a conflict, a rule) in place of the toast below, and leaves no
+    // Undo to act on: it resolves to nothing.
+    const result = update.mutateAsync({ id: todo.id, patch: { done } }).catch((e: unknown) => {
+      toast.show({ tone: 'error', message: errorMessage(e) });
+      return undefined;
+    });
     // Shown now, not on success: ticking can remove this row (and its callbacks) from the list.
     // Undo writes without the row's hooks for the same reason: the server's undo when the write
     // came back with one (the to-do's approval level gives it a window), else the reverse write
