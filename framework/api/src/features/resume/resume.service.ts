@@ -70,11 +70,19 @@ export class RunBusy extends Error {
   }
 }
 
-/** A thread changed outside a turn (a run went on): live updates tell its owner to reload it. */
+/** How a run went on: it ran (and may wait again), a turn hook refused it, or it failed. */
+export type ContinuedOutcome = 'resumed' | 'refused' | 'failed';
+
+/**
+ * A thread changed outside a turn (a run went on): live updates tell its owner to reload it, and
+ * the agents feature closes the run in its log (A6).
+ */
 class ThreadContinued implements NamedEvent {
   readonly eventName = 'thread.continued';
   readonly resourceType = 'thread';
-  constructor(readonly row: { id: string; messageId: string; runId: string }) {}
+  constructor(
+    readonly row: { id: string; messageId: string; runId: string; outcome: ContinuedOutcome },
+  ) {}
 }
 
 /** Is the subject the one who asked for this approval? */
@@ -230,7 +238,7 @@ export class ResumeService implements OnApplicationShutdown {
       if (!(e instanceof TurnRefused)) throw e;
       const { say, reason } = e.refusal;
       const text = say ? pick(say, lang) : t(lang, 'run.couldNotContinue', { reason });
-      await this.say(p, thread, runId, lang, { reply: text, results: [] });
+      await this.say(p, thread, runId, lang, { reply: text, results: [] }, 'refused');
       return `refused: ${e.refusal.rule}`;
     }
 
@@ -250,6 +258,8 @@ export class ResumeService implements OnApplicationShutdown {
     requestContext.set('surfaces', surfaces);
     if (ctx.screen) requestContext.set('screen', ctx.screen);
     if (ctx.record) requestContext.set('record', ctx.record);
+    // A business's agent (A6): its tools carry on with the run's token, not the assistant's key.
+    if (ctx.agent) requestContext.set('agent', ctx.agent);
     if (shape.context.length) requestContext.set('turnContext', shape.context);
     if (shape.model) requestContext.set('model', shape.model);
     if (shape.withoutTools.length) requestContext.set('withoutTools', shape.withoutTools);
@@ -276,7 +286,9 @@ export class ResumeService implements OnApplicationShutdown {
       await this.stored(runId, row.id);
     } catch (e) {
       log.warn(`run=${runId} resume failed: ${e instanceof Error ? e.message : e}`);
-      await this.say(p, thread, runId, lang, { reply: INTERRUPTED, results: [] }).catch(() => {});
+      await this.say(p, thread, runId, lang, { reply: INTERRUPTED, results: [] }, 'failed').catch(
+        () => {},
+      );
       await afterTurn(info, { text: INTERRUPTED, toolCalls: [], interrupted: true });
       return 'failed';
     }
@@ -301,7 +313,7 @@ export class ResumeService implements OnApplicationShutdown {
       return 'still waiting';
     }
     const reply = text.trim() || decidedLine(lang, decision);
-    await this.say(p, thread, runId, lang, { reply, results });
+    await this.say(p, thread, runId, lang, { reply, results }, 'resumed');
     await afterTurn(info, { ...outcome, text: reply });
     log.log(
       `run=${runId} resumed after approval=${row.id} (${row.status}) tools=[${outcome.toolCalls.join(',')}] ${Date.now() - started}ms`,
@@ -385,6 +397,7 @@ export class ResumeService implements OnApplicationShutdown {
     runId: string,
     lang: Lang,
     turn: { reply: string; results: unknown[] },
+    outcome: ContinuedOutcome,
   ) {
     const saved = await this.threads.append({
       threadId: thread.threadId,
@@ -399,7 +412,7 @@ export class ResumeService implements OnApplicationShutdown {
       recordEvents(tx, {
         principal: p,
         requestId: `resume:${runId}`,
-        events: [new ThreadContinued({ id: thread.threadId, messageId: saved.id, runId })],
+        events: [new ThreadContinued({ id: thread.threadId, messageId: saved.id, runId, outcome })],
       }),
     );
     if (thread.channel === 'whatsapp')

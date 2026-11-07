@@ -42,6 +42,8 @@ describe('script sets', () => {
       'comments-list',
       'comments-add',
       'comments-mentionable',
+      'agents-create',
+      'agents-run',
       'remember',
       'recall',
       'apply-transition',

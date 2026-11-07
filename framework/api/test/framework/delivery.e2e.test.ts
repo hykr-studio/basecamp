@@ -311,12 +311,14 @@ describe('personal data contributors', () => {
       `select after from audit.events where action = 'channel.contact.erased' and resource_id = $1`,
       [contactId],
     );
-    // The framework's own (comments, files, inbox, jobs, memory, parties, push) run too: a
-    // contact has no comments, files, inbox items, jobs, memories, party memberships or devices.
+    // The framework's own (agents, comments, files, inbox, jobs, memory, parties, push) run too:
+    // a contact has no agents, comments, files, inbox items, jobs, memories, party memberships or
+    // devices.
     expect(rows).toEqual([
       {
         after: {
           contributors: {
+            agents: 0,
             comments: 0,
             files: 0,
             inbox: 0,

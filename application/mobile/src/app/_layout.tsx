@@ -1,6 +1,7 @@
 import '../../global.css';
 import {
   AppShell,
+  agentsPlugin,
   businessesPlugin,
   calendarPlugin,
   connectionsPlugin,
@@ -33,9 +34,10 @@ const config = {
  * `webmcp`, offered to the browser's agent where the browser supports it), the business's
  * credits (usage, the pause, buying more: `/credits`), the person's calendars (connect Google,
  * feed links: `/calendar`), the in-app inbox (mentions in comments), exporting the business's
- * data (`/export`, for people who may: owners, unless the business grants it to another role)
- * and the AI apps a person connected over MCP (`/connections`). The switcher goes first:
- * switching starts everything after it again in the other business.
+ * data (`/export`, for people who may: owners, unless the business grants it to another role),
+ * the AI apps a person connected over MCP (`/connections`) and the business's agents (`/agents`:
+ * the meetings module's ready-made ones among them). The switcher goes first: switching starts
+ * everything after it again in the other business.
  */
 const plugins = [
   businessesPlugin,
@@ -48,6 +50,7 @@ const plugins = [
   inboxPlugin(),
   exportPlugin,
   connectionsPlugin,
+  agentsPlugin(),
 ];
 
 export default function RootLayout() {

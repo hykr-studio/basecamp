@@ -5,6 +5,7 @@ import {
   defineScript,
   items,
   plural,
+  runData,
   sameTitle,
   say,
   startOfDay,
@@ -24,6 +25,12 @@ import {
  *                                   without a canvas, the three lists, then one line
  *   only overdue                    canvas-patch on the page's to-do block; without one, list-todos
  *
+ * And the runs of the module's agent templates (templates.ts); a run's message starts with the
+ * agent's instructions, and what started it follows as data:
+ *   Summarize my open to-dos.        list-todos → "N open to-dos:" and each
+ *   Draft a follow-up note for the meeting that closed.
+ *                                    list-todos of the meeting → create-note "Follow-up: <title>"
+ *
  * It runs after the to-dos module's scripts (module order), so "add …", "list", "done …" and
  * "delete …" are theirs.
  */
@@ -42,7 +49,66 @@ const closeCall = (meetingId: string, intent: { summary: string; items: string[]
     actionItems: intent.items.map((title) => ({ title })),
   });
 
+type ClosedMeeting = { record?: { id?: string; title?: string } };
+
 export const meetingsScripts = [
+  defineScript({
+    name: 'agent-weekly-todos',
+    match: (text) => (/^summarize my open to-dos\.?$/i.test(first(text)) ? true : undefined),
+    step: (_, turn) => {
+      const r = turn.result('list-todos');
+      if (!r) return [call('list-todos', { done: false, sort: 'dueOn' })];
+      if (!r.ok) return [say("I couldn't read the to-dos.")];
+      const todos = items(r);
+      if (!todos.length) return [say('No open to-dos this week.')];
+      return [
+        say(
+          [
+            `${plural(todos.length, 'open to-do')}:`,
+            ...todos.map((t) => `- ${t.title}${dueText(t.dueOn)}`),
+          ].join('\n'),
+        ),
+      ];
+    },
+  }),
+  defineScript({
+    name: 'agent-follow-up',
+    match: (text) =>
+      /^draft a follow-up note for the meeting that closed\.?$/i.test(first(text))
+        ? text
+        : undefined,
+    step: (text, turn) => {
+      const meeting = (runData(text) as ClosedMeeting | undefined)?.record;
+      if (!meeting?.id) return [say('No meeting in what started this run.')];
+      const todos = turn.result('list-todos');
+      if (!todos)
+        return [call('list-todos', { meetingId: meeting.id, done: false, sort: 'title' })];
+      const open = items(todos);
+      const note = turn.result('create-note');
+      if (!note)
+        return [
+          call('create-note', {
+            title: `Follow-up: ${meeting.title}`,
+            body: [
+              `Follow-up for ${meeting.title}.`,
+              ...(open.length
+                ? ['', '## Open to-dos', ...open.map((t) => `- ${t.title}${dueText(t.dueOn)}`)]
+                : ['', 'Nothing is left open.']),
+            ].join('\n'),
+            meetingId: meeting.id,
+          }),
+        ];
+      return [
+        say(
+          written(
+            note,
+            () => `Drafted a follow-up for ${meeting.title}: ${plural(open.length, 'open to-do')}.`,
+            turn,
+          ),
+        ),
+      ];
+    },
+  }),
   defineScript({
     name: 'today',
     match: (text) => (/^today$/i.test(first(text)) ? true : undefined),

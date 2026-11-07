@@ -13,6 +13,11 @@ import {
   type AddGrantInput,
   type AddParticipantInput,
   type AddPartyMemberInput,
+  type AgentRunDetail,
+  type AgentRunPage,
+  type AgentRunsQuery,
+  AgentSpec,
+  type AgentTemplates,
   type Approval,
   type BusinessRoles,
   type BusyTimes,
@@ -90,6 +95,7 @@ import {
   type RenderDocumentInput,
   RenderDocumentSpec,
   type RoleView,
+  RunAgentSpec,
   SendDocumentSpec,
   type SendInviteInput,
   SendInviteSpec,
@@ -319,6 +325,29 @@ export function createApiClient(opts: ApiClientOptions) {
     remove: (commentId: string, key?: string) => command(RemoveCommentSpec, { commentId }, key),
   };
 
+  /**
+   * The business's agents (A6): the definitions are an entity (`agents.list`, `.create`, …); their
+   * runs are in the run log, the owner's and the managers'.
+   */
+  const agents = {
+    ...entity(AgentSpec),
+    /** Run one now; its run is queued (see `runs`). Only the agent's owner may add a note. */
+    runNow: (agentId: string, note?: string, key = newKey()) =>
+      command(RunAgentSpec, { agentId, ...(note ? { note } : {}) }, key) as Promise<
+        WriteResult<{ id: string; agentId: string; status: 'queued' }>
+      >,
+    /** The run log, newest first: one agent's, or every one the caller may see. */
+    runs: (q: AgentRunsQuery = {}) => call<AgentRunPage>('GET', `/api/agent-runs${query(q)}`),
+    /** One run, with what it said and did. */
+    run: (id: string) => call<AgentRunDetail>('GET', `/api/agent-runs/${encodeURIComponent(id)}`),
+    /** The application's ready-made agents in this language, and the tools an agent may use. */
+    templates: (lang?: string) =>
+      call<AgentTemplates>(
+        'GET',
+        `/api/agent-templates${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`,
+      ),
+  };
+
   /** The signed-in person's in-app inbox, in their business (people only). */
   const inbox = {
     list: (q: { unread?: boolean; cursor?: string; limit?: number } = {}) =>
@@ -495,6 +524,8 @@ export function createApiClient(opts: ApiClientOptions) {
     comments,
     /** The signed-in person's in-app inbox. */
     inbox,
+    /** The business's agents and their run log. */
+    agents,
     /**
      * Who is signed in, in which business (as a member or a participant), with which roles, and
      * every business they are in. Send `x-tenant-id` (the client's `headers`) to work in another.

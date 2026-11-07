@@ -16,6 +16,8 @@ export type RunContext = {
   surfaces?: Surface[];
   screen?: string;
   record?: { type: string; id: string };
+  /** The business's agent this run is (A6): its tools then call the API with the run's token. */
+  agent?: string;
 };
 
 /** What every generated tool returns (see `safely`): what the model and the channels read. */
@@ -92,6 +94,7 @@ export function runContextOf(rc: RequestContextLike): RunContext {
     ...pick('lang'),
     ...pick('timeZone'),
     ...pick('screen'),
+    ...pick('agent'),
     ...(Array.isArray(surfaces) ? { surfaces: surfaces as Surface[] } : {}),
     ...(record && typeof record.type === 'string' && typeof record.id === 'string'
       ? { record: { type: record.type, id: record.id } }

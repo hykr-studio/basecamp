@@ -64,6 +64,7 @@
     "ai": "7.0.128",
     "better-auth": "^1.7.7",
     "bullmq": "^6.3.11",
+    "croner": "^10.0.1",
     "drizzle-orm": "^0.45.3",
     "expo-server-sdk": "^8.0.0",
     "harfbuzzjs": "^1.6.4",

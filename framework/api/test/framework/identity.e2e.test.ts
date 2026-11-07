@@ -87,6 +87,8 @@ describe('roles and capabilities', () => {
       roles: ['owner'],
       capabilities: [
         'acceptances.evidence',
+        'agents.create',
+        'agents.manage',
         'approvals.decide',
         'backoffice.use',
         'calendar.availability.read',

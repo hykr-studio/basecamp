@@ -111,9 +111,10 @@ export const deliveryChannels = createHookRegistry<DeliveryChannel>('delivery ch
 export interface TurnInfo {
   /**
    * 'draft': a reply for staff to edit (no tools, nothing saved). 'resume': a run that waited for
-   * an approval goes on (durable runs), in its thread, after the decision.
+   * an approval goes on (durable runs), in its thread, after the decision. 'agent': a run of one of
+   * the business's agents (A6), started by its trigger, in the agent's thread.
    */
-  kind: 'chat' | 'draft' | 'resume';
+  kind: 'chat' | 'draft' | 'resume' | 'agent';
   principal: Principal;
   runId: string;
   /** The thread it continues; none for a draft. */

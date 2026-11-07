@@ -233,6 +233,13 @@ export interface AgentIdentity {
   agentVersion?: string;
   /** What the credential is limited to. It never adds to what the person may do. */
   scopes?: readonly string[];
+  /**
+   * Limits the credential's own feature enforces (an agent run's scope, through its write hook and
+   * interceptor). They are carried on the principal's `scopes` but, unlike `scopes`, never checked
+   * against what a route needs: a credential with only these is not a scoped one. Like `scopes`,
+   * they never add to what the person may do.
+   */
+  narrowing?: readonly string[];
   /** May start a chat turn for the person it acts for (POST /api/chat). */
   relay?: boolean;
 }

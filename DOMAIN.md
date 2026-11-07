@@ -159,6 +159,13 @@ refusal). A module's scripts for the scripted model handle that with `decided(ou
 `written(...)` from `@hykr/agents/script`; the sample's meetings close, once approved, lists what is
 left to follow up (developer guide, section 5.8.3).
 
+A business's people also make their own agents: a job in plain words, with triggers, the tools it
+may use and a budget, run for the person who made it (developer guide, section 5.26). Which agents
+are offered ready-made is the module's: it contributes templates (`defineAgentTemplate`, as
+`agentTemplates`) and the scripted model's scripts for their runs (`runData(text)` reads what started
+one). The sample's meetings module offers a Monday summary of open to-dos and a follow-up note when a
+meeting closes (`application/domain/src/modules/meetings/agent/templates.ts`).
+
 ## What a business sets up for itself
 
 The framework's `settings` feature (developer guide, section 5.18) gives every business its own
@@ -420,8 +427,13 @@ From the contracts declaration alone:
 - Durable runs: an assistant run whose write waits for approval is suspended and stored (Mastra,
   in the `mastra` schema), and resumed in the worker when the request is decided, in the same
   thread and under the same run id (the `resume` feature, developer guide section 5.8.3).
+- Agents a business makes (`/api/agents`, `/api/agent-runs`, `app.agents`, `app.agent_runs`):
+  definitions with triggers (once, a schedule, an event, a condition, a WhatsApp message, an
+  @-mention, a webhook), a scope of tools and a budget; runs in the worker that act for their owner
+  with a run token and never beyond them; a run log; `agentsPlugin()` and the back office's Agents
+  screen (developer guide, section 5.26). The application offers templates.
 - The streaming chat, and the scripted model's platform scripts (`save this as …`,
-  `open my … page`, `talk to the manager`, the back office's draft reply).
+  `open my … page`, `talk to the manager`, `create an agent to …`, the back office's draft reply).
 - The models the assistant runs on: the deployment's OpenAI-compatible gateways (`MODEL_PROVIDERS`,
   OpenRouter in development) and each business's model policy (`GET /api/models`,
   `PUT /api/models/policy`), which picks every turn's model and fails closed (developer guide,
