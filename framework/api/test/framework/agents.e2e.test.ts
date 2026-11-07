@@ -435,6 +435,16 @@ describe('a run', () => {
     const second = await settled(ana, await runNow(ana, once.id));
     expect(second).toMatchObject({ status: 'refused' });
     expect(second.reason).toMatch(/^agent_budget_exhausted: This agent has used 1 of its 1 runs/);
+    // Tokens too: the scripted model reports what each run used.
+    const thrifty = await agent(ana, {
+      name: 'Thrifty',
+      instructions: 'Count my open tasks.',
+      scope: { tools: ['list-tasks'] },
+      budget: { period: 'month', tokens: 1 },
+    });
+    expect((await settled(ana, await runNow(ana, thrifty.id))).status).toBe('done');
+    const over = await settled(ana, await runNow(ana, thrifty.id));
+    expect(over.reason).toMatch(/^agent_budget_exhausted: This agent has used \d+ of its 1 tokens/);
     await ana.call('PATCH', `/api/agents/${once.id}`, { status: 'paused' }, inA());
     const paused = await ana.call('POST', `/api/agents/${once.id}/run`, {}, inA());
     expect(paused).toMatchObject({ status: 403, body: { rule: 'agent_paused' } });
