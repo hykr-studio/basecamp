@@ -88,6 +88,8 @@ describe('roles and capabilities', () => {
       capabilities: [
         'approvals.decide',
         'backoffice.use',
+        'calendar.availability.read',
+        'calls.read_all',
         'channels.manage',
         'credits.manage',
         'credits.view',
@@ -106,6 +108,7 @@ describe('roles and capabilities', () => {
     expect((await inAna(ops)('GET', '/api/me')).body.capabilities).toEqual([
       'approvals.decide',
       'backoffice.use',
+      'calendar.availability.read',
       'credits.view',
       'customers.message',
       'history.all',

@@ -15,7 +15,6 @@ import {
   type GoogleTransport,
 } from '@hykr/connectors/google-calendar';
 import { ServiceUnavailableException } from '@nestjs/common';
-import { config } from '../../config.js';
 
 export type GoogleMode = 'live' | 'fake';
 
@@ -30,6 +29,12 @@ export interface GoogleSettings {
 
 const trimmed = (v: string | undefined) => (v ?? '').trim();
 const noSlash = (v: string) => v.replace(/\/+$/, '');
+
+// Read from the environment, not `config`: the server's public entry imports this file, and
+// `config` is fixed when first imported (a test sets the environment before it boots the app).
+const authUrl = (env: NodeJS.ProcessEnv) =>
+  noSlash(trimmed(env.BETTER_AUTH_URL) || 'http://localhost:3000');
+const appUrl = (env: NodeJS.ProcessEnv) => noSlash(trimmed(env.APP_URL) || 'http://localhost:8081');
 
 /** Google's transport mode, checked: production never runs on the fake. */
 export function googleMode(env: NodeJS.ProcessEnv = process.env): GoogleMode {
@@ -60,8 +65,7 @@ export function googleSettings(env: NodeJS.ProcessEnv = process.env): GoogleSett
     clientId,
     clientSecret,
     redirectUri:
-      trimmed(env.GOOGLE_CALENDAR_REDIRECT_URL) ||
-      `${noSlash(config.authUrl)}/api/calendar/google/callback`,
+      trimmed(env.GOOGLE_CALENDAR_REDIRECT_URL) || `${authUrl(env)}/api/calendar/google/callback`,
     mode,
     endpoints,
     transport: mode === 'fake' ? fakeGoogle().transport : fetchTransport(),
@@ -82,11 +86,11 @@ export function requireGoogle(): GoogleSettings {
 
 /** This server's public address: where Google posts and where feeds are read. */
 export const publicUrl = (env: NodeJS.ProcessEnv = process.env) =>
-  noSlash(trimmed(env.CALENDAR_PUBLIC_URL) || config.authUrl);
+  noSlash(trimmed(env.CALENDAR_PUBLIC_URL) || authUrl(env));
 
 /** Where the browser goes after connecting (with ?connected= or ?error=). */
 export const returnUrl = (env: NodeJS.ProcessEnv = process.env) =>
-  trimmed(env.CALENDAR_RETURN_URL) || `${config.appUrl}/calendar`;
+  trimmed(env.CALENDAR_RETURN_URL) || `${appUrl(env)}/calendar`;
 
 /** How many days ahead a new connection is filled with the person's records. */
 export function syncDays(env: NodeJS.ProcessEnv = process.env): number {
