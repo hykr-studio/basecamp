@@ -18,6 +18,10 @@ export {
   esignProviders,
   evidenceHash,
 } from './features/acceptance/public.js';
+  type MentionContext,
+  type MentionKind,
+  mentionKinds,
+} from './features/comments/mention-kinds.js';
 export {
   BUY_CREDITS,
   type CreditPurchaseProvider,
@@ -134,6 +138,12 @@ export {
   verifyJobCallback,
 } from './features/jobs/public.js';
 export { type LiveResource, liveResources } from './features/live/resources.js';
+export {
+  anyRole,
+  backfillAll,
+  MemoryIndexer,
+  RecallService,
+} from './features/memory/index.js';
 export {
   ModelPolicyChanged,
   ModelPolicyService,

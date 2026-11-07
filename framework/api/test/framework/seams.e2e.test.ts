@@ -80,10 +80,11 @@ describe('contributions', () => {
   });
 
   it('a name is unique in its registry', () => {
+    const before = api.turnHooks.all();
     expect(() => api.turnHooks.register({ name: NAME })).toThrow(
       'The turn hook "fixture.seams" is registered twice',
     );
-    expect(api.turnHooks.all().filter((h) => h.name === NAME)).toHaveLength(1);
+    expect(api.turnHooks.all()).toEqual(before);
   });
 
   it('a key that nothing collects fails closed, before anything is registered', () => {

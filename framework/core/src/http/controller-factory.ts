@@ -175,7 +175,8 @@ export function commandController(def: AnyCommandDef): Type {
   const params = pathParams(spec.http.path);
   const shape = spec.input.shape as Record<string, z.ZodType>;
   const bodyShape = Object.fromEntries(Object.entries(shape).filter(([k]) => !params.includes(k)));
-  const BodyDto = createZodDto(z.object(bodyShape));
+  // A request with no body (DELETE /api/x/:id) is an empty one: its fields' own rules decide.
+  const BodyDto = createZodDto(z.preprocess((b) => b ?? {}, z.object(bodyShape)));
   const route: Route = {
     verb: verbs[spec.http.method as keyof typeof verbs],
     path: spec.http.path.replace(/^\/?api\//, ''),

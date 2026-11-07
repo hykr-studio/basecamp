@@ -89,6 +89,8 @@ describe('roles and capabilities', () => {
         'approvals.decide',
         'backoffice.use',
         'channels.manage',
+        'comments.internal',
+        'comments.moderate',
         'credits.manage',
         'credits.view',
         'customers.message',
@@ -97,6 +99,9 @@ describe('roles and capabilities', () => {
         'marketing.approve',
         'members.manage',
         'members.read',
+        'memory.manage',
+        'memory.read',
+        'memory.write',
         'models.manage',
         'queues.admin',
         'records.grant',
@@ -106,17 +111,23 @@ describe('roles and capabilities', () => {
     expect((await inAna(ops)('GET', '/api/me')).body.capabilities).toEqual([
       'approvals.decide',
       'backoffice.use',
+      'comments.internal',
       'credits.view',
       'customers.message',
       'history.all',
       'members.read',
+      'memory.read',
+      'memory.write',
       'records.grant',
     ]);
     expect((await inAna(staffer)('GET', '/api/me')).body.capabilities).toEqual([
       'backoffice.use',
+      'comments.internal',
       'credits.view',
       'customers.message',
       'members.read',
+      'memory.read',
+      'memory.write',
     ]);
     // A role the application added, with the capability it names.
     expect((await inAna(auditor)('GET', '/api/me')).body).toMatchObject({

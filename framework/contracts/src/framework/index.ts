@@ -1,4 +1,5 @@
 export * from './business-time.js';
+export * from './comments.js';
 export * from './custom-fields.js';
 export * from './domain.js';
 export * from './events.js';
@@ -7,6 +8,7 @@ export * from './files.js';
 export * from './geo.js';
 export * from './integrations.js';
 export * from './list.js';
+export * from './memory.js';
 export * from './module.js';
 export * from './money.js';
 export * from './numbering.js';

@@ -181,6 +181,8 @@ export const threadMessages = app.table(
   (table) => [
     index('thread_messages_thread_created_idx').on(table.threadId, table.createdAt),
     index('thread_messages_thread_seq_idx').on(table.threadId, table.seq),
+    // A run's reply, and so its thread: a run that waited for an approval goes on there (A7).
+    index('thread_messages_run_idx').on(table.runId).where(sql`${table.runId} is not null`),
   ],
 );
 

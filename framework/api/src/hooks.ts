@@ -109,8 +109,11 @@ export const deliveryChannels = createHookRegistry<DeliveryChannel>('delivery ch
 
 /** One assistant turn, whatever the channel. A back-office draft is a turn too, with no thread. */
 export interface TurnInfo {
-  /** 'draft': a reply for staff to edit (no tools, nothing saved). */
-  kind: 'chat' | 'draft';
+  /**
+   * 'draft': a reply for staff to edit (no tools, nothing saved). 'resume': a run that waited for
+   * an approval goes on (durable runs), in its thread, after the decision.
+   */
+  kind: 'chat' | 'draft' | 'resume';
   principal: Principal;
   runId: string;
   /** The thread it continues; none for a draft. */

@@ -67,6 +67,14 @@ export const NoteSpec = entitySpec({
   },
   approval: { delete: (p) => p.actor.kind === 'agent' },
   views: { list: 'note.list', item: 'note.card' },
-  // Up to ten images of 10 MB each; SVG is not an image here.
-  traits: { files: { photos: { accept: ['image/*'], maxBytes: 10 * 1024 * 1024, max: 10 } } },
+  // Up to ten images of 10 MB each; SVG is not an image here. Notes are memory too: the
+  // assistant recalls them by meaning, as memory of their meeting, for whoever may read both
+  // (the framework loads each again as the reader).
+  traits: {
+    files: { photos: { accept: ['image/*'], maxBytes: 10 * 1024 * 1024, max: 10 } },
+    memory: {
+      text: (n: NoteView) => [n.title, n.body?.trim()].filter(Boolean).join(': '),
+      about: (n: NoteView) => (n.meetingId ? { type: 'meeting', id: n.meetingId } : null),
+    },
+  },
 });

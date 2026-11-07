@@ -9,6 +9,16 @@ export type {
 export { AGENT_KEYS, type Agents, createAgents, profileFor } from './agents.js';
 export { ModelNotChosen, modelFor, turnModel } from './assistant.js';
 export { type ApiFor, createApiFor } from './context.js';
+export {
+  durableAgent,
+  findSuspension,
+  parkedLine,
+  parkedView,
+  resumeSuspension,
+  type Suspension,
+  type TurnVoice,
+  voiceOf,
+} from './durable.js';
 export * from './models/index.js';
 export { type AgentModuleOf, mergeAgentModules, scriptConflicts, suitesFor } from './modules.js';
 export {

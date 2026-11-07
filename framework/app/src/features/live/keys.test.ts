@@ -36,6 +36,16 @@ const catalog: LiveCatalog = {
 };
 
 describe('liveKeysFor', () => {
+  it('comments refresh comment lists and history; an inbox item, the inbox', () => {
+    expect(liveKeysFor({ name: 'comment.added', type: 'comment', id: 'c1' }, catalog)).toEqual([
+      ['comments'],
+      ['history'],
+    ]);
+    expect(liveKeysFor({ name: 'inbox.added', type: 'inbox', id: 'i1' }, catalog)).toEqual([
+      ['inbox'],
+    ]);
+  });
+
   it('an entity write invalidates its plural and history', () => {
     expect(liveKeysFor({ name: 'task.updated', type: 'task', id: 't1' }, catalog)).toEqual([
       ['tasks'],
