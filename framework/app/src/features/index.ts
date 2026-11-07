@@ -15,5 +15,6 @@ export { ConnectionsScreen, connectionsPlugin, scopeWords } from './mcp';
 export * from './privacy';
 export { type PushOptions, pushPlugin } from './push/PushPlugin';
 export { settingsPlugin } from './settings';
+export * from './share';
 export * from './states';
 export * from './webmcp';

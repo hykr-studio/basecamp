@@ -251,10 +251,66 @@ export class PrincipalResolver {
   }
 
   /**
+   * A share link's guest (decisions B9), from the link as stored now: actor `guest` (the link's
+   * id), channel `share`, no roles and no capability, the link's recipient as subject (a contact)
+   * and customer, and `otp` assurance once its code was entered. A shared page's guest reads with
+   * the maker's roles in that business (`reach: 'sharer'`), still without their capabilities;
+   * when the maker is no longer there, nobody is (403 from `forUser`).
+   */
+  async forShareLink(
+    link: {
+      id: string;
+      tenantId: string;
+      kind: 'record' | 'page' | 'form';
+      createdBy: string;
+      contactId: string | null;
+      customerId: string | null;
+    },
+    opts: { verified: boolean; reach?: 'link' | 'form' },
+  ): Promise<Principal> {
+    const assurance: Assurance = opts.verified ? 'otp' : 'whatsapp_number';
+    const base = {
+      actor: { kind: 'guest' as const, id: link.id },
+      tenantId: link.tenantId,
+      capabilities: [],
+      assurance,
+      channel: 'share' as const,
+      scopes: [],
+    };
+    if (link.kind === 'page') {
+      const maker = await this.forUser(link.createdBy, {
+        tenantId: link.tenantId,
+        channel: 'share',
+      });
+      return {
+        ...base,
+        subject: maker.subject,
+        roles: maker.roles,
+        ...(maker.customerId ? { customerId: maker.customerId } : {}),
+        ...(maker.standing ? { standing: maker.standing } : {}),
+        share: { linkId: link.id, reach: 'sharer' },
+      };
+    }
+    const contact = link.contactId ? await contactById(this.options.db, link.contactId) : undefined;
+    const ours = contact && contact.tenantId === link.tenantId ? contact : undefined;
+    const customerId = link.customerId ?? ours?.customerId ?? undefined;
+    return {
+      ...base,
+      roles: [],
+      ...(ours ? { subject: { kind: 'contact' as const, contactId: ours.id } } : {}),
+      ...(customerId ? { customerId } : {}),
+      share: { linkId: link.id, reach: opts.reach ?? 'link' },
+    };
+  }
+
+  /**
    * A stored principal (a parked approval), checked again before it acts: the person must
    * still belong to the business, the contact must still exist. Its roles are today's.
    */
   async refresh(stored: Principal): Promise<Principal> {
+    // A guest never parks (decisions B9, 18): its stored request has nobody to act as.
+    if (stored.actor.kind === 'guest')
+      throw new ForbiddenException({ error: 'forbidden', rule: 'guest_cannot_wait' });
     const subject =
       stored.subject ??
       (stored.actor.kind === 'user'

@@ -1,8 +1,8 @@
 /**
  * The orders module, server side: orders with a tree of groups and priced lines, money in
  * minor units, the module's own number series, tax function, approval limits, cost capability,
- * its PDF (orders.order), its customer's acceptance of that PDF by a one-time code, and the
- * approval level of a comment a customer will see.
+ * its PDF (orders.order), its customer's acceptance of that PDF by a one-time code, the
+ * approval level of a comment a customer will see, and its share link (the order shown by link).
  */
 import { defineModule } from '@hykr/api';
 import { ordersAgent } from './agent/index.js';
@@ -16,6 +16,7 @@ import { OrderDocument } from './server/document.js';
 import { OrdersModule } from './server/orders.module.js';
 import { OrdersApprove } from './server/policy.js';
 import { OrderSeries } from './server/series.js';
+import { OrderShare } from './server/share.js';
 import { ordersViews } from './views/index.js';
 
 export const orders = defineModule({
@@ -36,5 +37,7 @@ export const orders = defineModule({
     levelRules: [OrderCommentLevels],
     // The organisation an order is placed with: it reads the order, not its cost.
     participantRoles: [SupplierRole],
+    // Shown by link to its customer: the order, its lines, its PDF and its acceptance.
+    shareables: [OrderShare],
   },
 });

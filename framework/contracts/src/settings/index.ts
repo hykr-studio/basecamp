@@ -11,6 +11,7 @@ export * from './parties.js';
 export * from './privacy.js';
 export * from './roles.js';
 export * from './sections.js';
+export * from './shares.js';
 export * from './sla.js';
 export * from './support.js';
 export * from './wording.js';

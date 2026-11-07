@@ -311,9 +311,10 @@ describe('personal data contributors', () => {
       `select after from audit.events where action = 'channel.contact.erased' and resource_id = $1`,
       [contactId],
     );
-    // The framework's own (agents, comments, files, inbox, jobs, memory, parties, push) run too:
-    // a contact has no agents, comments, files, inbox items, jobs, memories, party memberships or
-    // devices. The channel's own trail anonymises its customer record (B18: a privacy request now).
+    // The framework's own (agents, comments, files, inbox, jobs, memory, parties, push, share
+    // links) run too: a contact has no agents, comments, files, inbox items, jobs, memories, party
+    // memberships, devices or links made for them. The channel's own trail anonymises its
+    // customer record (B18: a privacy request now).
     expect(rows).toEqual([
       {
         after: {
@@ -327,6 +328,7 @@ describe('personal data contributors', () => {
             memory: 0,
             parties: 0,
             push: 0,
+            'share-links': 0,
             'fixture.runtime.erase': 1,
           },
         },
@@ -348,6 +350,7 @@ describe('personal data contributors', () => {
       jobs: [],
       parties: [],
       pushDevices: [],
+      shareLinks: [],
       fixtureNotes: [{ about: subject }],
     });
     api.exportContributors.register({

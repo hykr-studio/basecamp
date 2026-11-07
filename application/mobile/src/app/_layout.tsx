@@ -12,6 +12,7 @@ import {
   privacyPlugin,
   pushPlugin,
   settingsPlugin,
+  sharePlugin,
   webMcpPlugin,
 } from '@hykr/app';
 import { catalog, registry } from '@/catalog';
@@ -37,9 +38,10 @@ const config = {
  * feed links: `/calendar`), the in-app inbox (mentions in comments), exporting the business's
  * data (`/export`, for people who may: owners, unless the business grants it to another role),
  * the AI apps a person connected over MCP (`/connections`), the business's agents (`/agents`:
- * the meetings module's ready-made ones among them) and "Your data" (`/privacy`: a copy of what
- * the business keeps about you, or erasure). The switcher goes first: switching starts
- * everything after it again in the other business.
+ * the meetings module's ready-made ones among them), "Your data" (`/privacy`: a copy of what
+ * the business keeps about you, or erasure) and share links (`/share/:token`: what a link shows,
+ * on its own, for anyone holding it, signed in or not). The switcher goes first: switching
+ * starts everything after it again in the other business.
  */
 const plugins = [
   businessesPlugin,
@@ -54,6 +56,7 @@ const plugins = [
   connectionsPlugin,
   agentsPlugin(),
   privacyPlugin,
+  sharePlugin(),
 ];
 
 export default function RootLayout() {

@@ -12,7 +12,9 @@ import { subjectOf } from './subject.js';
  * the customer's (the customer column is theirs), the whole tenant, `granted`: the records
  * granted to the person one by one (`app.record_grants`), or the children of such records, and
  * `participant`: the records a party they are a member of participates in (`app.participations`),
- * in the participant roles `as` names, or the children of such records.
+ * in the participant roles `as` names, or the children of such records, and `share`: what a
+ * guest's share link names (`app.share_links`), never written in an access map (`accessFor` gives
+ * it to guests itself).
  * Open: a feature adds a kind by declaration merging and registers its SQL (`grantKinds` in
  * @hykr/core). Rows are always limited to the principal's tenant first.
  */
@@ -22,6 +24,7 @@ export interface GrantKinds {
   tenant: true;
   granted: true;
   participant: true;
+  share: true;
 }
 export type Grant = keyof GrantKinds & string;
 
@@ -112,6 +115,10 @@ export function accessFor(p: Principal, access: Access, op: 'read' | 'write'): A
     return p.tenantId
       ? { kind: 'grants', grants: ['tenant'], rules: [{ grant: 'tenant' }] }
       : { kind: 'none' };
+  if (p.actor.kind === 'guest') {
+    const guest = guestAccess(p, op);
+    if (guest) return guest;
+  }
   const map = access[op];
   const subject = subjectOf(p);
   const grants = new Set<Grant>();
@@ -135,6 +142,27 @@ export function accessFor(p: Principal, access: Access, op: 'read' | 'write'): A
   }
   if (grants.size > 0) return { kind: 'grants', grants: [...grants], rules: given };
   return need ? { kind: 'needs_assurance', need } : { kind: 'none' };
+}
+
+/**
+ * A guest's reach (a share link's holder, decisions B9): whatever the entity's access map says,
+ * a guest reads only what its link names (the `share` grant: a record and its declared children,
+ * while the link is live) and writes nothing; a public form's submission creates one record of
+ * its customer (the `customer` grant, `reach: 'form'`). A shared page's blocks are read with the
+ * link maker's roles (`reach: 'sharer'`): undefined here, so the map decides, and the guest holds
+ * none of their capabilities. Never anything without a business.
+ */
+function guestAccess(p: Principal, op: 'read' | 'write'): AccessDecision | undefined {
+  const none: AccessDecision = { kind: 'none' };
+  if (!p.tenantId) return none;
+  const reach = p.share?.reach ?? 'link';
+  if (op === 'read')
+    return reach === 'sharer'
+      ? undefined
+      : { kind: 'grants', grants: ['share'], rules: [{ grant: 'share' }] };
+  if (reach === 'form' && p.customerId)
+    return { kind: 'grants', grants: ['customer'], rules: [{ grant: 'customer' }] };
+  return none;
 }
 
 /**

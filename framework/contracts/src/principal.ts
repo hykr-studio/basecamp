@@ -110,6 +110,13 @@ export const Principal = z.object({
   approvedBy: z.string().optional(),
   /** How the call reached the server (app, voice, whatsapp, mcp…), carried into every audit row. */
   channel: Channel.optional(),
+  /**
+   * A guest's share link (`actor.kind: 'guest'`), set by the share guard only: the link, and how
+   * far it reaches. `link`: what the link names (the `share` grant); `sharer`: a shared page's
+   * blocks, read as the link's maker sees them, without their capabilities; `form`: a public
+   * form's submission, which creates one customer's record.
+   */
+  share: z.object({ linkId: z.string(), reach: z.enum(['link', 'sharer', 'form']) }).optional(),
 });
 export type Principal = z.infer<typeof Principal>;
 

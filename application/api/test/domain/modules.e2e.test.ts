@@ -18,13 +18,14 @@ beforeAll(async () => {
 afterAll(shutdown);
 
 describe('the sample modules', () => {
-  it('are todos, notes, meetings, orders and account, in dependency order', () => {
+  it('are todos, notes, meetings, orders, account and briefs, in dependency order', () => {
     expect(application.catalog.modules.map((m) => [m.name, m.dependsOn])).toEqual([
       ['todos', []],
       ['notes', []],
       ['meetings', ['todos', 'notes']],
       ['orders', []],
       ['account', []],
+      ['briefs', []],
     ]);
     expect(application.catalog.moduleOf('order.save')).toBe('orders');
     expect(application.catalog.moduleOf('meeting.close')).toBe('meetings');

@@ -167,7 +167,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/api/src/runtime.ts`, `start.ts` | `defineServer`, `startApi`, `startWorker`, `migrate`, `runTemplates`, `runEval`, `startStudio`. `testing.ts` is `@hykr/api/testing`. `hooks.ts` holds the server's extension points (section 5.9), `module.ts` `defineModule`, and `module-checks.ts` the boot checks across modules (section 5.11). |
 | `framework/api/src/channels/` | WhatsApp webhook, queues, sending, notifications dispatch, template sync, handoff, back office API, erasure |
 | `framework/api/src/modules/` | Chat, threads, history, me, voice, pages |
-| `framework/api/src/features/` | Framework features, one folder each (`defineFeature`), among them `events` (the outbox relay), `files`, `money`, `push`, `approvals`, `integrations` (webhooks out and in, section 5.14) and `mcp` (outside AI clients, section 7.8) |
+| `framework/api/src/features/` | Framework features, one folder each (`defineFeature`), among them `events` (the outbox relay), `files`, `money`, `push`, `approvals`, `integrations` (webhooks out and in, section 5.14), `mcp` (outside AI clients, section 7.8) and `share` (share links and public forms, section 5.28) |
 | `framework/app/src/` | `AppShell`, `defineAppModule` and the plugin types (`framework/app-domain.ts`), their merge (`framework/compose-app.ts`) and plugin slots (`framework/plugins.ts`), data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; framework features as plugins in `features/<x>/` (live, push, WebMCP); primitives in `@hykr/app/ui` |
 | `framework/cli/` | The `basecamp` command (`module-add.ts` scaffolds a module, `db-rebase.ts` regenerates migrations after a rebase), plus the `compose.yaml` and `infra/` it starts |
 
@@ -2028,6 +2028,97 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
   `test/framework/privacy.e2e.test.ts` show every part; the sample's notes and
   `application/domain/src/server/privacy.ts` its configuration.
 
+### 5.28 Share links and public forms
+
+A business shows a record, a saved page or a form to someone without an account, by a link
+(`docs/decisions/B9.md`). What may be shared, and what a form asks and creates, is the module's;
+the framework makes the links, turns each into a guest, and reads and writes as that guest
+through the usual path.
+
+```ts
+// a module's index.ts: contributes: { shareables: [OrderShare], publicForms: [BriefForm] }
+import { definePublicForm, defineShareable } from '@hykr/contracts';
+
+export const OrderShare = defineShareable({
+  entity: 'order',
+  children: ['orderItem'],          // child entities that come with it
+  documents: ['orders.order'],      // made PDFs a guest may open
+  acceptances: true,                // and accept (section 5.25), as the link's WhatsApp contact
+  // view: 'order.card',            // default: the spec's item view
+  // pages: false,                  // keep its lists off shared pages
+  // otp: 'required', maxDays: 30,  // every link asks for a code; a shorter limit
+});
+
+export const BriefForm = definePublicForm({
+  name: 'briefs.brief',
+  entity: 'brief',                  // needs a customer column
+  label: { en: 'Tell us what you need', … },
+  fields: ['name', 'phone', 'summary', 'budget', 'neededBy', 'notes'],
+  customerName: 'name',             // names the customer an anonymous answer creates
+  fixed: { source: 'form' },        // set by the server, never asked
+  // custom: false,                 // default: also ask the business's custom fields
+});
+```
+
+- **Links** (`app.share_links`): `POST /api/shares { target: { entity, id } | { page } | { form },
+  expiresInDays?, otp?: 'whatsapp' | 'email', to?, maxUses?, label? }` answers the token, the
+  path `/share/<token>` and the URL (`APP_URL`) once; only the token's SHA-256 is kept (no
+  idempotency key, so no stored answer holds it). People only, with `shares.create` (owner,
+  admin, ops, staff), for a target they reach. `GET /api/shares?entity&id | page | form` lists a
+  target's links; `POST /api/shares/:id/revoke` (its maker, or `shares.manage`). A link always
+  ends: `shares.defaultDays` (7) unless asked, at most `shares.maxDays` (90) or the declaration's
+  `maxDays`. Deleting a record revokes its links in the same write. Every write is audited
+  (`share.create`, `share.revoke`).
+- **Recipients.** `to: { contactId } | { customerId } | { email } | { recordCustomer: true }`
+  (the record's own customer, when it has one). It is where the link's code goes, and who the
+  guest is: a contact recipient is the guest's subject, and its customer record the guest's.
+- **The guest.** `ShareGuard` (`@hykr/core`) turns `/api/share/:token/…` into a principal:
+  actor `guest` (the link's id), channel `share`, no roles, no capabilities, assurance
+  `whatsapp_number` (`otp` once the link's code is entered). Unknown token: 404; revoked or
+  ended: 410 (`link_revoked`, `link_expired`). It never reaches the generated routes, which still
+  need a session.
+- **The `share` grant.** `accessFor` gives a guest, to read, only the `share` grant, whatever the
+  access map says; it reaches the record its link names, and its declared children, while the
+  link is live (checked in SQL on every query). Field policy and read projectors apply: a guest
+  holds no capability, so every restricted field stays hidden. A guest writes nothing, except a
+  form's answer.
+- **A gated link** (`otp`) shows only its gate (the business's branding, where the code goes,
+  masked) until `POST /api/share/:token/code` (`share.code`: the code is made and sent in the
+  worker, as for acceptances) and `POST /api/share/:token/verify { challengeId, code }`, which
+  spends the attempt on the pool first, then opens a session (`app.share_sessions`, hash only)
+  for `shares.sessionHours` (12) or until the link ends. The client sends it as
+  `x-share-session`.
+- **What a guest sees.** `GET /api/share/:token`: the link, the business's branding, the gate,
+  and a record (its view, the record, each child entity's rows, its made PDFs and whether each
+  can be accepted), a page, or a form. `GET /api/share/:token/documents/:id` opens a declared PDF
+  (a short-lived URL). The acceptance routes (`/api/share/:token/acceptances/…`) are B8's own
+  operations, run as the guest: the signer is the link's contact, the code goes to their number,
+  and the evidence records channel `share` and the guest's assurance.
+- **A shared page** shows its blocks as the link's maker sees them, without their capabilities
+  (`share.reach: 'sharer'`): the stored queries only, read only. Blocks with no data source, over
+  an entity with no shareable, or that fail (a filter on a hidden field) are left out. When the
+  maker leaves the business, the link reaches nothing (410).
+- **A form's answer** (`POST /api/share/:token/submit { values, custom? }`) is the entity's own
+  create (`<entity>.create`) in `runWrite`, as the guest with `share.reach: 'form'`: only the
+  form's fields are read from `values`, `fixed` is added, and amounts are in the business's
+  currency. The record is owned by the business's default owner and belongs to the link's
+  customer, or to a new customer record (named by `customerName`). Rules, plugins, approval and
+  level rules, write hooks and audit apply as to any create; it answers the new record's id only.
+  `maxUses` counts accepted answers (410 `link_used` after).
+- **A guest never waits.** A guest's write that would park is refused `guest_cannot_wait`
+  (audited): nobody could be asked on its behalf (the `share-guests` write hook).
+- **In the app.** List `sharePlugin()` in `<AppShell plugins>`: `/share/:token` is drawn on its
+  own, signed in or not, before the shell looks for a session (a `public`, `standalone` route).
+  The share page renders the module's own views from the link's data (`ViewDataProvider`, read by
+  `InlineView` through `dataKey`; actions off), a record's children as labelled lines, its PDFs,
+  and `AcceptDocument` bound to the share routes (`AcceptanceClientProvider`); a page through
+  `PageHost`; a form through `<PublicForm>`. `<ShareLinks target to? maxUses? />` (hooks
+  `useShares`, `useCreateShare`, `useRevokeShare`, `useCanShare`) is the team's side. A guest's
+  client: `createShareClient({ baseUrl, token, session })` (`@hykr/api-client`).
+- **Privacy.** A contact's "delete my data" revokes the links made for them and forgets where
+  their code went; their data export lists those links.
+- **No SSR or SEO.** Share pages are the single-page web app: not indexed, no link previews.
+
 ---
 
 ## 6. Principals and policy
@@ -2038,16 +2129,17 @@ Every request becomes a `Principal` (`framework/contracts/src/principal.ts`). Th
 
 | Field | Meaning |
 |---|---|
-| `actor` | `{ kind, id }`. `kind` is `'user'`, `'agent'`, `'system'` (the server's own work, below) or `'guest'` (a share link; not built yet). |
+| `actor` | `{ kind, id }`. `kind` is `'user'`, `'agent'`, `'system'` (the server's own work, below) or `'guest'` (a share link's holder, the link's id; section 5.28). |
 | `actingFor` | For an agent: the person it acts for |
 | `subject` | Whose business this is: `{ kind: 'user', userId }` or `{ kind: 'contact', contactId }`. Set by the server only. |
 | `tenantId`, `roles`, `customerId` | The business, your roles in it, and your customer record if you are one. No `tenantId`: a person in no business yet (section 6.5) |
 | `standing` | `'member'` (a membership of the team) or `'participant'` (a member of one of its parties, never of the team; section 6.5). Absent for a contact |
 | `capabilities` | What your roles allow there, by name (`'backoffice.use'`). Worked out by the server; check it with `can(p, …)` (6.4) |
-| `assurance` | `'whatsapp_number'` (a number alone) < `'otp'` (a one-time code; nothing sets it yet: an acceptance's code proves the act, not the session, section 5.25) < `'session'` (signed in) |
+| `assurance` | `'whatsapp_number'` (a number alone) < `'otp'` (a one-time code: a gated share link's guest, section 5.28; an acceptance's code proves the act, not the session, section 5.25) < `'session'` (signed in) |
 | `channel` | `'app'`, `'voice'`, `'whatsapp'`, `'mcp'`, `'webmcp'`, `'api'`, `'background'` or `'share'`. A session request has none, unless it names `app` or `webmcp` in `x-channel` (any other value is 400 `bad_channel`). `webmcp` (a page's WebMCP tools) only reads and is refused on people-only routes. |
 | `runId`, `agentVersion` | Set on agent calls, and written to audit |
 | `approvedBy` | Set on an approval replay |
+| `share` | A guest's link and reach (`link`, `sharer` for a shared page, `form` for an answer), set by `ShareGuard` only |
 
 Everything comes from server data. Headers only choose: `x-tenant-id` picks among the businesses you are in (as a member, or as a participant), and a WhatsApp channel lowers assurance. A role in a membership that neither the application declared nor the business defined grants nothing (the server logs it once). Sign-up creates the person's own business, with them holding the creator's roles (`owner` unless the application's `roleDefaults` say otherwise; a Better Auth `user.create.after` database hook in `framework/api/src/infra/auth.ts`). If that failed, `PrincipalGuard` creates it on their first call (`ensureDefaultTenant`). An application where people sign up without running a business (clients, outside organisations) turns this off with `defineServer({ signUp: { createBusiness: false } })` (section 6.5).
 
@@ -2087,6 +2179,7 @@ Read `p` in your rules with the helpers in `@hykr/policy`: `subjectOf(p)`, `user
 | `'tenant'` | Every row in the business |
 | `{ grant: 'granted', of?, via? }` | The rows granted to you one by one (`POST /api/grants`, section 6.4). With `via: 'projectId', of: 'project'`, the rows whose project is granted to you. Only for a user subject. |
 | `{ grant: 'participant', as?, of?, via? }` | The rows a party you are a member of participates in (`POST /api/participants`, section 6.5), in the participant roles `as` names (default any). `of` and `via` as for `granted`. For a person and for a WhatsApp contact. |
+| `share` | Never written in a map: what a guest's share link names (the record and its declared children, while the link is live). `accessFor` gives it to guests itself (section 5.28). |
 
 The sample's rules:
 
@@ -2168,6 +2261,8 @@ capabilities, with the roles that hold them by default (its features add their o
 | `support.consent` | owner | Letting the platform's operators in: support access requests, consent, ending it (section 6.6) |
 | `shared.publish` | none | Held only by an operator at platform scope (not grantable, section 6.6) |
 | `privacy.manage` | owner, admin | The business's privacy requests: reading, filing for someone, processing, refusing (section 5.27) |
+| `shares.create` | owner, admin, ops, staff | Sharing a record, page or form one reaches by link, and seeing its links (section 5.28) |
+| `shares.manage` | owner, admin | Revoking anyone's share link |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -3051,7 +3146,13 @@ These are not built. Each has a workaround for now.
 | MCP: older clients, other client registration | `@mastra/mcp` 2.x serves MCP revision 2026-07-28 only. Client ID metadata documents, the device grant, JWT access tokens and DPoP are not enabled. A client registered before a module existed registers again to ask for its scopes. Browser-based MCP clients from other origins are refused by CORS. |
 | MCP: screens | The app's `connectionsPlugin` lists and disconnects a person's clients; the back office has no view of every client in a business. The consent screen shows the application's name, not a business's branding. MCP Apps cards, resources and prompts are not served. |
 | MCP: framework features' tools | The MCP tools cover each module's entities, commands and state transitions. The framework features' own assistant tools (files, documents, jobs, memory recall, comments, handoff) are not offered, and their routes declare no scope, so a token gets 403 `out_of_scope` there. |
-| Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. A contact without an account cannot accept a document in the app until share links (B9) give them a principal; the acceptance routes take only signed-in people (`HumanOnlyGuard`). |
+| SSR, SEO, link previews | Share pages are the single-page web app (`web.output: 'single'`): not indexed, no Open Graph preview. A public site or marketplace stays outside the framework. |
+| Sending a share link | `POST /api/shares` answers the link once; the person copies it. Nothing sends it on WhatsApp or by email, and the assistant has no tool to make one. |
+| Signing through an email-only link | A guest signs only as the link's WhatsApp contact (`to: { contactId }`, a customer with a contact, or the record's customer). An email recipient can open a gated link but not accept (`people_only`). |
+| Several recipients, links without an end | A link has one recipient, and every link ends (at most `shares.maxDays`): a form posted on a website is linked again when its link ends. |
+| A guest's comments and files | A guest cannot comment, and a form asks no file. |
+| WhatsApp turns with share links | `RenderTurn.pages` is still not filled: links to a customer still point at the app (`APP_URL`), which needs an account. |
+| Share pages on a business's domain | The URL a link answers is `APP_URL`'s; a verified domain (section 5.18) is not used for it, though the page shows the business's branding. |
 | An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
 | Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders allow cancelling an approved order, accepted or not). |
 | An accepted order's state | The sample's `OrderAcceptance` has no transition (the orders entity files were not B8's to edit): an accepted order stays `approved`, which is frozen, and only its acceptances tell it from one that is not accepted. |
@@ -3102,7 +3203,7 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in and nav filter slots; `inboxPlugin()` (section 5.21), `exportPlugin` (section 5.22) and `privacyPlugin` (section 5.27) use routes and nav; `creditsPlugin`, `businessesPlugin` and `agentsPlugin()` (section 5.26) use routes, nav and nav filters too. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter, brand). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in, nav filter and brand slots; `inboxPlugin()` (section 5.21), `exportPlugin` (section 5.22) and `privacyPlugin` (section 5.27) use routes and nav; `creditsPlugin`, `businessesPlugin` and `agentsPlugin()` (section 5.26) use routes, nav and nav filters too; `sharePlugin()` (section 5.28) a public, standalone route. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
 | Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
@@ -3127,8 +3228,8 @@ These are not built. Each has a workaround for now.
 | Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
 | A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
 | Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |
-| Custom domains end to end | Verification, CORS, Better Auth's origin check and `GET /api/branding/public` work, and the back office's sign-in shows a verified domain's branding. The app's sign-in (`framework/app/src/screens/SignIn.tsx`, rendered by `AppShell`) does not call `api.settings.publicBranding(window.location.origin)` yet, so the app on a business's domain signs in under the product's name and colours. Sessions and cookies are not per domain, and TLS certificates are issued outside the framework. |
-| The business's brand in the app shell | The settings plugin applies a business's colours, but `AppShell` (a hot file: B9, then B12) still prints the product's `app.title` and `tagline` in the rail and the phone's top bar. Its next owner replaces them with `<BrandMark fallback={app.title}>` (or adds an `AppPlugin` header slot the settings plugin fills) and has the sign-in ask for the domain's public branding. Until then a screen shows the logo and name itself (the sample's Today). |
+| Custom domains end to end | Verification, CORS, Better Auth's origin check and `GET /api/branding/public` work, and both sign-ins (the back office's, and the app's in `SignIn.tsx`) show a verified domain's name and logo. The app's colours follow only once signed in (the settings plugin). Sessions and cookies are not per domain, and TLS certificates are issued outside the framework. |
+| The business's tagline in the app shell | The rail and the phone's top bar draw the first plugin's `Brand` (the settings plugin's `BrandMark`: the business's logo and name, else `app.title`), but the rail's tagline is still the product's `app.tagline`. |
 | A logo upload | `branding.logoUrl` is an https URL; there is no upload for it yet. |
 | Shared records that follow their source | An override is a full copy: later changes to the platform's row do not reach it. Only the platform business (`PLATFORM_TENANT_ID`) publishes shared rows. |
 | WebMCP actions | WebMCP tools only read; the API refuses any write on the `webmcp` channel. There are no declarative forms or write tools for a browser agent, and no read tool for a command. Public and share-link screens offer no tools. |
@@ -3185,6 +3286,8 @@ An earlier outline described an API that was never built. Map it like this:
 | **Contact** | A WhatsApp number known to a business (`channel.contacts`) |
 | **Grant** | `own`, `customer`, `tenant` or `granted`: which rows a role or capability reaches |
 | **Record grant** | One person's access to one record (`app.record_grants`), for the `granted` reach |
+| **Share link** | An expiring, revocable link to a record, a saved page or a public form (`app.share_links`); its holder is a `guest` |
+| **Public form** | A form whose link creates one record of an entity (`definePublicForm`) |
 | **Field policy** | Fields only the holders of a capability read: `traits.fieldPolicy` |
 | **Capability** | Something a role may do besides reaching rows (`backoffice.use`), checked with `can(p, …)` |
 | **Assurance** | How sure we are of who it is: `whatsapp_number` < `otp` < `session` |

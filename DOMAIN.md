@@ -2,7 +2,7 @@
 
 Basecamp, the agentic development stack for full-stack applications, ships with a sample
 application: meetings, notes, to-dos and orders, as four modules, plus `account`, which words the
-credits alerts. The framework (the API pipeline with
+credits alerts, and `briefs`, a customer's brief and the form that asks for it. The framework (the API pipeline with
 its rules, approvals and audit; the assistant with its tools, surfaces, canvas and WhatsApp;
 saved pages; the app shell) lives in `framework/` and is published as `@hykr/*` packages. The
 application lives in `application/`. The framework never imports the application; the
@@ -13,7 +13,8 @@ application hands its modules to the framework in two places:
 - the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app modules plugins catalog
   registry config />` from `@hykr/app`, with the app's modules (`defineAppModule`), the framework
   plugins it uses (`livePlugin()`, `pushPlugin()`, `webMcpPlugin()`, which offers each screen's
-  `webmcp` read tools to a browser agent, and `inboxPlugin()`, the in-app inbox), and the catalog
+  `webmcp` read tools to a browser agent, `inboxPlugin()`, the in-app inbox, and `sharePlugin()`,
+  the page a share link opens), and the catalog
   and registry built from every module's specs and views.
 
 Two dependency-cruiser rules, run by `pnpm lint:deps`, keep it that way:
@@ -263,6 +264,28 @@ evidence. The sample's `orders` module ships `OrderAcceptance`: an approved orde
 accepts its PDF once; the order stays `approved`, which is frozen (no transition: `when` limits
 it to approved orders).
 
+## Sharing by link and public forms
+
+Nothing is shareable until a module says so (developer guide, section 5.28):
+
+- **`defineShareable`** (`@hykr/contracts`), contributed as `shareables`: an entity whose records
+  a business may share by an expiring, revocable link, optionally behind a one-time code to the
+  link's recipient; the child entities that come with it (`children`), the PDFs a guest may open
+  (`documents`) and whether a guest may accept them (`acceptances`, as the link's WhatsApp
+  contact). A guest sees the record as anyone without a capability does: hidden fields stay
+  hidden. Lists of a shareable entity also show on a shared saved page (`pages: false` keeps
+  them off).
+- **`definePublicForm`**, contributed as `publicForms`: a form whose link creates one record of an
+  entity with a customer column, through the entity's own create, owned by the business's
+  default owner and belonging to the link's customer (or a new customer). The questions are the
+  fields of its create schema the form lists, in the spec's `fieldLabels`, then the business's
+  own custom fields of the entity; `fixed` values are set by the server.
+
+The sample's `orders` module shares its orders (`OrderShare`: lines, PDF, acceptance); the order
+screen has `<ShareLinks>`. The `briefs` module holds a customer's brief and its form
+`briefs.brief`; its screen lists briefs and the form's links. The app lists `sharePlugin()`,
+which serves `/share/:token`.
+
 ## States, deadlines and versions
 
 The framework has no workflow of its own either; a module declares it on the spec (the
@@ -410,6 +433,11 @@ From the contracts declaration alone:
   (`OtpService`, which WhatsApp linking uses too), a record's PDF accepted with one, append-only
   evidence chained by hash, the `ESignProvider` interface (no provider ships), and
   `<RecordAcceptance>` in the app.
+- Share links (`/api/shares`, `/api/share/:token`, `app.share_links`): a record, a saved page or
+  a public form shown by an expiring, revocable link, optionally behind a code to its recipient;
+  the guest principal that reads only what its link names; a form's answer created through the
+  entity's own write. `sharePlugin()`, `<ShareLinks>` and `<PublicForm>` in the app (developer
+  guide, section 5.28).
 - Threads (one saved conversation per person, shared by every channel), voice sessions
   (`/api/voice/*`, LiveKit, the voice worker), and the framework's phrases in `@hykr/i18n`.
 - Businesses, memberships and customers (`/api/me`), and the scope engine behind `access`.

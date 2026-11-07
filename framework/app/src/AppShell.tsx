@@ -164,6 +164,23 @@ function PublicRoute({ fallback }: { fallback: ReactNode }) {
   );
 }
 
+/**
+ * The public route gate (decisions B9): a plugin's standalone route (a share link's page) is
+ * drawn on its own for everyone, signed in or not, before any session is looked for.
+ */
+function standaloneRoute(path: string) {
+  return matchRoute(
+    getApp().routes.filter((r) => r.public && r.standalone),
+    path,
+  );
+}
+
+/** The business's mark when a plugin draws one (the settings plugin's logo and name), else the title. */
+function Brand({ fallback }: { fallback: string }) {
+  const Mark = getApp().plugins.find((p) => p.Brand)?.Brand;
+  return Mark ? <Mark fallback={fallback} /> : <Text style={styles.heading}>{fallback}</Text>;
+}
+
 /** The parts of the page the browser draws: focus ring, selection, caret, themed from the palette. */
 function useBrowserSurfaces() {
   useEffect(() => {
@@ -286,7 +303,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
         <ApprovalsAnnouncer />
         <View style={s.rail} role="navigation">
           <View style={{ gap: 2, paddingHorizontal: space.md, paddingBottom: space.lg }}>
-            <Text style={styles.heading}>{app.title}</Text>
+            <Brand fallback={app.title} />
             <Text style={styles.muted}>{app.tagline}</Text>
           </View>
           {nav.map((n) => (
@@ -347,7 +364,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
         <SkipLink />
         <ApprovalsAnnouncer />
         <View style={s.topBar}>
-          <Text style={styles.heading}>{app.title}</Text>
+          <Brand fallback={app.title} />
           {confirmSignOut ? (
             <View style={styles.row}>
               <Button title="Stay" variant="subtle" onPress={() => setConfirmSignOut(false)} />
@@ -446,6 +463,8 @@ export function AppShell(props: AppShellProps) {
       .then(setUser)
       .catch(() => setUser(null));
   }, []);
+  const standalone = standaloneRoute(usePathname());
+  const Standalone = standalone?.route.screen;
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -455,7 +474,11 @@ export function AppShell(props: AppShellProps) {
             <StatusBar style="dark" />
             {wrapProviders(
               getApp().plugins,
-              user === undefined || !(fontsLoaded || fontError) ? (
+              Standalone && standalone ? (
+                <View style={styles.screen}>
+                  <Standalone params={standalone.params} />
+                </View>
+              ) : user === undefined || !(fontsLoaded || fontError) ? (
                 <View style={styles.screen}>
                   <ActivityIndicator
                     style={{ marginTop: 96 }}

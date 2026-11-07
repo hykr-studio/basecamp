@@ -5,6 +5,7 @@
  * One line per module: `basecamp module add <name>` adds its own.
  */
 import { account } from './account/index.js';
+import { briefs } from './briefs/index.js';
 import { meetings } from './meetings/index.js';
 import { notes } from './notes/index.js';
 import { orders } from './orders/index.js';
@@ -16,5 +17,6 @@ export const modules = [
   meetings,
   orders,
   account,
+  briefs,
   // basecamp module add: one line per module, above this one.
 ];
