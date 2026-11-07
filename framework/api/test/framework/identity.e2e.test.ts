@@ -89,9 +89,12 @@ describe('roles and capabilities', () => {
         'approvals.decide',
         'backoffice.use',
         'channels.manage',
+        'comments.internal',
+        'comments.moderate',
         'credits.manage',
         'credits.view',
         'customers.message',
+        'data.export',
         'fixture.reports',
         'integrations.manage',
         'marketing.approve',
@@ -109,6 +112,7 @@ describe('roles and capabilities', () => {
     expect((await inAna(ops)('GET', '/api/me')).body.capabilities).toEqual([
       'approvals.decide',
       'backoffice.use',
+      'comments.internal',
       'credits.view',
       'customers.message',
       'history.all',
@@ -119,6 +123,7 @@ describe('roles and capabilities', () => {
     ]);
     expect((await inAna(staffer)('GET', '/api/me')).body.capabilities).toEqual([
       'backoffice.use',
+      'comments.internal',
       'credits.view',
       'customers.message',
       'members.read',

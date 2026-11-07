@@ -3,6 +3,8 @@ import {
   AppShell,
   connectionsPlugin,
   creditsPlugin,
+  exportPlugin,
+  inboxPlugin,
   livePlugin,
   pushPlugin,
   settingsPlugin,
@@ -25,7 +27,9 @@ const config = {
  * and phrases, live updates (other people's changes show without a reload), push notifications
  * (the to-do reminder goes to the phone first), WebMCP (each screen's read tools, the modules'
  * `webmcp`, offered to the browser's agent where the browser supports it), the business's
- * credits (usage, the pause, buying more: `/credits`) and the AI apps a person connected over MCP
+ * credits (usage, the pause, buying more: `/credits`), the in-app inbox (mentions in
+ * comments), exporting the business's data (`/export`, for people who may: owners, unless
+ * the business grants it to another role) and the AI apps a person connected over MCP
  * (`/connections`).
  */
 const plugins = [
@@ -34,6 +38,8 @@ const plugins = [
   pushPlugin({ androidChannel: 'Reminders' }),
   webMcpPlugin(),
   creditsPlugin,
+  inboxPlugin(),
+  exportPlugin,
   connectionsPlugin,
 ];
 

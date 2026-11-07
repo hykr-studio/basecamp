@@ -221,6 +221,10 @@ refused with `minAssurance: 'session'`. Background work writes as `systemPrincip
   (`defineChildEntity`, `traits.parent`), written whole with `children.replace` (developer guide 5.13).
 - Return `deny(...)` with a stable `rule` code and a plain `reason` instead of throwing. The caller gets
   403 `{ error: 'forbidden', rule, reason }`. "Not yours" is a 404, never a 403.
+- An assistant write that parks suspends the agent's run (Mastra stores it); the `resume` feature resumes it
+  when the request is decided, and the tool answers with the decision (developer guide 5.8.3). Never hold a
+  database transaction open around a model run: Mastra's first storage use builds indexes concurrently,
+  which waits for every open transaction.
 - WhatsApp templates (`defineTemplate`) are versioned forever. To change the wording, add `_v2`;
   `templates:sync` refuses an edit to an approved template.
 - Every user-facing word is `Labels` (`{ en, hi, te }`), which won't compile with a language missing. A list

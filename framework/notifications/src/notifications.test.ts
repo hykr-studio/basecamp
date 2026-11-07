@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { defineNotification } from './define-notification.js';
 import { contentHash, defineTemplate, toTemplateSpec } from './define-template.js';
-import { createNotificationCatalog } from './index.js';
+import { CommentMentionNotification, createNotificationCatalog } from './index.js';
 
 const { notifications, templates } = createNotificationCatalog();
 
@@ -103,6 +103,39 @@ describe('defineNotification', () => {
     );
     const push = { title: () => 'Done', body: () => 'It is done.', url: () => '/x' };
     expect(defineNotification({ ...base, channels: ['push', 'email'], push }).push).toBe(push);
+  });
+
+  it('needs a title and body for the in-app inbox', () => {
+    expect(() => defineNotification({ ...base, channels: ['inapp'] })).toThrow(
+      /inapp is a channel but has no title and body/,
+    );
+    const inapp = { title: () => 'Done', body: () => 'It is done.' };
+    expect(defineNotification({ ...base, channels: ['inapp', 'email'], inapp }).inapp).toBe(inapp);
+  });
+
+  it("the framework's mention notification: the inbox, for a person named, in their words", () => {
+    const n = CommentMentionNotification;
+    expect(n.channels).toEqual(['inapp']);
+    expect(n.send?.on).toEqual(['comment.mentioned']);
+    const row = {
+      id: 'c1',
+      tenantId: 't1',
+      commentId: 'c1',
+      on: { entity: 'task', id: 'r1' },
+      target: { kind: 'user', id: 'u2', label: 'Ravi' },
+      author: { id: 'u1', name: 'Ana' },
+      internal: false,
+      excerpt: 'Can you check @Ravi?',
+    };
+    expect(n.when?.(row)).toBe(true);
+    expect(n.when?.({ ...row, target: { kind: 'other', id: 'a1', label: 'Bot' } })).toBe(false);
+    expect(n.to(row)).toEqual([{ userId: 'u2' }]);
+    expect(n.inapp?.title(row, { lang: 'en', timeZone: 'UTC' })).toBe('Ana mentioned you');
+    expect(n.inapp?.title(row, { lang: 'hi', timeZone: 'UTC' })).toContain('Ana');
+    expect(n.inapp?.body(row, { lang: 'en', timeZone: 'UTC' })).toBe('Can you check @Ravi?');
+    expect(n.inapp?.record?.(row)).toEqual({ type: 'task', id: 'r1' });
+    expect(n.dedupe(row)).toBe('comment.mention:c1:user:u2');
+    expect(notifications.map((x) => x.key)).toContain('comment.mention');
   });
 });
 

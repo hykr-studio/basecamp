@@ -11,6 +11,13 @@ import {
 import type { Registry } from '@hykr/ui-registry';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+import {
+  decisionOutcome,
+  isParkedCall,
+  type ParkedCall,
+  parkedApproval,
+  runContextOf,
+} from './durable.js';
 import { resolvePresent } from './present.js';
 
 /**
@@ -23,6 +30,15 @@ export type ToolContext = {
   requestContext?: { get(key: string): unknown };
   tracingContext?: { currentSpan?: { traceId?: string } };
   loggerVNext?: { info(m: string, d?: object): void; warn(m: string, d?: object): void };
+  /**
+   * Inside an agent's loop (Mastra): suspend the run, and, when it is resumed, what it was
+   * resumed with and what it suspended with. Absent elsewhere (MCP, a direct execute).
+   */
+  agent?: {
+    suspend?(payload: unknown): Promise<unknown>;
+    resumeData?: unknown;
+    suspendPayload?: unknown;
+  };
 };
 export type ClientFor = (ctx: ToolContext | undefined) => ApiClient;
 
@@ -35,9 +51,49 @@ export type ToolKit = { clientFor: ClientFor; registry: Registry };
 /** What a successful result shows: a registered view, a screen, a page (see present.ts). */
 type PresentOf<T> = (result: T) => Present | undefined;
 
+/** A result, with what it shows on this turn's surfaces. */
+async function shown<T>(
+  tool: string,
+  ctx: ToolContext | undefined,
+  kit: ToolKit,
+  result: T,
+  presentOf?: PresentOf<T>,
+) {
+  const intent = presentOf?.(result);
+  if (!intent) return { ok: true as const, result };
+  const resolved = await resolvePresent(intent, ctx, kit);
+  if ('error' in resolved) {
+    // The framework built this intent, so a failure is a declaration bug, not the model's.
+    ctx?.loggerVNext?.warn(`${tool}: present dropped`, { tool, error: resolved.error });
+    return { ok: true as const, result };
+  }
+  return { ok: true as const, result, ...resolved };
+}
+
+/**
+ * A resumed call (its run waited for an approval): the decision, never the API again. The
+ * approval's replay already did the write, or did nothing; calling again would write twice.
+ */
+async function resumed<T>(tool: string, ctx: ToolContext, kit: ToolKit, presentOf?: PresentOf<T>) {
+  const parked = isParkedCall(ctx.agent?.suspendPayload) ? ctx.agent.suspendPayload : undefined;
+  const outcome = decisionOutcome(parked, ctx.agent?.resumeData);
+  ctx.loggerVNext?.info(`${tool} resumed`, {
+    tool,
+    approvalId: parked?.approvalId,
+    status: outcome.result?.status ?? (outcome.error as { error?: string }).error,
+  });
+  if (!outcome.ok || outcome.result.status !== 'approved') return outcome;
+  return shown(tool, ctx, kit, outcome.result as T, presentOf);
+}
+
 /**
  * Refusals become data the model can explain, not exceptions that end the run. A result
  * that can be shown carries its present intent, resolved for the turn's surfaces.
+ *
+ * A write the API parked, inside an agent's loop, suspends the run (durable runs, A7): the
+ * payload keeps what the tool shows while it waits and how to resume the turn. The run goes on
+ * when the approval is decided (the `resume` feature), and this call then answers with the
+ * decision instead of calling the API again.
  */
 export async function safely<T>(
   tool: string,
@@ -46,18 +102,24 @@ export async function safely<T>(
   fn: () => Promise<T>,
   presentOf?: PresentOf<T>,
 ) {
+  if (ctx?.agent && ctx.agent.resumeData !== undefined) return resumed(tool, ctx, kit, presentOf);
   try {
     const result = await fn();
     ctx?.loggerVNext?.info(`${tool} ok`, { tool });
-    const intent = presentOf?.(result);
-    if (!intent) return { ok: true as const, result };
-    const resolved = await resolvePresent(intent, ctx, kit);
-    if ('error' in resolved) {
-      // The framework built this intent, so a failure is a declaration bug, not the model's.
-      ctx?.loggerVNext?.warn(`${tool}: present dropped`, { tool, error: resolved.error });
-      return { ok: true as const, result };
+    const out = await shown(tool, ctx, kit, result, presentOf);
+    const approval = parkedApproval(result);
+    if (approval && ctx?.agent?.suspend) {
+      const parked: ParkedCall = {
+        kind: 'approval',
+        approvalId: approval.id,
+        summary: approval.summary,
+        output: out,
+        context: runContextOf(ctx.requestContext),
+      };
+      ctx.loggerVNext?.info(`${tool} suspended`, { tool, approvalId: approval.id });
+      await ctx.agent.suspend(parked);
     }
-    return { ok: true as const, result, ...resolved };
+    return out;
   } catch (e) {
     if (e instanceof ApiError) {
       const body = e.body as { reason?: string; message?: unknown } | null;
@@ -86,7 +148,7 @@ function needsApproval(spec: EntitySpec, action: 'create' | 'update' | 'delete')
 }
 
 const APPROVAL =
-  ' Returns { status: "needs_approval", approval } instead of doing it: tell the user what is waiting and that they approve it in the app.';
+  ' It may wait for approval instead of running: then the run pauses, the user is told what is waiting, and the run goes on once it is decided, with this result saying how ({ status: "approved" | "rejected" | "expired" }).';
 
 /** A parked write shows the person what is waiting, with Approve and Reject. */
 function parked(result: unknown): Present | undefined {

@@ -3,6 +3,11 @@
 // environment when it loads.
 
 export {
+  type MentionContext,
+  type MentionKind,
+  mentionKinds,
+} from './features/comments/mention-kinds.js';
+export {
   BUY_CREDITS,
   type CreditPurchaseProvider,
   CreditPurchaseRequested,
@@ -60,6 +65,27 @@ export {
   shaperFor,
 } from './features/documents/public.js';
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
+export {
+  archiveName,
+  type BuildArgs,
+  buildExport,
+  cellText,
+  csvOf,
+  type DataExportContext,
+  DataExportJob,
+  type DataExportSource,
+  dataExportSources,
+  ExportJobInput,
+  type ExportPlan,
+  ExportTooLarge,
+  exportColumns,
+  exportSourceProblems,
+  jsonOf,
+  planExport,
+  readZip,
+  writeZip,
+  ZipWriter,
+} from './features/export/public.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
 export {
   dispositionOf,

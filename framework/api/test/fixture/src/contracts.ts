@@ -41,6 +41,15 @@ export const TaskSpec = entitySpec({
   // An agent never deletes without the person.
   approval: { delete: (p) => p.actor.kind === 'agent' },
   views: { list: 'task.list' },
+  // Comments, added or edited: the assistant's wait for the person, a customer's for the business
+  // (team-only ones never wait); one may point at a version.
+  traits: {
+    comments: {
+      approval: (p, { input }) =>
+        input?.internal !== true && (p.actor.kind === 'agent' || p.customerId !== undefined),
+      anchor: z.object({ version: z.number().int().min(1) }),
+    },
+  },
 });
 
 export const Visit = z.object({
@@ -72,6 +81,8 @@ export const VisitSpec = entitySpec({
   // People delete visits; the assistant may not.
   expose: { list: 'all', get: 'all', create: 'all', update: 'all', delete: 'human' },
   approval: { delete: (p) => p.actor.kind === 'agent' },
+  // Visits take no comments.
+  traits: { comments: false },
 });
 
 export const RescheduleVisitSpec = commandSpec({

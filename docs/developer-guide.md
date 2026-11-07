@@ -808,6 +808,51 @@ events, so subscribers never see the write. It refuses when the row changed sinc
 `undo_window_closed`) and the second time (409 `already_undone`); another person's or business's
 undo is a 404. A command can be undone only when its `touched` rows carry `before` and `after`.
 
+#### 5.8.3 Durable runs: the assistant waits, then goes on
+
+When a write the assistant makes parks, its run is suspended, not ended (`docs/decisions/A7.md`):
+
+1. The tool gets `needs_approval` from the API. `safely` (`@hykr/core/tools`, which every generated
+   tool uses) calls Mastra's `suspend()` with a `ParkedCall`: the approval's id and summary, what the
+   tool shows while it waits (its approval card), and how to rebuild the turn (whom it acts for, the
+   business, channel, language, time zone, surfaces, the record on screen). Mastra stores the run in
+   its `mastra` schema under the turn's run id, which is also the approval's `run_id`.
+2. The turn still answers as a parked one (`durableAgent` in `@hykr/agents`, used by `agentFor`): the
+   parked call is a tool result with its card, and the reply ends with "I've asked for your
+   approval: …" (the framework's line, in the turn's language). The chat, WhatsApp's buttons and
+   voice are unchanged.
+3. The decision (app, WhatsApp button, or the expiry sweeper) stores `approval.decided`. The
+   `resume.approvals` subscriber puts it on the `agent-resume` queue. `ResumeService` finds the run,
+   checks the business, the requester, that they still belong, and the thread, passes the turn hooks
+   (`TurnInfo.kind` `'resume'`: credits and the model policy apply), and resumes it. One resume
+   runs per run at a time (a Redis lock; a second decision waits on its queue). Hold no database
+   transaction open around a model run: Mastra's first use of its storage builds indexes
+   concurrently, which waits for every open transaction.
+4. The tool does not call the API again (the approval's replay already wrote, or nothing did). It
+   answers `{ ok: true, result: { status: 'approved' | 'rejected' | 'expired', approval } }`, or a
+   refusal for `failed`. The model says what happened and carries on with the rest of the request,
+   under the same run id, so every follow-on write is audited under it.
+5. The continuation is a new assistant message in the person's thread. The app reloads its
+   conversation on the live event `thread.continued`; a run from WhatsApp sends it to the same
+   number while the 24-hour window is open.
+
+In a script for the scripted model, `decided(outcome)` says how a resumed call was decided, and
+`written(outcome, done, turn)` already says the framework's line for each decision:
+
+```ts
+// application/domain/src/modules/meetings/agent/scripts.ts
+const r = turn.result('close-meeting');
+if (r && decided(r) === 'approved') {
+  const todos = turn.result('list-todos');
+  if (!todos) return [call('list-todos', { meetingId, done: false })]; // the run goes on
+  return [say(`Closed ${name}. ${plural(items(todos).length, 'to-do')} to follow up.`)];
+}
+if (r) return [say(written(r, () => `Closed ${name}.`, turn))]; // rejected, expired
+```
+
+A tool contributed outside `tool-factory.ts` suspends too when it calls `safely`. One that calls the
+API itself returns the parked result and its run ends there, as before.
+
 ### 5.9 Extension points: traits, contributions and settings sections
 
 Shared behaviour plugs in without editing the framework's central files. There are three seams, and
@@ -824,9 +869,10 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `identityProviders` and `numberSeries` (section 5.13) in `@hykr/core`; `toolContributions` in
   `@hykr/core/tools`; `documents` (section 5.19),
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
-  `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `fileHolders`
-  (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
-  `creditPurchaseProviders` (section 7.6) and `jobs` (section 5.17) in `@hykr/api`.
+  `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources`,
+  `fileHolders` (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
+  `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21) and
+  `dataExportSources` (section 5.22) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -884,13 +930,14 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   runs on the shared `events` queue; `queue` adds the envelope to your own queue. The envelope has
   the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
   (F3) before it leaves the server. The in-process `EventBus` is not relayed.
-- **Turn hooks.** Every chat turn and back-office draft passes `turnHooks` in `ChatService`
-  (`gateTurn`): first a check that the deployment has a model (503 `model_not_configured`), then the
-  hooks, then the business's model policy chooses the turn's model (section 7.5). `before` returns
-  `{ refuse: { rule, reason, status?, say? } }` or `{ context?, model?, withoutTools? }`; a refusal is
-  `TurnRefused` (403 unless given, nothing saved; on WhatsApp the person hears `say`). A hook's
-  `model` is a ref (`<provider>/<model>`) that the policy checks like any other. `after` sees the
-  reply, the tools called, the token usage and `turn.model`, the model the turn ran on.
+- **Turn hooks.** Every chat turn, back-office draft and resumed run (`kind: 'resume'`, section
+  5.8.3) passes `turnHooks` (`gateTurn`): first a check that the deployment has a model (503
+  `model_not_configured`), then the hooks, then the business's model policy chooses the turn's model
+  (section 7.5). `before` returns `{ refuse: { rule, reason, status?, say? } }` or
+  `{ context?, model?, withoutTools? }`; a refusal is `TurnRefused` (403 unless given, nothing saved;
+  on WhatsApp the person hears `say`). A hook's `model` is a ref (`<provider>/<model>`) that the
+  policy checks like any other. `after` sees the reply, the tools called, the token usage and
+  `turn.model`, the model the turn ran on.
 - **The agent per turn.** The model (the one the policy chose, `model` in the request context; the
   scripted one in fake mode), the guardrail (on the same model), the tools (generated, plus
   `toolContributions`, minus `withoutTools`) and the instructions (plus the hooks' context lines, as
@@ -908,12 +955,20 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   business. Push reaches only devices registered in the notification's business. No device, or Expo
   refusing every device, moves on at once; a receipt error on every device (polled each minute by the
   `push.receipts` schedule) moves on later through `NotifyService.fallback`. A gone device is forgotten.
+- **In-app inbox.** `inapp` is the framework's in-app delivery channel (`features/inbox`, decisions in
+  `docs/decisions/B16.md`). A notification that lists it needs `inapp: { title, body, url?, record? }`.
+  It keeps one item per person and dedupe key in `channel.inbox_items`, in the reader's language, and
+  announces it on the live stream to that person only. A contact without an account has no inbox (the
+  next channel is tried). People read theirs with `GET /api/inbox` and mark items read with
+  `POST /api/inbox/read` (`{ ids }` or `{ all: true }`); the app's `inboxPlugin()` adds the `/inbox`
+  screen.
 - **Live updates.** `GET /api/live` (server-sent events, people only) sends `{ name, type, id }` for
   each committed event about a record the person may read now: an entity's record through its scoped
   read (as `GET`), any other type through a contributed `liveResources` check (`approval` and `job`
-  are the framework's). The `live.relay` subscriber publishes events on Redis per business, ids
-  only. A record that is gone reaches only streams already told about it and the person who changed
-  it. The app's `livePlugin()` invalidates the matching queries, and everything after a reconnect.
+  are the framework's, and `thread` from the `resume` feature: only the thread's owner). The
+  `live.relay` subscriber publishes events on Redis per business, ids only. A record that is gone
+  reaches only streams already told about it and the person who changed it. The app's
+  `livePlugin()` invalidates the matching queries, and everything after a reconnect.
 - **Inbound hooks.** Each WhatsApp message the code did not answer itself (buttons, keywords) passes
   `inboundHooks` before its turn: `{ handled: true }` keeps it out, `{ context }` adds lines the turn
   reads. A hook that throws is logged and skipped. A burst that says "delete my data" passes no hook:
@@ -1494,6 +1549,100 @@ who hears about it are the application's. The sample's `orders` module uses ever
   `GET /api/history/versions?resourceType&resourceId` lists a series as the caller may read it
   (`<VersionList>`); `diffFields` and `diffLists` compare two revisions.
 
+### 5.21 Comments and mentions
+
+Every record a person can read takes comments (`docs/decisions/B16.md`). The framework's `comments`
+feature keeps them in `app.comments`, keyed by the record's entity and id, and reaches them only
+through that record: whoever may read it now (its entity's scoped read, as `GET`; the assistant also
+needs the entity's `get` exposed) reads its comments, and anyone else gets 404.
+
+- **Writing** is three platform commands, through `runWrite`: `comment.add` (`POST /api/comments
+  { entity, recordId, body, internal?, anchor? }`, the assistant's `add-comment`), `comment.edit`
+  (`PATCH /api/comments/:commentId`, the author only) and `comment.remove` (`DELETE`, the author or
+  `comments.moderate`). Each command's audit row and approval name the record, so its history shows
+  "commented on"; the comment itself is audited as `comment`. Only people with an account comment.
+- **Reading.** `GET /api/comments?entity=&id=` (newest first, `nextCursor` for older ones), each with
+  `can: { edit, remove }` for the caller; the assistant's `list-comments`.
+- **Per entity**, the `comments` trait: `false` turns comments off (`comments_off`); its object form
+  gives an `approval` rule (checked with the action `comment`, the comment as it would be, `{ entity,
+  recordId, body, internal, anchor }` plus `commentId` on an edit, and the record; its object form
+  also names who decides and the approval `level`) and an `anchor` schema (a JSON object: a version,
+  a point) without which a comment carries no anchor.
+- **Edits pass the same gates as adds**: an edit publishes new text to the same readers, so the
+  trait's rule and the level rules decide it too, and a parked edit changes nothing until it is
+  approved (its new mentions are told then). Across the application, a level rule lists both
+  operations, `on: ['comment.add', 'comment.edit']`, and reads `commentWriteOf(args)` (`@hykr/contracts`:
+  `{ action, on: { entity, id }, body, mentions, internal, anchor, commentId }`), not `input`, which
+  an edit only has the new text in. The sample's orders module puts comments a customer could read,
+  and their edits, at its `external` level (section 5.8.1). Removing never parks.
+- **Mentions** are tokens in the text, `@[Name](user:<id>)`. The server checks each one: a member
+  of the business who may read the record now (and, for an `internal` comment, holds
+  `comments.internal`). Anyone else refuses the comment (`mention_not_allowed`), so nobody is told of
+  a record they cannot open. Labels become the names the server knows. `GET
+  /api/comments/mentionable?entity=&id=&q=` (and the assistant's `list-mentionable`) offers who may
+  be named. A feature adds a kind of target with `mentionKinds` (`MentionKind`: `resolve`, and
+  `suggest` for the picker); the agents feature adds `agent`.
+- **Events.** `comment.added`, `comment.edited`, `comment.removed`, and one `comment.mentioned` per
+  newly named target (never the author), all in the outbox with the write. A `comment.mentioned`
+  row is `{ id, tenantId, commentId, on: { entity, id }, target: { kind, id, label }, author: { id,
+  name }, internal, excerpt }` (`CommentMentionRow` in `@hykr/notifications`): subscribe to it
+  (`defineSubscriber({ on: ['comment.mentioned'] })`) to act on a mention, or declare a notification
+  on it. The framework's own, `comment.mention`, puts it in the person's in-app inbox; push, email
+  or WhatsApp is the application's own notification (the sample's orders module pushes, then emails).
+- **Team-only comments** (`internal: true`) are written, read and named only by holders of
+  `comments.internal` (the built-in team roles; give your own roles the capability).
+- **Live and erasure.** Comment events reach the streams of people who may read the comment; inbox
+  items, their owner's. Erasing a person deletes their comments and inbox items and turns tokens
+  naming them into `@—`. A record deleted through its entity leaves its comments unreachable.
+- **The app.** `<Comments entity="order" id={id} />` (`@hykr/app`) is the discussion: oldest first,
+  edit and remove where allowed, a composer whose `@` offers the people to name, and a "Team only"
+  switch for those who may. `inboxPlugin()` adds `/inbox`; `<InboxBell />` shows the unread count.
+
+### 5.22 Exporting a business's data
+
+A person who may (`data.export`, held by `owner` unless the application or the business grants it
+to another role) exports the business's data as one zip archive (`docs/decisions/A11X.md`).
+
+```ts
+// app, back office or any client
+const started = await api.command(StartExportSpec, { formats: ['json', 'csv'], only: ['todo'] });
+const job = await api.jobs.get(started.value.id);          // then the archive: api.files.get(job.files[0])
+
+// server: data that no entity serves joins the export (contributes: { dataExportSources: [...] })
+export const AuditSource: DataExportSource = {
+  name: 'audit-log',                                       // its files: audit-log.json, audit-log.csv
+  async *rows({ principal, tenantId, db }) { /* yield only what principal may read */ },
+};
+```
+
+- **Starting** is a command, `export.start` (`POST /api/exports { formats?, only? }`), for people
+  only (no assistant tool). It needs `data.export` (403 `needs_data_export`, audited as denied),
+  refuses a second export while one of the business runs (409 `export_running`) and an unknown
+  name in `only` (400 `unknown_export_part`), and starts a job of the kind `export.data` (section
+  5.17). Its audit row is `export.start` on the business (`resource_type 'tenant'`).
+- **What is read.** Every served entity, through its scoped repository and `toRead(row, p)`, as the
+  person who asked, as they stand when it runs: their access, record grants and hidden fields apply
+  exactly as on `GET /api/<plural>`. The export never widens anyone's reach (the sample's owners read
+  their own records, so that is what an owner exports). Left out, and named in the manifest's
+  `skipped`: entities whose list is `expose: 'internal'`, entities a feature flag switches off for
+  the business, and entities whose plugins refuse the person's list. Platform-shared rows (section
+  5.18) are not the business's and stay out. Then each export source's rows, through the read
+  projectors with the source's name as the resource type.
+- **The archive.** `export-<date>.zip`: `<plural>.json` (an array, one record per line) and
+  `<plural>.csv` per entity (UTF-8 with a byte-order mark, CRLF, a header of the read schema's
+  fields the person sees, objects as JSON, a leading `'` on text a spreadsheet would run as a
+  formula), the same per source, and `manifest.json` (`ExportManifest`: who, when, the parts and
+  their row counts, what was skipped). It is kept on the job as a server file: only its person
+  reaches it (`GET /api/jobs/:id`, `GET /api/files/:id`), and only while they hold `data.export`.
+  Past `FILES_MAX_BYTES` (compressed) the job fails `too_large`. `readZip(bytes)` (`@hykr/api`)
+  reads one back.
+- **In the app** list `exportPlugin` in `<AppShell plugins>`: an "Export data" destination and
+  `/export` screen for holders of `data.export` (`useExports()`, `useStartExport()`,
+  `useCanExport()` for your own screen). The back office's Settings screen has a "Data export"
+  section for them.
+- The fixture's `features/export` and `test/framework/export.e2e.test.ts` show a switched-off
+  module, a hidden field, an export source and a business role that may export.
+
 ---
 
 ## 6. Principals and policy
@@ -1624,6 +1773,7 @@ capabilities, with the roles that hold them by default (its features add their o
 | `memory.read` | owner, admin, ops, staff | Reading the business's memory, and having it recalled (section 7.7) |
 | `memory.write` | owner, admin, ops, staff | Adding to the business's memory, and changing your own |
 | `memory.manage` | owner, admin | Changing or deleting anyone's memories |
+| `data.export` | owner | Exporting the business's data, and keeping one's export archives (section 5.22) |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -1744,7 +1894,9 @@ defineScript({
 
 The first script that matches runs, and earlier modules' scripts come first. `defineServer` runs every module's eval inputs through all the modules' scripts and refuses to boot when another module's script would take one (`todos`'s `add` would take `add order 5` from an `orders` module listed after it). Give each module verbs of its own.
 
-Helpers you will use, all from `@hykr/agents/script`: `call`, `say`, `sayIn(turn, { en, hi, te })`, `verbs(...)`, `items(outcome)`, `written(...)`.
+Helpers you will use, all from `@hykr/agents/script`: `call`, `say`, `sayIn(turn, { en, hi, te })`, `verbs(...)`, `items(outcome)`, `written(...)`, `decided(outcome)`.
+
+A write that waits for approval suspends the run: the script's next step runs when the request is decided, with the tool's result saying `approved`, `rejected` or `expired` (section 5.8.3). The steps before the park are still in `turn.steps`.
 
 The framework's own scripts (saved pages, handoff, the failing turn) run before the domain's. Each feature keeps them in `framework/agents/src/fake/scripts/<feature>.ts` as `defineScriptSet({ name, order, scripts })`, with one line in `scripts/index.ts`. The first script that matches runs, so `order` places the set: pages 100, handoff 200, testing 900. A set or script name used twice throws. A new framework tool gets its script there.
 
@@ -2057,11 +2209,12 @@ export const MeetingReminder = defineTemplate({
 | `whatsapp` | `{ template, params(row, reader) }`. Required when `'whatsapp'` is a channel (and for `onButton`, `approval`). |
 | `email` | `{ subject, body }`. Required when `'email'` is in `channels`. |
 | `push` | `{ title(row, reader), body(row, reader), url?(row) }`: what the phone shows, and the app path a tap opens. Required when `'push'` is in `channels`. |
+| `inapp` | `{ title(row, reader), body(row, reader), url?(row), record?(row) }`: what the person's in-app inbox keeps, and what it opens. Required when `'inapp'` is in `channels`. |
 | `onButton` | `{ [buttonId]: (row) => { reschedule?: Date; reply?: Labels } \| undefined }` |
 | `approval` | `(row) => approvalId`: the quick replies `approve` and `reject` decide that approval |
 | `dedupe` | Required. `(row) => string`: one pending schedule per key |
 
-Event names are `<entity>.created|updated|deleted`, your commands' `NamedEvent`s, and `approval.requested` / `approval.decided`.
+Event names are `<entity>.created|updated|deleted`, your commands' `NamedEvent`s, `approval.requested` / `approval.decided`, and `comment.mentioned` (section 5.21).
 
 Add the template and notification to the module's `<name>Notifications` (the module's `index.ts` passes them to `defineModule`). Template names and notification keys are unique across modules. Then run:
 
@@ -2177,6 +2330,9 @@ Give it `{ grant: 'granted' }` in the entity's `access`, and its children `{ gra
 
 **…hide a field (cost, margin) from some roles?**
 `traits: { fieldPolicy: { cost: '<module>.cost.read' } }` on the spec, with the capability defined by the module (section 6.4).
+
+**…put data no entity serves (a module's own table) in a business's export?**
+Contribute a `dataExportSources` entry, `{ name, rows(ctx) }`, that yields only what `ctx.principal` may read. Let admins export too: give them `data.export` (`roleOverrides`, or a role's `capabilities`). Section 5.22.
 
 ---
 
@@ -2335,6 +2491,7 @@ These are not built. Each has a workaround for now.
 | Memory of the record on screen | A turn's recall does not prefer memory of the record the person is looking at. Ask with `recall-memory` and `about`. |
 | Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it, or the `memory` settings, yet. |
 | Memory timings | The indexer gives the embedding provider 30 s per batch and takes over a claim after 120 s; recall gives it 4 s per turn (1.5 s on voice). All are constants in `features/memory/` (`indexer.ts`, `recall.service.ts`), not deployment settings. |
+| Durable runs | A run waits only for approvals (no questions, timers or webhooks). A run outside a chat thread (none yet) is not resumed. A decision after WhatsApp's 24-hour window sends nothing there (the app shows it), and a request a continuation parks again is approved in the app, not with buttons. A resume a turn hook refuses (credits) runs no model and is not tried again. If the person keeps chatting meanwhile, the resumed run does not see those messages. A run parked before a deploy goes on under the new instructions and tools. A run whose resume never comes keeps the parked step's tokens unmetered. |
 | Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
 | Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates of an undoable write wait with its events until the window closes. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
@@ -2355,14 +2512,21 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in and nav filter slots. Routes and nav have no framework feature yet. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in and nav filter slots; `inboxPlugin()` (section 5.21) and `exportPlugin` (section 5.22) use routes and nav. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
 | Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
 | Live deletions for everyone | A deleted record reaches only streams already told about it and the person who deleted it; others see it go at their next refetch (focus, reconnect, their own write). |
+| Comment attachments, reactions, threads | Not built. Put files on the record itself; reply with a new comment that mentions the person. |
+| Comments from WhatsApp | A contact without an account cannot comment, and a mention is not answerable from WhatsApp. Comment in the app. |
+| Filtering comments by anchor | `GET /api/comments` returns every comment of the record; filter by `anchor` in the client. |
+| Comments of deleted records | No foreign key reaches a record of any type: deleting a record leaves its comments in `app.comments`, unreachable. They go with the business. |
+| An unread badge on the Inbox destination | Nav items have no badge. Put `<InboxBell />` in a screen's header. |
 | Live back office | The back office still polls its inbox (10 s) and an open conversation (5 s): inbound messages and handoffs write no outbox events. |
 | Missed live events | A reconnect refetches every query; `Last-Event-ID` replay is not supported. |
-| Data export for a business | Not built (A11's export waits for jobs and files). Read the business's records through the API's lists. |
+| Files' bytes in a data export | An export lists file ids on records, not the files themselves. Download them with `GET /api/files/:id`. |
+| Large data exports | An export is built in the worker's memory, one entity at a time, and fails `too_large` past `FILES_MAX_BYTES` (compressed): raise the limit, or export a few entities at a time (`only`). |
+| Telling someone an export is ready, export retention | Nothing notifies the person; the export screen polls. Archives stay until "delete my data" (B11). |
 | Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
 | A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
 | Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |

@@ -12,9 +12,9 @@ application hands its modules to the framework in two places:
   modules, migrations, contributes })` from `@hykr/api`;
 - the app: `application/mobile/src/app/_layout.tsx`, `<AppShell app modules plugins catalog
   registry config />` from `@hykr/app`, with the app's modules (`defineAppModule`), the framework
-  plugins it uses (`livePlugin()`, `pushPlugin()`, and `webMcpPlugin()`, which offers each screen's
-  `webmcp` read tools to a browser agent), and the catalog and registry built from every module's
-  specs and views.
+  plugins it uses (`livePlugin()`, `pushPlugin()`, `webMcpPlugin()`, which offers each screen's
+  `webmcp` read tools to a browser agent, and `inboxPlugin()`, the in-app inbox), and the catalog
+  and registry built from every module's specs and views.
 
 Two dependency-cruiser rules, run by `pnpm lint:deps`, keep it that way:
 `framework-never-imports-application` and `application-uses-public-framework-exports` (only
@@ -36,7 +36,7 @@ and registers it.
 
 | Layer | In the module | It must export |
 |---|---|---|
-| Contracts | `contracts/` (isomorphic) | Its `entitySpec`s and `commandSpec`s, and `<name>Spec = moduleSpec({ name, dependsOn, entities, commands })` from `@hykr/contracts`, entities keyed by plural. A field that keeps files is a `FileRef` or `fileRefs(max)`, listed in the spec's `files` trait with what it accepts |
+| Contracts | `contracts/` (isomorphic) | Its `entitySpec`s and `commandSpec`s, and `<name>Spec = moduleSpec({ name, dependsOn, entities, commands })` from `@hykr/contracts`, entities keyed by plural. A field that keeps files is a `FileRef` or `fileRefs(max)`, listed in the spec's `files` trait with what it accepts. Records take comments unless the spec says `comments: false`; the `comments` trait can also park the assistant's comments and give an anchor schema |
 | Database | `db/schema.ts` | Drizzle tables in the `app` schema (`app`, `id`, `tenantColumn()`, `customerColumn()`, `user`, `tableRef` from `@hykr/db`), named after the module (`orders`, `orders_lines`), each with `id`, `tenantColumn()`, an owner column, `customerColumn()` (when customers have rows), `createdBy`, `createdAt`, `updatedAt`. A file field's column is `fileColumn(<field>)` or `fileColumns(<field>)` |
 | API | `server/` | A Nest module with one `defineEntity` / `defineCommand` per spec (`entityController` / `entityHandlers` / `commandController`); who sees what in `access` (see below). `server/public.ts`: what other modules may call |
 | Notifications | `notifications/` (isomorphic) | Its templates (`defineTemplate`) and notifications (`defineNotification`), among them what an SLA breach (`<entity>.sla.breached`) says to whom |
@@ -141,6 +141,12 @@ it can be undone) is the application's: the sample declares `read`, `internal`, 
 `irreversible` (`application/domain/src/server/approval-levels.ts`), and the to-dos module maps its
 writes to `internal` with a level rule. Thresholds and approvers per amount band are each
 business's settings (`approvals`).
+
+When the assistant's write waits for approval, its run waits too, and goes on once the request is
+decided: the tool's result then says `approved`, `rejected` or `expired` (`failed` reads as a
+refusal). A module's scripts for the scripted model handle that with `decided(outcome)` and
+`written(...)` from `@hykr/agents/script`; the sample's meetings close, once approved, lists what is
+left to follow up (developer guide, section 5.8.3).
 
 ## What a business sets up for itself
 
@@ -255,9 +261,12 @@ module sends on its own initiative is a template, declared in code:
   follows the entity events (`meeting.created`, `meeting.deleted`) and the module's own: a
   command's event implements `NamedEvent` (`eventName`, `row`) to be one. `to` names the
   recipients (a user, a customer, a contact, or everyone with a role); `channels` is the order
-  to try (`['push', 'whatsapp', 'email']`, or a delivery channel a feature registers);
-  `whatsapp` (the template) is needed only when WhatsApp is one of them, `push`
-  (`{ title, body, url? }`) only when push is; `onButton` answers its quick replies (snooze).
+  to try (`['push', 'whatsapp', 'email']`, `inapp` for the in-app inbox, or a delivery channel a
+  feature registers); `whatsapp` (the template) is needed only when WhatsApp is one of them,
+  `push` (`{ title, body, url? }`) only when push is, `inapp` (`{ title, body, url?, record? }`)
+  only when the inbox is; `onButton` answers its quick replies (snooze). A mention in a comment
+  is the event `comment.mentioned`: a module that wants mentions pushed or emailed declares its
+  own notification on it (the sample's orders module does).
 - The framework decides the rest per recipient: consent for the topic, quiet hours and the
   marketing cap (per business), the template in their language or English, and the next
   channel when WhatsApp can't be used or fails for good. No module code sends a message.
@@ -318,6 +327,11 @@ From the contracts declaration alone:
   Telugu), stored as files the document holds, reached through their record, and sent by
   WhatsApp or email (`document.render`, `document.send`, the tools `render-document`,
   `send-document`, `get-document`, `list-documents`, and `<RecordDocuments>` in the app).
+- Comments on any record a person can read (`/api/comments`, `app.comments`), with @-mentions
+  checked against who may read the record, team-only comments, the `comment.mentioned` event,
+  and the in-app inbox (`/api/inbox`, the `inapp` delivery channel) where mentions land;
+  `<Comments entity id />` and `inboxPlugin()` in the app (developer guide, section 5.21). The
+  sample's orders show comments on an order.
 - Threads (one saved conversation per person, shared by every channel), voice sessions
   (`/api/voice/*`, LiveKit, the voice worker), and the framework's phrases in `@hykr/i18n`.
 - Businesses, memberships and customers (`/api/me`), and the scope engine behind `access`.
@@ -337,8 +351,11 @@ From the contracts declaration alone:
   voice notes, approvals by signed button, and handoff to a person with the back office
   (`framework/back-office`, `/api/backoffice`).
 - The framework's templates and notifications: login codes, approval requests and outcomes,
-  staff replies after the 24-hour window. The agent tools `send-template` (a template to a
+  staff replies after the 24-hour window, and a mention in a comment (in the in-app inbox). The agent tools `send-template` (a template to a
   customer; marketing waits for approval) and `request-human`.
+- Durable runs: an assistant run whose write waits for approval is suspended and stored (Mastra,
+  in the `mastra` schema), and resumed in the worker when the request is decided, in the same
+  thread and under the same run id (the `resume` feature, developer guide section 5.8.3).
 - The streaming chat, and the scripted model's platform scripts (`save this as …`,
   `open my … page`, `talk to the manager`, the back office's draft reply).
 - The models the assistant runs on: the deployment's OpenAI-compatible gateways (`MODEL_PROVIDERS`,
@@ -357,6 +374,11 @@ From the contracts declaration alone:
   route, a parked write answered with its `/approvals/<id>` link in the app, and the person's
   connections (`/api/mcp/connections`, the app's `connectionsPlugin`). The modules give the scopes
   and the tools; the deployment gives the addresses (`MCP_URL`, `APP_URL`).
+- Exporting a business's data (`POST /api/exports`, `data.export`, owners by default): a job that
+  reads every entity as the person who asked (their access and hidden fields) and keeps one zip of
+  JSON and CSV files on the job; a module adds data no entity serves as a `dataExportSources`
+  entry. `exportPlugin` in the app, a section of the back office's Settings (developer guide,
+  section 5.22).
 - Each business's setup: feature flags, custom field definitions (`app.custom_fields`), branding
   and verified web addresses (`app.tenant_domains`), shared records and wording (`/api/settings`,
   `/api/features`, `/api/custom-fields`, the back office's Settings screen, `settingsPlugin` in the
