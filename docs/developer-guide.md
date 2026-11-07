@@ -1980,8 +1980,10 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   stored hashed: one hour, thirty days.
 - **Who it is.** The `mcp` identity provider makes a token an agent (`mcp:<client id>`) acting for
   its person, in the business they consented in (their default one), on the `mcp` channel, with
-  the token's scopes. Everything else is the API's: access, field hiding, approvals, audit, the
-  throttle. A person who left the business gets 403.
+  the token's scopes cut down to what the person's consent allows now. A token works only while
+  that consent exists, so a token the provider mints during or after a disconnect is dead.
+  Everything else is the API's: access, field hiding, approvals, audit, the throttle. A person
+  who left the business gets 403.
 - **Scopes** are `<module>:read` and `<module>:write` for each application module (`write` covers
   `read`), plus `offline_access`. `PrincipalGuard` enforces them for any scoped credential (any
   identity provider that returns `scopes`): it reaches only routes that declare a scope
@@ -1999,8 +2001,8 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   Which writes wait (the PRD's tier 3) is the application's approval levels.
 - **Credits.** Each tool call is a `tool_calls` use (variant `mcp`); a paused business refuses it.
 - **Connections.** `GET /api/mcp/connections` (people only) lists the clients the person connected
-  in this business; `DELETE /api/mcp/connections/:clientId` disconnects one (consent deleted,
-  tokens revoked at once, audited as `mcp.connection.revoke`). In the app, list
+  in this business; `DELETE /api/mcp/connections/:clientId` disconnects one (consent deleted, which
+  ends every token of it at once, tokens revoked too, audited as `mcp.connection.revoke`). In the app, list
   `connectionsPlugin` in `<AppShell plugins>`: a `/connections` screen with both (the sample does).
 - **In tests.** `framework/api/test/framework/mcp.e2e.test.ts` runs the whole flow with
   `MCPClient` from `@mastra/mcp`; `application/api/test/domain/mcp.e2e.test.ts` runs the sample

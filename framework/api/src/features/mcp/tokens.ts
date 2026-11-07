@@ -2,7 +2,7 @@
 // them: hashed, in public.oauth_*. Checking one here is a read of those tables with the provider's
 // own rules, so the API never trusts a token the provider would call inactive.
 import { createHash } from 'node:crypto';
-import type { McpConnection } from '@hykr/contracts';
+import { type McpConnection, scopesWithin } from '@hykr/contracts';
 import {
   type Database,
   type DbOrTx,
@@ -36,7 +36,14 @@ export const isAccessToken = (value: string) =>
 
 /**
  * The grant behind an access token, or null when it is not valid: unknown, revoked, expired, its
- * client gone or disabled, bound to another resource, or without a person or business.
+ * client gone or disabled, bound to another resource, without a person or business, or without
+ * the person's consent.
+ *
+ * The consent row is the source of truth for a connection. Disconnecting deletes it, so a token
+ * the provider mints while or after that happens (its refresh grant rotates, then inserts, outside
+ * any transaction; a code issued before is redeemed later) is dead here even though its own row
+ * was never revoked. The grant's scopes are the token's cut down to the consent's, so a person who
+ * narrowed a client's consent since narrows its older tokens too.
  */
 export async function verifyAccessToken(
   db: Database,
@@ -50,9 +57,18 @@ export async function verifyAccessToken(
       token: oauthAccessToken,
       clientName: oauthClient.name,
       clientDisabled: oauthClient.disabled,
+      consented: oauthConsent.scopes,
     })
     .from(oauthAccessToken)
     .innerJoin(oauthClient, eq(oauthClient.clientId, oauthAccessToken.clientId))
+    .innerJoin(
+      oauthConsent,
+      and(
+        eq(oauthConsent.clientId, oauthAccessToken.clientId),
+        eq(oauthConsent.userId, oauthAccessToken.userId),
+        eq(oauthConsent.referenceId, oauthAccessToken.referenceId),
+      ),
+    )
     .where(eq(oauthAccessToken.token, hashed))
     .limit(1);
   if (!row) return null;
@@ -62,15 +78,16 @@ export async function verifyAccessToken(
   if (!t.userId || !t.referenceId) return null;
   if (t.resources?.length && !t.resources.includes(resource)) return null;
   // The browser session the person consented in is not consulted: a connection lives as long as
-  // its tokens (refreshed for thirty days) until the person disconnects it. Signing out deletes
-  // that session and the provider then unlinks it (set null), so it never revoked anything.
+  // its tokens (refreshed for thirty days) and its consent, until the person disconnects it.
+  // Signing out deletes that session and the provider then unlinks it (set null), so it never
+  // revoked anything.
   return {
     token: raw,
     clientId: t.clientId,
     clientName: row.clientName ?? t.clientId,
     userId: t.userId,
     tenantId: t.referenceId,
-    scopes: [...t.scopes],
+    scopes: scopesWithin(t.scopes, row.consented),
     expiresAt: t.expiresAt,
   };
 }
@@ -99,8 +116,9 @@ export async function connectionsOf(
 
 /**
  * Disconnect a client from a person in one business, inside the caller's transaction: its consent
- * goes, and every access and refresh token it holds for them there is revoked at once. Whether
- * there was anything to take back.
+ * goes, which is what ends the connection (`verifyAccessToken` needs it), and every access and
+ * refresh token it holds for them there is revoked too, as cleanup. A token the provider inserts
+ * after this commits is not revoked, but has no consent. Whether there was anything to take back.
  */
 export async function revokeConnection(
   tx: DbOrTx,

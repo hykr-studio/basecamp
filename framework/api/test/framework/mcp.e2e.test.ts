@@ -526,6 +526,62 @@ describe('connections', () => {
     ]);
   });
 
+  it('ends every token of a connection whose consent is gone, even one minted after', async () => {
+    // A refresh racing a disconnect: the provider rotates, the person disconnects, then the
+    // provider inserts the new tokens, unrevoked. Deleting only the consent row is that state.
+    const c = await connectMcp(ana, 'tasks:read offline_access');
+    const api = withToken(c.accessToken);
+    expect((await api('GET', '/api/tasks')).status).toBe(200);
+    await pool.query('delete from oauth_consent where client_id = $1 and user_id = $2', [
+      c.clientId,
+      ana.id,
+    ]);
+    const rows = await pool.query(
+      'select revoked from oauth_access_token where client_id = $1 and user_id = $2',
+      [c.clientId, ana.id],
+    );
+    expect(rows.rows.every((r: { revoked: Date | null }) => r.revoked === null)).toBe(true);
+    expect((await api('GET', '/api/tasks')).status).toBe(401);
+    // The provider's refresh grant does not ask for the consent, so it still mints a token.
+    const refreshed = await form('/api/auth/oauth2/token', {
+      grant_type: 'refresh_token',
+      refresh_token: c.refreshToken ?? '',
+      client_id: c.clientId,
+      resource,
+    });
+    expect(refreshed.status).toBe(200);
+    const minted = String(refreshed.body.access_token);
+    for (const token of [c.accessToken, minted]) {
+      expect((await withToken(token)('GET', '/api/tasks')).status).toBe(401);
+      const mcp = await fetch(`${server.base}/mcp`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(mcp.status).toBe(401);
+    }
+    // And nothing is listed for the person to disconnect: there is nothing left that works.
+    expect(
+      (await ana.call('GET', '/api/mcp/connections')).body.items.map(
+        (x: { clientId: string }) => x.clientId,
+      ),
+    ).not.toContain(c.clientId);
+  });
+
+  it('narrows a token to what its consent allows now', async () => {
+    const c = await connectMcp(ana, 'tasks:write');
+    const api = withToken(c.accessToken);
+    // The person narrowed this client to reading since the token was issued.
+    await pool.query(
+      `update oauth_consent set scopes = array['tasks:read'] where client_id = $1 and user_id = $2`,
+      [c.clientId, ana.id],
+    );
+    expect((await api('GET', '/api/tasks')).status).toBe(200);
+    const write = await api('POST', '/api/tasks', { title: 'Not any more' });
+    expect(write).toMatchObject({ status: 403, body: { rule: 'out_of_scope' } });
+    expect(await c.tools()).toEqual(['tasks_read']);
+    await c.close();
+  });
+
   it('ends a token whose person left the business', async () => {
     const c = await connectMcp(sam, 'tasks:read');
     expect((await withToken(c.accessToken)('GET', '/api/tasks')).status).toBe(200);

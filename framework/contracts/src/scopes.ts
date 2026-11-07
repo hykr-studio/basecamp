@@ -31,6 +31,20 @@ export function scopeCovers(
   );
 }
 
+/**
+ * These scopes, cut down to what `granted` still covers (write covers read): a scope it covers
+ * stays, a module's `write` it only reads becomes that `read`, anything else goes. In order.
+ */
+export function scopesWithin(scopes: readonly string[], granted: readonly string[]): string[] {
+  const kept = (s: string): string | undefined => {
+    const m = parseScope(s);
+    if (!m) return granted.includes(s) ? s : undefined;
+    if (scopeCovers(granted, m.module, m.access)) return s;
+    return scopeCovers(granted, m.module, 'read') ? scopeOf(m.module, 'read') : undefined;
+  };
+  return [...new Set(scopes.map(kept).filter((s) => s !== undefined))];
+}
+
 /** The modules these scopes reach for this access, in the order given. */
 export function modulesCovered<M extends { name: string }>(
   modules: readonly M[],

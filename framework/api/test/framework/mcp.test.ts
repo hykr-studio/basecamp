@@ -6,6 +6,7 @@ import {
   modulesCovered,
   parseScope,
   scopeCovers,
+  scopesWithin,
 } from '@hykr/contracts';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -37,6 +38,19 @@ describe('scopes', () => {
     expect(modulesCovered(catalog.modules, ['visits:read'], 'read').map((m) => m.name)).toEqual([
       'visits',
     ]);
+  });
+
+  it('are cut down to what is still granted, a write the grant only reads becoming that read', () => {
+    const token = ['tasks:write', 'visits:write', 'offline_access'];
+    expect(scopesWithin(token, ['tasks:write', 'visits:write', 'offline_access'])).toEqual(token);
+    expect(scopesWithin(token, ['tasks:read', 'offline_access'])).toEqual([
+      'tasks:read',
+      'offline_access',
+    ]);
+    expect(scopesWithin(['tasks:read'], ['tasks:write'])).toEqual(['tasks:read']);
+    expect(scopesWithin(['tasks:write'], ['visits:write'])).toEqual([]);
+    expect(scopesWithin(['tasks:read', 'tasks:write'], ['tasks:read'])).toEqual(['tasks:read']);
+    expect(scopesWithin(token, [])).toEqual([]);
   });
 });
 
