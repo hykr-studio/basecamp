@@ -2700,13 +2700,16 @@ The deployment configures its models; each business chooses among them (`docs/de
 Every business's use of what costs money is metered, priced and, when its plan says so, capped
 (`docs/decisions/A3.md`). A credit is one minor unit of the deployment's credits currency.
 
-- **Meters.** `tokens` (a turn's input and output, the model as variant), `tool_calls` (one per
+- **Meters.** `tokens` (a model's input and output, the model as variant: a turn's, the
+  guardrail's calls, and embeddings for memory recall and indexing), `tool_calls` (one per
   tool a turn called), `messages` (a WhatsApp message the provider accepted, its template's
   category as variant) and `voice_seconds` (a reported voice session). Each use is a row in
   `app.usage_events`, added to its period's counter (`app.usage_counters`). A feature or module adds
   a meter with `defineMeter({ name, unit, per })` (contributed as `meters`) and records with
   `CreditsService.record({ tenantId, meter, quantity, source, ref })`; `ref` makes a retried
-  report count once. Turns without a business (Studio) are not metered.
+  report count once. A `tokens` use without a cost is priced like a turn's (`tokens.<model>`, then
+  `tokens`, then the model's own price), with its input and output split when given
+  (`UsageInput.tokens`). Turns without a business (Studio) are not metered.
 - **Prices** come from `CREDITS_CONFIG` (JSON): `currency`, `prices` by `<meter>` or
   `<meter>.<variant>` in credits per pricing unit (tokens per million, voice per minute),
   `markupPercent` on a model's own `MODEL_PROVIDERS` price (used when no `tokens` price is set and
@@ -2728,7 +2731,12 @@ Every business's use of what costs money is metered, priced and, when its plan s
   sessions (and a session's `maxSeconds` is cut to what is left), and outbound messages of a
   category in `pauseMessages` (recorded as failed, never sent). Replies, codes, approvals, handoffs
   and staff messages always go. A paused business's WhatsApp customer is handed to the team.
-  One action may overshoot the cap; the wallet goes below zero by that much.
+  Every call an agent makes to the API (the assistant's key, an agent run's token, an MCP token)
+  is refused too, 402 `{ error: 'credits_paused', rule, reason }` (`CreditsAgentInterceptor`; the
+  voice relay is not), so a run that crosses the cap stops there: the assistant ends it with the
+  paused sentence (`EndWhenPaused`) instead of carrying on. Embedding stops as well: recall runs
+  without it (the API is 402) and the indexer leaves the business's memories pending. One action
+  may overshoot the cap; the wallet goes below zero by that much.
 - **The operator** is a platform operator holding `platform.credits` (section 6.6), signed in:
   `GET /api/credits/operator/:tenantId` (full status) and `/ledger`, `PUT …/settings` (the
   plan), `PUT …/override` (`{ override: { mode: 'run' | 'pause', until?, reason } }` or `null`) and
@@ -2740,13 +2748,17 @@ Every business's use of what costs money is metered, priced and, when its plan s
 - **Buying credits.** `POST /api/credits/purchases { amount, provider? }` goes through `runWrite`
   (a write hook may park it) and records the purchase; its `CreditPurchaseProvider` (contributed
   as `creditPurchaseProviders`, a payment connector's) starts it and returns a checkout URL or the
-  outcome. The connector's confirmation calls `CreditsService.settlePurchase(id, { status, ref })`,
-  which tops the wallet up once. No provider ships with the framework: without one, 503.
+  outcome. The connector's confirmation (a `connectorHandler` on its verified webhook) calls
+  `CreditsService.settlePurchase({ tenantId: event.tenantId, provider, purchaseId }, { status, ref })`,
+  which tops the wallet up once, and only for a purchase of that business made with that
+  provider (anything else is 404). No provider ships with the framework: without one, 503.
 - **In the app.** List `creditsPlugin` in `<AppShell plugins>`: a `/credits` screen (usage, the
   pause, the balance, buying, the history) and its destination for people with `credits.view`.
 - **In tests.** The scripted model reports usage (a token per four characters of prompt and
-  reply), so a test can price turns. The fixture's `features/credits/` shows a purchase provider,
-  an alert notification and a write hook that parks a large purchase.
+  reply), so a test can price turns. The fixture's `features/credits/` shows two purchase
+  providers (one settled by its gateway's signed webhook on a B10 connection), an alert
+  notification, a write hook that parks a large purchase, and a module's own meter
+  (`report_pages`) that a run crosses the cap with.
 
 ### 7.7 Memory and recall
 
@@ -2787,6 +2799,10 @@ call. What survives reaches the model as context lines, which it reads as data. 
 `recall-memory` do the same on request; an `about` record the caller cannot read is a 404.
 Recall's embedding gets one try and 4 s (1.5 s on a voice turn): past that the turn runs without
 recall and the API answers 503 `recall_unavailable`, so a slow provider never holds a turn.
+Every embedding (recall's and the indexer's, a use per batch) is metered as `tokens` for the
+business, the embedding model as variant (section 7.6). A business paused at its cap embeds
+nothing: its turns run without recall, the API answers 402 `credits_paused`, and the indexer
+leaves its memories pending and looks again after a minute (`MemoryIndexer.wake(tenantId)` sooner).
 
 **The index.** `app.memory_index` keeps one vector per source and no text. A write hook marks every
 touched record of a trait entity (commands included, from `touched`) in the write's transaction; the
@@ -2855,10 +2871,16 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   input }`, the action being one of the module's agent tool ids: `create-<name>`,
   `update-<name>`, `delete-<name>`, a command's `tool`, or `transition-<plural>` for an entity
   with states (`{ id, transition, ...its fields }`, the moves with `expose: 'all'`)). Only what is
-  exposed to agents. A token lists only the modules its scopes reach. Each call goes to the HTTP
-  API with the token, and answers text (a sentence, then the API's JSON); a refusal is an error
-  result. The framework features' own tools (files, documents, jobs, memory, comments) are not
-  offered over MCP yet (section 14).
+  exposed to agents. A token lists only the modules its scopes reach, less what its business has
+  switched off (A11's flags: a module, an entity, a command or a named tool id; read per request,
+  failing closed). Each call goes to the HTTP API with the token, and answers text (a sentence,
+  then the API's JSON); a refusal is an error result. The framework features' own tools (files,
+  documents, jobs, memory, comments) are not offered over MCP yet (section 14).
+- **Hints.** Each tool carries MCP annotations, so a client knows when to ask the person first:
+  `<module>_read` is `readOnlyHint`; `<module>_write` is not, and is `destructiveHint` when one of
+  its actions deletes (`delete-<name>`, a command over HTTP `DELETE`) or is marked
+  `destructive: true` by the application (a command's `traits`, a transition). Writes say
+  `openWorldHint` (they can notify people or fire webhooks).
 - **Approvals.** A write that parks answers with who decides it, its level, and the link
   `<APP_URL>/approvals/<id>`, where a person decides it in the app. An MCP client never decides.
   Which writes wait (the PRD's tier 3) is the application's approval levels.
@@ -3206,7 +3228,7 @@ These are not built. Each has a workaround for now.
 | A telephony provider, call recordings | None ships: contribute a `telephonyProviders` entry. Recordings and transcripts are not stored (no consent flow). |
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
 | Identity provider scopes | Enforced (section 7.8): a scoped credential reaches only routes that declare a scope. Only the generated entity and command routes declare one, so a feature's own routes are out of reach for scoped credentials until they say which scope they need. An identity's `narrowing` (an agent run's, section 5.26) is not a route scope: a run token is not a scoped credential. |
-| MCP: several businesses | A token acts in the business the person is in by default when they consent (their default membership, else their latest participation); the consent screen cannot choose another. Hiding the tools of a module a business's feature flag switches off is not done (the API answers 404 for its calls). |
+| MCP: several businesses | A token acts in the business the person is in by default when they consent (their default membership, else their latest participation); the consent screen cannot choose another. |
 | MCP: older clients, other client registration | `@mastra/mcp` 2.x serves MCP revision 2026-07-28 only. Client ID metadata documents, the device grant, JWT access tokens and DPoP are not enabled. A client registered before a module existed registers again to ask for its scopes. Browser-based MCP clients from other origins are refused by CORS. |
 | MCP: screens | The app's `connectionsPlugin` lists and disconnects a person's clients; the back office has no view of every client in a business. The consent screen shows the application's name, not a business's branding. MCP Apps cards, resources and prompts are not served. |
 | MCP: framework features' tools | The MCP tools cover each module's entities, commands and state transitions. The framework features' own assistant tools (files, documents, jobs, memory recall, comments, handoff) are not offered, and their routes declare no scope, so a token gets 403 `out_of_scope` there. |
@@ -3256,9 +3278,9 @@ These are not built. Each has a workaround for now.
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
 | A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
 | Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |
-| Buying credits | No purchase provider ships: register a `CreditPurchaseProvider` from a payment connector and call `CreditsService.settlePurchase` from its verified webhook. |
-| Credits mid-turn | A turn, a voice session or a message is checked before it starts; one may take a business past its cap. Tool calls are not refused in the middle of a turn. |
-| Metering everything | The guardrail's model calls, embeddings, WhatsApp voice-note transcription and voice sessions whose worker never reported an end are not metered. Call `CreditsService.record` from the feature. |
+| Buying credits | No purchase provider ships: register a `CreditPurchaseProvider` from a payment connector and call `CreditsService.settlePurchase({ tenantId, provider, purchaseId }, …)` from its verified webhook's handler. A purchase is found by our id only, not by the provider's own reference. |
+| Credits mid-turn | A turn, a voice session or a message is checked before it starts, and an agent's next call is refused once the business is paused, so one call may take it past its cap. A WhatsApp customer whose turn crosses the cap hears the paused sentence; the handoff comes with their next message. |
+| Metering everything | WhatsApp voice-note transcription and voice sessions whose worker never reported an end are not metered. Call `CreditsService.record` from the feature. |
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |
