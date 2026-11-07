@@ -7,6 +7,9 @@ import type { CreditsThresholdRow } from '@hykr/contracts';
 import { type Labels, type Lang, pick } from '@hykr/i18n';
 import { defineNotification, defineTemplate, type Reader } from '@hykr/notifications';
 import { z } from 'zod';
+import { PrivacyLateNotification, PrivacyWaitsNotification } from './privacy.js';
+
+export { PrivacyLateNotification, PrivacyWaitsNotification } from './privacy.js';
 
 export const CreditsLow = defineTemplate({
   name: 'credits_low_v1',
@@ -98,5 +101,10 @@ export const CreditsOutNotification = defineNotification<CreditsThresholdRow>({
 
 export const accountNotifications = {
   templates: [CreditsLow, CreditsOut],
-  notifications: [CreditsLowNotification, CreditsOutNotification],
+  notifications: [
+    CreditsLowNotification,
+    CreditsOutNotification,
+    PrivacyWaitsNotification,
+    PrivacyLateNotification,
+  ],
 };

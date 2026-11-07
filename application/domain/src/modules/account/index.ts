@@ -1,6 +1,7 @@
 /**
  * The account module, server side: the business's account with the platform. Its credits are
- * the framework's (metered, capped, the wallet); this module words their alerts.
+ * the framework's (metered, capped, the wallet), and so are privacy requests; this module words
+ * their alerts.
  */
 import { defineModule } from '@hykr/api';
 import { accountSpec } from './contracts/index.js';
