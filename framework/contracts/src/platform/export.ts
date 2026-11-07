@@ -15,6 +15,8 @@ export const DataExportCapability = defineCapability({
     te: 'వ్యాపార డేటాను ఎగుమతి చేయండి',
   },
   roles: ['owner'],
+  // The business's data leaving it: never support's.
+  supportable: false,
 });
 capabilities.register(DataExportCapability);
 

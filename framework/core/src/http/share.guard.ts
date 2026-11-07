@@ -81,7 +81,8 @@ export class ShareGuard implements CanActivate {
     try {
       principal = await this.resolver.forShareLink(link, { verified });
     } catch (e) {
-      // A shared page whose maker is no longer in the business: the link reaches nothing.
+      // A shared page whose maker is no longer in the business, or a link made under support
+      // access that has ended: the link reaches nothing.
       if (e instanceof ForbiddenException || e instanceof UnauthorizedException)
         throw gone('link_revoked', 'This link was withdrawn');
       throw e;

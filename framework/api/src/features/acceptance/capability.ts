@@ -13,4 +13,5 @@ export const AcceptanceEvidenceCapability = defineCapability({
     te: 'అంగీకార సాక్ష్యాన్ని చూడండి',
   },
   roles: ['owner', 'admin'],
+  supportable: true,
 });

@@ -136,6 +136,8 @@ export const ApprovalCapabilities = {
       te: 'వ్యాపార అభ్యర్థనలను నిర్ణయించండి',
     },
     roles: ['owner', 'ops'],
+    // Support access never decides (B19).
+    supportable: false,
   }),
   /** Approve a marketing message sent to a customer by hand (notify.send). */
   marketing: defineCapability({
@@ -146,6 +148,8 @@ export const ApprovalCapabilities = {
       te: 'మార్కెటింగ్ సందేశాలను అనుమతించండి',
     },
     roles: ['owner', 'admin'],
+    // Support access never decides (B19).
+    supportable: false,
   }),
 } as const;
 

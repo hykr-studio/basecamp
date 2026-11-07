@@ -195,6 +195,7 @@ export const CalendarCapabilities = {
       te: 'ఇతరుల ఖాళీ సమయం చూడండి',
     },
     roles: ['owner', 'admin', 'ops'],
+    supportable: true,
   }),
 };
 

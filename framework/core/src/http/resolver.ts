@@ -200,6 +200,25 @@ export class PrincipalResolver {
   }
 
   /**
+   * Does this person still stand in this business through the platform as `onBehalfOf` says
+   * (`onBehalfOfKey`: the standing something was made under)? The first provider that knows the
+   * key answers; a key none knows counts as ended. A membership never counts: what was made under
+   * support access ends with that access, whatever the person is now.
+   */
+  async standsOnBehalf(userId: string, tenantId: string, onBehalfOf: string): Promise<boolean> {
+    for (const provider of standingProviders.all()) {
+      const holds = await provider.stillStands?.({
+        db: this.options.db,
+        userId,
+        tenantId,
+        onBehalfOf,
+      });
+      if (holds !== null && holds !== undefined) return holds;
+    }
+    return false;
+  }
+
+  /**
    * A WhatsApp contact. Linked to an account (a member or participant of this business): that
    * person, at 'whatsapp_number'. Otherwise the contact, with the roles the application gives
    * contacts: their own customer records, and the records their parties participate in.
@@ -255,7 +274,9 @@ export class PrincipalResolver {
    * id), channel `share`, no roles and no capability, the link's recipient as subject (a contact)
    * and customer, and `otp` assurance once its code was entered. A shared page's guest reads with
    * the maker's roles in that business (`reach: 'sharer'`), still without their capabilities;
-   * when the maker is no longer there, nobody is (403 from `forUser`).
+   * when the maker is no longer there, nobody is (403 from `forUser`). A link made through the
+   * platform (`onBehalfOf`: an operator's support access) reaches nothing once that standing has
+   * ended (403 `maker_gone`), whatever kind it is (docs/decisions/S1.md).
    */
   async forShareLink(
     link: {
@@ -265,9 +286,15 @@ export class PrincipalResolver {
       createdBy: string;
       contactId: string | null;
       customerId: string | null;
+      onBehalfOf: string | null;
     },
     opts: { verified: boolean; reach?: 'link' | 'form' },
   ): Promise<Principal> {
+    if (
+      link.onBehalfOf &&
+      !(await this.standsOnBehalf(link.createdBy, link.tenantId, link.onBehalfOf))
+    )
+      throw new ForbiddenException({ error: 'forbidden', rule: 'maker_gone' });
     const assurance: Assurance = opts.verified ? 'otp' : 'whatsapp_number';
     const base = {
       actor: { kind: 'guest' as const, id: link.id },

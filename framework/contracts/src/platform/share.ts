@@ -32,12 +32,15 @@ export const ShareCapabilities = {
     name: 'shares.create',
     label: same('Share by link', 'लिंक से साझा करें', 'లింక్ ద్వారా పంచుకోండి'),
     roles: ['owner', 'admin', 'ops', 'staff'],
+    // A link lets someone without an account in: support never decides who reaches the business.
+    supportable: false,
   }),
   /** Revoke anyone's link in the business. */
   manage: defineCapability({
     name: 'shares.manage',
     label: same('Manage share links', 'साझा लिंक प्रबंधित करें', 'షేర్ లింక్‌లను నిర్వహించండి'),
     roles: ['owner', 'admin'],
+    supportable: false,
   }),
 } as const;
 
@@ -327,6 +330,8 @@ export const ShareLinkInfo = z.object({
   expiresAt: z.iso.datetime(),
   revokedAt: z.iso.datetime().nullable(),
   createdBy: z.string(),
+  /** Made through the platform (`support:<grantId>`): it ends with that support access. */
+  onBehalfOf: z.string().nullable(),
   createdAt: z.iso.datetime(),
 });
 export type ShareLinkInfo = z.infer<typeof ShareLinkInfo>;

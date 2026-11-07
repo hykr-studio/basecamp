@@ -48,12 +48,19 @@ export const shareLinks = app.table(
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     revokedBy: text('revoked_by'),
+    /**
+     * Made through the platform, as audit names it (`support:<grantId>`: an operator's support
+     * access); null for the business's own people. Such a link never outlives that standing: it
+     * reaches nothing once the standing ends, and is revoked when the access is (S1).
+     */
+    onBehalfOf: text('on_behalf_of'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
     uniqueIndex('share_links_token_idx').on(t.tokenHash),
     index('share_links_target_idx').on(t.tenantId, t.resourceType, t.resourceId),
     index('share_links_form_idx').on(t.tenantId, t.form).where(sql`${t.form} is not null`),
+    index('share_links_behalf_idx').on(t.onBehalfOf).where(sql`${t.onBehalfOf} is not null`),
   ],
 );
 

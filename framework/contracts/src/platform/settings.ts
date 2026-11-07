@@ -17,6 +17,7 @@ export const SettingsCapability = defineCapability({
     te: 'వ్యాపార సెట్టింగ్‌లను మార్చండి',
   },
   roles: ['owner', 'admin'],
+  supportable: false,
 });
 capabilities.register(SettingsCapability);
 
