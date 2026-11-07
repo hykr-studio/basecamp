@@ -7,6 +7,7 @@ import { signApproval } from '@hykr/channels';
 import { contentHash } from '@hykr/notifications';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  addMember,
   asAssistant,
   boot,
   eventually,
@@ -255,5 +256,39 @@ describe('approvals on WhatsApp', () => {
     expect(
       toNumber(address).some((s) => JSON.stringify(s.interactive ?? '').includes('apr:')),
     ).toBe(false);
+  });
+
+  it("the business's own roles count: a role it made, or one it gave approvals.decide, is asked", async () => {
+    // Bea holds a role the business made; Cal is staff, a role it gave approvals.decide.
+    const bea = new Person('Bea Approves');
+    const cal = new Person('Cal Approves');
+    const numbers = new Map<Person, string>();
+    for (const [person, roles] of [
+      [bea, ['deputy']],
+      [cal, ['staff']],
+    ] as const) {
+      await person.signUp();
+      await addMember(person, tenantId, [...roles]);
+      const number = phone();
+      const c = await seedContact(tenantId, person.name, number);
+      await pool.query(
+        'update channel.contacts set user_id = $1, linked_at = now(), welcomed_at = now() where id = $2',
+        [person.id, c.contactId],
+      );
+      numbers.set(person, number);
+    }
+    const roles = {
+      defined: [{ name: 'deputy', label: { en: 'Deputy' }, capabilities: ['approvals.decide'] }],
+      edits: { staff: { capabilities: ['approvals.decide', 'backoffice.use'] } },
+    };
+    await pool.query(
+      `update app.tenants set settings = settings || jsonb_build_object('roles', $2::jsonb) where id = $1`,
+      [tenantId, JSON.stringify(roles)],
+    );
+    await settingsChanged(tenantId);
+
+    const { approvalId } = await customerAsksToDelete('Fetch the ladder');
+    for (const number of [anaPhone, numbers.get(bea) ?? '', numbers.get(cal) ?? ''])
+      await requestButtons(number, approvalId);
   });
 });

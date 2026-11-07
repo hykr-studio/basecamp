@@ -1843,7 +1843,6 @@ These are not built. Each has a workaround for now.
 | Several currencies in one record | A record and its children have one currency, and there are no exchange rates. |
 | Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
 | Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates of an undoable write wait with its events until the window closes. |
-| Deciders and per-business roles | `Recipient { capability }` finds the people to ask through the registered roles only. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
 | A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
 | Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |

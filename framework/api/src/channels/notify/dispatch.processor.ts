@@ -1,5 +1,5 @@
 import { type ChannelAdapter, type OutboundMessage, signApproval } from '@hykr/channels';
-import { rolesWith } from '@hykr/contracts';
+import { rolesOfBusiness, type TenantConfig } from '@hykr/contracts';
 import { type Database, schema } from '@hykr/db';
 import { langOf } from '@hykr/i18n';
 import {
@@ -104,7 +104,7 @@ export class DispatchProcessor extends WorkerHost {
     if (def.when && !def.when(data.row as never)) return 'not now';
     const recipients = data.only
       ? [data.only.recipient as Recipient]
-      : await this.expand(data.tenantId, def.to(data.row as never));
+      : await this.expand(data.tenantId, def.to(data.row as never), settings);
     for (const r of recipients)
       await this.deliver(def, data, r, data.only?.channels ?? def.channels, settings);
   }
@@ -289,18 +289,26 @@ export class DispatchProcessor extends WorkerHost {
   }
 
   /**
-   * Every member of the business whose roles hold the capability, as people, each once, without
-   * the ones it leaves out (the requester of an approval decides nothing of their own).
+   * Every member of the business whose roles hold the capability there (the declared roles with
+   * the business's edits, and its own roles), as people, each once, without the ones it leaves
+   * out (the requester of an approval decides nothing of their own).
    */
-  private async expand(tenantId: string, recipients: Recipient[]): Promise<Recipient[]> {
+  private async expand(
+    tenantId: string,
+    recipients: Recipient[],
+    settings: TenantConfig,
+  ): Promise<Recipient[]> {
     const out: Recipient[] = [];
     const seen = new Set<string>();
+    const business = rolesOfBusiness(settings);
     for (const r of recipients) {
       if (!('capability' in r)) {
         out.push(r);
         continue;
       }
-      const roles = rolesWith(r.capability);
+      const roles = business
+        .filter((x) => x.capabilities.includes(r.capability))
+        .map((x) => x.name);
       if (!roles.length) continue;
       const members = await this.db
         .select({ userId: schema.memberships.userId })
