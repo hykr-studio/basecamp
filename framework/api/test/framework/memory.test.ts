@@ -34,10 +34,12 @@ describe('anyRole', () => {
     expect(accessFor(person(['staff']), access, 'read')).toEqual({
       kind: 'grants',
       grants: ['tenant'],
+      rules: [{ grant: 'tenant' }],
     });
     expect(accessFor(person(['fixture_role']), access, 'write')).toEqual({
       kind: 'grants',
       grants: ['own'],
+      rules: [{ grant: 'own' }],
     });
     expect(Object.hasOwn(access.read, 'anything')).toBe(true);
   });

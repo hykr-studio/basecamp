@@ -21,7 +21,7 @@ const common = () => ({
 });
 
 /** Memos: memory of a task, with a field only some may read. */
-export const memos = app.table('fixture_memory_memos', {
+export const memos = app.table('fixture_memos_recall', {
   ...common(),
   title: text('title').notNull(),
   body: text('body').notNull().default(''),
@@ -31,7 +31,7 @@ export const memos = app.table('fixture_memory_memos', {
 });
 
 /** Asides: memory people may read, the assistant never. */
-export const asides = app.table('fixture_memory_asides', {
+export const asides = app.table('fixture_memos_asides', {
   ...common(),
   title: text('title').notNull(),
 });
