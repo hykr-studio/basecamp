@@ -271,8 +271,9 @@ From the contracts declaration alone:
 - Outside AI clients over MCP (developer guide, section 7.7): an OAuth 2.1 server (Better Auth's
   oauth-provider, with its sign-in and consent pages), the `/mcp` endpoint with two tools per
   module (`<module>_read`, `<module>_write`), scopes per module that the API enforces on every
-  route, and a parked write answered with its `/approvals/<id>` link in the app. The modules give
-  the scopes and the tools; the deployment gives the addresses (`MCP_URL`, `APP_URL`).
+  route, a parked write answered with its `/approvals/<id>` link in the app, and the person's
+  connections (`/api/mcp/connections`, the app's `connectionsPlugin`). The modules give the scopes
+  and the tools; the deployment gives the addresses (`MCP_URL`, `APP_URL`).
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

@@ -2,6 +2,7 @@
 // them: hashed, in public.oauth_*. Checking one here is a read of those tables with the provider's
 // own rules, so the API never trusts a token the provider would call inactive.
 import { createHash } from 'node:crypto';
+import type { McpConnection } from '@hykr/contracts';
 import {
   type Database,
   type DbOrTx,
@@ -72,16 +73,6 @@ export async function verifyAccessToken(
     scopes: [...t.scopes],
     expiresAt: t.expiresAt,
   };
-}
-
-/** One client a person allowed, in one business. */
-export interface McpConnection {
-  clientId: string;
-  name: string;
-  uri: string | null;
-  scopes: string[];
-  connectedAt: string | null;
-  updatedAt: string | null;
 }
 
 /** The clients a person allowed in this business, newest first. */

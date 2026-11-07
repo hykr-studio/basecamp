@@ -6,6 +6,7 @@ export * from './chat.js';
 export * from './framework/index.js';
 export * from './platform/index.js';
 export * from './platform/live.js';
+export * from './platform/mcp.js';
 export * from './platform/push.js';
 export * from './principal.js';
 export * from './roles.js';

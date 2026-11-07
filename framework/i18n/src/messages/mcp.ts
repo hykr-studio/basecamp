@@ -25,6 +25,14 @@ export const mcpMessages = defineMessages({
     'mcp.consent.expired': 'This request has expired or was changed. Start again from {client}.',
     'mcp.consent.signedOut': 'You are signed out. Start again from the app that asked.',
     'mcp.consent.failed': 'That did not work. Start again from the app that asked.',
+    'mcp.connections.title': 'Connected AI apps',
+    'mcp.connections.lead':
+      'Apps such as Claude or ChatGPT you allowed to act for you here. They can only do what you can, and anything that needs approval waits for a person.',
+    'mcp.connections.empty': 'No app is connected yet.',
+    'mcp.connections.since': 'Connected {date}',
+    'mcp.connections.disconnect': 'Disconnect',
+    'mcp.connections.disconnected': '{name} is disconnected.',
+    'mcp.connections.offline': 'Stays connected',
   },
   hi: {
     'mcp.signIn.title': '{app} में साइन इन करें',
@@ -48,6 +56,14 @@ export const mcpMessages = defineMessages({
     'mcp.consent.expired': 'यह अनुरोध पुराना हो गया है या बदल गया है। {client} से फिर से शुरू करें।',
     'mcp.consent.signedOut': 'आप साइन आउट हैं। जिस ऐप ने पूछा था, वहीं से फिर शुरू करें।',
     'mcp.consent.failed': 'यह नहीं हुआ। जिस ऐप ने पूछा था, वहीं से फिर शुरू करें।',
+    'mcp.connections.title': 'जुड़े हुए AI ऐप',
+    'mcp.connections.lead':
+      'Claude या ChatGPT जैसे ऐप जिन्हें आपने यहाँ अपनी ओर से काम करने दिया। वे वही कर सकते हैं जो आप कर सकते हैं, और जिस काम को मंज़ूरी चाहिए वह किसी व्यक्ति का इंतज़ार करता है।',
+    'mcp.connections.empty': 'अभी कोई ऐप जुड़ा नहीं है।',
+    'mcp.connections.since': '{date} से जुड़ा',
+    'mcp.connections.disconnect': 'हटाएँ',
+    'mcp.connections.disconnected': '{name} हटा दिया गया।',
+    'mcp.connections.offline': 'जुड़ा रहता है',
   },
   te: {
     'mcp.signIn.title': '{app}లో సైన్ ఇన్ చేయండి',
@@ -71,5 +87,13 @@ export const mcpMessages = defineMessages({
     'mcp.consent.expired': 'ఈ అభ్యర్థన గడువు ముగిసింది లేదా మారింది. {client} నుండి మళ్లీ ప్రారంభించండి.',
     'mcp.consent.signedOut': 'మీరు సైన్ అవుట్ అయ్యారు. అడిగిన యాప్ నుండి మళ్లీ ప్రారంభించండి.',
     'mcp.consent.failed': 'అది పని చేయలేదు. అడిగిన యాప్ నుండి మళ్లీ ప్రారంభించండి.',
+    'mcp.connections.title': 'కనెక్ట్ చేసిన AI యాప్‌లు',
+    'mcp.connections.lead':
+      'Claude లేదా ChatGPT వంటి యాప్‌లు, మీరు ఇక్కడ మీ తరఫున పని చేయడానికి అనుమతించినవి. మీరు చేయగలిగేదే అవి చేయగలవు, ఆమోదం కావాల్సినది ఒక వ్యక్తి కోసం ఎదురుచూస్తుంది.',
+    'mcp.connections.empty': 'ఇంకా ఏ యాప్ కనెక్ట్ కాలేదు.',
+    'mcp.connections.since': '{date} నుండి కనెక్ట్ అయింది',
+    'mcp.connections.disconnect': 'తీసివేయి',
+    'mcp.connections.disconnected': '{name} తీసివేయబడింది.',
+    'mcp.connections.offline': 'కనెక్ట్ అయి ఉంటుంది',
   },
 });

@@ -25,6 +25,7 @@ import {
   type LedgerEntry,
   type ListInput,
   type ListJobsQuery,
+  type McpConnection,
   type Me,
   type Member,
   type Page,
@@ -500,6 +501,18 @@ export function createApiClient(opts: ApiClientOptions) {
       /** The business's own alert threshold, in per cent. */
       setAlertAt: (alertAt: number, key = newKey()) =>
         call<WriteResult<{ alertAt: number }>>('PUT', '/api/credits/alerts', { alertAt }, key),
+    },
+    /** Outside AI clients the person connected over MCP, in this business (people only). */
+    mcp: {
+      connections: () => call<{ items: McpConnection[] }>('GET', '/api/mcp/connections'),
+      /** Disconnect one: its tokens stop working at once. */
+      disconnect: (clientId: string, key = newKey()) =>
+        call<WriteResult<{ revoked: true }>>(
+          'DELETE',
+          `/api/mcp/connections/${encodeURIComponent(clientId)}`,
+          undefined,
+          key,
+        ),
     },
     /** The person's conversations, kept on the server so every channel shares them (people only). */
     threads: {

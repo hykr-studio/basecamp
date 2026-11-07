@@ -1736,7 +1736,8 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
 - **Credits.** Each tool call is a `tool_calls` use (variant `mcp`); a paused business refuses it.
 - **Connections.** `GET /api/mcp/connections` (people only) lists the clients the person connected
   in this business; `DELETE /api/mcp/connections/:clientId` disconnects one (consent deleted,
-  tokens revoked at once, audited as `mcp.connection.revoke`).
+  tokens revoked at once, audited as `mcp.connection.revoke`). In the app, list
+  `connectionsPlugin` in `<AppShell plugins>`: a `/connections` screen with both (the sample does).
 - **In tests.** `framework/api/test/framework/mcp.e2e.test.ts` runs the whole flow with
   `MCPClient` from `@mastra/mcp`; `application/api/test/domain/mcp.e2e.test.ts` runs the sample
   modules' tools.
@@ -2031,7 +2032,7 @@ These are not built. Each has a workaround for now.
 | Identity provider scopes | Enforced (section 7.7): a scoped credential reaches only routes that declare a scope. Only the generated entity and command routes declare one, so a feature's own routes are out of reach for scoped credentials until they say which scope they need. |
 | MCP: several businesses | A token acts in the person's default business when they consent; the consent screen cannot choose another. Hiding the tools of a module a business's feature flag switches off is not done (the API answers 404 for its calls). |
 | MCP: older clients, other client registration | `@mastra/mcp` 2.x serves MCP revision 2026-07-28 only. Client ID metadata documents, the device grant, JWT access tokens and DPoP are not enabled. A client registered before a module existed registers again to ask for its scopes. Browser-based MCP clients from other origins are refused by CORS. |
-| MCP: screens | `/api/mcp/connections` has no screen in the app or the back office yet. The consent screen shows the application's name, not a business's branding. MCP Apps cards, resources and prompts are not served. |
+| MCP: screens | The app's `connectionsPlugin` lists and disconnects a person's clients; the back office has no view of every client in a business. The consent screen shows the application's name, not a business's branding. MCP Apps cards, resources and prompts are not served. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
