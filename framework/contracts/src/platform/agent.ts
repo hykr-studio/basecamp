@@ -214,7 +214,7 @@ export const RunAgentSpec = commandSpec({
     'Run one of the user’s agents now (get its id from list-agents). It runs in the background; its run log says what it did.',
   input: z.object({
     agentId: z.uuid(),
-    /** Passed to the run as data. */
+    /** Passed to the run as data. Only the agent's owner may give one. */
     note: z.string().trim().max(1000).optional(),
   }),
   output: z.object({ id: z.string(), agentId: z.string(), status: z.literal('queued') }),

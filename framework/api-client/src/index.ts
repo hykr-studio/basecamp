@@ -305,7 +305,7 @@ export function createApiClient(opts: ApiClientOptions) {
    */
   const agents = {
     ...entity(AgentSpec),
-    /** Run one now; its run is queued (see `runs`). */
+    /** Run one now; its run is queued (see `runs`). Only the agent's owner may add a note. */
     runNow: (agentId: string, note?: string, key = newKey()) =>
       command(RunAgentSpec, { agentId, ...(note ? { note } : {}) }, key) as Promise<
         WriteResult<{ id: string; agentId: string; status: 'queued' }>
