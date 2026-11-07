@@ -123,6 +123,11 @@ describe('importing the old system’s to-dos', () => {
     expect(result(await importCsv(owner, moved))).toMatchObject({ updated: 1, unchanged: 4 });
     const booked = (await todos(owner)).filter((t) => t.title === 'Book the electrician');
     expect(booked.map((t) => t.dueOn)).toEqual(['2026-11-14']);
+    // A row of its key only changes nothing (a to-do's update wants at least one field).
+    expect(result(await importCsv(owner, 'legacy_id\nT-1001\n'))).toMatchObject({
+      unchanged: 1,
+      failed: 0,
+    });
   });
 
   it('rows it cannot write come back in a report that imports once fixed', async () => {

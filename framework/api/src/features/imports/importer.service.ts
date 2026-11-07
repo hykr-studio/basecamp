@@ -411,6 +411,9 @@ export class Importer {
           `The ${def.spec.label} imported from ${o.key} ${row.key} is gone, or not yours`,
         );
       const patch = pick(values, fields.update);
+      // Nothing to write (a row of its key only): unchanged, whatever an update schema that
+      // wants at least one field says.
+      if (!Object.keys(patch).length) return { outcome: 'unchanged', events };
       const checked = def.spec.schemas.update.safeParse(patch);
       if (!checked.success) throw checked.error;
       const shown = def.toRead(record, p) as Values;
