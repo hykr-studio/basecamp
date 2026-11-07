@@ -1,13 +1,14 @@
 /**
  * The orders module, server side: orders with a tree of groups and priced lines, money in
- * minor units, the module's own number series, tax function, approval limits, cost capability
- * and its PDF (orders.order).
+ * minor units, the module's own number series, tax function, approval limits, cost capability,
+ * its PDF (orders.order) and the approval level of a comment a customer will see.
  */
 import { defineModule } from '@hykr/api';
 import { ordersAgent } from './agent/index.js';
 import { ordersSpec } from './contracts/index.js';
 import * as tables from './db/schema.js';
 import { ordersNotifications } from './notifications/index.js';
+import { OrderCommentLevels } from './server/comment-levels.js';
 import { costHidden, OrdersCostRead } from './server/cost.js';
 import { OrderDocument } from './server/document.js';
 import { OrdersModule } from './server/orders.module.js';
@@ -29,5 +30,6 @@ export const orders = defineModule({
     capabilities: [OrdersApprove, OrdersCostRead],
     readProjectors: [costHidden],
     documents: [OrderDocument],
+    levelRules: [OrderCommentLevels],
   },
 });

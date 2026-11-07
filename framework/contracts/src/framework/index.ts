@@ -1,4 +1,5 @@
 export * from './business-time.js';
+export * from './comments.js';
 export * from './custom-fields.js';
 export * from './domain.js';
 export * from './events.js';

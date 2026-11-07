@@ -33,7 +33,7 @@ const access: Access = {
 };
 
 describe('the framework roles and capabilities', () => {
-  it('give what the hard-coded role checks gave, and settings to owners and admins (A11)', () => {
+  it('give what the hard-coded role checks gave, settings to owners and admins (A11), and the comment capabilities', () => {
     // Deciding: owner and ops decided the business's requests, owner and admin marketing sends.
     // Plus the members feature's (A4): the team reads members, owner and admin manage them,
     // and owner, admin and ops give access to single records. Owners and admins import records
@@ -42,6 +42,8 @@ describe('the framework roles and capabilities', () => {
       'approvals.decide',
       'backoffice.use',
       'channels.manage',
+      'comments.internal',
+      'comments.moderate',
       'customers.message',
       'imports.run',
       'marketing.approve',
@@ -54,6 +56,8 @@ describe('the framework roles and capabilities', () => {
     expect(capabilitiesOf(['admin'])).toEqual([
       'backoffice.use',
       'channels.manage',
+      'comments.internal',
+      'comments.moderate',
       'customers.message',
       'history.all',
       'imports.run',
@@ -67,6 +71,7 @@ describe('the framework roles and capabilities', () => {
     expect(capabilitiesOf(['ops'])).toEqual([
       'approvals.decide',
       'backoffice.use',
+      'comments.internal',
       'customers.message',
       'history.all',
       'members.read',
@@ -74,6 +79,7 @@ describe('the framework roles and capabilities', () => {
     ]);
     expect(capabilitiesOf(['staff'])).toEqual([
       'backoffice.use',
+      'comments.internal',
       'customers.message',
       'members.read',
     ]);

@@ -3,6 +3,11 @@
 // environment when it loads.
 
 export {
+  type MentionContext,
+  type MentionKind,
+  mentionKinds,
+} from './features/comments/mention-kinds.js';
+export {
   BUY_CREDITS,
   type CreditPurchaseProvider,
   CreditPurchaseRequested,

@@ -51,7 +51,7 @@ pnpm dev              # framework tsc -w watchers + `basecamp dev` (API, worker,
   halves) and adds its line to each module list.
 - `pnpm --dir application exec basecamp import <entity> <file> --as <email> [--key col] [--source s]
   [--dry-run]` imports a CSV/JSON/NDJSON file through the write path as that member; the worker runs
-  it, and rows not written land in `<file>.errors.csv` (developer guide 5.21).
+  it, and rows not written land in `<name>.errors.csv` beside the file (developer guide 5.22).
 - `pnpm eval` runs the scripted assistant eval and needs the API running. From `application/`:
   `pnpm exec basecamp eval [assistant|voice|whatsapp] [--module <name>] [--live [--model <ref>]]`
   (`--model` runs the evals on one model of `MODEL_PROVIDERS`).
@@ -224,6 +224,10 @@ refused with `minAssurance: 'session'`. Background work writes as `systemPrincip
   (`defineChildEntity`, `traits.parent`), written whole with `children.replace` (developer guide 5.13).
 - Return `deny(...)` with a stable `rule` code and a plain `reason` instead of throwing. The caller gets
   403 `{ error: 'forbidden', rule, reason }`. "Not yours" is a 404, never a 403.
+- An assistant write that parks suspends the agent's run (Mastra stores it); the `resume` feature resumes it
+  when the request is decided, and the tool answers with the decision (developer guide 5.8.3). Never hold a
+  database transaction open around a model run: Mastra's first storage use builds indexes concurrently,
+  which waits for every open transaction.
 - WhatsApp templates (`defineTemplate`) are versioned forever. To change the wording, add `_v2`;
   `templates:sync` refuses an edit to an approved template.
 - Every user-facing word is `Labels` (`{ en, hi, te }`), which won't compile with a language missing. A list
