@@ -5,7 +5,14 @@
 // notifications, and a level rule that makes processing an erasure, or filing one from a letter,
 // wait for an approval. Only the privacy e2e test boots `privacyApp`; its tables are a migration
 // set of their own.
-import { defineModule, definePrivacyPolicy, defineProcessor, defineServer } from '@hykr/api';
+import {
+  type DataSubject,
+  defineModule,
+  definePrivacyPolicy,
+  defineProcessor,
+  defineServer,
+  type ErasureContributor,
+} from '@hykr/api';
 import {
   type Contributions,
   CreatedBy,
@@ -22,6 +29,7 @@ import {
 } from '@hykr/core';
 import type { Access } from '@hykr/policy';
 import { Module } from '@nestjs/common';
+import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { fixture } from '../../index.js';
 import { callers, cards, ledgerEntries } from './schema.js';
@@ -209,6 +217,29 @@ export const ForgetWaits = defineLevelRule({
   },
 });
 
+/** What `AfterErasure` saw after each erasure: whose, and the request's status by then. */
+export const erasedAfterCommit: { subject: DataSubject['subject']; status?: string }[] = [];
+
+/**
+ * Work outside the database after an erasure (as a calendar's grant is revoked): it sees the
+ * erasure committed, and its own failure leaves the erasure as it is.
+ */
+export const AfterErasure: ErasureContributor = {
+  name: 'fixture.after',
+  erase: async ({ subject, tenantId }) => ({
+    count: 0,
+    afterCommit: async (ctx) => {
+      const id = subject.kind === 'user' ? subject.userId : subject.contactId;
+      const { rows } = await ctx.db.execute<{ status: string }>(
+        sql`select status from app.privacy_requests where tenant_id = ${tenantId ?? ''}
+            and subject_id = ${id} and kind = 'erase' order by received_at desc limit 1`,
+      );
+      erasedAfterCommit.push({ subject, status: rows[0]?.status });
+      throw new Error('fixture: a failure after the commit');
+    },
+  }),
+};
+
 export const privacyContributions: Partial<Contributions> = {
   processors: [
     defineProcessor({
@@ -218,7 +249,17 @@ export const privacyContributions: Partial<Contributions> = {
       location: 'Test region',
     }),
   ],
-  privacyPolicies: [definePrivacyPolicy({ name: 'fixture', respondWithinDays: 30 })],
+  privacyPolicies: [
+    definePrivacyPolicy({
+      name: 'fixture',
+      respondWithinDays: 30,
+      keepReasons: {
+        legal_hold: label('Kept while a legal hold lasts'),
+        acceptance_evidence: label('Kept as proof of what was agreed'),
+      },
+    }),
+  ],
+  erasureContributors: [AfterErasure],
   retentionPeriods: [{ target: 'outbox.relayed', days: 1 }],
   approvalLevels: [ForgetLevel],
   levelRules: [ForgetWaits],

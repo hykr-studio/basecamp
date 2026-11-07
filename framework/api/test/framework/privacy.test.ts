@@ -7,10 +7,12 @@ import { app, customerColumn, id, tenantColumn, user } from '@hykr/db';
 import { text, timestamp } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { nullValues, redactBody } from '../../dist/features/integrations/privacy.js';
 import { scrubFiling } from '../../dist/features/privacy/redact.js';
 import { registryProblems } from '../../dist/features/privacy/registry.js';
 import { dueFrom, effectivePolicy } from '../../dist/features/privacy/requests.js';
 import {
+  definePersonalDataPart,
   definePrivacyPolicy,
   defineProcessor,
   personalEntityProblems,
@@ -107,6 +109,19 @@ describe("the application's declarations", () => {
       '1 to 365 whole days',
     );
     expect(definePrivacyPolicy({ name: 'app', respondWithinDays: 30 }).respondWithinDays).toBe(30);
+    // The words for a keep reason, in English at least.
+    expect(() =>
+      definePrivacyPolicy({ name: 'app', keepReasons: { legal_hold: label(' ') } }),
+    ).toThrow('say why "legal_hold" is kept');
+  });
+
+  it('checks the parts a feature lists on the register', () => {
+    const part = { name: 'feature.part', label: label('Part'), fields: ['email'] };
+    expect(definePersonalDataPart({ ...part, erase: 'delete' }).name).toBe('feature.part');
+    expect(() => definePersonalDataPart({ ...part, erase: 'keep' })).toThrow('needs a keepReason');
+    expect(() => definePersonalDataPart({ ...part, name: 'Part One', erase: 'delete' })).toThrow(
+      'lower case words',
+    );
   });
 
   it('refuses a second policy, and a period for no target', () => {
@@ -175,5 +190,43 @@ describe('a privacy filing about an erased person', () => {
         { ...about, userId: null },
       ),
     ).toBeNull();
+  });
+});
+
+describe("the integration bus's stored copies", () => {
+  const body = JSON.stringify({
+    type: 'card.updated',
+    timestamp: '2026-01-01T00:00:00.000Z',
+    data: {
+      eventId: 'e1',
+      resourceType: 'card',
+      resourceId: 'c1',
+      row: { id: 'c1', name: 'New', phone: '+1', amountMinor: 3 },
+      before: { id: 'c1', name: 'Old', amountMinor: 3 },
+    },
+  });
+
+  it("lose an erased record's fields from the record and the record before", () => {
+    const out = JSON.parse(redactBody(body, ['name', 'phone']) ?? 'null');
+    expect(out.data.row).toEqual({ id: 'c1', amountMinor: 3 });
+    expect(out.data.before).toEqual({ id: 'c1', amountMinor: 3 });
+    expect(out.data.eventId).toBe('e1');
+    // Nothing to take out, or a body that does not parse: left as it is.
+    expect(redactBody(body, ['title'])).toBeNull();
+    expect(redactBody('not json', ['name'])).toBeNull();
+  });
+
+  it("null only the values that are the person's email or number", () => {
+    const data = {
+      to: ['A@Example.test', 'b@example.test'],
+      who: { email: ' a@example.test ', phone: '+911234567890' },
+      text: 'write to a@example.test',
+    };
+    expect(nullValues(data, ['a@example.test', '+911234567890'])).toEqual({
+      to: [null, 'b@example.test'],
+      who: { email: null, phone: null },
+      text: 'write to a@example.test',
+    });
+    expect(nullValues(data, ['c@example.test'])).toBeNull();
   });
 });
