@@ -5,7 +5,7 @@
  */
 import { defineModule } from '@hykr/api';
 import { ordersAgent } from './agent/index.js';
-import { ordersSpec } from './contracts/index.js';
+import { ordersSpec, SupplierRole } from './contracts/index.js';
 import * as tables from './db/schema.js';
 import { ordersNotifications } from './notifications/index.js';
 import { OrderCommentLevels } from './server/comment-levels.js';
@@ -31,5 +31,7 @@ export const orders = defineModule({
     readProjectors: [costHidden],
     documents: [OrderDocument],
     levelRules: [OrderCommentLevels],
+    // The organisation an order is placed with: it reads the order, not its cost.
+    participantRoles: [SupplierRole],
   },
 });

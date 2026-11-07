@@ -221,6 +221,13 @@ export class ChatAccessGuard implements CanActivate {
   canActivate(context: ExecutionContext) {
     const req = context.switchToHttp().getRequest<ApiRequest>();
     const p = req.principal;
+    // A person in no business yet has nobody to talk to: a thread belongs to a business.
+    if (p && !p.tenantId)
+      throw new ForbiddenException({
+        error: 'forbidden',
+        rule: 'no_tenant',
+        reason: 'You are not in a business yet',
+      });
     if (p?.actor.kind === 'user' && !drivenByAgent(p)) return true;
     if (p?.actor.kind === 'agent' && req.agent?.relay && p.actingFor?.userId) return true;
     throw new ForbiddenException('Only people, or a relay acting for one, can start a turn');

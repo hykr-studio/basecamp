@@ -9,7 +9,15 @@ import {
   type Subject,
   standingIn,
 } from '@hykr/contracts';
-import { contactById, ensureDefaultTenant, membershipOf, userExists } from '@hykr/db';
+import {
+  contactById,
+  customerOfUser,
+  ensureDefaultTenant,
+  latestParticipation,
+  membershipOf,
+  participatesIn,
+  userExists,
+} from '@hykr/db';
 import {
   ForbiddenException,
   Inject,
@@ -20,11 +28,15 @@ import {
 import { TenantConfigService } from '../tenants/tenant-config.service.js';
 import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
 
-/** The part of a principal that says who it is for and what they may do, in which business. */
+/**
+ * The part of a principal that says who it is for and what they may do, in which business. No
+ * `tenantId`: a person in no business yet (sign-up made none); every scoped call refuses them.
+ * `standing`: a member of the business's team, or a participant (a member of one of its parties).
+ */
 export type Standing = Required<
-  Pick<Principal, 'subject' | 'tenantId' | 'roles' | 'capabilities' | 'assurance'>
+  Pick<Principal, 'subject' | 'roles' | 'capabilities' | 'assurance'>
 > &
-  Pick<Principal, 'customerId'>;
+  Pick<Principal, 'customerId' | 'tenantId' | 'standing'>;
 
 /**
  * How sure a channel makes us, at most: WhatsApp vouches only for a number, and a share link
@@ -93,8 +105,10 @@ export class PrincipalResolver {
   }
 
   /**
-   * A person, in a business they belong to (that one, or their default). A WhatsApp turn is
-   * only as sure as the number: 'whatsapp_number', even for a person with an account.
+   * A person, in a business they are in (that one, or their default): as a member of its team,
+   * or, when they are no member there, as a participant (a member of one of its parties). A
+   * WhatsApp turn is only as sure as the number: 'whatsapp_number', even for a person with an
+   * account. Asked for a business they are not in: 403.
    */
   async forUser(
     userId: string,
@@ -102,11 +116,25 @@ export class PrincipalResolver {
   ): Promise<Standing> {
     const db = this.options.db;
     let membership = await membershipOf(db, userId, opts.tenantId);
-    if (!membership && opts.tenantId)
+    if (!membership && opts.tenantId) {
+      if (await participatesIn(db, userId, opts.tenantId))
+        return this.participant(userId, opts.tenantId, opts.channel);
       throw new ForbiddenException({ error: 'forbidden', rule: 'not_a_member' });
-    // A person without a business yet (signed up before the hook, or it failed): give them one.
+    }
     if (!membership) {
       if (!(await userExists(db, userId))) throw new UnauthorizedException('Unknown person');
+      // No membership: where they participate, most recently first.
+      const participating = await latestParticipation(db, userId);
+      if (participating) return this.participant(userId, participating, opts.channel);
+      // A person without a business yet (signed up before the hook, or it failed): give them
+      // one, unless the application gives none on sign-up. Then they are in no business.
+      if (this.options.createBusinessOnSignUp === false)
+        return {
+          subject: { kind: 'user', userId },
+          roles: [],
+          capabilities: [],
+          assurance: this.assurance(opts.channel),
+        };
       membership = await ensureDefaultTenant(db, userId, opts.name ?? '');
     }
     return {
@@ -115,12 +143,35 @@ export class PrincipalResolver {
       ...standingOf(membership.roles, await this.rolesOf(membership.tenantId)),
       ...(membership.customerId ? { customerId: membership.customerId } : {}),
       assurance: this.assurance(opts.channel),
+      standing: 'member',
     };
   }
 
   /**
-   * A WhatsApp contact. Linked to an account (and a member of this business): that person,
-   * at 'whatsapp_number'. Otherwise the business's customer, seeing only their own records.
+   * A person who is no member of this business but a member of one of its parties: the roles
+   * the application gives participants, their customer record there if one is theirs, and only
+   * what those roles' access rules (the participant grant above all) reach. Never a membership.
+   */
+  private async participant(
+    userId: string,
+    tenantId: string,
+    channel: Channel | undefined,
+  ): Promise<Standing> {
+    const customerId = await customerOfUser(this.options.db, userId, tenantId);
+    return {
+      subject: { kind: 'user', userId },
+      tenantId,
+      ...standingOf(givenRoles('participant'), await this.rolesOf(tenantId)),
+      ...(customerId ? { customerId } : {}),
+      assurance: this.assurance(channel),
+      standing: 'participant',
+    };
+  }
+
+  /**
+   * A WhatsApp contact. Linked to an account (a member or participant of this business): that
+   * person, at 'whatsapp_number'. Otherwise the contact, with the roles the application gives
+   * contacts: their own customer records, and the records their parties participate in.
    * A contact belongs to one business: asked for another one (a credential or header that
    * fixes it), it is refused, never moved there.
    */
@@ -132,9 +183,11 @@ export class PrincipalResolver {
     if (!contact) throw new UnauthorizedException('Unknown contact');
     if (opts.tenantId && opts.tenantId !== contact.tenantId)
       throw new ForbiddenException({ error: 'forbidden', rule: 'tenant_mismatch' });
+    // A number linked to an account acts as its person there: a member, or a participant.
     if (contact.userId) {
-      const member = await membershipOf(this.options.db, contact.userId, contact.tenantId);
-      if (member)
+      const db = this.options.db;
+      const member = await membershipOf(db, contact.userId, contact.tenantId);
+      if (member || (await participatesIn(db, contact.userId, contact.tenantId)))
         return this.forUser(contact.userId, {
           tenantId: contact.tenantId,
           channel: opts.channel ?? 'whatsapp',

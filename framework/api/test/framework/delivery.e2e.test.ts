@@ -311,8 +311,8 @@ describe('personal data contributors', () => {
       `select after from audit.events where action = 'channel.contact.erased' and resource_id = $1`,
       [contactId],
     );
-    // The framework's own (comments, files, inbox, jobs, memory, push) run too: a contact has no
-    // comments, files, inbox items, jobs, memories or devices.
+    // The framework's own (comments, files, inbox, jobs, memory, parties, push) run too: a
+    // contact has no comments, files, inbox items, jobs, memories, party memberships or devices.
     expect(rows).toEqual([
       {
         after: {
@@ -322,6 +322,7 @@ describe('personal data contributors', () => {
             inbox: 0,
             jobs: 0,
             memory: 0,
+            parties: 0,
             push: 0,
             'fixture.runtime.erase': 1,
           },
@@ -336,12 +337,13 @@ describe('personal data contributors', () => {
     const subject = { kind: 'user' as const, userId: ana.id };
     expect(await api.exportPersonalData({ subject, tenantId, db })).toEqual({
       // The framework's comments, documents, files, inbox, jobs and push: Ana wrote, made,
-      // uploaded, got, started and registered nothing.
+      // uploaded, got, started and registered nothing; and parties: she is no party's member.
       comments: [],
       documents: [],
       files: [],
       inbox: [],
       jobs: [],
+      parties: [],
       pushDevices: [],
       fixtureNotes: [{ about: subject }],
     });

@@ -8,6 +8,7 @@ import { MeetingCheckInSpec, MeetingSpec } from './meeting.js';
 
 export * from './commands.js';
 export * from './meeting.js';
+export * from './participants.js';
 
 export const meetingsSpec = moduleSpec({
   name: 'meetings',

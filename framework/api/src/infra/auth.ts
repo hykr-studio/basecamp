@@ -4,7 +4,7 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { config } from '../config.js';
 import { installFeatures } from '../features/install.js';
 import { authPlugins } from '../hooks.js';
-import { runtime } from '../runtime.js';
+import { createsBusinessOnSignUp, runtime } from '../runtime.js';
 import { sharedDb } from './db.js';
 import { nativeAppOrigin } from './native-origin.js';
 
@@ -70,13 +70,16 @@ function createAuth() {
       },
     }),
     emailAndPassword: { enabled: true, minPasswordLength: 8 },
-    // A new person gets their own business, as its owner: the template works for one person as
-    // before, and their records are theirs alone. (The guard does the same if this ever fails.)
+    // A new person gets their own business, as its creator: the template works for one person
+    // as before, and their records are theirs alone. (The guard does the same if this ever
+    // fails.) Unless the application gives none on sign-up (`signUp.createBusiness: false`): then
+    // they are in no business until they are invited, or made a participant somewhere.
     databaseHooks: {
       user: {
         create: {
           after: async (user) => {
-            await ensureDefaultTenant(sharedDb.db, user.id, user.name);
+            if (createsBusinessOnSignUp())
+              await ensureDefaultTenant(sharedDb.db, user.id, user.name);
           },
         },
       },
