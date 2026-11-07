@@ -345,7 +345,13 @@ export class DocumentSender {
           address: gone.address,
           messageId: gone.channel === 'whatsapp' ? gone.messageId : null,
         })
-        .where(and(eq(documentSends.id, send.id), eq(documentSends.claimedBy, t.by)));
+        .where(
+          and(
+            eq(documentSends.id, send.id),
+            eq(documentSends.status, 'sending'),
+            eq(documentSends.claimedBy, t.by),
+          ),
+        );
       return await this.finish(send, 'sent', gone, t.by);
     } catch (e) {
       // It left: the claim stays, and the next try (resume) records it from the row.
