@@ -826,7 +826,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `fileHolders`
   (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
-  `creditPurchaseProviders` (section 7.6) and `jobs` (section 5.17) in `@hykr/api`.
+  `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17) and `dataExportSources` (section
+  5.20) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -1438,6 +1439,51 @@ export const OrderDocument = defineDocument<Data>({
 - **In the app** `<RecordDocuments entity id />` (`@hykr/app`) makes each kind, lists every
   version with its state, opens one with a fresh link and sends it to the person; the hooks
   are `useDocuments`, `useDocumentKinds`, `useDocument`, `useRenderDocument`, `useSendDocument`.
+
+### 5.20 Exporting a business's data
+
+A person who may (`data.export`, held by `owner` unless the application or the business grants it
+to another role) exports the business's data as one zip archive (`docs/decisions/A11X.md`).
+
+```ts
+// app, back office or any client
+const started = await api.command(StartExportSpec, { formats: ['json', 'csv'], only: ['todo'] });
+const job = await api.jobs.get(started.value.id);          // then the archive: api.files.get(job.files[0])
+
+// server: data that no entity serves joins the export (contributes: { dataExportSources: [...] })
+export const AuditSource: DataExportSource = {
+  name: 'audit-log',                                       // its files: audit-log.json, audit-log.csv
+  async *rows({ principal, tenantId, db }) { /* yield only what principal may read */ },
+};
+```
+
+- **Starting** is a command, `export.start` (`POST /api/exports { formats?, only? }`), for people
+  only (no assistant tool). It needs `data.export` (403 `needs_data_export`, audited as denied),
+  refuses a second export while one of the business runs (409 `export_running`) and an unknown
+  name in `only` (400 `unknown_export_part`), and starts a job of the kind `export.data` (section
+  5.17). Its audit row is `export.start` on the business (`resource_type 'tenant'`).
+- **What is read.** Every served entity, through its scoped repository and `toRead(row, p)`, as the
+  person who asked, as they stand when it runs: their access, record grants and hidden fields apply
+  exactly as on `GET /api/<plural>`. The export never widens anyone's reach (the sample's owners read
+  their own records, so that is what an owner exports). Left out, and named in the manifest's
+  `skipped`: entities whose list is `expose: 'internal'`, entities a feature flag switches off for
+  the business, and entities whose plugins refuse the person's list. Platform-shared rows (section
+  5.18) are not the business's and stay out. Then each export source's rows, through the read
+  projectors with the source's name as the resource type.
+- **The archive.** `export-<date>.zip`: `<plural>.json` (an array, one record per line) and
+  `<plural>.csv` per entity (UTF-8 with a byte-order mark, CRLF, a header of the read schema's
+  fields the person sees, objects as JSON, a leading `'` on text a spreadsheet would run as a
+  formula), the same per source, and `manifest.json` (`ExportManifest`: who, when, the parts and
+  their row counts, what was skipped). It is kept on the job as a server file: only its person
+  reaches it (`GET /api/jobs/:id`, `GET /api/files/:id`), and only while they hold `data.export`.
+  Past `FILES_MAX_BYTES` (compressed) the job fails `too_large`. `readZip(bytes)` (`@hykr/api`)
+  reads one back.
+- **In the app** list `exportPlugin` in `<AppShell plugins>`: an "Export data" destination and
+  `/export` screen for holders of `data.export` (`useExports()`, `useStartExport()`,
+  `useCanExport()` for your own screen). The back office's Settings screen has a "Data export"
+  section for them.
+- The fixture's `features/export` and `test/framework/export.e2e.test.ts` show a switched-off
+  module, a hidden field, an export source and a business role that may export.
 
 ---
 
@@ -2170,7 +2216,9 @@ These are not built. Each has a workaround for now.
 | Live deletions for everyone | A deleted record reaches only streams already told about it and the person who deleted it; others see it go at their next refetch (focus, reconnect, their own write). |
 | Live back office | The back office still polls its inbox (10 s) and an open conversation (5 s): inbound messages and handoffs write no outbox events. |
 | Missed live events | A reconnect refetches every query; `Last-Event-ID` replay is not supported. |
-| Data export for a business | Not built (A11's export waits for jobs and files). Read the business's records through the API's lists. |
+| Files' bytes in a data export | An export lists file ids on records, not the files themselves. Download them with `GET /api/files/:id`. |
+| Large data exports | An export is built in the worker's memory, one entity at a time, and fails `too_large` past `FILES_MAX_BYTES` (compressed): raise the limit, or export a few entities at a time (`only`). |
+| Telling someone an export is ready, export retention | Nothing notifies the person; the export screen polls. Archives stay until "delete my data" (B11). |
 | Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
 | A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
 | Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |
