@@ -198,6 +198,31 @@ describe('a run that waits for an approval', () => {
     );
   });
 
+  it('two requests of one run decided together: resumed one at a time, the run goes on once', async () => {
+    const piles = [await task(ana, 'First pile'), await task(ana, 'Second pile')];
+    const chat = await ana.chat('tidy both First pile and Second pile');
+    expect(chat.status).toBe(200);
+    const parked = (chat.body.toolCalls as { tool: string; outcome: string; approvalId: string }[])
+      .filter((c) => c.tool === 'delete-task')
+      .map((c) => {
+        expect(c.outcome).toBe('parked');
+        return c.approvalId;
+      });
+    expect(parked).toHaveLength(2);
+    const { runId, threadId } = chat.body as { runId: string; threadId: string };
+    // Both at once: the second waits for the first's resume (the run's lock), then resumes its own.
+    await Promise.all(parked.map((id) => ana.call('POST', `/api/approvals/${id}/approve`)));
+    const next = await continuation(ana, threadId, runId, 1);
+    expect(textOfMessage(next)).toBe('Both decided: approved and approved.');
+    for (const t of piles) expect((await ana.call('GET', `/api/tasks/${t.id}`)).status).toBe(404);
+    for (const approvalId of parked)
+      expect(await runtime().agents.findSuspension({ runId, approvalId })).toBeUndefined();
+    // The decision that came first said nothing: the run went on, once, after the second.
+    await new Promise((r) => setTimeout(r, 1500));
+    const said = (await messages(ana, threadId)).filter((m) => m.metadata.runId === runId);
+    expect(said).toHaveLength(2);
+  });
+
   it('a hook that refuses the resumed run: no model runs, the thread says why, it stays suspended', async () => {
     await task(ana, 'Paused one');
     const run = await tidy(ana, 'Paused one');

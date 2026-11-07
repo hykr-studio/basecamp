@@ -14,8 +14,29 @@ export const seen = { turns: [] as TurnInfo[], refuse: false };
  *   tidy <title>   list-tasks → delete-task (waits for approval). Once approved, the run goes
  *                  on: create-task "Tidied <title>" (a write, audited under the same run), then
  *                  how many tasks are left. Rejected or expired: nothing changed.
+ *   tidy both <a> and <b>   list-tasks → two delete-task calls in one step (each waits for its
+ *                  own approval). The run goes on once both are decided: how each went.
  */
 const scripts = [
+  defineScript({
+    name: 'tidy-both',
+    match: (text) => {
+      const m = /^tidy both (.+) and (.+)$/i.exec(text.trim());
+      return m ? [m[1], m[2]] : undefined;
+    },
+    step: (titles, turn) => {
+      const removed = turn.steps.filter((s) => s.toolName === 'delete-task');
+      if (removed.length) {
+        const how = removed.map((s) => decided(s.outcome) ?? 'waiting');
+        return [say(`Both decided: ${how.join(' and ')}.`)];
+      }
+      const list = turn.result('list-tasks');
+      if (!list) return [call('list-tasks', {})];
+      const ids = titles.map((title) => items(list).find((t) => sameTitle(t.title, title))?.id);
+      if (ids.some((id) => !id)) return [say('No such task.')];
+      return ids.map((id) => call('delete-task', { id }));
+    },
+  }),
   defineScript({
     name: 'tidy',
     match: (text) => /^tidy (.+)$/i.exec(text.trim())?.[1],
