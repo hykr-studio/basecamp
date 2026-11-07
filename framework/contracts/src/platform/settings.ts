@@ -1,16 +1,18 @@
-// A business's setup (A11): its feature flags, branding, wording and web addresses. Changed by
-// people with `settings.manage` through these commands (no tools: the assistant does not change
-// a business's setup); read by every member.
+// A business's setup (A11): its feature flags, branding, wording and web addresses, and every
+// section that opts in to the generic writer (H2). Changed by people with `settings.manage` (or
+// a section's own capability) through these commands (no tools: the assistant does not change a
+// business's setup).
 import { z } from 'zod';
 import { commandSpec } from '../framework/spec.js';
 import { capabilities, defineCapability } from '../roles.js';
 import { Branding, BrandingPatch, DomainOrigin, TenantDomain } from '../settings/branding.js';
 import { GatedOff } from '../settings/features.js';
+import { SETTINGS_MANAGE } from '../settings/sections.js';
 import { SomeLabels, Wording, WordingPatch } from '../settings/wording.js';
 
 /** Change the business's setup: flags it may switch, branding, wording, domains, custom fields. */
 export const SettingsCapability = defineCapability({
-  name: 'settings.manage',
+  name: SETTINGS_MANAGE,
   label: {
     en: "Change the business's settings",
     hi: 'व्यवसाय की सेटिंग बदलें',
@@ -92,6 +94,40 @@ export const RemoveDomainSpec = commandSpec({
   verb: { do: 'remove the address', did: 'removed the address' },
 });
 
+/**
+ * One section the business changes with the generic writer (`settings.section`), as the people
+ * who may change it read it. `general` is the base settings' editable part.
+ */
+export const SettingsSectionView = z.object({
+  key: z.string(),
+  /** Who may read and change it. */
+  capability: z.string(),
+  /** Its value, defaults applied; null when what is stored no longer parses. */
+  value: z.unknown(),
+  /** Why what is stored no longer parses: fix it with the same patch. Empty otherwise. */
+  problems: z.array(z.string()),
+});
+export type SettingsSectionView = z.infer<typeof SettingsSectionView>;
+
+/**
+ * PATCH /api/settings/sections/:section { value }: a JSON merge patch of one section (an
+ * object changes key by key, null restores a key's default, anything else replaces). Checked
+ * by the section's schema and the settings checks, unknown keys refused (400 settings_invalid).
+ */
+export const UpdateSettingsSectionSpec = commandSpec({
+  name: 'settings.section',
+  description:
+    "Change one section of the business's settings (approvals, money, business hours, SLAs …).",
+  input: z.object({
+    section: z.string().min(1).max(64),
+    value: z.record(z.string(), z.unknown()),
+  }),
+  output: z.object({ key: z.string(), value: z.unknown() }),
+  http: { method: 'PATCH', path: '/api/settings/sections/:section' },
+  expose: 'human',
+  verb: { do: 'change the settings', did: 'changed the settings' },
+});
+
 /** The settings commands, for clients (`api.command(spec, input)`). */
 export const settingsCommands = [
   SetFeatureSpec,
@@ -100,4 +136,5 @@ export const settingsCommands = [
   AddDomainSpec,
   VerifyDomainSpec,
   RemoveDomainSpec,
+  UpdateSettingsSectionSpec,
 ] as const;

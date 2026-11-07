@@ -25,4 +25,4 @@ declare module './sections.js' {
   }
 }
 
-export const MemorySettings = defineSettingsSection('memory', MemoryPolicy);
+export const MemorySettings = defineSettingsSection('memory', MemoryPolicy, { editable: true });

@@ -2,6 +2,7 @@ export * from './approvals.js';
 export * from './branding.js';
 export * from './business-hours.js';
 export * from './credits.js';
+export * from './editing.js';
 export * from './features.js';
 export * from './files.js';
 export * from './memory.js';

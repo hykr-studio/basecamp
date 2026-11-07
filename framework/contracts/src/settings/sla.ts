@@ -31,4 +31,4 @@ declare module './sections.js' {
   }
 }
 
-export const SlaSection = defineSettingsSection('sla', SlaSettings);
+export const SlaSection = defineSettingsSection('sla', SlaSettings, { editable: true });

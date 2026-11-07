@@ -16,4 +16,4 @@ export const FilesSettings = z
   .default({ keepInboundMedia: true });
 export type FilesSettings = z.infer<typeof FilesSettings>;
 
-export const filesSettings = defineSettingsSection('files', FilesSettings);
+export const filesSettings = defineSettingsSection('files', FilesSettings, { editable: true });

@@ -28,7 +28,7 @@ declare module './sections.js' {
   }
 }
 
-export const MoneySection = defineSettingsSection('money', MoneySettings);
+export const MoneySection = defineSettingsSection('money', MoneySettings, { editable: true });
 
 // GET /api/money (the money feature in @hykr/api).
 reserveRoutes('money');
