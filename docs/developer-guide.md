@@ -1170,11 +1170,17 @@ needs the entity's `get` exposed) reads its comments, and anyone else gets 404.
 - **Reading.** `GET /api/comments?entity=&id=` (newest first, `nextCursor` for older ones), each with
   `can: { edit, remove }` for the caller; the assistant's `list-comments`.
 - **Per entity**, the `comments` trait: `false` turns comments off (`comments_off`); its object form
-  gives an `approval` rule for added comments (checked with the action `comment`, the input and the
-  record; its object form also names who decides and the approval `level`) and an `anchor` schema (a
-  JSON object: a version, a point) without which a comment carries no anchor. Across the
-  application, a level rule on `comment.add` (section 5.8) sees `input.entity` and `input.internal`:
-  the sample's orders module puts comments a customer could read at its `external` level.
+  gives an `approval` rule (checked with the action `comment`, the comment as it would be, `{ entity,
+  recordId, body, internal, anchor }` plus `commentId` on an edit, and the record; its object form
+  also names who decides and the approval `level`) and an `anchor` schema (a JSON object: a version,
+  a point) without which a comment carries no anchor.
+- **Edits pass the same gates as adds**: an edit publishes new text to the same readers, so the
+  trait's rule and the level rules decide it too, and a parked edit changes nothing until it is
+  approved (its new mentions are told then). Across the application, a level rule lists both
+  operations, `on: ['comment.add', 'comment.edit']`, and reads `commentWriteOf(args)` (`@hykr/contracts`:
+  `{ action, on: { entity, id }, body, mentions, internal, anchor, commentId }`), not `input`, which
+  an edit only has the new text in. The sample's orders module puts comments a customer could read,
+  and their edits, at its `external` level (section 5.8.1). Removing never parks.
 - **Mentions** are tokens in the text, `@[Name](user:<id>)`. The server checks each one: a member
   of the business who may read the record now (and, for an `internal` comment, holds
   `comments.internal`). Anyone else refuses the comment (`mention_not_allowed`), so nobody is told of
