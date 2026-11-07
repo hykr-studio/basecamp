@@ -21,7 +21,7 @@ export const AgentResumeQueue = defineQueue<DomainEventEnvelope, string>({
   concurrency: 4,
   attempts: 6,
   backoffMs: 2000,
-  process: (job, ctx) => ctx.get(ResumeService).onDecided(DomainEventEnvelope.parse(job.data)),
+  process: (job, ctx) => ctx.get(ResumeService).onDecided(DomainEventEnvelope.parse(job.data), job),
 });
 
 /**

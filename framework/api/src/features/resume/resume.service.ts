@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { AGENT_ID, type Suspension } from '@hykr/agents';
 import { render } from '@hykr/channels';
 import {
@@ -14,9 +15,11 @@ import type { ResumeDecision } from '@hykr/core/tools';
 import { type Database, schema } from '@hykr/db';
 import { isLang, type Lang, pick, t } from '@hykr/i18n';
 import { RequestContext } from '@mastra/core/request-context';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { DelayedError, type Job } from 'bullmq';
+import { and, asc, eq } from 'drizzle-orm';
+import { Redis } from 'ioredis';
 import { ContactsService } from '../../channels/contacts.service.js';
 import { OutboundService } from '../../channels/outbound.service.js';
 import { toRenderTurn } from '../../channels/whatsapp/turn.js';
@@ -42,11 +45,25 @@ const INTERRUPTED = '(The reply was interrupted.)';
 
 const DECIDED = new Set(['approved', 'rejected', 'expired', 'failed']);
 
+/** How long one resume may hold its run (a resume runs at most 8 model steps). */
+const LOCK_MS = 10 * 60_000;
+
+/** Delete the lock only if this resume still holds it. */
+const UNLOCK = `if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0`;
+
 /** Thrown to retry the job later: the run's turn may still be saving its reply. */
 export class RunNotSaved extends Error {
   constructor(runId: string) {
     super(`Run ${runId} is not in a thread yet`);
     this.name = 'RunNotSaved';
+  }
+}
+
+/** Another decision of the same run is being resumed now (outside a queue job). */
+export class RunBusy extends Error {
+  constructor(runId: string) {
+    super(`Run ${runId} is being resumed`);
+    this.name = 'RunBusy';
   }
 }
 
@@ -91,7 +108,7 @@ type RunThread = {
  * (WhatsApp when the run came from there, a live event for the app). docs/decisions/A7.md.
  */
 @Injectable()
-export class ResumeService {
+export class ResumeService implements OnApplicationShutdown {
   constructor(
     @Inject(DB) private readonly db: Database,
     private readonly threads: ThreadsService,
@@ -99,8 +116,19 @@ export class ResumeService {
     @Inject(ModuleRef) private readonly ref: ModuleRef,
   ) {}
 
-  /** One decided approval: resume the run it belongs to, if one waits. Returns what happened. */
-  async onDecided(event: DomainEventEnvelope): Promise<string> {
+  /** The lock client, opened on first use (the queues keep their own connections). */
+  private redis: Redis | undefined;
+
+  async onApplicationShutdown() {
+    await this.redis?.quit().catch(() => this.redis?.disconnect());
+  }
+
+  /**
+   * One decided approval: resume the run it belongs to, if one waits. Returns what happened.
+   * `job`: the queue's job, put back for a second while another decision of the same run is
+   * being resumed (without one, that throws `RunBusy`).
+   */
+  async onDecided(event: DomainEventEnvelope, job?: Job): Promise<string> {
     if (event.resourceType !== 'approval' || !event.resourceId) return 'not an approval';
     const [row] = await this.db
       .select()
@@ -108,12 +136,24 @@ export class ResumeService {
       .where(and(eq(approvals.id, event.resourceId), eq(approvals.tenantId, event.tenantId)));
     if (!row?.runId || !DECIDED.has(row.status)) return 'nothing to resume';
     const runId = row.runId;
-    // One resume of a run at a time: two requests of one run decided together wait in turn, each
-    // then finding its own call in the run as the other left it.
-    return this.db.transaction(async (tx) => {
-      await tx.execute(sqlLock(runId));
-      return this.resumeLocked(row, runId);
-    });
+    // One resume of a run at a time: two requests of one run decided together go in turn, each
+    // then finding its own call in the run as the other left it. A Redis lock, not a database
+    // one: no transaction may stay open while the model runs (Mastra's first use of its storage
+    // builds indexes concurrently, which waits for every open transaction).
+    this.redis ??= new Redis(config.redisUrl, { maxRetriesPerRequest: 3 });
+    const key = `${config.queuePrefix}:resume:lock:${runId}`;
+    const holder = `${job?.id ?? 'direct'}:${randomUUID()}`;
+    if (!(await this.redis.set(key, holder, 'PX', LOCK_MS, 'NX'))) {
+      if (!job) throw new RunBusy(runId);
+      // Not a failure: it comes back once the other resume is done (no try is spent).
+      await job.moveToDelayed(Date.now() + 1000, job.token);
+      throw new DelayedError();
+    }
+    try {
+      return await this.resumeLocked(row, runId);
+    } finally {
+      await this.redis.eval(UNLOCK, 1, key, holder).catch(() => {});
+    }
   }
 
   private async resumeLocked(row: ApprovalRow, runId: string): Promise<string> {
@@ -389,11 +429,6 @@ export class ResumeService {
     });
     await outbound.queue({ tenantId, contactId: contact.id, from }, messages, { runId });
   }
-}
-
-/** The run's advisory lock, for the transaction it is taken in. */
-function sqlLock(runId: string) {
-  return sql`select pg_advisory_xact_lock(hashtext(${`resume:${runId}`}))`;
 }
 
 function validTimeZone(zone: string | undefined): string {
