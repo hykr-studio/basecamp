@@ -13,7 +13,6 @@ import {
   Person,
   pool,
   server,
-  setTenantSettings,
   shutdown,
 } from '@hykr/api/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -69,10 +68,11 @@ beforeAll(async () => {
   await addMember(staff, tenantId, ['staff']);
   await addMember(admin, tenantId, ['admin']);
   // The business counts in INR, its financial year starts in April, and it sets its own
-  // approval limit (10,000.00).
-  await setTenantSettings(tenantId, {
-    money: { currency: 'INR', fyStartMonth: 4, amounts: { 'orders.approval': inr(1_000_000) } },
+  // approval limit (10,000.00): its owner sets them, through the settings writer.
+  const money = await owner.call('PATCH', '/api/settings/sections/money', {
+    value: { currency: 'INR', fyStartMonth: 4, amounts: { 'orders.approval': inr(1_000_000) } },
   });
+  expect(money.body).toMatchObject({ status: 'done', value: { key: 'money' } });
 });
 afterAll(shutdown);
 

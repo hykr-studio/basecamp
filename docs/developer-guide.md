@@ -788,6 +788,12 @@ A business adjusts this in its settings, section `approvals` (`@hykr/contracts`)
 - `bands[key]`: who decides each amount, first match first: `[{ upTo?: Money, approver: { userId } |
   { capability } }]`, read by `{ by: { band: key } }`. No band fits: holders of `approvals.decide`.
 
+Its owners and admins change them with `PATCH /api/settings/sections/approvals` (section 5.18),
+which refuses a level nobody declares, `parks: false` on a level without `tenantMayLoosen`, a
+band capability nobody defines, a named approver who is not on the business's team, and a band no
+amount reaches. Approvals read the settings in the write's own transaction, so a new threshold
+applies to the very next write.
+
 A decision that names a level nobody declared ranks above every level and always parks. Without any
 levels, everything works as before: decisions without a level, and `needsApproval` parks as it did.
 The sample declares `read`, `internal`, `external` and `irreversible` in
@@ -882,8 +888,11 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   - Registries are process-global, so read them per request, not at import.
   - To add a kind, create its registry with `{ collects: '<key>' }` and declare `<key>` on
     `Contributions` next to it.
-- **Settings sections.** `defineSettingsSection('<key>', schema)` adds a per-business section. Its
-  schema must have a default for every field. `parseTenantSettings(raw)` returns the base settings,
+- **Settings sections.** `defineSettingsSection('<key>', schema, { editable? })` adds a
+  per-business section. Its schema must have a default for every field. With `editable: true`
+  (`settings.manage`) or `editable: { capability }` the business changes it with the generic writer
+  (section 5.18); a `settingsChecks` contribution (`defineSettingsCheck({ name, section, check })`,
+  `@hykr/api`) refuses what the schema cannot see. `parseTenantSettings(raw)` returns the base settings,
   `features` (switches by key, absent means off) and every section. Read a business's settings with
   `TenantConfigService` (`@hykr/core`, global): `get(tenantId)` caches them for 10 seconds per process
   (`CoreModule.forRoot({ tenantConfigTtlMs })`), `invalidate(tenantId)` after you change them, and
@@ -1133,7 +1142,8 @@ sample's `orders` module uses every part.
   `useMoneyText()` (`@hykr/app`) format through Intl.
 - **A business's money.** The `money` settings section: `currency`, `fyStartMonth`, and named
   `amounts` and `bands` the application reads in its own rules (`moneyAmount`, `exceeds`,
-  `moneyBand`). `tenantMoney(conn, tenantId)` resolves the currency: the business's, else
+  `moneyBand`), changed with `PATCH /api/settings/sections/money` (a currency the runtime knows,
+  bands that go up). `tenantMoney(conn, tenantId)` resolves the currency: the business's, else
   `DEFAULT_CURRENCY`, else `XXX`. `GET /api/money` gives clients the currency, its exponent and the
   financial year, never the amounts.
 - **Tax.** `defineTaxFunction({ name, compute(lines, { currency, at }) })` is your computation;
@@ -1418,6 +1428,26 @@ does not change a business's setup.
   are read-only to them (403 `shared_read_only`). A business overrides one by creating its own row
   with `sharedId` (once: 409 `shared_override_exists`), and then reads its own instead. What is
   shared (a catalog) is application data.
+- **Settings sections** (`docs/decisions/H2.md`). Every section declared `editable` (the
+  framework's `approvals`, `money`, `businessHours`, `sla`, `memory`, `shares`, `files` and
+  `parties`, and an application's own) and `general` (the base settings `timeZone`, `quietHours`,
+  `replyTime`, `marketingPerWeek`) are changed by one command, `settings.section`:
+  `PATCH /api/settings/sections/:section { value }`, a JSON merge patch of what the business stored
+  (an object changes key by key, `null` restores a key's default, a list is replaced). The merged
+  value must parse with the section's schema; a key the schema does not know is refused, not
+  dropped; then the section's settings checks run in the transaction (400 `settings_invalid` with
+  `problems`, one per path). It needs the section's capability (403 `needs_settings_manage`,
+  audited), a person signed in, or the system principal; the assistant has no tool for it. The
+  business's row is locked, only the section's keys change (what the business set is stored, not
+  the defaults), the touched `tenant` row carries the section before and after, and
+  `settings.changed` drops this process's cached copy. A module's level rule on `settings.section`
+  can make a change wait; the check runs when it is asked for and again when it runs.
+  `GET /api/settings/sections` lists the sections the person may change with their values (or,
+  for a stored value that no longer parses, `value: null` and its `problems`), and
+  `GET /api/settings/sections/:section` reads one. Credits, models, privacy, roles, members,
+  support, branding and wording keep their own writers (404 here). Client:
+  `api.settings.sections()`, `section(key)`, `updateSection(key, patch)`; the back office's
+  Settings screen edits each one as JSON and sends `patchBetween(before, after)`.
 - **Wording.** The application rewords framework phrases and notifications without declaring them
   again: `defineServer({ wording: { phrases: { en: { 'channel.handoff': '…' } }, notifications:
   [overrideNotification('approval.request', { channels, whatsapp, email })] } })`. A phrase must
@@ -1434,10 +1464,12 @@ does not change a business's setup.
   inputs with a new `key` to start again; an edit sends the patch as `custom`. The shell's rail and phone bar still show the product's `title` (section 14), so a
   screen shows the business's logo and name with `<BrandMark>`: the sample's Today does. The back
   office's header shows them, its sign-in shows a verified domain's, and its `SettingsScreen` edits
-  branding, flags, custom fields and web addresses. The sample's to-dos screen sets a business's
+  branding, flags, custom fields, web addresses and the settings sections. The sample's to-dos screen sets a business's
   fields (such as `priority`) in its add form and each row's editor, filters on a filterable
   select field, and honours the business-managed flag `todos.clear-done`. Tests: `framework/api/test/framework/settings{,.e2e}.test.ts` on the fixture's
-  `features/settings/`, and `application/api/test/domain/todo-settings.e2e.test.ts`.
+  `features/settings/`, `settings-sections{,.e2e}.test.ts` on its `claims` module (a threshold, a
+  band approver, SLA durations and business hours changed through the writer), and
+  `application/api/test/domain/todo-settings.e2e.test.ts`.
 
 ### 5.19 Documents (PDFs)
 
@@ -1538,7 +1570,9 @@ who hears about it are the application's. The sample's `orders` module uses ever
   A refused escalation is kept on the clock (`escalationError`). A business's `businessHours`
   settings (`week`, `holidays`, in its `timeZone`) decide what `hours: 'business'` counts; its
   `sla` settings override a duration by name (`within: { 'orders.decision': '36h' }`) or switch
-  one off (`off`). `GET /api/sla/<plural>/:id` and `GET /api/sla?status=breached` read clocks on
+  one off (`off`). It changes them with `PATCH /api/settings/sections/businessHours` (open
+  intervals of a day may not overlap), `…/sla` (only declared SLA names) and its time zone with
+  `…/general`; a clock started after the change counts with them. `GET /api/sla/<plural>/:id` and `GET /api/sla?status=breached` read clocks on
   records the caller reads (`&open=true`: only those whose record is still in the state, i.e.
   still late); `<SlaBadge>` shows a record's, `<OverdueList>` the late ones (Today).
 - **Versions.** `traits.versioned: { field?, frozenWhen?, editableWhenFrozen?, revisions? }` and
@@ -3233,12 +3267,11 @@ These are not built. Each has a workaround for now.
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
 | Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); `roleOverrides`, `roleDefaults` and `grantKinds` (A4); `participantRoles` (B7); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10); `standingProviders`, `operatorCapabilities`, `supportWithheld` and `inboundRouters` (B19, section 6.6). |
-| Editing a business's money settings | Nothing in the API changes `money` (currency, `fyStartMonth`, amounts, bands) yet: set it in `app.tenants.settings` with SQL. |
 | Bulk writes for plain entities | Only children of a parent are inserted in bulk (`children.insert`/`replace`); `insertMany` for any other entity is one insert per row. There is no bulk update. |
 | Line-level tools | The assistant saves a whole tree in one call (the sample's `save-order`); there are no tools to add or move one line. |
 | Several currencies in one record | A record and its children have one currency, and there are no exchange rates. |
 | Business-editable workflows | States, transitions and SLAs are declared by modules. A business can change an SLA's duration or switch it off (`sla` settings) but cannot add a state or a transition. |
-| Editing `businessHours` and `sla` settings | Nothing in the API changes them yet: set them in `app.tenants.settings` with SQL. Half days and per-branch calendars are not supported. |
+| Calendars beyond a week | `businessHours` is one week and whole-day holidays: half days and per-branch calendars are not supported. |
 | Escalations that ask a person | An SLA's escalation transition runs as the system principal, which cannot park; one that would wait is refused and kept on the clock. Notify the people instead (`escalate.notify`). |
 | `If-Match` beyond entity writes | Only an entity's `PATCH` and `DELETE` check it (section 5.29); transitions and commands refuse it. Send the version in a command's input when it takes one. Reads send no `ETag` (the version is in the body). |
 | Files captured offline | The outbox queues records, not files: a photo needs the network (B1's presign, upload, confirm). |
@@ -3248,7 +3281,9 @@ These are not built. Each has a workaround for now.
 | Revisions without copying | A revision is a copy (its own id). There is no snapshot of one record in place. |
 | Memory recall at scale | Recall compares every vector of one business (no approximate index), and the compose and CI images have no pgvector, so it runs on `app.memory_cosine`. Fine for thousands of memories per business; beyond that, install pgvector and add an index. |
 | Memory of the record on screen | A turn's recall does not prefer memory of the record the person is looking at. Ask with `recall-memory` and `about`. |
-| Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it, or the `memory` settings, yet. |
+| Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it. Its `memory` settings are edited as JSON on the back office's Settings screen. |
+| Settings screens | Every editable section (section 5.18) has the API and client methods, and the back office edits each as JSON; neither app has a form per section. |
+| Settings across processes | A settings change drops the cached copy of the process that made it; other processes keep theirs up to 10 s. Approvals and SLA clocks read settings in the write's transaction, so they are never late. |
 | Memory timings | The indexer gives the embedding provider 30 s per batch and takes over a claim after 120 s; recall gives it 4 s per turn (1.5 s on voice). All are constants in `features/memory/` (`indexer.ts`, `recall.service.ts`), not deployment settings. |
 | Durable runs | A run waits only for approvals (no questions, timers or webhooks). An agent's run (section 5.26) is resumed in its agent's thread. A decision after WhatsApp's 24-hour window sends nothing there (the app shows it), and a request a continuation parks again is approved in the app, not with buttons. A resume a turn hook refuses (credits) runs no model and is not tried again. If the person keeps chatting meanwhile, the resumed run does not see those messages. A run parked before a deploy goes on under the new instructions and tools. A run whose resume never comes keeps the parked step's tokens unmetered. |
 | Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
