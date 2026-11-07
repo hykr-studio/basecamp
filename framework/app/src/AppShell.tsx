@@ -3,7 +3,7 @@ import {
   SchibstedGrotesk_700Bold,
   useFonts,
 } from '@expo-google-fonts/schibsted-grotesk';
-import { ApiError, isNetworkError } from '@hykr/api-client';
+import { ApiError } from '@hykr/api-client';
 import type { Catalog } from '@hykr/contracts';
 import type { Registry } from '@hykr/ui-registry';
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -46,6 +46,7 @@ import { Icon } from './framework/Icon';
 import { LangProvider } from './framework/lang';
 import { forgetSession, lastSession, rememberSession } from './framework/last-session';
 import { SignedIn, useNavFilters, wrapProviders } from './framework/plugins';
+import { createShellSession, type Shown } from './framework/shell-session';
 import { ToastProvider } from './framework/Toast';
 import { inApp, webHref } from './framework/web-link';
 import { getApp, setRuntime } from './runtime';
@@ -486,41 +487,21 @@ export function AppShell(props: AppShellProps) {
     SchibstedGrotesk_700Bold,
   });
   // undefined while the session loads, null when signed out.
-  const [user, setUser] = useState<SessionUser | null | undefined>(undefined);
-  useEffect(() => {
-    let stopped = false;
-    // Opened without a network: on the last person signed in here, until the network is back
-    // and the session can be checked (decisions B12).
-    let unchecked = false;
-    const check = () =>
-      auth
-        .me()
-        .then((u) => {
-          if (stopped) return;
-          unchecked = false;
-          if (u) rememberSession(u);
-          else forgetSession();
-          setUser(u);
-        })
-        .catch((e) => {
-          if (stopped) return;
-          if (isNetworkError(e)) {
-            unchecked = true;
-            setUser((now) => (now === undefined ? lastSession() : now));
-            return;
-          }
-          forgetSession();
-          setUser(null);
-        });
-    void check();
-    const unsubscribe = onlineManager.subscribe((online) => {
-      if (online && unchecked) void check();
-    });
-    return () => {
-      stopped = true;
-      unsubscribe();
-    };
-  }, []);
+  const [user, setUser] = useState<Shown>(undefined);
+  // Opened without a network: on the last person signed in here, until the network is back and
+  // the session can be checked. Another person (or nobody) shown drops the cached answers first.
+  const [session] = useState(() =>
+    createShellSession({
+      me: () => auth.me(),
+      render: setUser,
+      clear: () => queryClient.clear(),
+      last: lastSession,
+      remember: rememberSession,
+      forget: forgetSession,
+      onNetwork: (listener) => onlineManager.subscribe(listener),
+    }),
+  );
+  useEffect(() => session.start(), [session]);
   const standalone = standaloneRoute(usePathname());
   const Standalone = standalone?.route.screen;
 
@@ -548,12 +529,7 @@ export function AppShell(props: AppShellProps) {
                 <PublicRoute
                   fallback={
                     <View style={styles.screen}>
-                      <SignIn
-                        onSignedIn={(u) => {
-                          rememberSession(u);
-                          setUser(u);
-                        }}
-                      />
+                      <SignIn onSignedIn={(u) => session.signedIn(u)} />
                     </View>
                   }
                 />
@@ -567,11 +543,7 @@ export function AppShell(props: AppShellProps) {
                       onSignOut={() => {
                         signOutPlugins(user)
                           .then(() => auth.signOut())
-                          .finally(() => {
-                            forgetSession();
-                            queryClient.clear();
-                            setUser(null);
-                          });
+                          .finally(() => session.signedOut());
                       }}
                     />
                   </SignedIn>

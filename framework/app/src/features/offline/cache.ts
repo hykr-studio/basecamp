@@ -56,14 +56,26 @@ export function persistCache(
     queries: { ...defaults.queries, gcTime: Math.max(options.maxAgeMs, 5 * 60_000) },
   });
   void remember(kv, who.userId, who.business).catch(() => {});
+  const persister = persisterFor(kv, cacheKey(who.userId, who.business));
+  let stopped = false;
   const [stop] = persistQueryClient({
     queryClient: client,
-    persister: persisterFor(kv, cacheKey(who.userId, who.business)),
+    // A restore still reading when the person changed brings nothing back into the client.
+    persister: {
+      ...persister,
+      restoreClient: async () => {
+        const kept = await persister.restoreClient();
+        return stopped ? undefined : kept;
+      },
+    },
     maxAge: options.maxAgeMs,
     buster: options.buster,
     dehydrateOptions: { shouldDehydrateQuery: (q) => q.state.status === 'success' },
   });
-  return stop;
+  return () => {
+    stopped = true;
+    stop();
+  };
 }
 
 /** Forget every answer kept for this person (sign-out), in every business they used here. */
