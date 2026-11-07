@@ -18,6 +18,7 @@ export {
   esignProviders,
   evidenceHash,
 } from './features/acceptance/public.js';
+export {
   type MentionContext,
   type MentionKind,
   mentionKinds,
