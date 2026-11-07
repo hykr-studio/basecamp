@@ -743,6 +743,73 @@ describe('triggers', () => {
     await ana.call('PATCH', `/api/agents/${steady.id}`, { status: 'paused' }, inA());
   });
 
+  it('a time that fired does not stop an edit: a rename, a new order, a removal fire nothing again', async () => {
+    // Inside the minute a new time may be late by; past it by the time of the edits.
+    const at = new Date(Date.now() - 57_000).toISOString();
+    const once = { kind: 'once', at };
+    const schedule = { kind: 'recurring', cron: '0 9 * * 1' };
+    const scope = { tools: ['list-tasks'] };
+    const fired = await agent(ana, {
+      name: 'Fired once',
+      instructions: 'Count my open tasks.',
+      scope,
+      triggers: [schedule, once],
+    });
+    const rowsOf = async () =>
+      (
+        await pool.query(
+          'select id, position, next_at from app.agent_triggers where agent_id = $1 order by position',
+          [fired.id],
+        )
+      ).rows as { id: string; position: number; next_at: Date | null }[];
+    await svc().tick(new Date());
+    await eventually(async () => (await runsOf(fired.id)).find((r) => r.status === 'done'), 20_000);
+    const ticked = await rowsOf();
+    expect(ticked).toHaveLength(2);
+    expect(ticked[1].next_at).toBeNull();
+    const wait = new Date(at).getTime() + 61_000 - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+
+    // A rename alone, and the whole definition again as the editor saves it.
+    for (const body of [
+      { name: 'Fired, renamed' },
+      { name: 'Fired', instructions: 'Count my open tasks.', scope, triggers: [schedule, once] },
+    ]) {
+      const res = await ana.call('PATCH', `/api/agents/${fired.id}`, body, inA());
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    }
+    expect(await rowsOf()).toEqual(ticked);
+    // A new order keeps both rows; removing the schedule moves the time up, still its row.
+    const swapped = await ana.call(
+      'PATCH',
+      `/api/agents/${fired.id}`,
+      { triggers: [once, schedule] },
+      inA(),
+    );
+    expect(swapped.status, JSON.stringify(swapped.body)).toBe(200);
+    expect(await rowsOf()).toEqual([
+      { ...ticked[1], position: 0 },
+      { ...ticked[0], position: 1 },
+    ]);
+    const removed = await ana.call('PATCH', `/api/agents/${fired.id}`, { triggers: [once] }, inA());
+    expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+    expect(await rowsOf()).toEqual([{ ...ticked[1], position: 0 }]);
+    await svc().tick(new Date(Date.now() + 1000));
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(await runsOf(fired.id)).toHaveLength(1);
+
+    // A time that is new and past is still refused; the kept one is not.
+    const late = await ana.call(
+      'PATCH',
+      `/api/agents/${fired.id}`,
+      { triggers: [once, { kind: 'once', at: '2001-01-01T00:00:00Z' }] },
+      inA(),
+    );
+    expect(late.status).toBe(400);
+    expect(late.body.problems).toEqual(['triggers.1 (once): 2001-01-01T00:00:00Z is in the past']);
+    await ana.call('PATCH', `/api/agents/${fired.id}`, { status: 'paused' }, inA());
+  });
+
   it('an @-mention: the agent runs with the comment; one whose owner cannot read the record cannot be named', async () => {
     const helper = await agent(ana, {
       name: 'Helper',

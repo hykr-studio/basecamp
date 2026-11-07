@@ -154,6 +154,31 @@ export function sameTrigger(stored: unknown, t: AgentTrigger): boolean {
   return was.success && canonicalJson(was.data) === canonicalJson(AgentTrigger.parse(t));
 }
 
+/**
+ * The stored trigger each of a definition's triggers keeps, by position; null for one that is
+ * new or changed. An unchanged trigger keeps its row wherever it moved (a trigger removed before
+ * it, a new order), the row at its own position first. Each row is kept at most once.
+ */
+export function keptTriggers<R extends { position: number; spec: unknown }>(
+  rows: readonly R[],
+  triggers: readonly AgentTrigger[],
+): (R | null)[] {
+  const free = new Set(rows);
+  const byPosition = new Map(rows.map((r) => [r.position, r]));
+  const kept = triggers.map((t, position) => {
+    const same = byPosition.get(position);
+    if (!same || !sameTrigger(same.spec, t)) return null;
+    free.delete(same);
+    return same;
+  });
+  return kept.map((row, position) => {
+    if (row) return row;
+    const moved = [...free].find((r) => sameTrigger(r.spec, triggers[position]));
+    if (moved) free.delete(moved);
+    return moved ?? null;
+  });
+}
+
 /* ── How a run says what started it ────────────────────────────────────── */
 
 /** A short line about a trigger, for the run log and the run's own message. */

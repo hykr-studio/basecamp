@@ -20,7 +20,7 @@ import { runtime } from '../../runtime.js';
 import { connectorHandlers } from '../integrations/registry.js';
 import { allToolIds, readableIn, unscoped } from './scope.js';
 import { agentTemplates } from './templates.js';
-import { cronProblem, firstDue, knownZone, resolveWhere, sameTrigger } from './triggers.js';
+import { cronProblem, firstDue, keptTriggers, knownZone, resolveWhere } from './triggers.js';
 
 /** The parts of a definition that say what it does. */
 export const Definition = z.object({
@@ -30,7 +30,11 @@ export const Definition = z.object({
 });
 export type Definition = z.infer<typeof Definition>;
 
-/** Every problem with a definition, for its owner, with the business's time zone. */
+/**
+ * Every problem with a definition, for its owner, with the business's time zone. `kept`: the
+ * positions of triggers an edit keeps as they are (their rows stay), whose time may have passed
+ * since (a `once` that fired): they fire nothing again. Everything else about them is checked.
+ */
 export async function definitionProblems(
   conn: Tx,
   a: {
@@ -40,6 +44,7 @@ export async function definitionProblems(
     def: Definition;
     template?: string | null;
     now?: Date;
+    kept?: ReadonlySet<number>;
   },
 ): Promise<string[]> {
   const problems: string[] = [];
@@ -55,7 +60,7 @@ export async function definitionProblems(
   const reads = readableIn(a.def.scope.tools, catalog);
   for (const [i, t] of a.def.triggers.entries()) {
     const at = `triggers.${i} (${t.kind})`;
-    if (t.kind === 'once' && new Date(t.at).getTime() < now.getTime() - 60_000)
+    if (t.kind === 'once' && !a.kept?.has(i) && new Date(t.at).getTime() < now.getTime() - 60_000)
       problems.push(`${at}: ${t.at} is in the past`);
     if (t.kind === 'recurring') {
       const why = cronProblem(t.cron, t.timeZone ?? a.zone);
@@ -130,20 +135,35 @@ export function setZoneOf(f: ZoneOf) {
   zoneOf = f;
 }
 
+const storedTriggers = (tx: Tx, agentId: string) =>
+  tx.select().from(agentTriggers).where(eq(agentTriggers.agentId, agentId));
+
 /**
  * The definition's triggers as rows: one per position. A trigger that did not change keeps its
  * row (its id, when it fires next, a condition's records seen), whatever order its keys come
- * back in; a changed one starts again. A change of `status` alone changes no trigger.
+ * back in and wherever it moved (`keptTriggers`); a changed or new one starts again. A change of
+ * `status` alone changes no trigger.
  */
 async function syncTriggers(tx: Tx, row: Row, zone: string, now: Date) {
   const triggers = z.array(AgentTrigger).parse(row.triggers);
-  const kept = await tx.select().from(agentTriggers).where(eq(agentTriggers.agentId, row.id));
-  const byPosition = new Map(kept.map((k) => [k.position, k]));
+  const stored = await storedTriggers(tx, row.id);
+  const kept = keptTriggers(stored, triggers);
+  const keep = new Set(kept);
+  for (const gone of stored)
+    if (!keep.has(gone)) await tx.delete(agentTriggers).where(eq(agentTriggers.id, gone.id));
+  // A kept row that moved goes through a negative position first: (agent, position) is unique.
+  const moved = kept.flatMap((r, position) =>
+    r && r.position !== position ? [{ id: r.id, position }] : [],
+  );
+  for (const m of moved)
+    await tx
+      .update(agentTriggers)
+      .set({ position: -1 - m.position })
+      .where(eq(agentTriggers.id, m.id));
+  for (const m of moved)
+    await tx.update(agentTriggers).set({ position: m.position }).where(eq(agentTriggers.id, m.id));
   for (const [position, t] of triggers.entries()) {
-    const old = byPosition.get(position);
-    byPosition.delete(position);
-    if (old && sameTrigger(old.spec, t)) continue;
-    if (old) await tx.delete(agentTriggers).where(eq(agentTriggers.id, old.id));
+    if (kept[position]) continue;
     await tx.insert(agentTriggers).values({
       tenantId: row.tenantId,
       agentId: row.id,
@@ -154,8 +174,6 @@ async function syncTriggers(tx: Tx, row: Row, zone: string, now: Date) {
       queues: config.queuePrefix,
     });
   }
-  for (const gone of byPosition.values())
-    await tx.delete(agentTriggers).where(eq(agentTriggers.id, gone.id));
 }
 
 const OPS = new Set(['agent.create', 'agent.update']);
@@ -163,7 +181,8 @@ const OPS = new Set(['agent.create', 'agent.update']);
 /**
  * Every create and update of an agent, parked or run: the definition as it would be is checked
  * against this server (400 `invalid_agent`, nothing written or parked). A write that ran syncs the
- * triggers in its transaction. A change of `status` alone is not checked again.
+ * triggers in its transaction. A change of `status` alone is not checked again, and an edit does
+ * not hold the time of a trigger it keeps (a `once` that fired) against it.
  */
 export const AgentDefinitions: WriteHook = {
   name: 'agents.definitions',
@@ -181,6 +200,14 @@ export const AgentDefinitions: WriteHook = {
         scope: given.scope ?? before?.scope ?? { tools: [] },
         budget: given.budget ?? before?.budget ?? {},
       });
+      // The triggers this edit keeps as they are, as `syncTriggers` will keep them.
+      const kept = new Set<number>();
+      if (before && def.success)
+        for (const [i, r] of keptTriggers(
+          await storedTriggers(tx, before.id),
+          def.data.triggers,
+        ).entries())
+          if (r) kept.add(i);
       const problems = def.success
         ? await definitionProblems(tx, {
             tenantId,
@@ -188,6 +215,7 @@ export const AgentDefinitions: WriteHook = {
             zone,
             def: def.data,
             template: before ? null : (given.template as string | null | undefined),
+            kept,
           })
         : def.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
       if (problems.length)

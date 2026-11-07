@@ -15,6 +15,7 @@ export {
   canonicalJson,
   cronProblem,
   eventMatches,
+  keptTriggers,
   messageMatches,
   movingValue,
   nextRun,

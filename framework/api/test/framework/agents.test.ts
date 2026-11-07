@@ -5,6 +5,7 @@ import {
   canonicalJson,
   cronProblem,
   eventMatches,
+  keptTriggers,
   messageMatches,
   movingValue,
   nextRun,
@@ -136,6 +137,31 @@ describe('an edited trigger', () => {
     expect(sameTrigger({ kind: 'mention' }, t)).toBe(false);
     expect(sameTrigger({ kind: 'event', on: [], extra: 1 }, t)).toBe(false);
     expect(canonicalJson({ b: [{ d: 1, c: 2 }], a: null })).toBe('{"a":null,"b":[{"c":2,"d":1}]}');
+  });
+
+  it('keeps its row wherever it moved, its own position first, each row once', () => {
+    const once = { kind: 'once' as const, at: '2026-12-01T09:00:00Z' };
+    const mention = { kind: 'mention' as const };
+    const rows = [
+      { id: 'a', position: 0, spec: { kind: 'mention' } },
+      { id: 'b', position: 1, spec: { at: '2026-12-01T09:00:00Z', kind: 'once' } },
+      { id: 'c', position: 2, spec: { kind: 'mention' } },
+    ];
+    const ids = (t: Parameters<typeof keptTriggers>[1]) =>
+      keptTriggers(rows, t).map((r) => r?.id ?? null);
+    expect(ids([mention, once, mention])).toEqual(['a', 'b', 'c']);
+    // The first trigger removed: the others move up and keep theirs.
+    expect(ids([once, mention])).toEqual(['b', 'a']);
+    // A mention where the time was is new (the others keep their own); a changed time is new.
+    expect(ids([mention, mention, mention])).toEqual(['a', null, 'c']);
+    expect(ids([{ ...once, at: '2026-12-02T09:00:00Z' }, mention])).toEqual([null, 'a']);
+    // A row at its own position stays there; an earlier trigger takes another.
+    const moved = [
+      { id: 'x', position: 0, spec: once },
+      { id: 'y', position: 1, spec: mention },
+      { id: 'z', position: 2, spec: mention },
+    ];
+    expect(keptTriggers(moved, [mention, mention]).map((r) => r?.id)).toEqual(['z', 'y']);
   });
 });
 
