@@ -871,8 +871,9 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources`,
   `fileHolders` (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
-  `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21)
-  and `agentTemplates` (section 5.22) in `@hykr/api`.
+  `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21),
+  `dataExportSources` (section 5.22), `uploadTargets` (section 5.23) and `agentTemplates` (section
+  5.24) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -931,7 +932,7 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
   (F3) before it leaves the server. The in-process `EventBus` is not relayed.
 - **Turn hooks.** Every chat turn, back-office draft, resumed run (`kind: 'resume'`, section
-  5.8.3) and agent run (`kind: 'agent'`, section 5.22) passes `turnHooks` (`gateTurn`): first a check that the deployment has a model (503
+  5.8.3) and agent run (`kind: 'agent'`, section 5.24) passes `turnHooks` (`gateTurn`): first a check that the deployment has a model (503
   `model_not_configured`), then the hooks, then the business's model policy chooses the turn's model
   (section 7.5). `before` returns `{ refuse: { rule, reason, status?, say? } }` or
   `{ context?, model?, withoutTools? }`; a refusal is `TurnRefused` (403 unless given, nothing saved;
@@ -1598,7 +1599,106 @@ needs the entity's `get` exposed) reads its comments, and anyone else gets 404.
   edit and remove where allowed, a composer whose `@` offers the people to name, and a "Team only"
   switch for those who may. `inboxPlugin()` adds `/inbox`; `<InboxBell />` shows the unread count.
 
-### 5.22 Agents a business makes
+### 5.22 Exporting a business's data
+
+A person who may (`data.export`, held by `owner` unless the application or the business grants it
+to another role) exports the business's data as one zip archive (`docs/decisions/A11X.md`).
+
+```ts
+// app, back office or any client
+const started = await api.command(StartExportSpec, { formats: ['json', 'csv'], only: ['todo'] });
+const job = await api.jobs.get(started.value.id);          // then the archive: api.files.get(job.files[0])
+
+// server: data that no entity serves joins the export (contributes: { dataExportSources: [...] })
+export const AuditSource: DataExportSource = {
+  name: 'audit-log',                                       // its files: audit-log.json, audit-log.csv
+  async *rows({ principal, tenantId, db }) { /* yield only what principal may read */ },
+};
+```
+
+- **Starting** is a command, `export.start` (`POST /api/exports { formats?, only? }`), for people
+  only (no assistant tool). It needs `data.export` (403 `needs_data_export`, audited as denied),
+  refuses a second export while one of the business runs (409 `export_running`) and an unknown
+  name in `only` (400 `unknown_export_part`), and starts a job of the kind `export.data` (section
+  5.17). Its audit row is `export.start` on the business (`resource_type 'tenant'`).
+- **What is read.** Every served entity, through its scoped repository and `toRead(row, p)`, as the
+  person who asked, as they stand when it runs: their access, record grants and hidden fields apply
+  exactly as on `GET /api/<plural>`. The export never widens anyone's reach (the sample's owners read
+  their own records, so that is what an owner exports). Left out, and named in the manifest's
+  `skipped`: entities whose list is `expose: 'internal'`, entities a feature flag switches off for
+  the business, and entities whose plugins refuse the person's list. Platform-shared rows (section
+  5.18) are not the business's and stay out. Then each export source's rows, through the read
+  projectors with the source's name as the resource type.
+- **The archive.** `export-<date>.zip`: `<plural>.json` (an array, one record per line) and
+  `<plural>.csv` per entity (UTF-8 with a byte-order mark, CRLF, a header of the read schema's
+  fields the person sees, objects as JSON, a leading `'` on text a spreadsheet would run as a
+  formula), the same per source, and `manifest.json` (`ExportManifest`: who, when, the parts and
+  their row counts, what was skipped). It is kept on the job as a server file: only its person
+  reaches it (`GET /api/jobs/:id`, `GET /api/files/:id`), and only while they hold `data.export`.
+  Past `FILES_MAX_BYTES` (compressed) the job fails `too_large`. `readZip(bytes)` (`@hykr/api`)
+  reads one back.
+- **In the app** list `exportPlugin` in `<AppShell plugins>`: an "Export data" destination and
+  `/export` screen for holders of `data.export` (`useExports()`, `useStartExport()`,
+  `useCanExport()` for your own screen). The back office's Settings screen has a "Data export"
+  section for them.
+- The fixture's `features/export` and `test/framework/export.e2e.test.ts` show a switched-off
+  module, a hidden field, an export source and a business role that may export.
+
+### 5.23 Bulk import
+
+Records from another system (a spreadsheet, another product's export) come in through the
+**imports** feature (`docs/decisions/B20.md`): a CSV, JSON or NDJSON file of one entity's records,
+written row by row **through the write path**, as the person who imports it. Nothing to declare:
+every served entity can be imported, unless its spec says `traits: { imports: false }` (a record
+with a parent is saved through its parent's command and is never imported on its own).
+
+```bash
+# From application/, once built, with the worker running (basecamp dev, or basecamp start worker):
+pnpm exec basecamp import todo domain/src/modules/todos/import/todos.csv \
+  --as owner@example.com --key legacy_id --source legacy --dry-run
+# Options: --tenant <id>, --format csv|json|ndjson, --existing update|skip, --empty omit|null,
+# --map <column>=<field> (or <column>= to leave it out), --ref <field>=<entity>, --report <path>
+```
+
+- **Who.** A person holding `imports.run` (owners and admins; re-grant it with `roleOverrides` or
+  a business role) who may create the entity. The assistant cannot start one. Starting is the
+  command `import.start` (`POST /api/imports`), so it is audited and an application's level rule
+  on `import.start` can make imports wait for someone.
+- **The file.** Upload it with `for: { entity: 'import', field: 'file' }` (`IMPORT_UPLOAD`; CSV,
+  JSON, NDJSON or plain text), then start: `api.imports.upload(bytes, { name, mime })` and
+  `api.imports.start({ entity, file, key, source, ... })` in `@hykr/api-client`. The CLI stores the
+  file itself. Non-entity upload targets like this one are an `uploadTargets` contribution.
+- **The job.** An import is a job of kind `imports.records` (section 5.17) that the worker runs as
+  its starter. Rows are written in batches (`IMPORTS_BATCH_SIZE`, 100 per transaction, one savepoint
+  per row): each is the entity's own `create` (then an `update` for fields only the update schema
+  has, such as a to-do's `done`) or `update` through `runWrite`, so access, rules, plugins, field
+  policy, feature flags, level rules, undo windows and audit all apply. Each record's audit row
+  carries the job's id as its run id. A row whose write would wait for an approval is not written
+  (`needs_approval`): an import never parks rows, and an approved import does not approve them.
+- **Keys.** Every row needs its id in the other system (the `key` column, default `id`). Which record
+  each key became is kept per business, entity and `source` (`app.import_keys`), so running the same
+  import again updates those records (`existing: 'update'`), or leaves them (`'skip'`), and a row
+  that would change nothing counts as `unchanged`. A key whose record was deleted is `not_found`: a
+  re-run never brings it back. `refs: { shelfId: 'shelf' }` says a column holds another entity's
+  keys in the same source; each becomes that record's id.
+- **Values.** Columns are fields by name, or by `columns: { 'Old name': 'field' }` (`null` leaves a
+  column out); columns starting with `_` are ignored; any other unknown column fails the import
+  before it writes anything. A CSV cell is given to the field's schema as text, or as the number,
+  `true`/`false` or JSON it spells when the schema refuses the text. An empty cell leaves the field
+  out (`empty: 'null'` sets null).
+- **The result.** The job's output is the counts (`ImportResult`: created, updated, unchanged,
+  skipped, failed, errors by code). Rows not written are in the job's result file
+  `<name>.errors.csv` (or `.ndjson`): `_row`, `_code`, `_field`, `_message`, then the row as given.
+  Fix the rows in the report and import the report itself. A **dry run** (`dryRun: true`,
+  `--dry-run`) does everything in transactions it rolls back: the counts and the report say what a
+  real run would do. Its refusals are still audited as refused writes.
+- **In the app.** `<ImportRecords entity="todo" options={{ key: 'legacy_id' }} />` (people with
+  `imports.run` only): check a file, import it, follow `<JobProgress>`. `useStartImport()` and
+  `useCanImport()` under it. The sample's to-dos screen shows it; `import/todos.csv` is its file.
+- **Limits.** `IMPORTS_MAX_ROWS` (50 000), `IMPORTS_BATCH_SIZE` (100), `IMPORTS_REPORT_ROWS`
+  (10 000), `IMPORTS_TIMEOUT_S` (14 400); the file's size is `FILES_MAX_BYTES`.
+
+### 5.24 Agents a business makes
 
 People make their own agents (`docs/decisions/A6.md`): a job in plain words that runs on its own
 when a trigger fires, acting for the person who made it. The framework's `agents` feature
@@ -1661,14 +1761,15 @@ Every request becomes a `Principal` (`framework/contracts/src/principal.ts`). Th
 | `actor` | `{ kind, id }`. `kind` is `'user'`, `'agent'`, `'system'` (the server's own work, below) or `'guest'` (a share link; not built yet). |
 | `actingFor` | For an agent: the person it acts for |
 | `subject` | Whose business this is: `{ kind: 'user', userId }` or `{ kind: 'contact', contactId }`. Set by the server only. |
-| `tenantId`, `roles`, `customerId` | The business, your roles in it, and your customer record if you are one |
+| `tenantId`, `roles`, `customerId` | The business, your roles in it, and your customer record if you are one. No `tenantId`: a person in no business yet (section 6.5) |
+| `standing` | `'member'` (a membership of the team) or `'participant'` (a member of one of its parties, never of the team; section 6.5). Absent for a contact |
 | `capabilities` | What your roles allow there, by name (`'backoffice.use'`). Worked out by the server; check it with `can(p, …)` (6.4) |
 | `assurance` | `'whatsapp_number'` (a number alone) < `'otp'` (a one-time code; nothing sets it yet) < `'session'` (signed in) |
 | `channel` | `'app'`, `'voice'`, `'whatsapp'`, `'mcp'`, `'webmcp'`, `'api'`, `'background'` or `'share'`. A session request has none, unless it names `app` or `webmcp` in `x-channel` (any other value is 400 `bad_channel`). `webmcp` (a page's WebMCP tools) only reads and is refused on people-only routes. |
 | `runId`, `agentVersion` | Set on agent calls, and written to audit |
 | `approvedBy` | Set on an approval replay |
 
-Everything comes from server data. Headers only choose: `x-tenant-id` picks among the businesses you belong to, and a WhatsApp channel lowers assurance. A role in a membership that neither the application declared nor the business defined grants nothing (the server logs it once). Sign-up creates the person's own business, with them holding the creator's roles (`owner` unless the application's `roleDefaults` say otherwise; a Better Auth `user.create.after` database hook in `framework/api/src/infra/auth.ts`). If that failed, `PrincipalGuard` creates it on their first call (`ensureDefaultTenant`).
+Everything comes from server data. Headers only choose: `x-tenant-id` picks among the businesses you are in (as a member, or as a participant), and a WhatsApp channel lowers assurance. A role in a membership that neither the application declared nor the business defined grants nothing (the server logs it once). Sign-up creates the person's own business, with them holding the creator's roles (`owner` unless the application's `roleDefaults` say otherwise; a Better Auth `user.create.after` database hook in `framework/api/src/infra/auth.ts`). If that failed, `PrincipalGuard` creates it on their first call (`ensureDefaultTenant`). An application where people sign up without running a business (clients, outside organisations) turns this off with `defineServer({ signUp: { createBusiness: false } })` (section 6.5).
 
 A WhatsApp customer who has not linked an account acts as `actor.kind: 'user'` with id `contact:<id>`, with the contact's roles (`['customer']` unless `roleDefaults` say otherwise).
 
@@ -1702,6 +1803,7 @@ Read `p` in your rules with the helpers in `@hykr/policy`: `subjectOf(p)`, `user
 | `'customer'` | `customer_id = your customer`. Only when you are a customer. |
 | `'tenant'` | Every row in the business |
 | `{ grant: 'granted', of?, via? }` | The rows granted to you one by one (`POST /api/grants`, section 6.4). With `via: 'projectId', of: 'project'`, the rows whose project is granted to you. Only for a user subject. |
+| `{ grant: 'participant', as?, of?, via? }` | The rows a party you are a member of participates in (`POST /api/participants`, section 6.5), in the participant roles `as` names (default any). `of` and `via` as for `granted`. For a person and for a WhatsApp contact. |
 
 The sample's rules:
 
@@ -1719,6 +1821,7 @@ read: { ...BUSINESS_ACCESS.read, buyer: { grant: 'granted' } },
 - A rule may be a list, ORed: `{ buyer: ['own', { grant: 'granted' }] }`.
 - Under `granted` alone a person cannot create a top-level row; a child row (`via` a parent's column) only under a parent granted to them, and they own it. A write on a row outside the grant is refused by the write's own query (404).
 - Don't give `'own'` on a child entity whose parent is limited: anyone could add a child to a parent they cannot see. Use `{ grant: 'granted', of: '<parent>', via: '<parentId>' }`.
+- `participant` works like `granted` for creating: a person may add a child under a record they participate in (in a role `as` names), never a top-level row; a WhatsApp contact creates nothing under it. A participant role named in `as` that nobody declares throws.
 - More kinds plug in: declare the name on `GrantKinds` (`@hykr/policy`) and contribute a `GrantKind` (`grantKinds`, `@hykr/core`): `where(p, rule, target)` gives its rows as SQL, ORed with the others; `creates(...)` may let a person create a row under it.
 
 Ask for a signed-in session on a write with `{ grant: 'customer', minAssurance: 'session' }`. A WhatsApp-only customer is then refused with rule `needs_assurance`.
@@ -1778,6 +1881,7 @@ capabilities, with the roles that hold them by default (its features add their o
 | `memory.read` | owner, admin, ops, staff | Reading the business's memory, and having it recalled (section 7.7) |
 | `memory.write` | owner, admin, ops, staff | Adding to the business's memory, and changing your own |
 | `memory.manage` | owner, admin | Changing or deleting anyone's memories |
+| `data.export` | owner | Exporting the business's data, and keeping one's export archives (section 5.22) |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -1834,6 +1938,71 @@ parked input. A module's notification parameters come from the raw row: don't pu
 template another role receives.
 
 ---
+
+### 6.5 Participants: people outside the team
+
+A business works with people who are not on its team: several people of a client's household,
+an outside organisation it reaches on WhatsApp. They are **participants**, never members. The
+framework holds the mechanism (`features/parties`, `framework/db/src/schema/parties.ts`); what
+kinds of participant exist and what each may do is the application's.
+
+- **Parties.** A party is a `person` or an `organisation` of one business (`POST /api/parties`),
+  optionally belonging to a customer record (`customerId`: a household is several person parties
+  of one customer). Its **members** are how it is reached: `{ address }` (a WhatsApp number: the
+  business's contact for it, made without a customer record) or `{ email }` (an invitation: the
+  answer carries a token once; `POST /api/parties/join { token }`, signed in with that email,
+  within `members.inviteDays`). Reading needs `parties.read` (the team), changing `parties.manage`
+  (owner, admin, ops); both are overridable like any capability.
+- **Participant roles** are declared by a module: `defineParticipantRole({ name, label, kinds?,
+  on? })`, contributed as `participantRoles`. `kinds` says which parties may hold it, `on` which
+  entities it applies to (checked at start). The sample's: `household` (meetings) and `supplier`
+  (orders).
+- **Participations.** `POST /api/participants { resourceType, resourceId, partyId, role }` puts a
+  party on a record you reach; `GET /api/participants?resourceType&resourceId` lists them
+  (`parties.read`); `DELETE /api/participants/:id`. Deleting the record deletes them.
+- **Reach.** Give the participant grant in the entity's access, under the role outsiders hold
+  (the framework's `customer`, section 6.2):
+
+  ```ts
+  // application/domain/src/server/access.ts: read by the household, write as before
+  read: { ...BUSINESS_ACCESS.read, customer: ['customer', { grant: 'participant', as: ['household'] }] },
+  // a child follows its record (orders' lines)
+  customer: ['customer', { grant: 'participant', of: 'order', via: 'orderId', as: ['supplier'] }],
+  ```
+
+  Field policy, rules and approvals apply to participants like anyone else: a supplier never
+  reads an order line's cost.
+- **Who a participant is.** A person who is no member of a business but a member of one of its
+  parties (by account, or by a WhatsApp number linked to their account there) works there with
+  the roles `roleDefaults` gives `participant` (unset: the contact's, `customer`), their customer
+  record there if one is theirs, and `standing: 'participant'`. A WhatsApp contact keeps the
+  contact's roles and reaches through its own party memberships.
+- **Businesses per person.** `GET /api/me` lists `businesses`: each one the person is in, `as`
+  member (roles, default) or participant (participant roles there). A client sends `x-tenant-id`
+  to work in another; `PUT /api/me/default { tenantId }` makes one of their memberships the
+  default. In the app, list `businessesPlugin` first in `<AppShell plugins>`: a Businesses screen
+  (in the navigation when there are several, or none), the choice kept per person on the device
+  and sent on every call, and everything under it started again on a switch.
+- **Joining in the app.** The Businesses screen ends with "Join a business": the person pastes
+  the invitation link or code they were sent. An invitation link is
+  `<app>/businesses/join?token=<token>` (the plugin's `JOIN_PATH`; on a phone, the app's scheme),
+  which opens the same form filled in. Joining tries the token as a party's invitation
+  (`parties.join`: a participant) and, when no party invitation has it (404), as the team's
+  (`members.acceptInvite`: a member). Any other refusal (another email's invitation) is shown as
+  it is. Then the app works in the business joined. `JoinForm` is exported for a screen of your
+  own. The inviter shares the link: nothing emails it yet.
+- **No business on sign-up.** With `signUp: { createBusiness: false }`, a new account is in no
+  business: `/api/me` answers with `tenantId: null` (and no feature flags), scoped routes and
+  chat answer 403 `no_tenant`, and invitations (members or parties) can be accepted. In the app
+  such a person sees the Businesses screen in the navigation, to join one.
+- **Channels.** A notification can go to `{ partyId }` (every joined member of the party) or
+  `{ participantsOf: { type, id }, as? }` (everyone on a record), each person once. A business's
+  `parties.unknownSenders` setting (`'customer'`, the default, or `'contact'`) says whether a
+  new WhatsApp sender becomes a customer. "Delete my data" removes a contact's party memberships,
+  and a person party left with nobody; the data export lists them.
+- **Application data.** KYC details, agreed rates and the like are the application's tables (or
+  files) keyed by the party id (`parties.id` in `@hykr/db`). The framework stores a party's kind,
+  name and customer only.
 
 ## 7. The assistant and how it shows things
 
@@ -2229,6 +2398,9 @@ Add it to the read, create and update schemas. Add the column to the table. Run 
 **…keep photos or documents on a record?**
 Give it a file field (`fileRefs()` or `FileRef`, a `files` trait, a `fileColumns()` column) and use `<FileField>` in its form. Section 5.12.
 
+**…bring in records from another system?**
+Export them as CSV or JSON with each record's old id, then `basecamp import <entity> <file> --as <email> --key <id column> --source <system> --dry-run`, read the report, and run it again without `--dry-run`. Section 5.23.
+
 **…make a PDF of a record and send it?**
 Declare it with `defineDocument` in the module's `server/` (what it reads, how it lays out, how it is named and sent), contribute it as `documents`, add its WhatsApp template (with `header: { type: 'document' }`) to the module's templates, and show `<RecordDocuments entity id />` on the record's screen. Section 5.19; the sample's `orders/server/document.ts`.
 
@@ -2282,6 +2454,9 @@ Give it `{ grant: 'granted' }` in the entity's `access`, and its children `{ gra
 
 **…hide a field (cost, margin) from some roles?**
 `traits: { fieldPolicy: { cost: '<module>.cost.read' } }` on the spec, with the capability defined by the module (section 6.4).
+
+**…put data no entity serves (a module's own table) in a business's export?**
+Contribute a `dataExportSources` entry, `{ name, rows(ctx) }`, that yields only what `ctx.principal` may read. Let admins export too: give them `data.export` (`roleOverrides`, or a role's `capabilities`). Section 5.22.
 
 ---
 
@@ -2406,6 +2581,10 @@ These are not built. Each has a workaround for now.
 | Retention of finished jobs | Jobs and their result files are kept until "delete my data" (jobs about no record only). |
 | A result file on a record | Result files stay on their job; `complete` puts a copy on a record (`ctx.copyFile`). |
 | Every job of a business | `GET /api/jobs` lists a record's jobs or the caller's own; there is no operations view. |
+| Importing children, owners and dates | An import writes top-level records only (a record with a parent comes in with its parent's command), owned by the importer, with today's `createdAt`. Set owners afterwards with the entity's own writes. |
+| Files inside imported rows, Excel files | A row cannot carry a file to fetch into a file field, and `.xlsx` is not read: export CSV. |
+| Reading or forgetting an import's keys | `app.import_keys` has no API: a source's keys stay as long as the business. Import under a new `source` to start over. |
+| Importing with no worker | `basecamp import` starts the job and follows it; the worker runs it. With no worker running it waits (and says so). Large JSON files through the local storage drivers (memory, fs) also pass the API's JSON body limit (`JSON_BODY_LIMIT`) on upload; S3 has no such limit. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
 | Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.7) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
@@ -2418,11 +2597,18 @@ These are not built. Each has a workaround for now.
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
 | OAuth connectors | Credentials are stored as given; no OAuth flow or token refresh yet (B17 adds the first). |
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
-| Identity provider scopes | `scopes` from an identity provider are copied into the principal. Only an agent run's (section 5.22) are enforced; another provider's are not. |
+| Identity provider scopes | `scopes` from an identity provider are copied into the principal. Only an agent run's (section 5.24) are enforced; another provider's are not. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
+| Agent tools for parties | `/api/parties` and `/api/participants` are people-only routes; the assistant cannot add someone to a record. |
+| A participant who decides | A participant reaches records (and writes them, in the roles `as` names) but is never a named approver: A5's named approvers are members. Capabilities per participant role are not built either. |
+| Parties shared across businesses | A party belongs to one business: the same organisation at two businesses is two parties, and its details are kept twice. |
+| Party screens | Parties and participants have an HTTP API and typed `@hykr/api-client` methods, but no app or back-office screen; the back office has no business switcher. |
+| Emailing a party invitation | `POST /api/parties/:id/members { email }` returns the token; the business shares the link (`<app>/businesses/join?token=<token>`). The back office's join field takes team invitations only. |
+| A WhatsApp contact adding child rows | Under the participant grant only a person with an account creates a child row (an owner column needs a user). |
+| A participant's assistant writing outside its roles | Its change parks (if the operation parks for agents) and the approved replay finds no row (404); the business sees a request it cannot carry out. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
-| Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); `roleOverrides`, `roleDefaults` and `grantKinds` (A4); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
+| Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); `roleOverrides`, `roleDefaults` and `grantKinds` (A4); `participantRoles` (B7); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
 | Editing a business's money settings | Nothing in the API changes `money` (currency, `fyStartMonth`, amounts, bands) yet: set it in `app.tenants.settings` with SQL. |
 | Bulk writes for plain entities | Only children of a parent are inserted in bulk (`children.insert`/`replace`); `insertMany` for any other entity is one insert per row. There is no bulk update. |
 | Line-level tools | The assistant saves a whole tree in one call (the sample's `save-order`); there are no tools to add or move one line. |
@@ -2437,7 +2623,7 @@ These are not built. Each has a workaround for now.
 | Memory of the record on screen | A turn's recall does not prefer memory of the record the person is looking at. Ask with `recall-memory` and `about`. |
 | Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it, or the `memory` settings, yet. |
 | Memory timings | The indexer gives the embedding provider 30 s per batch and takes over a claim after 120 s; recall gives it 4 s per turn (1.5 s on voice). All are constants in `features/memory/` (`indexer.ts`, `recall.service.ts`), not deployment settings. |
-| Durable runs | A run waits only for approvals (no questions, timers or webhooks). An agent's run (section 5.22) is resumed in its agent's thread. A decision after WhatsApp's 24-hour window sends nothing there (the app shows it), and a request a continuation parks again is approved in the app, not with buttons. A resume a turn hook refuses (credits) runs no model and is not tried again. If the person keeps chatting meanwhile, the resumed run does not see those messages. A run parked before a deploy goes on under the new instructions and tools. A run whose resume never comes keeps the parked step's tokens unmetered. |
+| Durable runs | A run waits only for approvals (no questions, timers or webhooks). An agent's run (section 5.24) is resumed in its agent's thread. A decision after WhatsApp's 24-hour window sends nothing there (the app shows it), and a request a continuation parks again is approved in the app, not with buttons. A resume a turn hook refuses (credits) runs no model and is not tried again. If the person keeps chatting meanwhile, the resumed run does not see those messages. A run parked before a deploy goes on under the new instructions and tools. A run whose resume never comes keeps the parked step's tokens unmetered. |
 | Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
 | Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates of an undoable write wait with its events until the window closes. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
@@ -2458,7 +2644,7 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in and nav filter slots; `inboxPlugin()` (section 5.21) uses routes and nav; `agentsPlugin()` (section 5.22) routes, nav and the nav filter. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in and nav filter slots; `inboxPlugin()` (section 5.21) and `exportPlugin` (section 5.22) use routes and nav; `creditsPlugin`, `businessesPlugin` and `agentsPlugin()` (section 5.24) use routes, nav and nav filters too. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
 | Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
@@ -2471,7 +2657,9 @@ These are not built. Each has a workaround for now.
 | An unread badge on the Inbox destination | Nav items have no badge. Put `<InboxBell />` in a screen's header. |
 | Live back office | The back office still polls its inbox (10 s) and an open conversation (5 s): inbound messages and handoffs write no outbox events. |
 | Missed live events | A reconnect refetches every query; `Last-Event-ID` replay is not supported. |
-| Data export for a business | Not built (A11's export waits for jobs and files). Read the business's records through the API's lists. |
+| Files' bytes in a data export | An export lists file ids on records, not the files themselves. Download them with `GET /api/files/:id`. |
+| Large data exports | An export is built in the worker's memory, one entity at a time, and fails `too_large` past `FILES_MAX_BYTES` (compressed): raise the limit, or export a few entities at a time (`only`). |
+| Telling someone an export is ready, export retention | Nothing notifies the person; the export screen polls. Archives stay until "delete my data" (B11). |
 | Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
 | A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
 | Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |

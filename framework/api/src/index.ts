@@ -66,6 +66,27 @@ export {
   shaperFor,
 } from './features/documents/public.js';
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
+export {
+  archiveName,
+  type BuildArgs,
+  buildExport,
+  cellText,
+  csvOf,
+  type DataExportContext,
+  DataExportJob,
+  type DataExportSource,
+  dataExportSources,
+  ExportJobInput,
+  type ExportPlan,
+  ExportTooLarge,
+  exportColumns,
+  exportSourceProblems,
+  jsonOf,
+  planExport,
+  readZip,
+  writeZip,
+  ZipWriter,
+} from './features/export/public.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
 export {
   dispositionOf,
@@ -80,7 +101,20 @@ export {
   type StorageDriver,
   StorageUnavailable,
   type Uploader,
+  type UploadTarget,
+  uploadTargets,
 } from './features/files/public.js';
+export {
+  failureText,
+  type ImportFileOptions,
+  ImportJob,
+  type ImportOutcome,
+  type ImportsConfig,
+  importFile,
+  importSummary,
+  importsConfig,
+  StartImport,
+} from './features/imports/public.js';
 export { IntegrationsCapability } from './features/integrations/capability.js';
 export { openConnection } from './features/integrations/credentials.js';
 export {
@@ -202,6 +236,7 @@ export {
 export {
   migrate,
   runEval,
+  runImport,
   runTemplates,
   startApi,
   startStudio,

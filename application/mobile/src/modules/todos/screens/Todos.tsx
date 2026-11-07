@@ -8,6 +8,7 @@ import {
   errorMessage,
   Field,
   FilterChips,
+  ImportRecords,
   isValidDate,
   LoadError,
   listRow,
@@ -46,8 +47,9 @@ const empty: Record<string, { title: string; body?: string }> = {
 };
 
 /**
- * All to-dos: add one (with the business's own fields, such as a priority), filter by open,
- * overdue or done, and by a field the business made filterable.
+ * All to-dos: add one (with the business's own fields, such as a priority), import many from a
+ * file (people who may import), filter by open, overdue or done, and by a field the business
+ * made filterable.
  */
 export function Todos() {
   useScreenContext({ screen: 'todos' });
@@ -126,6 +128,13 @@ export function Todos() {
             />
             {create.error && <Text style={styles.error}>{errorMessage(create.error)}</Text>}
           </View>
+          {/* For people who may import (imports.run): to-dos from the old system's CSV export,
+              keyed by its legacy_id, so importing it again updates them (import/todos.csv). */}
+          <ImportRecords
+            entity="todo"
+            label="to-dos"
+            options={{ key: 'legacy_id', source: 'legacy' }}
+          />
           <View style={[styles.row, { flexWrap: 'wrap', justifyContent: 'space-between' }]}>
             <FilterChips chips={options} selected={chip.label} onSelect={setChip} />
             {canClear && chip.label === 'Done' && count > 0 ? (

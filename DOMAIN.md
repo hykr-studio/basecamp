@@ -106,15 +106,26 @@ An entity's `access` says what each role, or each capability, reaches, per read 
 
 - `own`: rows the person owns; `customer`: rows of the customer they are; `tenant`: every row
   in the business; `{ grant: 'granted' }`: the rows granted to the person one by one
-  (`/api/grants`), or, with `of` and `via`, the children of such a row.
+  (`/api/grants`), or, with `of` and `via`, the children of such a row;
+  `{ grant: 'participant', as: [...] }`: the rows a party the person (or WhatsApp contact) is a
+  member of participates in, in those participant roles (`/api/participants`).
 - A key may be a capability (`'orders.read_all': 'tenant'`): that is how a role a business made
   reaches rows. A rule may be a list (`['own', { grant: 'granted' }]`).
 - A write may need `minAssurance: 'session'`: a WhatsApp number alone (`whatsapp_number`) is
   refused with `needs_assurance`.
 
+People outside the team are **participants**, never members: a party (a person, or an
+organisation reached on WhatsApp) put on a record in a participant role the module declares,
+`contributes: { participantRoles: [defineParticipantRole({ name, label, kinds?, on? })] }`
+(developer guide 6.5). The sample's meetings module declares `household` (people of a meeting's
+customer read it) and its orders module `supplier` (an organisation reads the orders it supplies,
+never their cost). What the application knows about a party (KYC details, agreed rates) is its own
+tables, keyed by the party id. A person can be a member of one business and a participant of
+another: `GET /api/me` lists both, and `x-tenant-id` switches.
+
 The sample modules give the owner and staff their own rows, admin and ops the whole business,
-and a customer their own customer's rows (`application/domain/src/server/access.ts`, shared by
-the modules). With
+a customer their own customer's rows, and participants the records they are on, read only
+(`application/domain/src/server/access.ts`, shared by the modules). With
 `customer: (t) => t.customerId`, a customer's assistant creates rows for that customer, owned by
 the business's default owner.
 
@@ -149,7 +160,7 @@ refusal). A module's scripts for the scripted model handle that with `decided(ou
 left to follow up (developer guide, section 5.8.3).
 
 A business's people also make their own agents: a job in plain words, with triggers, the tools it
-may use and a budget, run for the person who made it (developer guide, section 5.22). Which agents
+may use and a budget, run for the person who made it (developer guide, section 5.24). Which agents
 are offered ready-made is the module's: it contributes templates (`defineAgentTemplate`, as
 `agentTemplates`) and the scripted model's scripts for their runs (`runData(text)` reads what started
 one). The sample's meetings module offers a Monday summary of open to-dos and a follow-up note when a
@@ -329,6 +340,12 @@ From the contracts declaration alone:
   service reports back by signed callback or is polled, and its result files are kept on the job
   and reached through the record it is about. `<JobProgress>` and `useJob` in the app (developer
   guide, section 5.17). The fixture's `drawings` shows one; the sample has none yet.
+- Bulk import (`/api/imports`, `basecamp import <entity> <file>`, `app.import_keys`): a CSV, JSON
+  or NDJSON file of one entity's records written row by row through the write path by a job, as
+  the person who imports it (`imports.run`); each row's id in the other system is kept, so the same
+  import run again updates instead of adding, and the rows it could not write come back in an
+  error report file. A module opts an entity out with `traits: { imports: false }` (developer
+  guide, section 5.23). The sample's to-dos ship `import/todos.csv` and `<ImportRecords>`.
 - Documents (`/api/documents`, `app.documents`): a module's PDFs made in the worker from data
   read as the person who asked (pdfkit, HarfBuzz and the Noto fonts for English, Hindi and
   Telugu), stored as files the document holds, reached through their record, and sent by
@@ -367,7 +384,7 @@ From the contracts declaration alone:
   definitions with triggers (once, a schedule, an event, a condition, a WhatsApp message, an
   @-mention, a webhook), a scope of tools and a budget; runs in the worker that act for their owner
   with a run token and never beyond them; a run log; `agentsPlugin()` and the back office's Agents
-  screen (developer guide, section 5.22). The application offers templates.
+  screen (developer guide, section 5.24). The application offers templates.
 - The streaming chat, and the scripted model's platform scripts (`save this as …`,
   `open my … page`, `talk to the manager`, `create an agent to …`, the back office's draft reply).
 - The models the assistant runs on: the deployment's OpenAI-compatible gateways (`MODEL_PROVIDERS`,
@@ -380,6 +397,11 @@ From the contracts declaration alone:
   (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
   (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
   sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+- Exporting a business's data (`POST /api/exports`, `data.export`, owners by default): a job that
+  reads every entity as the person who asked (their access and hidden fields) and keeps one zip of
+  JSON and CSV files on the job; a module adds data no entity serves as a `dataExportSources`
+  entry. `exportPlugin` in the app, a section of the back office's Settings (developer guide,
+  section 5.22).
 - Each business's setup: feature flags, custom field definitions (`app.custom_fields`), branding
   and verified web addresses (`app.tenant_domains`), shared records and wording (`/api/settings`,
   `/api/features`, `/api/custom-fields`, the back office's Settings screen, `settingsPlugin` in the

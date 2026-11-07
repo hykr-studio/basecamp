@@ -6,7 +6,7 @@
 import { defineModule } from '@hykr/api';
 import { meetingsAgent } from './agent/index.js';
 import { meetingsAgentTemplates } from './agent/templates.js';
-import { meetingsSpec } from './contracts/index.js';
+import { HouseholdRole, meetingsSpec } from './contracts/index.js';
 import * as tables from './db/schema.js';
 import { meetingsNotifications } from './notifications/index.js';
 import { MeetingsModule } from './server/meetings.module.js';
@@ -21,6 +21,10 @@ export const meetings = defineModule({
   notifications: meetingsNotifications.notifications,
   agent: meetingsAgent,
   tables,
-  // Ready-made agents for a business: a Monday summary, a follow-up when a meeting closes (A6).
-  contributes: { agentTemplates: meetingsAgentTemplates },
+  contributes: {
+    // Ready-made agents for a business: a Monday summary, a follow-up when a meeting closes (A6).
+    agentTemplates: meetingsAgentTemplates,
+    // People of a customer's household the business puts on a meeting: they read it.
+    participantRoles: [HouseholdRole],
+  },
 });

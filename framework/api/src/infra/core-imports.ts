@@ -4,7 +4,7 @@ import { CoreModule } from '@hykr/core';
 import { CqrsModule } from '@nestjs/cqrs';
 import { config } from '../config.js';
 import { PagesModule } from '../modules/pages/pages.module.js';
-import { runtime } from '../runtime.js';
+import { createsBusinessOnSignUp, runtime } from '../runtime.js';
 import { sharedDb } from './db.js';
 import { DbModule } from './db.module.js';
 
@@ -27,6 +27,8 @@ export const coreImports = () => [
     queuePrefix: config.queuePrefix,
     // A business without its own currency counts in the deployment's (DEFAULT_CURRENCY).
     defaultCurrency: config.defaultCurrency,
+    // Whether a person without a business gets one of their own (defineServer's signUp).
+    createBusinessOnSignUp: createsBusinessOnSignUp(),
   }),
   // Each module's entities and commands, in module order.
   ...runtime().definition.modules.flatMap((m) => (m.server ? [m.server] : [])),

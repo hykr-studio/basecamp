@@ -36,7 +36,9 @@ describe('the framework roles and capabilities', () => {
   it('give what the hard-coded role checks gave, settings to owners and admins (A11), and the comment capabilities', () => {
     // Deciding: owner and ops decided the business's requests, owner and admin marketing sends.
     // Plus the members feature's (A4): the team reads members, owner and admin manage them,
-    // and owner, admin and ops give access to single records.
+    // and owner, admin and ops give access to single records. Owners export the business's
+    // data (A11X). And the parties' (B7): the team reads them, owner, admin and ops manage them.
+    // Owners and admins import records from files (B20).
     expect(capabilitiesOf(['owner'])).toEqual([
       'approvals.decide',
       'backoffice.use',
@@ -44,9 +46,13 @@ describe('the framework roles and capabilities', () => {
       'comments.internal',
       'comments.moderate',
       'customers.message',
+      'data.export',
+      'imports.run',
       'marketing.approve',
       'members.manage',
       'members.read',
+      'parties.manage',
+      'parties.read',
       'queues.admin',
       'records.grant',
       'settings.manage',
@@ -58,9 +64,12 @@ describe('the framework roles and capabilities', () => {
       'comments.moderate',
       'customers.message',
       'history.all',
+      'imports.run',
       'marketing.approve',
       'members.manage',
       'members.read',
+      'parties.manage',
+      'parties.read',
       'queues.admin',
       'records.grant',
       'settings.manage',
@@ -72,6 +81,8 @@ describe('the framework roles and capabilities', () => {
       'customers.message',
       'history.all',
       'members.read',
+      'parties.manage',
+      'parties.read',
       'records.grant',
     ]);
     expect(capabilitiesOf(['staff'])).toEqual([
@@ -79,6 +90,7 @@ describe('the framework roles and capabilities', () => {
       'comments.internal',
       'customers.message',
       'members.read',
+      'parties.read',
     ]);
     expect(capabilitiesOf(['customer'])).toEqual([]);
   });

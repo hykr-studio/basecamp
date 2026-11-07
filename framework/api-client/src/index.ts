@@ -2,7 +2,10 @@ import {
   type AcceptedInvite,
   type AddCommentInput,
   AddCommentSpec,
+  type AddedPartyMember,
   type AddGrantInput,
+  type AddParticipantInput,
+  type AddPartyMemberInput,
   type AgentRunDetail,
   type AgentRunPage,
   type AgentRunsQuery,
@@ -19,6 +22,7 @@ import {
   type CommentPage,
   type CreatedInvite,
   type CreateInviteInput,
+  type CreatePartyInput,
   type CreditPurchase,
   type CreditsStatus,
   type DefineRoleInput,
@@ -27,6 +31,7 @@ import {
   type DocumentKindInfo,
   type DocumentRecipient,
   EditCommentSpec,
+  type EditPartyInput,
   type EditRoleInput,
   type EntitySpec,
   type FeatureState,
@@ -35,6 +40,8 @@ import {
   type FileTranscript,
   type HandoffThread,
   type HistoryEntry,
+  IMPORT_UPLOAD,
+  type ImportOptionsInput,
   type Inbox,
   type InboxPage,
   type Invite,
@@ -46,6 +53,11 @@ import {
   type Member,
   type MentionablePage,
   type Page,
+  type ParticipantRoleView,
+  type Participation,
+  type PartiesQuery,
+  type Party,
+  type PartyMember,
   type PresignFileInput,
   type PresignFileResult,
   type PublicBranding,
@@ -64,6 +76,7 @@ import {
   SendDocumentSpec,
   type SlaListInput,
   type SlaTimer,
+  StartImportSpec,
   type Summary,
   type SummaryInput,
   type TemplateStatus,
@@ -388,6 +401,18 @@ export function createApiClient(opts: ApiClientOptions) {
     cancel: (id: string) => call<JobInfo>('POST', jobUrl(id, '/cancel')),
   };
 
+  const imports = {
+    /** Upload a file to import (CSV, JSON or NDJSON): a ready file whose id `start` takes. */
+    upload: (body: Blob | ArrayBuffer | Uint8Array, o: { name: string; mime: string }) =>
+      files.upload(body, { ...o, for: { ...IMPORT_UPLOAD } }),
+    /**
+     * Import one entity's records from an uploaded file, through the write path: a job
+     * (`imports.records`) the worker runs, whose output is the counts and whose file is the error
+     * report. People with `imports.run`; it may wait for an approval.
+     */
+    start: (options: ImportOptionsInput, key = newKey()) => command(StartImportSpec, options, key),
+  };
+
   const documentUrl = (id: string) => `/api/documents/${encodeURIComponent(id)}`;
   const withDocumentUrl = (d: DocumentInfo): DocumentInfo =>
     d.url ? { ...d, url: absolute(d.url) } : d;
@@ -426,6 +451,8 @@ export function createApiClient(opts: ApiClientOptions) {
     files,
     /** Long-running jobs: a record's, or the caller's own. */
     jobs,
+    /** Bulk import: a file of one entity's records, through the write path. */
+    imports,
     /** Documents (PDFs) of records: make, read, send. */
     documents,
     /** Comments and @-mentions on records. */
@@ -434,8 +461,14 @@ export function createApiClient(opts: ApiClientOptions) {
     inbox,
     /** The business's agents and their run log. */
     agents,
-    /** Who is signed in, in which business, with which roles. */
+    /**
+     * Who is signed in, in which business (as a member or a participant), with which roles, and
+     * every business they are in. Send `x-tenant-id` (the client's `headers`) to work in another.
+     */
     me: () => call<Me>('GET', '/api/me'),
+    /** Work in this business by default (one of the person's memberships). */
+    setDefaultBusiness: (tenantId: string, key = newKey()) =>
+      call<WriteResult<{ tenantId: string }>>('PUT', '/api/me/default', { tenantId }, key),
     /** The back office: conversations staff have taken from the assistant (staff only). */
     backoffice: {
       inbox: () => call<Inbox>('GET', '/api/backoffice/inbox'),
@@ -524,6 +557,66 @@ export function createApiClient(opts: ApiClientOptions) {
       /** Join the business an invitation is for, signed in with the email it was sent to. */
       acceptInvite: (token: string, key = newKey()) =>
         call<WriteResult<AcceptedInvite>>('POST', '/api/members/invites/accept', { token }, key),
+    },
+    /**
+     * The people and organisations the business works with (people only). Reading needs
+     * `parties.read`, changing anything `parties.manage`.
+     */
+    parties: {
+      list: (query: PartiesQuery = {}) =>
+        call<Party[]>('GET', `/api/parties${toQueryString(query as Record<string, unknown>)}`),
+      get: (id: string) => call<Party>('GET', `/api/parties/${encodeURIComponent(id)}`),
+      create: (input: CreatePartyInput, key = newKey()) =>
+        call<WriteResult<Party>>('POST', '/api/parties', input, key),
+      edit: (id: string, input: EditPartyInput, key = newKey()) =>
+        call<WriteResult<Party>>('PATCH', `/api/parties/${encodeURIComponent(id)}`, input, key),
+      remove: (id: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/parties/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+      /** By WhatsApp number, or by email: an invitation's answer carries its token, this once. */
+      addMember: (id: string, input: AddPartyMemberInput) =>
+        call<WriteResult<AddedPartyMember>>(
+          'POST',
+          `/api/parties/${encodeURIComponent(id)}/members`,
+          input,
+        ),
+      removeMember: (id: string, memberId: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/parties/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
+          undefined,
+          key,
+        ),
+      /** Join the party an invitation is for, signed in with the email it was sent to. */
+      join: (token: string, key = newKey()) =>
+        call<WriteResult<{ member: PartyMember; tenantId: string }>>(
+          'POST',
+          '/api/parties/join',
+          { token },
+          key,
+        ),
+    },
+    /** Who participates in a record, and as what (participant roles are the application's). */
+    participants: {
+      roles: () => call<ParticipantRoleView[]>('GET', '/api/participants/roles'),
+      list: (resourceType: string, resourceId: string) =>
+        call<Participation[]>(
+          'GET',
+          `/api/participants?resourceType=${encodeURIComponent(resourceType)}&resourceId=${encodeURIComponent(resourceId)}`,
+        ),
+      add: (input: AddParticipantInput, key = newKey()) =>
+        call<WriteResult<Participation>>('POST', '/api/participants', input, key),
+      remove: (id: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/participants/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
     },
     /** Who reaches one record by a grant (`records.grant`), and giving or taking it. */
     grants: {
