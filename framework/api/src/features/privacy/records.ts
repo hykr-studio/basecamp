@@ -21,7 +21,8 @@ import {
   sql,
   type Table,
 } from 'drizzle-orm';
-import type { ErasedRecords, RetentionTarget } from './registry.js';
+import type { ErasedRecords } from '../../hooks.js';
+import type { RetentionTarget } from './registry.js';
 import type { Identities } from './subject.js';
 
 type Values = Record<string, unknown>;

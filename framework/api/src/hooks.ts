@@ -348,12 +348,47 @@ export interface DataSubject {
   tenantId?: string;
 }
 
+/** Records an erasure or a retention rule changed: their copies (audit, events) lose these fields. */
+export interface ErasedRecords {
+  /** The resource type audit and events name them by: the entity's name. */
+  type: string;
+  ids: readonly string[];
+  /** The fields to take out of their copies. */
+  fields: readonly string[];
+  /** The records are gone (all their files go), not only blanked. */
+  deleted?: boolean;
+}
+
+/** Personal data a feature keeps on purpose when its person is forgotten, counted as evidence. */
+export interface KeptData {
+  /** Unique, owner-prefixed: 'acceptance.evidence'. */
+  name: string;
+  count: number;
+  /** Why it stays: a code, like a privacy trait's `keepReason`. */
+  keepReason: string;
+}
+
+/** What one contributor did in an erasure. */
+export interface ErasureResult {
+  /** How many records it touched, for the evidence. */
+  count: number;
+  /** The records it deleted or blanked: their copies lose these fields, as declared records' do. */
+  erased?: readonly ErasedRecords[];
+  /** What it kept on purpose, and why. */
+  kept?: readonly KeptData[];
+  /**
+   * Work outside the database once the erasure has committed (an outside account's grant
+   * revoked). Best effort: a failure is logged, and the erasure stands.
+   */
+  afterCommit?: (ctx: ServerContext) => Promise<void>;
+}
+
 /** What one feature erases or anonymises when a person asks to be forgotten. */
 export interface ErasureContributor {
   /** Unique: 'files'. */
   name: string;
-  /** In the erasure's transaction. Returns how many records it touched, for the evidence. */
-  erase(a: DataSubject & { tx: Tx }): Promise<{ count: number }>;
+  /** In the erasure's transaction. */
+  erase(a: DataSubject & { tx: Tx }): Promise<ErasureResult>;
 }
 
 /** Erasure contributors, in the order they run. */

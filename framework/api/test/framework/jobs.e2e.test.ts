@@ -926,7 +926,7 @@ describe('personal data', () => {
       expect.arrayContaining([id, aboutDrawing]),
     );
 
-    const counts = await db.transaction((tx: Json) =>
+    const { counts } = await db.transaction((tx: Json) =>
       api.eraseWithContributors({ subject, tenantId, tx }),
     );
     expect(counts.jobs).toBeGreaterThanOrEqual(1);
