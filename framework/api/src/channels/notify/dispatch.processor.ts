@@ -1,5 +1,6 @@
 import { type ChannelAdapter, type OutboundMessage, signApproval } from '@hykr/channels';
-import { rolesOfBusiness, type TenantConfig } from '@hykr/contracts';
+import { type Principal, rolesOfBusiness, type TenantConfig } from '@hykr/contracts';
+import { PrincipalResolver } from '@hykr/core';
 import { type Database, schema } from '@hykr/db';
 import { langOf } from '@hykr/i18n';
 import {
@@ -7,6 +8,7 @@ import {
   quietUntil,
   type Reader,
   type Recipient,
+  type Row,
   underMarketingCap,
 } from '@hykr/notifications';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
@@ -25,8 +27,9 @@ import { QUEUES } from '../queues.js';
 import { TemplateSync } from '../templates/template-sync.js';
 import { TenantsService } from '../tenants.service.js';
 import { WHATSAPP } from '../whatsapp/adapter.provider.js';
+import { readAs } from './as-read.js';
 import { MailerService } from './mailer.service.js';
-import { type DispatchJob, NotifyService } from './notify.service.js';
+import { type DispatchJob, NotifyService, typeFromEvents } from './notify.service.js';
 import { partiesTo } from './parties-to.js';
 import { TEMPLATE_KEY } from './send-template.command.js';
 
@@ -61,14 +64,30 @@ function byHand(key: string): NotificationDef | undefined {
   };
 }
 
+/** What a send keeps to move on to the next channels later: the record as stored. */
+const metaOf = (
+  def: NotificationDef,
+  data: DispatchJob,
+  recipient: Recipient,
+  next: string[],
+): NotificationMeta => ({
+  key: def.key,
+  dedupe: data.dedupe,
+  row: data.row,
+  ...(data.resourceType ? { resourceType: data.resourceType } : {}),
+  recipient,
+  next,
+});
+
 /** "Not on WhatsApp" and similar: later sends skip WhatsApp until they write to us again. */
 const UNREACHABLE = new Set([131026]);
 
 /**
  * How a notification goes out, decided per recipient, in order: who they are on which
  * channel; consent for its topic; quiet hours; a template approved in their language (or
- * English); the marketing cap. WhatsApp first where it can, the next channel where it can't.
- * Notifications always use templates: one path, whether or not the 24-hour window is open.
+ * English); the marketing cap. Each channel in its order where it can, the next where it can't.
+ * Notifications always use templates: one path, whether or not the 24-hour window is open. What
+ * it says to each recipient is built from the record as they may read it.
  */
 @Processor(QUEUES.dispatch, { concurrency: 5 })
 export class DispatchProcessor extends WorkerHost {
@@ -81,6 +100,7 @@ export class DispatchProcessor extends WorkerHost {
     private readonly tenants: TenantsService,
     private readonly mailer: MailerService,
     private readonly notify: NotifyService,
+    private readonly resolver: PrincipalResolver,
     @Inject(WHATSAPP) wa: ChannelAdapter,
   ) {
     super();
@@ -94,11 +114,17 @@ export class DispatchProcessor extends WorkerHost {
     const def = notifications().find((n) => n.key === data.key) ?? byHand(data.key);
     if (!def) return 'unknown notification';
 
+    // The record's type, so each recipient's words read it as they may (an older job, queued
+    // without one, takes it from the event the notification names).
+    if (!data.resourceType && !data.key.startsWith(TEMPLATE_KEY)) {
+      const type = typeFromEvents(def);
+      if (type) data.resourceType = type;
+    }
     const { settings } = await this.tenants.get(data.tenantId);
     if (def.topic !== 'service') {
       const until = quietUntil(new Date(), { ...settings.quietHours, timeZone: settings.timeZone });
       if (until) {
-        await this.notify.schedule(def, data.row, until);
+        await this.notify.schedule(def, data.row, until, data.resourceType);
         return `quiet hours: moved to ${until.toISOString()}`;
       }
     }
@@ -106,42 +132,101 @@ export class DispatchProcessor extends WorkerHost {
     const recipients = data.only
       ? [data.only.recipient as Recipient]
       : await this.expand(data.tenantId, def.to(data.row as never), settings);
-    for (const r of recipients)
-      await this.deliver(def, data, r, data.only?.channels ?? def.channels, settings);
+    for (const r of recipients) await this.deliver(def, data, r, settings);
   }
 
+  /**
+   * One recipient: the channels it always goes by as well (`also`, not on a fallback or a retry,
+   * which name their channels), then the chain until one reaches them. A channel the
+   * notification skips for this row (`channelWhen`) is passed over. The words are built from the
+   * record as this recipient may read it.
+   */
   private async deliver(
     def: NotificationDef,
     data: DispatchJob,
     recipient: Recipient,
-    channels: readonly string[],
     settings: { timeZone: string; marketingPerWeek: number },
   ) {
     const to = await this.resolve(data.tenantId, recipient, settings.timeZone);
-    for (const [i, channel] of channels.entries()) {
-      const next = channels.slice(i + 1);
-      if (channel !== 'whatsapp' && channel !== 'email') {
-        if (await this.viaRegistered(channel, def, data, recipient, to, next)) return;
-        continue;
-      }
-      if (
-        channel === 'whatsapp' &&
-        (await this.viaWhatsApp(def, data, recipient, to, next, settings))
-      )
-        return;
-      if (channel === 'email' && to.email && def.email) {
-        await this.mailer.send(
-          { email: to.email, tenantId: data.tenantId, contactId: to.contact?.id },
-          {
-            subject: def.email.subject(data.row as never, to.reader),
-            text: def.email.body(data.row as never, to.reader),
-          },
-          { notification: def.key },
-        );
-        return;
-      }
+    const seen = await this.seenBy(def, data, to);
+    if (!seen) {
+      log.warn(`${def.key}: nothing to say to ${JSON.stringify(recipient)}; not sent`);
+      return;
     }
-    log.warn(`${def.key}: no channel could reach ${JSON.stringify(recipient)}`);
+    const usable = (channel: string) =>
+      def.channelWhen?.[channel as keyof typeof def.channelWhen]?.(data.row as never) ?? true;
+    const chain = (data.only?.channels ?? def.channels).filter(usable);
+    if (!data.only)
+      for (const channel of (def.also ?? []).filter(usable))
+        await this.via(channel, def, data, recipient, to, seen, [], settings);
+    for (const [i, channel] of chain.entries())
+      if (await this.via(channel, def, data, recipient, to, seen, chain.slice(i + 1), settings))
+        return;
+    if (chain.length) log.warn(`${def.key}: no channel could reach ${JSON.stringify(recipient)}`);
+  }
+
+  /** One channel for one recipient. Returns whether it is taken care of there. */
+  private async via(
+    channel: string,
+    def: NotificationDef,
+    data: DispatchJob,
+    recipient: Recipient,
+    to: Resolved,
+    seen: Row,
+    next: string[],
+    settings: { marketingPerWeek: number },
+  ): Promise<boolean> {
+    if (channel === 'whatsapp')
+      return this.viaWhatsApp(def, data, recipient, to, seen, next, settings);
+    if (channel !== 'email')
+      return this.viaRegistered(channel, def, data, recipient, to, seen, next);
+    if (!to.email || !def.email) return false;
+    await this.mailer.send(
+      { email: to.email, tenantId: data.tenantId, contactId: to.contact?.id },
+      {
+        subject: def.email.subject(seen as never, to.reader),
+        text: def.email.body(seen as never, to.reader),
+      },
+      { notification: def.key },
+    );
+    return true;
+  }
+
+  /**
+   * The record as this recipient may read it, for the words (decisions H1): their principal in
+   * the business (a person who is no longer there, or nobody we can name, reads nothing), and
+   * the row through the record's read schema, field policy and read projectors. A template sent
+   * by hand carries the sender's own parameters: as they are.
+   */
+  private async seenBy(def: NotificationDef, data: DispatchJob, to: Resolved): Promise<Row | null> {
+    if (def.key.startsWith(TEMPLATE_KEY) && !notifications().some((n) => n.key === def.key))
+      return data.row;
+    if (!data.resourceType) return null;
+    const reader = await this.readerOf(data.tenantId, to);
+    return reader ? readAs(data.resourceType, data.row, reader) : null;
+  }
+
+  /** Who a recipient is in this business, as a principal that reads. */
+  private async readerOf(tenantId: string, to: Resolved): Promise<Principal | null> {
+    try {
+      if (to.userId) {
+        const standing = await this.resolver.forUser(to.userId, { tenantId, channel: 'app' });
+        return { actor: { kind: 'user', id: to.userId }, ...standing, scopes: [], channel: 'app' };
+      }
+      if (to.contact) {
+        const standing = await this.resolver.forContact(to.contact.id, { tenantId });
+        return {
+          actor: { kind: 'agent', id: 'notify' },
+          actingFor: { contactId: to.contact.id },
+          ...standing,
+          scopes: [],
+          channel: 'whatsapp',
+        };
+      }
+    } catch {
+      // Not in this business (any more): they read nothing of it.
+    }
+    return null;
   }
 
   /**
@@ -155,6 +240,7 @@ export class DispatchProcessor extends WorkerHost {
     data: DispatchJob,
     recipient: Recipient,
     to: Resolved,
+    seen: Row,
     next: string[],
   ): Promise<boolean> {
     const channel = deliveryChannels.get(name);
@@ -162,13 +248,6 @@ export class DispatchProcessor extends WorkerHost {
       log.error(`${def.key}: no delivery channel is registered as ${name}`);
       return false;
     }
-    const meta: NotificationMeta = {
-      key: def.key,
-      dedupe: data.dedupe,
-      row: data.row,
-      recipient,
-      next,
-    };
     const outcome = await channel.deliver({
       tenantId: data.tenantId,
       notification: def,
@@ -177,9 +256,9 @@ export class DispatchProcessor extends WorkerHost {
         ...(to.contact ? { contactId: to.contact.id } : {}),
       },
       reader: to.reader,
-      row: data.row,
+      row: seen,
       dedupe: data.dedupe,
-      meta,
+      meta: metaOf(def, data, recipient, next),
     });
     if (outcome.status === 'sent') return true;
     if (outcome.status === 'unavailable' || outcome.final) {
@@ -208,6 +287,7 @@ export class DispatchProcessor extends WorkerHost {
     data: DispatchJob,
     recipient: Recipient,
     to: Resolved,
+    seen: Row,
     next: string[],
     settings: { marketingPerWeek: number },
   ): Promise<boolean> {
@@ -241,7 +321,7 @@ export class DispatchProcessor extends WorkerHost {
     }
     const from = await this.contacts.numberOfTenant(data.tenantId);
     if (!from) return false;
-    const params = def.whatsapp.params(data.row as never, { ...to.reader, lang });
+    const params = def.whatsapp.params(seen as never, { ...to.reader, lang });
     const message: OutboundMessage = {
       kind: 'template',
       to: contact.address,
@@ -254,17 +334,10 @@ export class DispatchProcessor extends WorkerHost {
           : { urlParam: params[template.urlParam ?? ''] ?? '' },
       ),
     };
-    const meta: NotificationMeta = {
-      key: def.key,
-      dedupe: data.dedupe,
-      row: data.row,
-      recipient,
-      next,
-    };
     await this.outbound.queue({ tenantId: data.tenantId, contactId: contact.id, from }, [message], {
       notification: def.key,
       category: template.category,
-      extra: { ...meta },
+      extra: { ...metaOf(def, data, recipient, next) },
     });
     return true;
   }
@@ -371,7 +444,11 @@ export class DispatchProcessor extends WorkerHost {
       contact,
       ...(userId ? { userId } : {}),
       email: person?.email,
-      reader: { lang: langOf(contact?.locale), timeZone: contact?.timeZone ?? timeZone },
+      reader: {
+        lang: langOf(contact?.locale),
+        timeZone: contact?.timeZone ?? timeZone,
+        appUrl: config.appUrl,
+      },
     };
   }
 }

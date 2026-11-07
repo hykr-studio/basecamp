@@ -60,7 +60,10 @@ const byName = (x: { name: string }) => x.name;
 export interface NotificationMeta {
   key: string;
   dedupe: string;
+  /** The record as stored: each try reads it again for its recipient. */
   row: Row;
+  /** The record's type, so a later try reads it as that type for its recipient. */
+  resourceType?: string;
   recipient: Recipient;
   /** The channels still to try, in order. */
   next: string[];
@@ -74,6 +77,10 @@ export interface DeliveryRequest {
   /** Whom to reach: a person, a contact, or both when the number is linked. */
   to: { userId?: string; contactId?: string };
   reader: Reader;
+  /**
+   * The record as this recipient may read it (decisions H1): build the words from it. Whom to
+   * reach is already decided; `meta.row` is the record as stored, for a later try.
+   */
   row: Row;
   /** One per notification and record: a channel can refuse a second send with it. */
   dedupe: string;

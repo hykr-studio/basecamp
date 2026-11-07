@@ -2,6 +2,7 @@
 // starts the API, the queue worker or the templates CLI with it. Nothing exported here reads the
 // environment when it loads.
 
+export { queueNotification } from './channels/notify/queue.js';
 export {
   type AcceptanceDef,
   AcceptanceEvidenceCapability,
