@@ -385,6 +385,12 @@ From the contracts declaration alone:
   (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
   (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
   sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+- Outside AI clients over MCP (developer guide, section 7.8): an OAuth 2.1 server (Better Auth's
+  oauth-provider, with its sign-in and consent pages), the `/mcp` endpoint with two tools per
+  module (`<module>_read`, `<module>_write`), scopes per module that the API enforces on every
+  route, a parked write answered with its `/approvals/<id>` link in the app, and the person's
+  connections (`/api/mcp/connections`, the app's `connectionsPlugin`). The modules give the scopes
+  and the tools; the deployment gives the addresses (`MCP_URL`, `APP_URL`).
 - Exporting a business's data (`POST /api/exports`, `data.export`, owners by default): a job that
   reads every entity as the person who asked (their access and hidden fields) and keeps one zip of
   JSON and CSV files on the job; a module adds data no entity serves as a `dataExportSources`
