@@ -125,6 +125,7 @@ export {
   SET_MODEL_POLICY,
 } from './features/models/index.js';
 export { FeatureFlagsService } from './features/settings/flags.service.js';
+export { SlaService } from './features/sla/sla.service.js';
 export {
   type AgentIdentity,
   type AgentIdentityProvider,

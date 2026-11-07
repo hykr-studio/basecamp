@@ -30,7 +30,12 @@ export const SaveOrderItem = z.object({
 export type SaveOrderItem = z.infer<typeof SaveOrderItem>;
 
 export const SaveOrderInput = z.object({
-  orderId: z.uuid().optional().describe('To change an existing order; leave out for a new one'),
+  orderId: z.uuid().optional().describe('To change a draft order; leave out for a new one'),
+  version: z
+    .number()
+    .int()
+    .optional()
+    .describe('The version of the order you read: a save over a newer one is refused'),
   title: z.string().min(1).max(200),
   currency: CurrencyCode.optional().describe("A new order's currency; default the business's"),
   items: z.array(SaveOrderItem).max(1000),
@@ -42,7 +47,7 @@ export const SaveOrderResult = z.object({ order: OrderView, items: z.array(Order
 export const SaveOrderSpec = commandSpec({
   name: 'order.save',
   description:
-    'Save a whole order in one step: its title and every item, groups and priced lines. A new order gets the next number. Amounts are decimal strings in the order currency ("1500.00"). To change an order, send its orderId and every item to keep, with their ids; items left out are removed.',
+    'Save a whole order in one step: its title and every item, groups and priced lines. A new order gets the next number and starts as a draft. Amounts are decimal strings in the order currency ("1500.00"). To change a draft, send its orderId and every item to keep, with their ids; items left out are removed. A submitted order is frozen: revise it instead.',
   input: SaveOrderInput,
   output: SaveOrderResult,
   http: { method: 'POST', path: '/api/orders/save' },
@@ -54,16 +59,16 @@ export const SaveOrderSpec = commandSpec({
   touches: ['order', 'orderItem'],
 });
 
-export const CancelOrderSpec = commandSpec({
-  name: 'order.cancel',
-  description: 'Cancel an order. Its number stays taken: orders are never deleted.',
+export const ReviseOrderSpec = commandSpec({
+  name: 'order.revise',
+  description:
+    'Change a submitted (or expired) order by making its next revision: a draft copy of it with every item, numbered <number>-v2, -v3. The old revision is superseded and stays as it was.',
   input: z.object({ orderId: z.uuid() }),
-  output: OrderView,
-  http: { method: 'POST', path: '/api/orders/:orderId/cancel' },
-  tool: 'cancel-order',
+  output: SaveOrderResult,
+  http: { method: 'POST', path: '/api/orders/:orderId/revise' },
+  tool: 'revise-order',
   expose: 'all',
-  approvalNote: 'When you call it, the cancel waits for the user to approve it.',
-  view: { name: 'order.card', id: (input) => input.orderId },
-  verb: { do: 'cancel', did: 'cancelled' },
-  touches: ['order'],
+  approvalNote: 'When you call it, the revision waits for the user to approve it.',
+  verb: { do: 'revise', did: 'revised' },
+  touches: ['order', 'orderItem'],
 });
