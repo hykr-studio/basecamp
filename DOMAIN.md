@@ -184,8 +184,9 @@ setup, changed by people with `settings.manage` (owners and admins) through the 
   in its `wording` settings.
 
 - **Personal data.** How soon it answers requests about personal data, which requests a person
-  on its team reviews first, its own retention periods and its own processors (`privacy`
-  settings, developer guide 5.25).
+  on its team reviews first, its own retention periods, its own processors and its privacy
+  contact and notice (`privacy` settings, changed by its privacy team on the back office's
+  Privacy screen, `PATCH /api/privacy/settings`; developer guide 5.25).
 
 The sample's to-dos take custom fields (a business adds its `priority`; the to-dos screen sets it
 in its add form and each row's editor with `<CustomFieldInputs>`), and "clear done to-dos"

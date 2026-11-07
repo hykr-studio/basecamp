@@ -1803,7 +1803,8 @@ what a data protection law such as DPDP asks of a business: a person may ask for
 keeps about them, or to be forgotten, within a deadline; personal data is kept no longer than a
 period; and the business can say who processes it. The framework has no period, purpose,
 processor or legal wording of its own: modules declare their personal data, the application its
-policy, processors and periods, and each business overrides them (settings `privacy`).
+policy, processors and periods, and each business's privacy team overrides them (settings
+`privacy`, `PATCH /api/privacy/settings`).
 
 ```ts
 // contracts: which records are someone's personal data, and what forgetting them does
@@ -1854,8 +1855,12 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
   **Audit redaction** then takes the erased records' personal fields out of `audit.events`
   before and after, `app.domain_events`, `app.approvals` (and its summary), `app.outbox` and
   `channel.messages` copies, keeping every row and id, and erases their files and memory vectors.
-  A person in no business and no party any more loses their login too (name, email, sessions).
-  The request's `outcome` holds the counts, never the data.
+  The replies kept for idempotent retries (`app.idempotency`) lose them too. The privacy filings
+  about the person (the approvals that held one, their audit rows, kept replies) lose their note,
+  and name the person by id instead of the email or number they were filed with; a filing that
+  waits for an approval names them by id from the start. A person in no business and no party any
+  more loses their login too (name, email, sessions). The request's `outcome` holds the counts,
+  never the data.
 - **Deadlines.** A sweeper (every 5 minutes) marks open requests past due once (`overdueAt`,
   audited, event `privacy.request.overdue`). The application's notifications say what that means
   to whom (the sample's account module tells holders of `privacy.manage` in the inbox).
@@ -1864,16 +1869,27 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
   anonymised, then redacted) and the framework's targets, which have no period until the
   application gives one: `chat.messages`, `events.relayed`, `outbox.relayed` and
   `privacy.archives` (per business), and `channel.inbound-payloads` (raw WhatsApp payloads,
-  emptied) and `assistant.traces` (Mastra) for the whole deployment. A business changes a period by name
-  (`privacy.retention: { 'notes.personal': 365 }`, `null` keeps the data). Each run that changes
+  emptied) and `assistant.traces` (Mastra) for the whole deployment. A business changes a
+  per-business period by name (its settings, below: `retention: { 'notes.personal': 365 }`,
+  `null` keeps the data); the deployment's periods are the application's. Each run that changes
   something is audited (`privacy.retention.applied`, event of the same name). A module's own table
   is a `retentionTargets` entry `{ name, label, scope, action, apply({ tenantId, before, tx }) }`.
+- **The business's settings.** `PATCH /api/privacy/settings` (`privacy.configure`, people with
+  `privacy.manage`; `api.privacy.configure`) changes its deadline (`respondWithinDays`, null for
+  the application's), the kinds it reviews (`review`), its own periods (`retention`, every one it
+  sets; a name that no rule or target has, or a deployment one, is 400 `privacy_settings_invalid`),
+  its own processors (`processors`) and its contact as fiduciary (`grievanceContact`,
+  `privacyUrl`; null for the default). A field left out stays; a list replaces the stored one. It
+  is audited with the business's before and after, and `settings.changed` drops every cached copy.
+  `GET /api/privacy/settings` reads them (`privacy.manage`, people only).
 - **The register.** `GET /api/privacy/register?lang=hi`, for anyone in the business: the business as
   fiduciary (name, `grievanceContact`, `privacyUrl`), how requests are answered, the processors
-  (the application's and the business's own, `privacy.processors`), every entity's personal data
-  and what erasure does to it, and every retention rule with its period here.
+  (the application's and the business's own), every entity's personal data and what erasure does
+  to it, and every retention rule with its period here (`days`) and the application's
+  (`defaultDays`).
 - **Screens.** The back office's Privacy screen (`/privacy`, with `privacy.manage`): requests with
-  their deadlines, process, refuse, download, file one received by email or phone, the register.
+  their deadlines, process, refuse, download, file one received by email or phone, the business's
+  privacy settings (deadline, review, periods, processors, contact), the register.
   In the app, `privacyPlugin` gives everyone "Your data" (`/privacy`): a copy, erasure (asked
   twice), their requests. `api.privacy.*` in `@hykr/api-client`.
 - The fixture's `features/privacy` (a module whose records are deleted, kept and anonymised) and
@@ -2649,7 +2665,7 @@ Give it `{ grant: 'granted' }` in the entity's `access`, and its children `{ gra
 `traits: { fieldPolicy: { cost: '<module>.cost.read' } }` on the spec, with the capability defined by the module (section 6.4).
 
 **…say which records hold someone's personal data, and for how long?**
-`traits: { privacy: { subject, fields, erase, retention } }` on the spec; a table no entity serves is a `retentionTargets` entry, and its rows an `erasureContributors` and `exportContributors` entry. Periods and processors are the application's (`retentionPeriods`, `processors`); each business overrides them in its `privacy` settings. Section 5.25.
+`traits: { privacy: { subject, fields, erase, retention } }` on the spec; a table no entity serves is a `retentionTargets` entry, and its rows an `erasureContributors` and `exportContributors` entry. Periods and processors are the application's (`retentionPeriods`, `processors`); each business's privacy team overrides them in its `privacy` settings (`PATCH /api/privacy/settings`, the back office's Privacy screen). Section 5.25.
 
 **…put data no entity serves (a module's own table) in a business's export?**
 Contribute a `dataExportSources` entry, `{ name, rows(ctx) }`, that yields only what `ctx.principal` may read. Let admins export too: give them `data.export` (`roleOverrides`, or a role's `capabilities`). Section 5.22.
@@ -2871,6 +2887,8 @@ These are not built. Each has a workaround for now.
 | Copies erasure does not reach | BullMQ's kept jobs (`removeOnComplete`, `removeOnFail`) still hold their data until they are trimmed; other people's conversation messages that quoted the person stay; backups are the deployment's. |
 | Checking who asks before a copy is released | A signed-in person's own request runs as they are; there is no OTP step, and the copy is not sent on WhatsApp or by email. The team downloads it for a contact. |
 | A privacy tool for the assistant | Requests are filed by people (the app, the back office, WhatsApp's keyword). |
+| A team filing's request id on its approval | A privacy request the team files that waits for an approval names a provisional request id on the approval (`resource_id`); the request gets its own id when the approval runs it. Find it by its person (`GET /api/privacy/requests`). |
+| A business's privacy contact before it sets one | Until the privacy team sets `grievanceContact` (the Privacy screen, `PATCH /api/privacy/settings`), the register and WhatsApp's HELP show the framework's placeholder contact. Nothing asks a new business for it. |
 | Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
 | A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
 | Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |
