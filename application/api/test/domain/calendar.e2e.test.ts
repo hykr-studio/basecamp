@@ -4,7 +4,16 @@
 process.env.SECRETS_KEY ||= 'test-secrets-key-0123456789abcdef0123456789';
 process.env.GOOGLE_CALENDAR_TRANSPORT = 'fake';
 
-import { boot, eventually, fakeGoogle, Person, pool, server, shutdown } from '@hykr/api/testing';
+import {
+  boot,
+  connectGoogleCalendar,
+  eventually,
+  fakeGoogle,
+  Person,
+  pool,
+  server,
+  shutdown,
+} from '@hykr/api/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { server as application } from '../../dist/server.js';
 
@@ -31,9 +40,8 @@ beforeAll(async () => {
   process.env.CALENDAR_PUBLIC_URL = server.base;
   process.env.GOOGLE_CALENDAR_REDIRECT_URL = `${server.base}/api/calendar/google/callback`;
   await ana.signUp();
-  const res = await ana.call('POST', '/api/calendar/connections', { provider: 'google' });
+  const res = await connectGoogleCalendar(ana);
   expect(res.status, JSON.stringify(res.body)).toBe(201);
-  expect((await fetch(res.body.url, { redirect: 'manual' })).status).toBe(302);
   await eventually(() => google.channels(ana.email).length === 1);
 });
 afterAll(shutdown);

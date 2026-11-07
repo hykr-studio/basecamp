@@ -6,6 +6,7 @@
 //   GOOGLE_OAUTH_URL, GOOGLE_TOKEN_URL, GOOGLE_REVOKE_URL, GOOGLE_CALENDAR_API_URL   overrides
 //   CALENDAR_PUBLIC_URL                      where Google posts and feeds are read (default BETTER_AUTH_URL)
 //   CALENDAR_RETURN_URL                      where the browser goes after connecting (default <APP_URL>/calendar)
+//   CALENDAR_APP_RETURN_URL                  the same for a native app (its deep link); unset: the web's
 //   CALENDAR_SYNC_DAYS                       how far ahead a new connection is filled (default 90)
 import {
   fakeGoogle,
@@ -88,9 +89,13 @@ export function requireGoogle(): GoogleSettings {
 export const publicUrl = (env: NodeJS.ProcessEnv = process.env) =>
   noSlash(trimmed(env.CALENDAR_PUBLIC_URL) || authUrl(env));
 
-/** Where the browser goes after connecting (with ?connected= or ?error=). */
+/** Where the browser goes after connecting (with ?code=&state= or ?error=): the web app. */
 export const returnUrl = (env: NodeJS.ProcessEnv = process.env) =>
   trimmed(env.CALENDAR_RETURN_URL) || `${appUrl(env)}/calendar`;
+
+/** The same for a native app: its deep link (`<scheme>://calendar`), or else the web app's. */
+export const appReturnUrl = (env: NodeJS.ProcessEnv = process.env) =>
+  trimmed(env.CALENDAR_APP_RETURN_URL) || returnUrl(env);
 
 /** How many days ahead a new connection is filled with the person's records. */
 export function syncDays(env: NodeJS.ProcessEnv = process.env): number {
@@ -98,9 +103,15 @@ export function syncDays(env: NodeJS.ProcessEnv = process.env): number {
   return Number.isFinite(n) && n >= 1 && n <= 730 ? Math.floor(n) : 90;
 }
 
-/** At start: a bad transport mode stops the API and the worker. */
+/** At start: a bad transport mode or return address stops the API and the worker. */
 export function checkCalendarSettings() {
   googleMode();
+  for (const [name, url] of [
+    ['CALENDAR_RETURN_URL', returnUrl()],
+    ['CALENDAR_APP_RETURN_URL', appReturnUrl()],
+  ]) {
+    if (!URL.canParse(url)) throw new Error(`${name} is not an address (got "${url}")`);
+  }
 }
 
 /** The host events' UIDs are named in: '<entity>-<id>@<host>'. */

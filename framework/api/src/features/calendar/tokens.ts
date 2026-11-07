@@ -24,9 +24,6 @@ export interface StoredTokens {
 /** Where a sealed value belongs: it opens only for this business and row. */
 export const tokensAad = (tenantId: string, id: string) => `calendar:${tenantId}:${id}`;
 
-/** The state of an OAuth round trip: sealed, so the callback trusts only what it carries. */
-export const STATE_AAD = 'calendar-oauth';
-
 export function sealTokens(tenantId: string, id: string, t: StoredTokens): string {
   return requireSecretBox().seal(JSON.stringify(t), tokensAad(tenantId, id));
 }

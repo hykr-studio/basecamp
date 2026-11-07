@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { Principal } from '@hykr/contracts';
 import {
   CurrentPrincipal,
@@ -50,6 +49,17 @@ export class CalendarController {
   @UseGuards(HumanOnlyGuard)
   connect(@CurrentPrincipal() p: Principal, @Body() body: unknown) {
     return this.calendar.start(p, body);
+  }
+
+  /** The app, back from Google with its code and state: only their starter finishes them. */
+  @Post('google/complete')
+  @UseGuards(HumanOnlyGuard)
+  complete(
+    @CurrentPrincipal() p: Principal,
+    @RequestMeta() meta: RequestMetaValue,
+    @Body() body: unknown,
+  ) {
+    return this.calendar.complete(p, meta.requestId, body);
   }
 
   @Get('connections')
@@ -116,8 +126,9 @@ export class CalendarController {
 }
 
 /**
- * What arrives without a session: Google sending the browser back (the sealed state says who),
- * and a calendar app reading a feed (the token says whose).
+ * What arrives without a session: Google sending the browser back (nothing is exchanged here:
+ * the browser goes on to the app, which finishes under its session), and a calendar app reading
+ * a feed (the token says whose).
  */
 @Controller('api/calendar')
 @AllowAnonymous()
@@ -127,7 +138,7 @@ export class CalendarPublicController {
   @Get('google/callback')
   @Redirect()
   async callback(@Query() query: Record<string, unknown>) {
-    return { url: await this.calendar.callback(query, randomUUID()), statusCode: 302 };
+    return { url: await this.calendar.callback(query), statusCode: 302 };
   }
 
   @Get('feed/:token')

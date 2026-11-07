@@ -1,5 +1,6 @@
-// A person's calendars: connecting one (OAuth with PKCE, the state sealed), the list, the
-// disconnect; busy and free time; private feeds. Writes go through runWrite (ops.ts).
+// A person's calendars: connecting one (OAuth with PKCE, finished only under the session of the
+// person who started it), the list, the disconnect; busy and free time; private feeds. Writes go
+// through runWrite (ops.ts).
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { type IcsEvent, icsCalendar } from '@hykr/connectors';
 import {
@@ -16,6 +17,7 @@ import {
   type CalendarConnectionInfo,
   type CalendarFeedInfo,
   type CalendarProviderInfo,
+  CompleteCalendarInput,
   ConnectCalendarInput,
   CreateFeedInput,
   FreeTimeQuery,
@@ -58,14 +60,16 @@ import {
 import { memberPrincipal } from './principal.js';
 import { contentOf, namesPerson, schedulables, uidOf } from './schedulable.js';
 import {
+  appReturnUrl,
   checkCalendarSettings,
   feedUrl,
   googleSettings,
   requireGoogle,
   returnUrl,
 } from './settings.js';
+import { beginSignIn, findSignIn, takeSignIn, verifierOf } from './sign-in.js';
 import { CalendarSyncService } from './sync.service.js';
-import { accessTokenFor, GrantRevoked, STATE_AAD, sealTokens } from './tokens.js';
+import { accessTokenFor, GrantRevoked, sealTokens } from './tokens.js';
 
 const log = new Logger('Calendar');
 
@@ -83,15 +87,6 @@ function parse<T extends z.ZodType>(schema: T, body: unknown): z.infer<T> {
 const notFound = (what: string) =>
   new NotFoundException({ error: 'not_found', message: `No such ${what}` });
 
-/** The sealed OAuth state: who, where, the PKCE verifier, until when. */
-interface OAuthState {
-  t: string;
-  u: string;
-  v: string;
-  e: number;
-}
-
-const STATE_TTL_MS = 10 * 60_000;
 const DAY = 86_400_000;
 /** A feed lists this far back and ahead, at most this many events. */
 const FEED_BACK_MS = 90 * DAY;
@@ -113,12 +108,15 @@ const userOf = (p: Principal) => {
 
 const feedTokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
 
-/** Where the browser lands after Google, with what happened. */
-const landing = (outcome: Record<string, string>) => {
-  const url = new URL(returnUrl());
+/** Where the browser lands after Google, with what it brought back. */
+const landing = (to: string, outcome: Record<string, string>) => {
+  const url = new URL(to);
   for (const [k, v] of Object.entries(outcome)) url.searchParams.set(k, v);
   return url.toString();
 };
+
+const refused = (rule: string, message: string) =>
+  new BadRequestException({ error: 'invalid', rule, message });
 
 @Injectable()
 export class CalendarService implements OnModuleInit {
@@ -153,22 +151,30 @@ export class CalendarService implements OnModuleInit {
 
   /** The consent screen's URL for this person, in this business. */
   async start(p: Principal, body: unknown): Promise<{ url: string }> {
-    parse(ConnectCalendarInput, body);
+    const input = parse(ConnectCalendarInput, body);
     const userId = userOf(p);
+    if (!p.tenantId)
+      throw new ForbiddenException({
+        error: 'forbidden',
+        rule: 'no_business',
+        reason: 'Connect a calendar from within a business',
+      });
     const google = requireGoogle();
-    const box = requireSecretBox();
+    requireSecretBox();
     const pkce = pkcePair();
-    const state: OAuthState = {
-      t: p.tenantId as string,
-      u: userId,
-      v: pkce.verifier,
-      e: Date.now() + STATE_TTL_MS,
-    };
+    // The verifier stays here, under a random state: the URL carries nothing it could be read from.
+    const state = await beginSignIn(this.db, {
+      tenantId: p.tenantId,
+      userId,
+      provider: 'google',
+      verifier: pkce.verifier,
+      returnTo: input.returnTo === 'app' ? appReturnUrl() : returnUrl(),
+    });
     const [me] = await this.db.select({ email: user.email }).from(user).where(eq(user.id, userId));
     const url = authorizationUrl({
       clientId: google.clientId,
       redirectUri: google.redirectUri,
-      state: box.seal(JSON.stringify(state), STATE_AAD),
+      state,
       codeChallenge: pkce.challenge,
       endpoints: google.endpoints,
       ...(me?.email ? { loginHint: me.email } : {}),
@@ -179,27 +185,58 @@ export class CalendarService implements OnModuleInit {
   }
 
   /**
-   * Google sends the browser back here. The sealed state names the person and business; the
-   * code becomes tokens, sealed; the connection is written as the person. Returns where the
-   * browser goes next.
+   * Google sends the browser back here, with no session to trust. Nothing is exchanged: the
+   * browser goes on to the app, with the code and the state, and the app finishes the sign-in
+   * under its own session (`complete`). Returns where the browser goes next.
    */
-  async callback(query: Record<string, unknown>, requestId: string): Promise<string> {
-    if (typeof query.error === 'string') return landing({ error: query.error.slice(0, 100) });
-    const state = this.openState(query.state);
+  async callback(query: Record<string, unknown>): Promise<string> {
+    const signIn = await findSignIn(this.db, query.state);
+    if (!signIn) return landing(returnUrl(), { error: 'sign_in_expired' });
+    if (typeof query.error === 'string') {
+      // The person said no (or Google could not ask): this sign-in is over.
+      await takeSignIn(this.db, query.state);
+      return landing(signIn.returnTo, { error: query.error.slice(0, 100) });
+    }
     const code = typeof query.code === 'string' ? query.code : '';
-    if (!code) throw new BadRequestException({ error: 'invalid', message: 'No code' });
+    if (!code || code.length > 2048) return landing(signIn.returnTo, { error: 'no_code' });
+    return landing(signIn.returnTo, { code, state: query.state as string });
+  }
+
+  /**
+   * The app finishes a sign-in under the session of the person who started it, in the business
+   * they started it in. The sign-in is taken first, so a refused try also ends it: a code that
+   * reached someone else's browser can never be exchanged, by them or by the one who started it.
+   * Only then is the code exchanged, with the verifier kept here, and the connection written as
+   * this person.
+   */
+  async complete(p: Principal, requestId: string, body: unknown) {
+    const input = parse(CompleteCalendarInput, body);
+    const userId = userOf(p);
     const google = requireGoogle();
-    const p = await memberPrincipal(this.ctx.get, {
-      userId: state.u,
-      tenantId: state.t,
-      channel: 'app',
-    });
-    if (!p)
+    const box = requireSecretBox();
+    const signIn = await takeSignIn(this.db, input.state);
+    if (!signIn)
+      throw refused(
+        'calendar_sign_in_invalid',
+        'This calendar sign-in is old or was used already: start again',
+      );
+    if (signIn.userId !== userId) {
+      log.warn(`calendar sign-in of ${signIn.userId} refused to ${userId}: not theirs`);
       throw new ForbiddenException({
         error: 'forbidden',
-        rule: 'not_a_member',
-        reason: 'You are no longer a member of this business',
+        rule: 'calendar_sign_in_not_yours',
+        reason:
+          'Someone else started this calendar sign-in, so nothing was connected. Start one yourself.',
       });
+    }
+    if (signIn.tenantId !== p.tenantId)
+      throw new ForbiddenException({
+        error: 'forbidden',
+        rule: 'calendar_sign_in_other_business',
+        reason:
+          'This calendar sign-in was started in another business, so nothing was connected. Start again here.',
+      });
+    const tenantId = signIn.tenantId;
     let tokens: Awaited<ReturnType<typeof exchangeCode>>;
     try {
       tokens = await exchangeCode(google.transport, {
@@ -207,22 +244,26 @@ export class CalendarService implements OnModuleInit {
         clientSecret: google.clientSecret,
         endpoints: google.endpoints,
         redirectUri: google.redirectUri,
-        code,
-        codeVerifier: state.v,
+        code: input.code,
+        codeVerifier: verifierOf(signIn),
       });
     } catch (e) {
       log.warn(`Google refused the code: ${e instanceof Error ? e.message : e}`);
-      return landing({ error: 'google_refused' });
+      throw refused('google_refused', 'Google did not accept this sign-in: start again');
     }
-    if (!tokens.refreshToken) return landing({ error: 'no_offline_access' });
+    if (!tokens.refreshToken)
+      throw refused(
+        'no_offline_access',
+        'Google gave no lasting access to the calendar: remove the app in your Google account and connect again',
+      );
     const account = tokens.email ?? 'Google account';
     const [existing] = await this.db
       .select()
       .from(calendarConnections)
       .where(
         and(
-          eq(calendarConnections.tenantId, state.t),
-          eq(calendarConnections.userId, state.u),
+          eq(calendarConnections.tenantId, tenantId),
+          eq(calendarConnections.userId, userId),
           eq(calendarConnections.provider, 'google'),
         ),
       );
@@ -231,13 +272,12 @@ export class CalendarService implements OnModuleInit {
       existing && existing.account !== account ? await this.sync.leftovers(existing.id) : null;
     const id = existing?.id ?? randomUUID();
     const inboundId = randomUUID();
-    const box = requireSecretBox();
     const result = await this.write(p, requestId, connectOp(), {
       id,
       provider: 'google',
       account,
       scopes: (tokens.scope ?? '').split(' ').filter(Boolean).slice(0, 20),
-      sealed: sealTokens(state.t, id, {
+      sealed: sealTokens(tenantId, id, {
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         expiresAt: tokens.expiresAt,
@@ -246,26 +286,12 @@ export class CalendarService implements OnModuleInit {
         id: inboundId,
         sealed: box.seal(
           JSON.stringify(googleCalendarConnector.generate?.()),
-          connectionAad(state.t, inboundId),
+          connectionAad(tenantId, inboundId),
         ),
       },
     });
-    if (result.status !== 'done') return landing({ pending: 'google' });
-    if (old) await this.sync.cleanUp(old);
-    return landing({ connected: 'google' });
-  }
-
-  private openState(raw: unknown): OAuthState {
-    const bad = () => new BadRequestException({ error: 'invalid', message: 'Bad or old state' });
-    if (typeof raw !== 'string' || raw.length > 4000) throw bad();
-    let state: OAuthState;
-    try {
-      state = JSON.parse(requireSecretBox().open(raw, STATE_AAD)) as OAuthState;
-    } catch {
-      throw bad();
-    }
-    if (!state?.t || !state.u || !state.v || !(state.e > Date.now())) throw bad();
-    return state;
+    if (result.status === 'done' && old) await this.sync.cleanUp(old);
+    return result;
   }
 
   async list(p: Principal): Promise<CalendarConnectionInfo[]> {

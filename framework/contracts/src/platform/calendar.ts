@@ -38,7 +38,25 @@ export const CalendarProviderInfo = z.object({
 });
 export type CalendarProviderInfo = z.infer<typeof CalendarProviderInfo>;
 
-export const ConnectCalendarInput = z.object({ provider: CalendarProvider });
+/**
+ * Start connecting. `returnTo` picks where the browser comes back after the provider, between
+ * the deployment's own addresses: its web app (default) or its native app's link.
+ */
+export const ConnectCalendarInput = z.object({
+  provider: CalendarProvider,
+  returnTo: z.enum(['web', 'app']).optional(),
+});
+export type ConnectCalendarInput = z.infer<typeof ConnectCalendarInput>;
+
+/**
+ * Finish connecting: what the provider sent the browser back with. Only the person who started
+ * the sign-in, signed in, in the business they started it in, may finish it.
+ */
+export const CompleteCalendarInput = z.object({
+  code: z.string().min(1).max(2048),
+  state: z.string().min(1).max(200),
+});
+export type CompleteCalendarInput = z.infer<typeof CompleteCalendarInput>;
 
 /** A private feed: its URL is shown once, when it is made. */
 export const CalendarFeedInfo = z.object({

@@ -49,6 +49,7 @@ import {
   schedulables,
 } from './schedulable.js';
 import { type GoogleSettings, googleSettings, syncDays, watchAddress } from './settings.js';
+import { forgetOldSignIns } from './sign-in.js';
 import {
   accessTokenFor,
   type ConnectionRow,
@@ -422,9 +423,10 @@ export class CalendarSyncService implements OnApplicationBootstrap {
 
   /**
    * Every few minutes, for this process's connections: renew channels that end within a day,
-   * and look for changes where no channel tells us.
+   * and look for changes where no channel tells us. Sign-ins too old to finish are forgotten.
    */
   async maintain(): Promise<string> {
+    await forgetOldSignIns(this.db);
     const google = googleSettings();
     if (!google) return 'no provider';
     const soon = new Date(Date.now() + RENEW_BEFORE_MS);

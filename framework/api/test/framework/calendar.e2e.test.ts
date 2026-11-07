@@ -5,7 +5,7 @@
 process.env.SECRETS_KEY ||= 'test-secrets-key-0123456789abcdef0123456789';
 process.env.GOOGLE_CALENDAR_TRANSPORT = 'fake';
 
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { fakeGoogle } from '@hykr/connectors/google-calendar';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MailerService } from '../../dist/channels/notify/mailer.service.js';
@@ -13,6 +13,7 @@ import {
   addMember,
   asAssistant,
   boot,
+  connectGoogleCalendar,
   eventually,
   me,
   Person,
@@ -41,15 +42,46 @@ const hoursAhead = (h: number) => {
   return d.toISOString();
 };
 
-/** Connect a person's calendar: the API's URL (the fake agrees at once), then the callback. */
+/** Connect a person's calendar as the app does: consent, the callback, the app finishing it. */
 async function connect(p: Person, inTenant = true) {
-  const call = inTenant ? inBusiness(p) : p.call.bind(p);
-  const res = await call('POST', '/api/calendar/connections', { provider: 'google' });
+  const res = await connectGoogleCalendar(p, inTenant ? { 'x-tenant-id': tenantId } : {});
+  expect(res.status, JSON.stringify(res.body)).toBe(201);
+  expect(res.body.status).toBe('done');
+  return res;
+}
+
+/** A sign-in `p` started, through Google and the callback: what the app is handed. */
+async function signIn(p: Person, headers: Record<string, string> = {}) {
+  const res = await p.call('POST', '/api/calendar/connections', { provider: 'google' }, headers);
   expect(res.status, JSON.stringify(res.body)).toBe(201);
   const back = await fetch(res.body.url, { redirect: 'manual' });
   expect(back.status).toBe(302);
-  return back.headers.get('location') ?? '';
+  const landing = new URL(back.headers.get('location') ?? '');
+  return {
+    consent: new URL(res.body.url),
+    landing,
+    code: landing.searchParams.get('code') ?? '',
+    state: landing.searchParams.get('state') ?? '',
+  };
 }
+
+const complete = (
+  p: Person,
+  body: { code: string; state: string },
+  headers: Record<string, string> = {},
+) => p.call('POST', '/api/calendar/google/complete', body, headers);
+
+/** How many times the API asked Google for tokens (code exchanges and refreshes). */
+const tokenRequests = () =>
+  google.requests.filter((r) => r.url.startsWith(google.endpoints.token)).length;
+
+const connectionsOf = async (userId: string) =>
+  (
+    await pool.query(
+      'select id, account, updated_at from app.calendar_connections where user_id = $1',
+      [userId],
+    )
+  ).rows;
 
 const events = (email: string) =>
   google.events(email).filter((e) => e.extendedProperties?.private?.basecamp === '1');
@@ -115,12 +147,33 @@ describe('connecting a calendar', () => {
     const back = new URL(res.body.url);
     expect(back.pathname).toBe('/api/calendar/google/callback');
     expect(back.searchParams.get('code')).toBeTruthy();
-    expect(back.searchParams.get('state')).toMatch(/^v1\./);
+    // The state is a random token: who started it and the PKCE verifier stay on the server.
+    const state = back.searchParams.get('state') ?? '';
+    expect(state).toMatch(/^cs[A-Za-z0-9_-]{43}$/);
+    const { rows } = await pool.query(
+      'select user_id, tenant_id, verifier_sealed from app.calendar_oauth_states where state_hash = $1',
+      [createHash('sha256').update(state).digest('hex')],
+    );
+    expect(rows).toEqual([expect.objectContaining({ user_id: owner.id, tenant_id: tenantId })]);
+    expect(rows[0].verifier_sealed).toMatch(/^v1\./);
   });
 
-  it('stores the grant sealed, audited without a token, and lands back in the app', async () => {
-    const location = await connect(owner, false);
-    expect(location).toContain('connected=google');
+  it('exchanges the code only when the app finishes it; stores the grant sealed, audited without a token', async () => {
+    const before = tokenRequests();
+    const started = await signIn(owner);
+    // The callback hands the code and the state on to the app, and asks Google for nothing.
+    expect(started.landing.pathname).toBe('/calendar');
+    expect(started.code).toBeTruthy();
+    expect(started.state).toMatch(/^cs/);
+    expect(tokenRequests()).toBe(before);
+    const done = await complete(owner, started);
+    expect(done.status, JSON.stringify(done.body)).toBe(201);
+    expect(done.body).toMatchObject({
+      status: 'done',
+      value: { provider: 'google', account: owner.email, status: 'active' },
+    });
+    expect(JSON.stringify(done.body)).not.toMatch(/fake-(rt|at)-|v1\./);
+    expect(tokenRequests()).toBe(before + 1);
     const { rows } = await pool.query(
       'select id, account, tokens_sealed, inbound_connection_id from app.calendar_connections where tenant_id = $1 and user_id = $2',
       [tenantId, owner.id],
@@ -145,6 +198,8 @@ describe('connecting a calendar', () => {
     expect(list.body).toEqual([
       expect.objectContaining({ provider: 'google', account: owner.email, status: 'active' }),
     ]);
+    // A sign-in is used once.
+    expect((await complete(owner, started)).body.rule).toBe('calendar_sign_in_invalid');
     // The channel opens once the connection is looked after.
     await eventually(() => google.channels(owner.email).length === 1);
     await eventually(
@@ -152,17 +207,83 @@ describe('connecting a calendar', () => {
     );
   });
 
-  it('refuses a state that was changed, and lands with an error when Google refuses', async () => {
-    const res = await owner.call('POST', '/api/calendar/connections', { provider: 'google' });
-    const url = new URL(res.body.url);
-    const tampered = new URL(url);
-    tampered.searchParams.set('state', `${url.searchParams.get('state')}x`);
-    expect((await fetch(tampered, { redirect: 'manual' })).status).toBe(400);
-    const badCode = new URL(url);
-    badCode.searchParams.set('code', 'not-a-code');
-    const back = await fetch(badCode, { redirect: 'manual' });
+  it("refuses to finish someone else's sign-in, and nothing is connected", async () => {
+    // The owner starts a sign-in and sends its consent link to someone else, who agrees: their
+    // browser comes back to the app with the code, under their own session.
+    const ownerBefore = await connectionsOf(owner.id);
+    const before = tokenRequests();
+    const started = await signIn(owner);
+    const res = await complete(other, started);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: 'forbidden', rule: 'calendar_sign_in_not_yours' });
+    // Google was not asked for tokens, and no calendar was connected to either of them.
+    expect(tokenRequests()).toBe(before);
+    expect(await connectionsOf(other.id)).toEqual([]);
+    expect(await connectionsOf(owner.id)).toEqual(ownerBefore);
+    // The refusal used the sign-in up: the one who started it cannot finish it either.
+    const late = await complete(owner, started);
+    expect(late.status).toBe(400);
+    expect(late.body.rule).toBe('calendar_sign_in_invalid');
+    expect(tokenRequests()).toBe(before);
+    expect(await connectionsOf(owner.id)).toEqual(ownerBefore);
+  });
+
+  it('is finished only by a signed-in person, in the business it was started in', async () => {
+    const started = await signIn(owner);
+    // No session: the sign-in is not touched.
+    const anonymous = await fetch(`${server.base}/api/calendar/google/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: server.base },
+      body: JSON.stringify({ code: started.code, state: started.state }),
+    });
+    expect(anonymous.status).toBe(401);
+    // The assistant never finishes one.
+    const assistant = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
+    expect((await assistant('POST', '/api/calendar/google/complete', { ...started })).status).toBe(
+      403,
+    );
+    // The same person, in another business: refused, and the sign-in is used up.
+    const staffStarted = await signIn(staff, { 'x-tenant-id': tenantId });
+    const elsewhere = await complete(staff, staffStarted);
+    expect(elsewhere.status).toBe(403);
+    expect(elsewhere.body.rule).toBe('calendar_sign_in_other_business');
+    expect(await connectionsOf(staff.id)).toEqual([]);
+    expect((await complete(staff, staffStarted, { 'x-tenant-id': tenantId })).body.rule).toBe(
+      'calendar_sign_in_invalid',
+    );
+  });
+
+  it('refuses a state that was changed or is old, and stops when Google refuses', async () => {
+    const started = await signIn(owner);
+    // A changed state: the callback knows no such sign-in, and nor does finishing it.
+    const tampered = new URL(started.consent);
+    const last = started.state.endsWith('A') ? 'B' : 'A';
+    tampered.searchParams.set('state', `${started.state.slice(0, -1)}${last}`);
+    const back = await fetch(tampered, { redirect: 'manual' });
     expect(back.status).toBe(302);
-    expect(back.headers.get('location')).toContain('error=google_refused');
+    expect(back.headers.get('location')).toContain('error=sign_in_expired');
+    const changed = await complete(owner, { code: started.code, state: `${started.state}x` });
+    expect(changed.status).toBe(400);
+    expect(changed.body.rule).toBe('calendar_sign_in_invalid');
+    // A code Google does not know.
+    const badCode = await complete(owner, { code: 'not-a-code', state: started.state });
+    expect(badCode.status).toBe(400);
+    expect(badCode.body.rule).toBe('google_refused');
+    // Too old.
+    const old = await signIn(owner);
+    await pool.query(
+      "update app.calendar_oauth_states set expires_at = now() - interval '1 minute' where state_hash = $1",
+      [createHash('sha256').update(old.state).digest('hex')],
+    );
+    expect((await complete(owner, old)).body.rule).toBe('calendar_sign_in_invalid');
+    // The person said no at Google: the app is told, and the sign-in is over.
+    const no = await signIn(owner);
+    const denied = new URL(no.consent);
+    denied.searchParams.delete('code');
+    denied.searchParams.set('error', 'access_denied');
+    const deniedBack = await fetch(denied, { redirect: 'manual' });
+    expect(deniedBack.headers.get('location')).toContain('error=access_denied');
+    expect((await complete(owner, no)).body.rule).toBe('calendar_sign_in_invalid');
   });
 
   it('connects the other people of the test, each in their own calendar', async () => {

@@ -1,5 +1,6 @@
 // Calendars (decisions B17): a person's connection to their own calendar (tokens sealed), which
-// records are in it as which events, the invites emailed for records, and private feeds.
+// records are in it as which events, the invites emailed for records, private feeds, and
+// sign-ins under way.
 import { sql } from 'drizzle-orm';
 import { index, integer, jsonb, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
@@ -149,5 +150,33 @@ export const calendarFeeds = app.table(
   (table) => [
     uniqueIndex('calendar_feeds_token_uq').on(table.tokenHash),
     index('calendar_feeds_person_idx').on(table.tenantId, table.userId),
+  ],
+);
+
+/**
+ * A calendar sign-in under way (decisions B17, 36): who started it, in which business, the PKCE
+ * verifier (sealed for the row), and where the browser returns. Used once, by that person only.
+ * Only the SHA-256 of the state Google carries is kept.
+ */
+export const calendarOauthStates = app.table(
+  'calendar_oauth_states',
+  {
+    id: id(),
+    tenantId: tenantColumn(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    /** 'google'. */
+    provider: text('provider').notNull(),
+    stateHash: text('state_hash').notNull(),
+    verifierSealed: text('verifier_sealed').notNull(),
+    /** Where the browser goes after the provider: one of the deployment's addresses. */
+    returnTo: text('return_to').notNull(),
+    expiresAt: at('expires_at').notNull(),
+    createdAt: at('created_at').defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('calendar_oauth_states_state_uq').on(table.stateHash),
+    index('calendar_oauth_states_expires_idx').on(table.expiresAt),
   ],
 );
