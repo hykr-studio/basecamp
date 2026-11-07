@@ -246,7 +246,8 @@ which document's PDF, who signs (`by`), the words they agree to (`statement`), w
 code to the signer's own WhatsApp number or email, binds the acceptance to that PDF's hash and
 the record's version (so the entity must be versioned), and keeps append-only, hash-chained
 evidence. The sample's `orders` module ships `OrderAcceptance`: an approved order's customer
-accepts its PDF, and the order moves to `accepted`, frozen.
+accepts its PDF once; the order stays `approved`, which is frozen (no transition: `when` limits
+it to approved orders).
 
 ## States, deadlines and versions
 

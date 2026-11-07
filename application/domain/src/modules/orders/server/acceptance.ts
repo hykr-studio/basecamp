@@ -17,8 +17,9 @@ const words = (text: string, vars: Record<string, string>) =>
 /**
  * An approved order is accepted by its customer, with a one-time code to their WhatsApp number
  * (else their email), against the order's PDF (orders.order): exactly that PDF, of the order as
- * it is now. Accepted, the order moves to `accepted` (frozen: it is the contract) and the
- * evidence is kept (docs/decisions/B8.md).
+ * it is now. The order stays `approved`, which is frozen already (it is the contract, and only a
+ * submitted order is revised), the evidence is kept, and the customer accepts that PDF once. It
+ * has no transition: the order's states are not this module file's to change (decisions B8, 24).
  */
 export const OrderAcceptance = defineAcceptance<OrderDocumentData>({
   name: 'orders.order',
@@ -32,5 +33,8 @@ export const OrderAcceptance = defineAcceptance<OrderDocumentData>({
     }),
   by: 'customer',
   channels: ['whatsapp', 'email'],
-  transition: 'accept',
+  when: (row) =>
+    row.status === 'approved'
+      ? null
+      : { rule: 'order_not_approved', reason: 'Only an approved order is accepted' },
 });

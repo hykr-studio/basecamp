@@ -5,7 +5,5 @@ UPDATE app.orders SET status = 'draft' WHERE status = 'open';
 
 ALTER TABLE app.orders DROP CONSTRAINT IF EXISTS orders_status_check;
 ALTER TABLE app.orders ADD CONSTRAINT orders_status_check CHECK (
-  status IN (
-    'draft', 'submitted', 'approved', 'accepted', 'fulfilled', 'cancelled', 'superseded', 'expired'
-  )
+  status IN ('draft', 'submitted', 'approved', 'fulfilled', 'cancelled', 'superseded', 'expired')
 );

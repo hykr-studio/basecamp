@@ -51,16 +51,7 @@ export const orders = app.table(
     title: text('title').notNull(),
     /** Its state (contracts ORDER_STATES): only its transitions move it. */
     status: text('status', {
-      enum: [
-        'draft',
-        'submitted',
-        'approved',
-        'accepted',
-        'fulfilled',
-        'cancelled',
-        'superseded',
-        'expired',
-      ],
+      enum: ['draft', 'submitted', 'approved', 'fulfilled', 'cancelled', 'superseded', 'expired'],
     })
       .notNull()
       .default('draft'),

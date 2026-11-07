@@ -1,7 +1,8 @@
 // The orders module's acceptance (OrderAcceptance, B8): an order its customer asked for is
 // submitted and approved, its PDF made, and the customer accepts exactly that PDF with a one-time
-// code to their email. The order is then `accepted` and frozen (no save, no revise), and its
-// evidence holds the PDF's hash and the order's version. Nobody outside the business reaches it.
+// code to their email. The order stays `approved`, which is frozen (no save, no revise); its
+// evidence holds the PDF's hash and the order's version, and the PDF is accepted once. A submitted
+// order cannot be accepted. Nobody outside the business reaches it.
 import {
   addMember,
   boot,
@@ -31,6 +32,16 @@ const items = [
 
 const move = (p: Person, id: string, name: string, headers: Record<string, string> = {}) =>
   p.call('POST', `/api/transitions/orders/${id}/${name}`, {}, headers);
+
+/** A PDF of the order, made (the owner asks for it). */
+async function pdf(id: string) {
+  const asked = await owner.call('POST', '/api/documents', { document: 'orders.order', id });
+  expect(asked.status).toBe(200);
+  return eventually(async () => {
+    const got = await owner.call('GET', `/api/documents/${asked.body.value.id}`);
+    return got.body?.status === 'ready' ? (got.body as Json) : undefined;
+  });
+}
 
 async function mails(email: string) {
   const res = await fetch(
@@ -75,16 +86,17 @@ describe("an order's acceptance by its customer", () => {
     expect(saved.status).toBe(200);
     order = saved.body.value.order;
     expect((await move(customer, order.id, 'submit', inTenant())).status).toBe(200);
+    // Submitted, not approved: its PDF is not for accepting yet.
+    const early = await pdf(order.id);
+    const notYet = await customer.call(
+      'GET',
+      `/api/acceptances/documents/${early.id}`,
+      undefined,
+      inTenant(),
+    );
+    expect(notYet.body.can).toMatchObject({ ok: false, rule: 'order_not_approved' });
     expect((await move(owner, order.id, 'approve')).status).toBe(200);
-    const asked = await owner.call('POST', '/api/documents', {
-      document: 'orders.order',
-      id: order.id,
-    });
-    expect(asked.status).toBe(200);
-    doc = await eventually(async () => {
-      const got = await owner.call('GET', `/api/documents/${asked.body.value.id}`);
-      return got.body?.status === 'ready' ? got.body : undefined;
-    });
+    doc = await pdf(order.id);
     const status = await customer.call(
       'GET',
       `/api/acceptances/documents/${doc.id}`,
@@ -125,7 +137,7 @@ describe("an order's acceptance by its customer", () => {
     expect(unreached.status).toBe(404);
   });
 
-  it('the customer accepts with the code emailed to them; the order is accepted and frozen', async () => {
+  it('the customer accepts with the code emailed to them; the order stays approved and frozen', async () => {
     const before = new Set(await mails(customer.email));
     const asked = await customer.call(
       'POST',
@@ -159,8 +171,10 @@ describe("an order's acceptance by its customer", () => {
       document: { id: doc.id, sha256: doc.sha256 },
       signer: { userId: customer.id },
     });
+    // No transition: the order is the approved one that was accepted, at the same version.
     const now = (await owner.call('GET', `/api/orders/${order.id}`)).body;
-    expect(now.status).toBe('accepted');
+    expect(now.status).toBe('approved');
+    expect(now.version).toBe(doc.recordVersion);
     // The contract: no save, no revision.
     const save = await owner.call('POST', '/api/orders/save', {
       orderId: order.id,
@@ -171,6 +185,22 @@ describe("an order's acceptance by its customer", () => {
     const revise = await owner.call('POST', `/api/orders/${order.id}/revise`, {});
     expect(revise.status).toBe(403);
     expect(revise.body.rule).toBe('order_revise_submitted');
+    // Once: the customer has accepted this PDF.
+    const again = await customer.call(
+      'GET',
+      `/api/acceptances/documents/${doc.id}`,
+      undefined,
+      inTenant(),
+    );
+    expect(again.body.can).toMatchObject({ ok: false, rule: 'already_accepted' });
+    const asksAgain = await customer.call(
+      'POST',
+      '/api/acceptances/challenges',
+      { documentId: doc.id },
+      inTenant(),
+    );
+    expect(asksAgain.status).toBe(403);
+    expect(asksAgain.body.rule).toBe('already_accepted');
   });
 
   it('the business keeps the evidence; another business reaches none of it', async () => {
