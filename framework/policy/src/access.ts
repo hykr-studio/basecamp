@@ -9,8 +9,10 @@ import { subjectOf } from './subject.js';
 
 /**
  * How a rule reaches an entity's rows. Built in: the person's own (the owner column is them),
- * the customer's (the customer column is theirs), the whole tenant, and `granted`: the records
- * granted to the person one by one (`app.record_grants`), or the children of such records.
+ * the customer's (the customer column is theirs), the whole tenant, `granted`: the records
+ * granted to the person one by one (`app.record_grants`), or the children of such records, and
+ * `participant`: the records a party they are a member of participates in (`app.participations`),
+ * in the participant roles `as` names, or the children of such records.
  * Open: a feature adds a kind by declaration merging and registers its SQL (`grantKinds` in
  * @hykr/core). Rows are always limited to the principal's tenant first.
  */
@@ -19,6 +21,7 @@ export interface GrantKinds {
   customer: true;
   tenant: true;
   granted: true;
+  participant: true;
 }
 export type Grant = keyof GrantKinds & string;
 
@@ -32,12 +35,20 @@ export interface GrantRule {
   /** A write needs this much assurance (a WhatsApp number alone is refused 'session'). */
   minAssurance?: Assurance;
   /**
-   * `granted`: the resource type the grant is on. Default: this entity's name. A child names
-   * its parent's ('project'), with `via`.
+   * `granted`, `participant`: the resource type the grant (or participation) is on. Default:
+   * this entity's name. A child names its parent's ('project'), with `via`.
    */
   of?: string;
-  /** `granted`: the column (its key) holding the granted record's id. Default: 'id'. */
+  /**
+   * `granted`, `participant`: the column (its key) holding the granted (or participated) record's
+   * id. Default: 'id'.
+   */
   via?: string;
+  /**
+   * `participant`: only participations in these participant roles (declared by the application,
+   * `participantRoles` in @hykr/contracts). Default: any role.
+   */
+  as?: readonly string[];
 }
 
 /** One way in, or several (ORed): `['own', { grant: 'granted' }]`. */
@@ -92,7 +103,7 @@ function keysOf(p: Principal, rules: RoleAccess): string[] {
 /**
  * What this principal's roles (and capabilities) allow, for reading or writing. A grant only
  * counts if the principal has what it needs: 'own' and 'granted' a person with an account,
- * 'customer' a customer record. The server's own background work (`systemPrincipal()`, never
+ * 'participant' a person or a contact, 'customer' a customer record. The server's own background work (`systemPrincipal()`, never
  * from a request) reaches every row of its one business; entity rules, approvals and audit
  * still apply to it. Pure: reads roles, capabilities, subject, customer and assurance.
  */
@@ -111,6 +122,8 @@ export function accessFor(p: Principal, access: Access, op: 'read' | 'write'): A
     if (!rule) continue;
     for (const r of rulesOf(rule)) {
       if ((r.grant === 'own' || r.grant === 'granted') && subject?.kind !== 'user') continue;
+      // A participant is a person or a contact: nobody else participates.
+      if (r.grant === 'participant' && !subject) continue;
       if (r.grant === 'customer' && !p.customerId) continue;
       if (r.minAssurance && !atLeast(p.assurance, r.minAssurance)) {
         need = r.minAssurance;

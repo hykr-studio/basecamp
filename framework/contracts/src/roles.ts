@@ -54,15 +54,17 @@ export interface RoleOverride {
 }
 
 /**
- * The roles the framework hands out itself: to the person who creates a business (`creator`)
- * and to a WhatsApp contact without an account (`contact`). An application names its own; the
- * framework's are `owner` and `customer`.
+ * The roles the framework hands out itself: to the person who creates a business (`creator`), to
+ * a WhatsApp contact without an account (`contact`), and to a person who is no member of a
+ * business but a member of one of its parties (`participant`). An application names its own; the
+ * framework's are `owner`, `customer`, and for a participant whatever `contact` is.
  */
 export interface RoleDefault {
   name: RoleDefaultName;
   roles: readonly string[];
 }
-export type RoleDefaultName = 'creator' | 'contact';
+export const ROLE_DEFAULT_NAMES = ['creator', 'contact', 'participant'] as const;
+export type RoleDefaultName = (typeof ROLE_DEFAULT_NAMES)[number];
 
 /** A role, checked: a valid name, and capability names that look like capabilities. */
 export function defineRole(def: RoleDef): RoleDef {
@@ -99,7 +101,7 @@ export const roleOverrides = createHookRegistry<RoleOverride>('role override', (
   collects: 'roleOverrides',
 });
 
-/** The roles given to a business's creator and to a contact. Collects `contributes.roleDefaults`. */
+/** The roles given to a creator, a contact and a participant. Collects `contributes.roleDefaults`. */
 export const roleDefaults = createHookRegistry<RoleDefault>('role default', (d) => d.name, {
   collects: 'roleDefaults',
 });
@@ -132,14 +134,19 @@ export const FrameworkRoles = {
 const TEAM = ['owner', 'admin', 'ops', 'staff'];
 
 /** Who gets which role when the framework hands one out, unless the application says otherwise. */
-const FRAMEWORK_DEFAULTS: Readonly<Record<RoleDefaultName, readonly string[]>> = {
+const FRAMEWORK_DEFAULTS: Readonly<Record<'creator' | 'contact', readonly string[]>> = {
   creator: [FrameworkRoles.owner.name],
   contact: [FrameworkRoles.customer.name],
 };
 
-/** The roles the framework gives a business's creator or a contact: the application's, or its own. */
+/**
+ * The roles the framework gives a business's creator, a contact or a participant: the
+ * application's, or its own. A participant gets the contact's unless the application names both.
+ */
 export function givenRoles(name: RoleDefaultName): string[] {
-  return [...(roleDefaults.get(name)?.roles ?? FRAMEWORK_DEFAULTS[name])];
+  const named = roleDefaults.get(name)?.roles;
+  if (named) return [...named];
+  return name === 'participant' ? givenRoles('contact') : [...FRAMEWORK_DEFAULTS[name]];
 }
 
 /** The framework's own capabilities, with the roles that had each one before. */
@@ -288,8 +295,8 @@ export function checkRoles(): void {
       if (!capabilities.has(c)) throw undefinedCapability(`The override of role "${o.role}"`, c);
   }
   for (const d of roleDefaults.all()) {
-    if (d.name !== 'creator' && d.name !== 'contact')
-      throw new Error(`Role default "${d.name}": only "creator" and "contact" exist`);
+    if (!(ROLE_DEFAULT_NAMES as readonly string[]).includes(d.name))
+      throw new Error(`Role default "${d.name}": only ${ROLE_DEFAULT_NAMES.join(', ')} exist`);
     if (!d.roles.length) throw new Error(`Role default "${d.name}" gives no role`);
     for (const r of d.roles)
       if (!roles.has(r)) throw new Error(`Role default "${d.name}" names "${r}", no role`);

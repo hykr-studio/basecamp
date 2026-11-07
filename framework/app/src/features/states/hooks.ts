@@ -51,7 +51,7 @@ export function useVersions(type: string, id: string | undefined): UseQueryResul
 /**
  * The signed-in person as a transition's checks see them (their roles and capabilities in this
  * business), to offer only the moves they may make; undefined until it loads. The server checks
- * again: this only greys buttons.
+ * again: this only greys buttons. With no business, no tenant (a transition's checks then refuse).
  */
 export function useActingPrincipal(): Principal | undefined {
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.me(), staleTime: 5 * 60_000 }).data;
@@ -59,7 +59,7 @@ export function useActingPrincipal(): Principal | undefined {
     ? {
         actor: { kind: 'user', id: me.userId },
         subject: { kind: 'user', userId: me.userId },
-        tenantId: me.tenantId,
+        ...(me.tenantId ? { tenantId: me.tenantId } : {}),
         ...(me.customerId ? { customerId: me.customerId } : {}),
         roles: me.roles,
         capabilities: me.capabilities,

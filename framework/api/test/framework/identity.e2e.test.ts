@@ -104,6 +104,8 @@ describe('roles and capabilities', () => {
         'memory.read',
         'memory.write',
         'models.manage',
+        'parties.manage',
+        'parties.read',
         'queues.admin',
         'records.grant',
         'settings.manage',
@@ -119,6 +121,8 @@ describe('roles and capabilities', () => {
       'members.read',
       'memory.read',
       'memory.write',
+      'parties.manage',
+      'parties.read',
       'records.grant',
     ]);
     expect((await inAna(staffer)('GET', '/api/me')).body.capabilities).toEqual([
@@ -129,6 +133,7 @@ describe('roles and capabilities', () => {
       'members.read',
       'memory.read',
       'memory.write',
+      'parties.read',
     ]);
     // A role the application added, with the capability it names.
     expect((await inAna(auditor)('GET', '/api/me')).body).toMatchObject({

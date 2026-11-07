@@ -11,6 +11,7 @@ export * from './integrations.js';
 export * from './jobs.js';
 export * from './memory.js';
 export * from './numbering.js';
+export * from './parties.js';
 export * from './push.js';
 export * from './roles.js';
 export * from './settings.js';

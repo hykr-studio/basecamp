@@ -1,14 +1,23 @@
 import { createApiClient } from '@hykr/api-client';
 import { appConfig } from './config';
-import { authHeaders, credentials } from './session';
+import { businessHeaders } from './framework/business';
+import { credentials, authHeaders as sessionHeaders } from './session';
 
-export { auth, authHeaders, credentials, type SessionUser } from './session';
+export { auth, credentials, type SessionUser } from './session';
 
 /**
- * The app's one API client. How a request proves who the person is lives in session.ts
- * (web: the browser's cookie) and session.native.ts (iOS, Android: the cookie from
- * SecureStore), so screens, views and the chat never know which platform they run on.
- * The address is read per request, so configure() may run after this module loads.
+ * What every call to the API carries: how the person proves who they are (session.ts on the
+ * web: nothing, the browser sends the cookie; session.native.ts on iOS and Android: the cookie
+ * from SecureStore), and the business they chose to work in (`x-tenant-id`, the switcher's).
+ */
+export async function authHeaders(): Promise<Record<string, string>> {
+  return { ...(await sessionHeaders()), ...businessHeaders() };
+}
+
+/**
+ * The app's one API client. Screens, views and the chat never know which platform they run on
+ * or which business they are in: both are in its headers. The address is read per request, so
+ * configure() may run after this module loads.
  */
 export const api = createApiClient({
   get baseUrl() {
