@@ -39,6 +39,11 @@ describe('script sets', () => {
       'calendar-invite',
       'log-call',
       'dial-call',
+      'comments-list',
+      'comments-add',
+      'comments-mentionable',
+      'remember',
+      'recall',
       'apply-transition',
       'fail',
     ]);

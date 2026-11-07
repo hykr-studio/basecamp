@@ -3,6 +3,11 @@
 // environment when it loads.
 
 export {
+  type MentionContext,
+  type MentionKind,
+  mentionKinds,
+} from './features/comments/mention-kinds.js';
+export {
   contentOf,
   type EventContent,
   googleSettings,
@@ -136,6 +141,12 @@ export {
   verifyJobCallback,
 } from './features/jobs/public.js';
 export { type LiveResource, liveResources } from './features/live/resources.js';
+export {
+  anyRole,
+  backfillAll,
+  MemoryIndexer,
+  RecallService,
+} from './features/memory/index.js';
 export {
   ModelPolicyChanged,
   ModelPolicyService,

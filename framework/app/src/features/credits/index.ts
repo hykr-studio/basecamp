@@ -4,7 +4,7 @@ import type { AppPlugin, NavItem } from '../../framework/app-domain';
 import { CreditsScreen } from './CreditsScreen';
 
 export { CreditsScreen } from './CreditsScreen';
-export { formatCredits, toMinor } from './money';
+export { formatCredits, parseCredits } from './money';
 
 /** The capability that shows the credits screen (`credits.view` on the server). */
 const VIEW = 'credits.view';

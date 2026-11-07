@@ -1,8 +1,8 @@
 /**
- * The framework's own notifications: a request waiting for the business's decision, and its
- * outcome told back to the customer who asked. Any domain gets them.
+ * The framework's own notifications: a request waiting for the business's decision, its outcome
+ * told back to the customer who asked, and a person mentioned in a comment. Any domain gets them.
  */
-import type { Lang } from '@hykr/i18n';
+import { type Lang, t } from '@hykr/i18n';
 import { defineNotification, type Row } from '../define-notification.js';
 import { ApprovalOutcome, ApprovalRequest } from './templates.js';
 
@@ -71,4 +71,40 @@ export const ApprovalOutcomeNotification = defineNotification<ApprovalRow>({
   dedupe: (a) => `approval.outcome:${a.id}`,
 });
 
-export const frameworkNotifications = [ApprovalRequestNotification, ApprovalOutcomeNotification];
+/** A `comment.mentioned` event's row: one person (or agent) a comment names. */
+export type CommentMentionRow = Row & {
+  commentId: string;
+  on: { entity: string; id: string };
+  target: { kind: string; id: string; label: string };
+  author: { id: string | null; name: string | null };
+  internal: boolean;
+  /** The comment's first characters, mentions shown as @Name. */
+  excerpt: string;
+};
+
+/**
+ * A person named in a comment finds it in their in-app inbox, with a link to the record. The
+ * framework sends nothing outside the app on its own: an application that wants push or email
+ * for mentions declares its own notification on `comment.mentioned`.
+ */
+export const CommentMentionNotification = defineNotification<CommentMentionRow>({
+  key: 'comment.mention',
+  topic: 'service',
+  send: { on: ['comment.mentioned'] },
+  when: (m) => m.target.kind === 'user',
+  to: (m) => [{ userId: m.target.id }],
+  channels: ['inapp'],
+  inapp: {
+    title: (m, r) =>
+      t(r.lang, 'comments.mentioned', { name: m.author.name ?? t(r.lang, 'comments.someone') }),
+    body: (m) => m.excerpt,
+    record: (m) => ({ type: m.on.entity, id: m.on.id }),
+  },
+  dedupe: (m) => `comment.mention:${m.commentId}:${m.target.kind}:${m.target.id}`,
+});
+
+export const frameworkNotifications = [
+  ApprovalRequestNotification,
+  ApprovalOutcomeNotification,
+  CommentMentionNotification,
+];

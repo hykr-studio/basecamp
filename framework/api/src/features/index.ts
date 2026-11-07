@@ -4,14 +4,17 @@
 export { approvalsFeature } from './approvals/index.js';
 export { calendarFeature } from './calendar/index.js';
 export { callsFeature } from './calls/index.js';
+export { commentsFeature } from './comments/index.js';
 export { creditsFeature } from './credits/index.js';
 export { documentsFeature } from './documents/index.js';
 export { eventsFeature } from './events/index.js';
 export { filesFeature } from './files/index.js';
+export { inboxFeature } from './inbox/index.js';
 export { integrationsFeature } from './integrations/index.js';
 export { jobsFeature } from './jobs/index.js';
 export { liveFeature } from './live/index.js';
 export { membersFeature } from './members/index.js';
+export { memoryFeature } from './memory/index.js';
 export { modelsFeature } from './models/index.js';
 export { moneyFeature } from './money/index.js';
 export { pushFeature } from './push/index.js';
