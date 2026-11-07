@@ -46,18 +46,18 @@ import {
 import { can } from '@hykr/policy';
 import {
   BadRequestException,
-  type CallHandler,
   ConflictException,
-  type ExecutionContext,
   Inject,
   Injectable,
   Logger,
-  type NestInterceptor,
+  type MiddlewareConsumer,
+  Module,
+  type NestMiddleware,
+  type NestModule,
   NotFoundException,
 } from '@nestjs/common';
 import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { Response } from 'express';
-import type { Observable } from 'rxjs';
 import { z } from 'zod';
 import type { ActingOperator } from './operators.js';
 
@@ -564,38 +564,43 @@ const log = new Logger('SupportAccess');
 
 /**
  * Every request made under support access, reads included, kept for the business: the grant,
- * the method, the path (no query string) and the answer's status. A failure to log is logged,
- * never shown.
+ * the method, the path (no query string) and the answer's status. A middleware, so it listens
+ * before any guard runs: a request a guard refuses (a write under read-only access) is logged
+ * with its 403 too, from the principal PrincipalGuard set before refusing. Logged once the answer
+ * has gone (or the caller left), a stream's included. A failure to log is logged, never shown.
  */
 @Injectable()
-export class SupportLogInterceptor implements NestInterceptor {
+export class SupportLogMiddleware implements NestMiddleware {
   constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {}
 
-  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
-    if (context.getType() !== 'http') return next.handle();
-    const http = context.switchToHttp();
-    const req = http.getRequest<ApiRequest>();
-    const behalf = req.principal?.onBehalfOf;
-    if (behalf?.kind !== 'support') return next.handle();
-    // Once the answer has gone (or the caller left), with the status it went with: a stream's
-    // too, and a refusal's.
-    const res = http.getResponse<Response>();
-    res.once('close', () =>
-      this.write(this.options.db, {
+  use(req: ApiRequest, res: Response, next: () => void) {
+    res.once('close', () => {
+      const p = req.principal;
+      const behalf = p?.onBehalfOf;
+      if (behalf?.kind !== 'support' || !p?.tenantId) return;
+      logSupport(this.options.db, {
         grantId: behalf.grantId,
-        tenantId: req.principal?.tenantId ?? '',
-        actorKind: req.principal?.actor.kind ?? 'user',
+        tenantId: p.tenantId,
+        actorKind: p.actor.kind,
         method: req.method,
-        path: req.path.slice(0, 500),
+        path: (req.originalUrl ?? req.url).split('?')[0].slice(0, 500),
         status: res.statusCode,
-      }),
-    );
-    return next.handle();
+      });
+    });
+    next();
   }
+}
 
-  private write(db: Database, row: typeof supportLog.$inferInsert) {
-    db.insert(supportLog)
-      .values(row)
-      .catch((e: unknown) => log.error(`could not log a support request: ${e}`));
+function logSupport(db: Database, row: typeof supportLog.$inferInsert) {
+  db.insert(supportLog)
+    .values(row)
+    .catch((e: unknown) => log.error(`could not log a support request: ${e}`));
+}
+
+/** The support log on every route of the API (imported by the platform feature). */
+@Module({})
+export class SupportLogModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(SupportLogMiddleware).forRoutes('*path');
   }
 }

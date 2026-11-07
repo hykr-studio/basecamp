@@ -4,7 +4,6 @@
 // hook for inbound requests, and a usage report across businesses. No routing rules, plans or
 // prices: those are the application's.
 import { reserveRoutes, SharedPublishCapability, SupportConsentCapability } from '@hykr/contracts';
-import { APP_INTERCEPTOR } from '@nestjs/core';
 import { defineFeature } from '../feature.js';
 import { OperatorGuard } from './operators.js';
 import { PlatformController, PlatformMeController } from './platform.controller.js';
@@ -13,7 +12,7 @@ import { platformScopeHook, platformScopePlugin, platformScopeStanding } from '.
 import { SupportAccessController } from './support.controller.js';
 import {
   FRAMEWORK_WITHHELD,
-  SupportLogInterceptor,
+  SupportLogModule,
   supportReadOnlyHook,
   supportStanding,
 } from './support.js';
@@ -23,13 +22,9 @@ reserveRoutes('platform', 'support-access');
 
 export const platformFeature = defineFeature({
   name: 'platform',
+  imports: [SupportLogModule],
   controllers: [PlatformMeController, PlatformController, SupportAccessController],
-  providers: [
-    OperatorGuard,
-    PlatformRoutingService,
-    PlatformInboundHook,
-    { provide: APP_INTERCEPTOR, useClass: SupportLogInterceptor },
-  ],
+  providers: [OperatorGuard, PlatformRoutingService, PlatformInboundHook],
   exports: [OperatorGuard, PlatformRoutingService],
   contributes: {
     capabilities: [SupportConsentCapability, SharedPublishCapability],
