@@ -9,7 +9,17 @@ import {
 } from '@hykr/contracts';
 import { customFields } from '@hykr/db';
 import { BadRequestException } from '@nestjs/common';
-import { and, type Column, eq, not, or, type SQL, sql } from 'drizzle-orm';
+import {
+  and,
+  type Column,
+  eq,
+  getTableColumns,
+  getTableName,
+  not,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm';
 import { entityDef } from '../entity/registry.js';
 import type { EntityPlugin, WriteHook } from '../hooks.js';
 import { escapeLike, type ListFieldSql } from '../query/field-sql.js';
@@ -51,19 +61,39 @@ export function mergeCustom(base: unknown, patch: Readonly<Record<string, unknow
 }
 
 /**
+ * The same patch as SQL, applied to the column as it is when the UPDATE runs: the keys sent are
+ * set, the null ones removed, and every other key stays as the row holds it then. Two updates of
+ * one record that set different keys both keep theirs; a merge made from the row each one read
+ * (unlocked, at READ COMMITTED) would let the second overwrite the first's.
+ */
+export function mergeCustomSql(column: Column, patch: Readonly<Record<string, unknown>>): SQL {
+  const set: Values = {};
+  const removed: string[] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) removed.push(key);
+    else if (value !== undefined) set[key] = value;
+  }
+  let merged = sql`(coalesce(${column}, '{}'::jsonb) || ${JSON.stringify(set)}::jsonb)`;
+  for (const key of removed) merged = sql`(${merged} - ${key}::text)`;
+  return merged;
+}
+
+/**
  * The plugin on every entity with the `customFields` trait: a create stores the values sent,
- * an update merges its patch into the stored object, and a read always has an object.
+ * an update merges its patch into the stored object in SQL, and a read always has an object.
  */
 export const customFieldsPlugin: EntityPlugin = {
   name: 'custom-fields',
   appliesTo: hasCustomFields,
-  toValues(values, { action, row, input }) {
+  toValues(values, { action, input }, { table }) {
+    const { custom: _dropped, ...rest } = values;
     const patch = input.custom as Values | undefined;
-    if (patch === undefined) {
-      const { custom: _dropped, ...rest } = values;
-      return rest;
-    }
-    return { ...values, custom: mergeCustom(action === 'update' ? row?.custom : {}, patch) };
+    if (patch === undefined) return rest;
+    if (action === 'create') return { ...rest, custom: mergeCustom({}, patch) };
+    const column = getTableColumns(table).custom;
+    if (!column)
+      throw new Error(`${getTableName(table)} takes custom fields but has no \`custom\` column`);
+    return { ...rest, custom: mergeCustomSql(column, patch) };
   },
   toJson: (row) => ({ ...row, custom: (row.custom as Values | null) ?? {} }),
 };
@@ -187,7 +217,9 @@ export const customFieldsHook: WriteHook = {
       const created = t.change === 'created';
       if (!created && Object.keys({ ...after, ...before }).every(same)) continue;
       // Only the values this write set are checked: one kept from before its field was removed
-      // (or its option dropped) stays as it is until someone changes or clears it.
+      // (or its option dropped) stays as it is until someone changes or clears it. `before` is
+      // the row as this write read it, so a key a concurrent write changed in between is
+      // checked too.
       const set = Object.fromEntries(Object.entries(after).filter(([k]) => created || !same(k)));
       // Required fields must hold a value on the entity's own create and whenever this write
       // sets custom values; not on a record another operation made without any.

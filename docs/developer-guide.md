@@ -1113,8 +1113,10 @@ does not change a business's setup.
   required?, filterable? }`; key, type and entity never change). Types are a registry
   (`defineCustomFieldType`); the framework's are `text`, `number`, `boolean`, `date` and `select`.
   Values are checked in the write's transaction on every path (400 `custom_field_invalid`, rolled
-  back; a parked write when it parks). An update merges its patch; `null` removes a key. Only the
-  values a write sets are checked, so a value kept from a removed field stays until changed. A
+  back; a parked write when it parks). An update merges its patch in SQL, into the row as it is
+  when the update runs, so two updates that set different keys both keep theirs; `null` removes a
+  key. Only the values a write sets are checked, so a value kept from a removed field stays until
+  changed. A
   required field binds the entity's own create and any write that sets or changes custom values;
   a record a command makes without any (a meeting's close making to-dos) is made with the field
   unset, since the command cannot know the business's fields.

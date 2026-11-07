@@ -325,6 +325,45 @@ describe('custom fields', () => {
     expect(unknown.body).toMatchObject({ error: 'unknown_custom_field' });
   });
 
+  it('updates at once that set different keys each keep theirs', async () => {
+    const made = await owner.call('POST', '/api/gadgets', { title: 'Bench' });
+    const id = made.body.value.id;
+    // Another transaction holds the row, so every update reads it as it is now and then waits to
+    // write: a merge made from what each one read would lose the change of the one before it.
+    const holder = await pool.connect();
+    let waiting = 0;
+    try {
+      await holder.query('begin');
+      await holder.query('select id from app.fixture_gadgets where id = $1 for update', [id]);
+      const updates = [
+        owner.call('PATCH', `/api/gadgets/${id}`, { custom: { priority: 'high' } }),
+        owner.call('PATCH', `/api/gadgets/${id}`, { custom: { estimate: 7 } }),
+        owner.call('PATCH', `/api/gadgets/${id}`, { title: 'Long bench' }),
+      ];
+      for (let i = 0; i < 100 && waiting < updates.length; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        const { rows } = await pool.query(
+          `select count(*)::int as n from pg_stat_activity
+            where datname = current_database() and wait_event_type = 'Lock'
+              and query ilike 'update%fixture_gadgets%'`,
+        );
+        waiting = rows[0].n;
+      }
+      await holder.query('commit');
+      const done = await Promise.all(updates);
+      expect(done.map((r) => r.status)).toEqual([200, 200, 200]);
+    } finally {
+      await holder.query('rollback').catch(() => undefined);
+      holder.release();
+    }
+    expect(waiting).toBe(3);
+    const stored = await owner.call('GET', `/api/gadgets/${id}`);
+    expect(stored.body).toMatchObject({
+      title: 'Long bench',
+      custom: { priority: 'high', estimate: 7 },
+    });
+  });
+
   it("a parked write's values are checked when it parks, and the park is audited with them", async () => {
     const agent = asAssistant(`user:${owner.id}`, { 'x-tenant-id': tenantId });
     const bad = await agent('POST', '/api/gadgets', {
