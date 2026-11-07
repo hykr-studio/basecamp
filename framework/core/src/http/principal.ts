@@ -5,6 +5,8 @@ import {
   isReadOnlyChannel,
   isSessionChannel,
   type Principal,
+  type ScopeAccess,
+  scopeCovers,
 } from '@hykr/contracts';
 import {
   BadRequestException,
@@ -47,6 +49,25 @@ const RELAY_ALLOWED = 'core:relay-allowed';
  * read or write data directly; it can only ask the assistant, like the person would.
  */
 export const RelayAllowed = () => SetMetadata(RELAY_ALLOWED, true);
+
+const ROUTE_SCOPE = 'core:route-scope';
+
+/**
+ * What a route needs from a scoped credential (an MCP client's token): the module it belongs to
+ * and whether it reads or writes. The module may be read lazily (a spec stamped with its module
+ * after its controller was made).
+ */
+export interface RouteScope {
+  access: ScopeAccess;
+  module: string | (() => string | undefined);
+}
+
+/**
+ * The scope a route needs. A scoped credential reaches only routes that declare one, and only
+ * with that scope; sessions and unscoped agents (the agent key) are not affected. The generated
+ * entity and command routes declare theirs.
+ */
+export const RequireScope = (scope: RouteScope) => SetMetadata(ROUTE_SCOPE, scope);
 
 /** The methods a read-only channel may use. */
 const READS = new Set(['GET', 'HEAD']);
@@ -91,6 +112,8 @@ export class PrincipalGuard implements CanActivate {
         context.getClass(),
       ]);
       if (identity.relay && !allowed) throw new ForbiddenException('A relay can only start turns');
+      // A credential limited to scopes reaches only what a scope opens, never more than its person.
+      if (identity.scopes) this.checkScope(context, identity.scopes);
     } else {
       req.principal = await this.userPrincipal(req);
     }
@@ -104,6 +127,24 @@ export class PrincipalGuard implements CanActivate {
         reason: `Calls on the ${channel} channel can only read`,
       });
     return true;
+  }
+
+  /** A scoped credential on a route: refused unless the route declares a scope it holds. */
+  private checkScope(context: ExecutionContext, scopes: readonly string[]) {
+    const need = this.reflector.getAllAndOverride<RouteScope | undefined>(ROUTE_SCOPE, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    const module = typeof need?.module === 'function' ? need.module() : need?.module;
+    if (need && module && scopeCovers(scopes, module, need.access)) return;
+    throw new ForbiddenException({
+      error: 'forbidden',
+      rule: 'out_of_scope',
+      reason:
+        need && module
+          ? `This connection was not allowed to ${need.access} ${module}`
+          : 'This connection cannot use this route',
+    });
   }
 
   /** The agent, acting for whom it names, in a business that person belongs to: the server's facts. */

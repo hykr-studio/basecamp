@@ -2,6 +2,7 @@ import { ensureDefaultTenant, schema } from '@hykr/db';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { config } from '../config.js';
+import { installFeatures } from '../features/install.js';
 import { authPlugins } from '../hooks.js';
 import { runtime } from '../runtime.js';
 import { sharedDb } from './db.js';
@@ -64,6 +65,8 @@ function createAuth() {
         session: schema.session,
         account: schema.account,
         verification: schema.verification,
+        // Each auth plugin's own tables (the OAuth provider's).
+        ...Object.assign({}, ...authPlugins.all().map((p) => p.schema ?? {})),
       },
     }),
     emailAndPassword: { enabled: true, minPasswordLength: 8 },
@@ -90,6 +93,8 @@ let built: ReturnType<typeof createAuth> | undefined;
  */
 export function getAuth() {
   runtime();
+  // The framework features' auth plugins too: they are installed with their contributions.
+  installFeatures();
   built ??= createAuth();
   return built;
 }

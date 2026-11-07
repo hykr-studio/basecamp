@@ -383,6 +383,11 @@ export interface AuthPlugin {
   plugin?: BetterAuthPlugin;
   /** More origins that may call the API with cookies. */
   trustedOrigins?: readonly string[];
+  /**
+   * The plugin's tables (drizzle, in `@hykr/db`), keyed by its model names, for Better Auth's
+   * adapter: `{ oauthClient, oauthConsent, … }`.
+   */
+  schema?: Readonly<Record<string, unknown>>;
 }
 
 /** Auth plugins, in registration order: added to Better Auth when it is built (infra/auth.ts). */

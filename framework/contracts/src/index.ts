@@ -9,5 +9,6 @@ export * from './platform/live.js';
 export * from './platform/push.js';
 export * from './principal.js';
 export * from './roles.js';
+export * from './scopes.js';
 export * from './settings/index.js';
 export * from './voice.js';
