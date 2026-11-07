@@ -3,6 +3,7 @@ import {
   AppShell,
   agentsPlugin,
   businessesPlugin,
+  connectionsPlugin,
   creditsPlugin,
   exportPlugin,
   inboxPlugin,
@@ -32,9 +33,9 @@ const config = {
  * `webmcp`, offered to the browser's agent where the browser supports it), the business's
  * credits (usage, the pause, buying more: `/credits`), the in-app inbox (mentions in
  * comments), exporting the business's data (`/export`, for people who may: owners, unless the
- * business grants it to another role) and the business's agents (`/agents`: the meetings
- * module's ready-made ones among them). The switcher goes first: switching starts everything
- * after it again in the other business.
+ * business grants it to another role), the AI apps a person connected over MCP (`/connections`)
+ * and the business's agents (`/agents`: the meetings module's ready-made ones among them). The
+ * switcher goes first: switching starts everything after it again in the other business.
  */
 const plugins = [
   businessesPlugin,
@@ -45,6 +46,7 @@ const plugins = [
   creditsPlugin,
   inboxPlugin(),
   exportPlugin,
+  connectionsPlugin,
   agentsPlugin(),
 ];
 

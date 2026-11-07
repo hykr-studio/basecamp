@@ -392,6 +392,11 @@ export interface AuthPlugin {
    * origin the static lists do not hold. Its plugin answers Better Auth the same way.
    */
   originAllowed?(origin: string): Promise<boolean>;
+  /**
+   * The plugin's tables (drizzle, in `@hykr/db`), keyed by its model names, for Better Auth's
+   * adapter: `{ oauthClient, oauthConsent, … }`.
+   */
+  schema?: Readonly<Record<string, unknown>>;
 }
 
 /** Auth plugins, in registration order: added to Better Auth when it is built (infra/auth.ts). */
