@@ -44,6 +44,7 @@ import { fileHolders } from './holders.js';
 import { bytesFit, SNIFF_BYTES, sniff } from './sniff.js';
 import { SPEECH, type Speech } from './speech.js';
 import { STORAGE, type StorageDriver } from './storage/index.js';
+import { type FileTarget, fileTargets } from './targets.js';
 
 export type FileRow = typeof files.$inferSelect;
 
@@ -134,6 +135,8 @@ export class FilesService implements OnApplicationBootstrap {
    */
   async onApplicationBootstrap() {
     const problems = entityDefs().flatMap(fileFieldProblems);
+    for (const t of fileTargets.all())
+      if (entityDef(t.type)) problems.push(`The upload target "${t.type}" is named like an entity`);
     if (problems.length)
       throw new Error(`File fields are declared wrong:\n- ${problems.join('\n- ')}`);
     if (this.config.defaulted)
@@ -186,15 +189,20 @@ export class FilesService implements OnApplicationBootstrap {
   /* ── Upload ──────────────────────────────────────────────────────────────── */
 
   /** The served entity and file field an upload is for, or 400. */
-  private target(entity: string, field: string): { def: AnyEntityDef; policy: FileFieldPolicy } {
+  private target(
+    entity: string,
+    field: string,
+  ): { label: string; policy: FileFieldPolicy; def?: AnyEntityDef; other?: FileTarget } {
     const def = entityDef(entity);
     const policy = def ? fileFieldOf(def, field) : undefined;
-    if (!def || !policy)
-      throw new BadRequestException({
-        error: 'unknown_file_field',
-        message: `"${entity}" has no file field "${field}"`,
-      });
-    return { def, policy };
+    if (def && policy) return { label: def.spec.label, policy, def };
+    // Not an entity: a target a feature registered (an import's file).
+    const other = def ? undefined : fileTargets.get(entity);
+    if (other && other.field === field) return { label: other.type, policy: other, other };
+    throw new BadRequestException({
+      error: 'unknown_file_field',
+      message: `"${entity}" has no file field "${field}"`,
+    });
   }
 
   /**
@@ -210,12 +218,12 @@ export class FilesService implements OnApplicationBootstrap {
     const s = subjectOf(p);
     if (s?.kind !== 'user' || !p.tenantId)
       throw refused(403, 'needs_an_account', 'Sign in to upload');
-    const { def, policy } = this.target(input.for.entity, input.for.field);
+    const { label, policy, def, other } = this.target(input.for.entity, input.for.field);
     const mime = baseMime(input.mime);
     if (!acceptsMime(policy, mime))
       throw new UnsupportedMediaTypeException({
         error: 'type_not_accepted',
-        message: `${def.spec.label} ${input.for.field} does not take ${mime} files`,
+        message: `${label} ${input.for.field} does not take ${mime} files`,
       });
     const cap = maxBytesOf(policy, this.config.maxBytes);
     if (input.size > cap)
@@ -224,8 +232,19 @@ export class FilesService implements OnApplicationBootstrap {
         message: `The largest file here is ${cap} bytes`,
         maxBytes: cap,
       });
-    // Their reach: the record they will put it on, or one they could create.
-    if (input.for.id) {
+    // Their reach: the record they will put it on, or one they could create; for another
+    // target, its own say.
+    if (other) {
+      if (input.for.id)
+        throw new BadRequestException({
+          error: 'unknown_file_field',
+          message: `${label} takes no record id`,
+        });
+      const decision = other.may(p);
+      if (decision.decision === 'deny') throw refused(403, decision.rule, decision.reason);
+    } else if (!def) {
+      throw notFound();
+    } else if (input.for.id) {
       const row = await def.repo.find(this.db, p, input.for.id);
       if (!row)
         throw new NotFoundException({ error: 'not_found', message: `No such ${def.spec.label}` });
@@ -270,7 +289,7 @@ export class FilesService implements OnApplicationBootstrap {
           mime,
           size: input.size,
           status: 'pending',
-          intendedType: def.name,
+          intendedType: def?.name ?? other?.type ?? input.for.entity,
           intendedField: input.for.field,
           uploadExpiresAt: new Date(Date.now() + this.config.uploadTtlS * 1000),
         })
