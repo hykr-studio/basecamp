@@ -6,7 +6,7 @@ import { type DomainEventEnvelope, PRIVACY_REQUEST, reserveRoutes } from '@hykr/
 import { commandController, commandHandler } from '@hykr/core';
 import { privacyRequests } from '@hykr/db';
 import { and, eq } from 'drizzle-orm';
-import { channelErasure, PRIVACY_INTAKE } from '../../channels/maintenance/erasure.service.js';
+import { channelErasure, PRIVACY_INTAKE } from '../../channels/maintenance/erasure.js';
 import { defineQueue, defineSchedule } from '../../queues/define.js';
 import { defineSubscriber } from '../events/subscriber.js';
 import { defineFeature } from '../feature.js';

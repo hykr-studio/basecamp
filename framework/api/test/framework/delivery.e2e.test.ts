@@ -313,10 +313,12 @@ describe('personal data contributors', () => {
     );
     // The framework's own (comments, files, inbox, jobs, memory, parties, push) run too: a
     // contact has no comments, files, inbox items, jobs, memories, party memberships or devices.
+    // The channel's own trail anonymises its customer record (B18: a privacy request now).
     expect(rows).toEqual([
       {
         after: {
           contributors: {
+            channel: 1,
             comments: 0,
             files: 0,
             inbox: 0,

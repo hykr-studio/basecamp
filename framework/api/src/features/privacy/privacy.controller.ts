@@ -6,7 +6,14 @@ import {
   type PrivacyRegister,
   type PrivacyRequest,
 } from '@hykr/contracts';
-import { CurrentPrincipal, PrincipalGuard, projectRead, tenantOf } from '@hykr/core';
+import {
+  CORE_OPTIONS,
+  type CoreOptions,
+  CurrentPrincipal,
+  PrincipalGuard,
+  projectRead,
+  tenantOf,
+} from '@hykr/core';
 import { type Database, privacyRequests } from '@hykr/db';
 import { LANGS, type Lang } from '@hykr/i18n';
 import { can, subjectOf } from '@hykr/policy';
@@ -22,7 +29,6 @@ import {
 import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 import { and, desc, eq, type SQL } from 'drizzle-orm';
 import { createZodDto } from 'nestjs-zod';
-import { DB } from '../../infra/db.module.js';
 import { PrivacyService } from './privacy.service.js';
 import { reachesRequest, requestOut } from './requests.js';
 
@@ -41,10 +47,13 @@ const notFound = () =>
 @OptionalAuth()
 @UseGuards(PrincipalGuard)
 export class PrivacyController {
+  private readonly db: Database;
   constructor(
-    @Inject(DB) private readonly db: Database,
+    @Inject(CORE_OPTIONS) options: CoreOptions,
     private readonly privacy: PrivacyService,
-  ) {}
+  ) {
+    this.db = options.db;
+  }
 
   private out(p: Principal, row: typeof privacyRequests.$inferSelect): PrivacyRequest {
     return projectRead(PRIVACY_REQUEST, requestOut(row), p) as PrivacyRequest;

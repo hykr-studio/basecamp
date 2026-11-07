@@ -107,6 +107,7 @@ describe('roles and capabilities', () => {
         'models.manage',
         'parties.manage',
         'parties.read',
+        'privacy.manage',
         'queues.admin',
         'records.grant',
         'settings.manage',

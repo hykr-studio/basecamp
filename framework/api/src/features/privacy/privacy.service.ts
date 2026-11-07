@@ -15,6 +15,8 @@ import {
 import {
   allow,
   auditCtx,
+  CORE_OPTIONS,
+  type CoreOptions,
   eventQueues,
   runWrite,
   settingsIn,
@@ -44,12 +46,7 @@ import { ModuleRef } from '@nestjs/core';
 import { EventBus } from '@nestjs/cqrs';
 import { and, asc, eq, inArray, isNull, lte, ne } from 'drizzle-orm';
 import { z } from 'zod';
-import {
-  type ErasedContact,
-  ErasureService,
-  type PrivacyIntake,
-} from '../../channels/maintenance/erasure.service.js';
-import { DB } from '../../infra/db.module.js';
+import type { ErasedContact, PrivacyIntake } from '../../channels/maintenance/erasure.js';
 import { eraseWithContributors, exportPersonalData } from '../../privacy/contributors.js';
 import { runtime } from '../../runtime.js';
 import { jsonOf } from '../export/csv.js';
@@ -111,11 +108,14 @@ const subjectsOf = (ids: Identities): Subject[] => [
 
 @Injectable()
 export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
+  private readonly db: Database;
   constructor(
-    @Inject(DB) private readonly db: Database,
+    @Inject(CORE_OPTIONS) options: CoreOptions,
     @Inject(EventBus) private readonly events: EventBus,
     private readonly ref: ModuleRef,
-  ) {}
+  ) {
+    this.db = options.db;
+  }
 
   /** A trait, a target or a period that does not hold together stops the start. */
   onApplicationBootstrap() {
@@ -494,6 +494,7 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
               action: 'channel.contact.erased',
               resourceType: 'contact',
               resourceId: contactId,
+              after: { contributors: features },
             });
           // Mastra's memory is keyed across businesses: a person's goes only with their login.
           const elsewhere = ids.userId
@@ -561,6 +562,8 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
   /** After a queued run: a WhatsApp contact forgotten for a request they made there is told. */
   async afterRun(row: { intake: string }, out: RunOutcome) {
     if (!out.performed || !out.confirm || row.intake !== 'whatsapp') return;
+    // Loaded here, not at import: the channel's module reads the configuration when it loads.
+    const { ErasureService } = await import('../../channels/maintenance/erasure.service.js');
     const erasure = (() => {
       try {
         return this.ref.get(ErasureService, { strict: false });
