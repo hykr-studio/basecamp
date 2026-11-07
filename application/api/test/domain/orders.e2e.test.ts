@@ -424,7 +424,7 @@ describe('who decides, and who sees the cost', () => {
       amount: inr(5_000_000),
       rule: 'order_over_limit',
     });
-    // Staff may look at their own request but not decide it (403 own_request); the owner can.
+    // Staff cannot decide their own request (they may only look at it); the owner can.
     const byStaff = await staff.call(
       'POST',
       `/api/approvals/${parked.body.approval.id}/approve`,

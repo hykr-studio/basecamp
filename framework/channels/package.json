@@ -22,6 +22,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@hykr/connectors": "workspace:*",
     "@hykr/contracts": "workspace:*",
     "@hykr/i18n": "workspace:*",
     "zod": "^4.6.5"
