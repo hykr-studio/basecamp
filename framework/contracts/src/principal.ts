@@ -94,6 +94,8 @@ export const Me = z.object({
   /** What those roles allow here, by name: what a client checks before showing a feature. */
   capabilities: z.array(z.string()),
   customerId: z.string().nullable(),
+  /** The declared feature flags that are on in this business (`featureFlags`): off otherwise. */
+  features: z.array(z.string()),
 });
 export type Me = z.infer<typeof Me>;
 

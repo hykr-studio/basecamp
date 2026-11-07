@@ -3,4 +3,5 @@
 export { type LiveOptions, livePlugin } from './live/LivePlugin';
 export { onLiveEvent } from './live/listeners';
 export { type PushOptions, pushPlugin } from './push/PushPlugin';
+export { settingsPlugin } from './settings';
 export * from './webmcp';

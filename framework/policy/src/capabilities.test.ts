@@ -33,7 +33,7 @@ const access: Access = {
 };
 
 describe('the framework roles and capabilities', () => {
-  it('give exactly what the hard-coded role checks gave', () => {
+  it('give what the hard-coded role checks gave, and settings to owners and admins (A11)', () => {
     // Deciding: owner and ops decided the business's requests, owner and admin marketing sends.
     // Plus the members feature's (A4): the team reads members, owner and admin manage them,
     // and owner, admin and ops give access to single records.
@@ -47,6 +47,7 @@ describe('the framework roles and capabilities', () => {
       'members.read',
       'queues.admin',
       'records.grant',
+      'settings.manage',
     ]);
     expect(capabilitiesOf(['admin'])).toEqual([
       'backoffice.use',
@@ -58,6 +59,7 @@ describe('the framework roles and capabilities', () => {
       'members.read',
       'queues.admin',
       'records.grant',
+      'settings.manage',
     ]);
     expect(capabilitiesOf(['ops'])).toEqual([
       'approvals.decide',

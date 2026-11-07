@@ -1,11 +1,11 @@
 {
-  "id": "e20ef268-500e-43cd-a7b2-e9eaea22dcaa",
+  "id": "67a0c588-4bc6-44d4-8eb4-fe9dae58f500",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "app.fixture_jobs_steps": {
-      "name": "fixture_jobs_steps",
+    "app.fixture_projects_steps": {
+      "name": "fixture_projects_steps",
       "schema": "app",
       "columns": {
         "id": {
@@ -54,8 +54,8 @@
           "notNull": true,
           "default": "now()"
         },
-        "job_id": {
-          "name": "job_id",
+        "project_id": {
+          "name": "project_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -68,11 +68,11 @@
         }
       },
       "indexes": {
-        "fixture_jobs_steps_job_idx": {
-          "name": "fixture_jobs_steps_job_idx",
+        "fixture_projects_steps_project_idx": {
+          "name": "fixture_projects_steps_project_idx",
           "columns": [
             {
-              "expression": "job_id",
+              "expression": "project_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -85,9 +85,9 @@
         }
       },
       "foreignKeys": {
-        "fixture_jobs_steps_tenant_id_tenants_id_fk": {
-          "name": "fixture_jobs_steps_tenant_id_tenants_id_fk",
-          "tableFrom": "fixture_jobs_steps",
+        "fixture_projects_steps_tenant_id_tenants_id_fk": {
+          "name": "fixture_projects_steps_tenant_id_tenants_id_fk",
+          "tableFrom": "fixture_projects_steps",
           "tableTo": "tenants",
           "schemaTo": "app",
           "columnsFrom": [
@@ -99,9 +99,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "fixture_jobs_steps_owner_id_user_id_fk": {
-          "name": "fixture_jobs_steps_owner_id_user_id_fk",
-          "tableFrom": "fixture_jobs_steps",
+        "fixture_projects_steps_owner_id_user_id_fk": {
+          "name": "fixture_projects_steps_owner_id_user_id_fk",
+          "tableFrom": "fixture_projects_steps",
           "tableTo": "user",
           "columnsFrom": [
             "owner_id"
@@ -112,9 +112,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "fixture_jobs_steps_customer_id_customers_id_fk": {
-          "name": "fixture_jobs_steps_customer_id_customers_id_fk",
-          "tableFrom": "fixture_jobs_steps",
+        "fixture_projects_steps_customer_id_customers_id_fk": {
+          "name": "fixture_projects_steps_customer_id_customers_id_fk",
+          "tableFrom": "fixture_projects_steps",
           "tableTo": "customers",
           "schemaTo": "app",
           "columnsFrom": [
@@ -126,13 +126,13 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
-        "fixture_jobs_steps_job_id_fixture_jobs_id_fk": {
-          "name": "fixture_jobs_steps_job_id_fixture_jobs_id_fk",
-          "tableFrom": "fixture_jobs_steps",
-          "tableTo": "fixture_jobs",
+        "fixture_projects_steps_project_id_fixture_projects_id_fk": {
+          "name": "fixture_projects_steps_project_id_fixture_projects_id_fk",
+          "tableFrom": "fixture_projects_steps",
+          "tableTo": "fixture_projects",
           "schemaTo": "app",
           "columnsFrom": [
-            "job_id"
+            "project_id"
           ],
           "columnsTo": [
             "id"
@@ -147,8 +147,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "app.fixture_jobs": {
-      "name": "fixture_jobs",
+    "app.fixture_projects": {
+      "name": "fixture_projects",
       "schema": "app",
       "columns": {
         "id": {
@@ -212,9 +212,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "fixture_jobs_tenant_id_tenants_id_fk": {
-          "name": "fixture_jobs_tenant_id_tenants_id_fk",
-          "tableFrom": "fixture_jobs",
+        "fixture_projects_tenant_id_tenants_id_fk": {
+          "name": "fixture_projects_tenant_id_tenants_id_fk",
+          "tableFrom": "fixture_projects",
           "tableTo": "tenants",
           "schemaTo": "app",
           "columnsFrom": [
@@ -226,9 +226,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "fixture_jobs_owner_id_user_id_fk": {
-          "name": "fixture_jobs_owner_id_user_id_fk",
-          "tableFrom": "fixture_jobs",
+        "fixture_projects_owner_id_user_id_fk": {
+          "name": "fixture_projects_owner_id_user_id_fk",
+          "tableFrom": "fixture_projects",
           "tableTo": "user",
           "columnsFrom": [
             "owner_id"
@@ -239,9 +239,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "fixture_jobs_customer_id_customers_id_fk": {
-          "name": "fixture_jobs_customer_id_customers_id_fk",
-          "tableFrom": "fixture_jobs",
+        "fixture_projects_customer_id_customers_id_fk": {
+          "name": "fixture_projects_customer_id_customers_id_fk",
+          "tableFrom": "fixture_projects",
           "tableTo": "customers",
           "schemaTo": "app",
           "columnsFrom": [

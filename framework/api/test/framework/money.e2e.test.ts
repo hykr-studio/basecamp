@@ -17,6 +17,7 @@ import {
   Person,
   pool,
   server,
+  setTenantSettings,
   shutdown,
 } from '../../dist/testing.js';
 import {
@@ -46,10 +47,7 @@ const principalOf = (person: Person, tenant: string): Principal => ({
 });
 
 const setMoney = (tenant: string, money: object, more: object = {}) =>
-  pool.query(`update app.tenants set settings = settings || $2::jsonb where id = $1`, [
-    tenant,
-    JSON.stringify({ money, ...more }),
-  ]);
+  setTenantSettings(tenant, { money, ...more });
 
 const eur = (minor: number): Money => ({ minor, currency: 'EUR' });
 

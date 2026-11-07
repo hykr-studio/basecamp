@@ -16,7 +16,7 @@ import {
   pool,
   seedContact,
   server,
-  settingsChanged,
+  setTenantSettings,
   shutdown,
 } from '../../dist/testing.js';
 // The framework's fixture application, compiled (Nest's DI needs the decorator metadata).
@@ -115,11 +115,7 @@ beforeAll(async () => {
   expect(
     (await ana.call('POST', '/api/channels/whatsapp/number', { phoneNumberId: NUMBER })).status,
   ).toBe(201);
-  await pool.query(
-    `update app.tenants set settings = settings || '{"quietHours":{"from":"00:00","to":"00:00"}}' where id = $1`,
-    [tenantId],
-  );
-  await settingsChanged(tenantId);
+  await setTenantSettings(tenantId, { quietHours: { from: '00:00', to: '00:00' } });
   for (const t of templates)
     for (const lang of ['en', 'hi', 'te'] as const)
       await pool.query(
@@ -317,11 +313,7 @@ describe('approvals on WhatsApp', () => {
       defined: [{ name: 'deputy', label: { en: 'Deputy' }, capabilities: ['approvals.decide'] }],
       edits: { staff: { capabilities: ['approvals.decide', 'backoffice.use'] } },
     };
-    await pool.query(
-      `update app.tenants set settings = settings || jsonb_build_object('roles', $2::jsonb) where id = $1`,
-      [tenantId, JSON.stringify(roles)],
-    );
-    await settingsChanged(tenantId);
+    await setTenantSettings(tenantId, { roles });
 
     const { approvalId } = await customerAsksToDelete('Fetch the ladder');
     for (const number of [anaPhone, numbers.get(bea) ?? '', numbers.get(cal) ?? ''])

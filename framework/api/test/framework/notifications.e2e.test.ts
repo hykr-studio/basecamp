@@ -16,7 +16,7 @@ import {
   pool,
   seedContact,
   server,
-  settingsChanged,
+  setTenantSettings,
   shutdown,
 } from '../../dist/testing.js';
 // The framework's fixture application, compiled (Nest's DI needs the decorator metadata).
@@ -126,11 +126,7 @@ beforeAll(async () => {
     (await ana.call('POST', '/api/channels/whatsapp/number', { phoneNumberId: NUMBER })).status,
   ).toBe(201);
   // Never quiet, so the tests don't depend on the hour they run at.
-  await pool.query(
-    `update app.tenants set settings = settings || '{"quietHours":{"from":"00:00","to":"00:00"}}' where id = $1`,
-    [tenantId],
-  );
-  await settingsChanged(tenantId);
+  await setTenantSettings(tenantId, { quietHours: { from: '00:00', to: '00:00' } });
   // Every template approved, as templates:sync leaves them once Meta has reviewed them.
   for (const t of templates)
     for (const lang of ['en', 'hi', 'te'] as const)

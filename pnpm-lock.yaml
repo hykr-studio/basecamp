@@ -206,6 +206,12 @@ importers:
         specifier: workspace:*
         version: link:../../framework/api
     devDependencies:
+      '@hykr/api-client':
+        specifier: workspace:*
+        version: link:../../framework/api-client
+      '@hykr/contracts':
+        specifier: workspace:*
+        version: link:../../framework/contracts
       '@hykr/tsconfig':
         specifier: workspace:*
         version: link:../../framework/tsconfig

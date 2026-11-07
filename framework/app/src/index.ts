@@ -36,6 +36,18 @@ export {
   useCurrentLocation,
 } from './features/location';
 export {
+  BrandMark,
+  brandTokens,
+  CustomFieldInputs,
+  CustomFieldValues,
+  hideOff,
+  useBranding,
+  useClientSettings,
+  useCustomFields,
+  useFeature,
+  useFieldLabel,
+} from './features/settings';
+export {
   ApprovalCard,
   ApprovalItem,
   amountText,
@@ -143,7 +155,6 @@ export { NotFoundScreen } from './screens/NotFoundScreen';
 export { PageScreen } from './screens/PageScreen';
 export { PagesScreen } from './screens/PagesScreen';
 export { colors, fonts, listRow, space, styles } from './theme';
-
 export { InlineView } from './views/InlineView';
 export { OpenRow, Rows, ViewCard } from './views/parts';
 export { useAct } from './views/useAct';

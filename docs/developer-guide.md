@@ -886,8 +886,9 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `isEnabled(tenantId, key)` is true only for a stored `true` (no business, an unknown one or
   settings that do not parse are all off). `get` throws when any part does not parse;
   `section(tenantId, key)` reads one section, parsed alone in that case, so another feature's
-  broken section does not stop yours. A test that changes settings with SQL calls
-  `settingsChanged(tenantId)` (`@hykr/api/testing`): the server reads them on every request.
+  broken section does not stop yours. A test changes settings with `setTenantSettings(tenantId,
+  patch)` (`@hykr/api/testing`), which drops the cached copy: the server reads them on every
+  request (section 12).
 
 A framework feature also keeps its phrases, its scripted-model scripts and its fixture tables in files of its own, so parallel work never edits a shared file. One line in a barrel registers each one: `framework/i18n/src/messages/index.ts` (section 9), `framework/agents/src/fake/scripts/index.ts` (section 7.3). The fixture's per-feature migration sets need no line (section 12). These barrels merge with `merge=union` (`.gitattributes`).
 
@@ -1342,6 +1343,86 @@ run: async ({ tx, principal, loaded }) => ({
   `JOBS_SECRET` (derived from `BETTER_AUTH_SECRET` when unset), `JOBS_CALLBACK_TOLERANCE_S` (300),
   `JOBS_ALLOW_PRIVATE_URLS`. The fixture's `features/jobs` and `test/framework/jobs.e2e.test.ts`
   show a callback job and a polled one against a stand-in service.
+
+### 5.18 A business's setup: flags, custom fields, white label, shared records, wording
+
+The `settings` feature (`framework/api/src/features/settings/`, `docs/decisions/A11.md`). Every
+change to a business's setup goes through `runWrite` (validated, idempotent, audited) and needs the
+capability `settings.manage` (owners and admins). None of these commands is a tool: the assistant
+does not change a business's setup.
+
+- **Feature flags, failing closed.** A module declares its flags and what each gates, and
+  contributes them: `defineFeatureFlag({ key: 'todos.clear-done', label, description?, managedBy?,
+  gates: { modules?, entities?, commands?, tools?, nav? } })` in `contributes: { featureFlags }`.
+  A flag is on for a business only when its settings store `features[key] === true`; no business,
+  an unknown key or settings that do not parse are off. Something gated by several flags needs all
+  of them on. What is off:
+  - its routes answer 404 `not_found`, like a missing record (a global interceptor);
+  - every write that runs it or touches its records rolls back with 404, on every path (another
+    module's command, an approval approved after the flag went off, a system job);
+  - its tools are taken from the assistant for the turn (a turn hook's `withoutTools`);
+  - the app hides its destinations (`settingsPlugin`, by the item's `module` or href); `useFeature(key)`
+    hides anything else.
+  A flag that names a module, entity, command or tool the application does not have stops the start.
+  `managedBy: 'platform'` (the default) is switched only from server code
+  (`FeatureFlagsService.set(tenantId, key, on)`, as the system principal); `managedBy: 'tenant'` by
+  the business: `PUT /api/features/:key { on }`. `GET /api/features` lists every flag and its
+  state; `GET /api/me` and `GET /api/settings` list the ones that are on.
+- **Custom fields.** An entity opts in: the trait `customFields: {}`, `custom: CustomFieldValues`
+  in the read schema, `custom: CustomFieldsInput.optional()` in create and update, `custom:
+  'custom'` in `list.filterable`, and `custom: customFieldsColumn()` on the table (`@hykr/db`). A
+  business defines its fields at `/api/custom-fields` (`{ entity, key, type, label, options?,
+  required?, filterable? }`; key, type and entity never change). Types are a registry
+  (`defineCustomFieldType`); the framework's are `text`, `number`, `boolean`, `date` and `select`.
+  Values are checked in the write's transaction on every path (400 `custom_field_invalid`, rolled
+  back; a parked write when it parks). An update merges its patch in SQL, into the row as it is
+  when the update runs, so two updates that set different keys both keep theirs; `null` removes a
+  key. Only the values a write sets are checked, so a value kept from a removed field stays until
+  changed. A required field binds the entity's own create and any write that sets or changes
+  custom values; a record a command makes without any (a meeting's close making to-dos) is made
+  with the field unset, since the command cannot know the business's fields.
+  Filters: `custom[priority]=high` or `custom={"estimate":{"gte":3}}` (`eq`, `ne`, `in`, `lt`,
+  `lte`, `gt`, `gte`, `contains`), compared by the stored JSON type; a key the business has not
+  made filterable is a 400. The assistant gets the business's fields as turn context.
+- **White label.** The settings section `branding` (`name`, `logoUrl` (https), `colors.primary`,
+  `primaryText`, `rail`): `PATCH /api/settings/branding`. Custom domains:
+  `POST /api/settings/domains { origin }` returns a token; the business publishes it as a TXT record
+  at `_basecamp-verify.<host>`, then `POST /api/settings/domains/:id/verify`. Only a verified origin
+  is trusted, for CORS (`AuthPlugin.originAllowed`) and Better Auth (a dynamic `trustedOrigins`), and
+  `GET /api/branding/public?origin=` (no session; `api.settings.publicBranding(origin)`) returns its
+  name, logo and colours, which the back office's sign-in shows; the app's sign-in does not ask yet
+  (section 14). One origin belongs to one business (409). Anyone can ask about an origin, so each
+  process holds a copy of every verified origin (loaded at most every 30 seconds, and again after a
+  domain changes here) and never looks up anything that is not an exact https origin: a question
+  costs no query and keeps nothing.
+- **Shared records.** An entity opts in with the trait `shared: {}`, `...SharedFields` in its read
+  schema, `...SharedFromInput` in create, `sharedId: sharedFromColumn()` with a unique index on
+  `(tenant_id, shared_id)`, and `defineSharedEntity(spec, config)` instead of `defineEntity`. Rows of
+  the platform's business (`PLATFORM_TENANT_ID`, deployment configuration; unset: nothing is shared)
+  are read by every business with its own (`list`, `get`, tools), each through `toRead(row, p)`, and
+  are read-only to them (403 `shared_read_only`). A business overrides one by creating its own row
+  with `sharedId` (once: 409 `shared_override_exists`), and then reads its own instead. What is
+  shared (a catalog) is application data.
+- **Wording.** The application rewords framework phrases and notifications without declaring them
+  again: `defineServer({ wording: { phrases: { en: { 'channel.handoff': '…' } }, notifications:
+  [overrideNotification('approval.request', { channels, whatsapp, email })] } })`. A phrase must
+  exist and keep its `{placeholders}`; an unknown or twice-overridden key stops the start; a
+  replacement template must be in the catalog. A business words phrases and notification emails
+  its own way in the settings section `wording` (`PATCH /api/settings/wording`): the app shows its
+  phrases (`setTenantPhrases`), `tenantPhrase(settings, lang, key)` reads them on the server, and its
+  email subject and body (`{field}` from the record) replace the application's at send time.
+- **The apps.** `<AppShell plugins={[settingsPlugin()]} />` (`@hykr/app`) applies the business's
+  colours to the theme, its phrases, and hides what is off; `useFeature`, `useBranding`,
+  `<BrandMark>`, `useCustomFields(entity)`, `<CustomFieldValues>` and `<CustomFieldInputs>` are for
+  screens. `<CustomFieldInputs>` reports patches (`null` clears a value): a create form sends
+  `customForCreate(collected)` (`@hykr/contracts`, the cleared ones left out) and remounts the
+  inputs with a new `key` to start again; an edit sends the patch as `custom`. The shell's rail and phone bar still show the product's `title` (section 14), so a
+  screen shows the business's logo and name with `<BrandMark>`: the sample's Today does. The back
+  office's header shows them, its sign-in shows a verified domain's, and its `SettingsScreen` edits
+  branding, flags, custom fields and web addresses. The sample's to-dos screen sets a business's
+  fields (such as `priority`) in its add form and each row's editor, filters on a filterable
+  select field, and honours the business-managed flag `todos.clear-done`. Tests: `framework/api/test/framework/settings{,.e2e}.test.ts` on the fixture's
+  `features/settings/`, and `application/api/test/domain/todo-settings.e2e.test.ts`.
 
 ---
 
@@ -1959,7 +2040,7 @@ Both Vitest configs copy the `.env` into `process.env` when they load (the shell
 
 **Fixture tables for a framework feature.** Don't add to the fixture's `src/schema.ts` and its single journal. Give the feature its own migration set: tables in `framework/api/test/fixture/src/features/<f>/schema.ts` (import `app` from `@hykr/db`, don't export it), then `FIXTURE_FEATURE=<f> pnpm --filter @hykr/api fixture:generate --name <f>`, which writes `src/features/<f>/migrations/`. SQL hooks go in `src/features/<f>/sql/{pre,post}`. `migrationSetsIn` (`@hykr/db`) finds the folder, the e2e `globalSetup` applies it after the fixture's own tables, and it is recorded in `drizzle.__fixture_<f>_migrations`. Commit it with the feature. `src/features/par/` and `test/framework/migrations.e2e.test.ts` are the example.
 
-Other helpers: `me(person)`, `addMember(person, tenantId, roles)`, `seedContact(tenantId, name, address)`, `asAssistant(actingFor)` (agent headers), `eventually(check)`, `pool` (direct SQL) and `server` (the running Nest app). `@hykr/api/testing/internals` gives a test the services it drives directly: `NotifyService`, `TemplateSync`, `WHATSAPP` and `DB`.
+Other helpers: `me(person)`, `addMember(person, tenantId, roles)`, `setTenantSettings(tenantId, patch)`, `seedContact(tenantId, name, address)`, `asAssistant(actingFor)` (agent headers), `eventually(check)`, `pool` (direct SQL) and `server` (the running Nest app). Change a business's settings with `setTenantSettings` (each key replaces that section, `null` removes it), never a bare `UPDATE app.tenants`: settings are cached per process for 10 seconds, and any request before the change (`GET /api/me`) would leave the test reading the old ones. `@hykr/api/testing/internals` gives a test the services it drives directly: `NotifyService`, `TemplateSync`, `WHATSAPP` and `DB`.
 
 An eval case lists the tools that must run, in order:
 
@@ -2058,13 +2139,22 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots. Routes, nav and nav filters have no framework feature yet. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in and nav filter slots. Routes and nav have no framework feature yet. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
 | Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
 | Live deletions for everyone | A deleted record reaches only streams already told about it and the person who deleted it; others see it go at their next refetch (focus, reconnect, their own write). |
 | Live back office | The back office still polls its inbox (10 s) and an open conversation (5 s): inbound messages and handoffs write no outbox events. |
 | Missed live events | A reconnect refetches every query; `Last-Event-ID` replay is not supported. |
+| Data export for a business | Not built (A11's export waits for jobs and files). Read the business's records through the API's lists. |
+| Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
+| A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
+| Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |
+| Platform-managed flags from a screen | `managedBy: 'platform'` flags are switched with `FeatureFlagsService.set` in server code; no operator screen or route exists yet. |
+| Custom domains end to end | Verification, CORS, Better Auth's origin check and `GET /api/branding/public` work, and the back office's sign-in shows a verified domain's branding. The app's sign-in (`framework/app/src/screens/SignIn.tsx`, rendered by `AppShell`) does not call `api.settings.publicBranding(window.location.origin)` yet, so the app on a business's domain signs in under the product's name and colours. Sessions and cookies are not per domain, and TLS certificates are issued outside the framework. |
+| The business's brand in the app shell | The settings plugin applies a business's colours, but `AppShell` (a hot file: B9, then B12) still prints the product's `app.title` and `tagline` in the rail and the phone's top bar. Its next owner replaces them with `<BrandMark fallback={app.title}>` (or adds an `AppPlugin` header slot the settings plugin fills) and has the sign-in ask for the domain's public branding. Until then a screen shows the logo and name itself (the sample's Today). |
+| A logo upload | `branding.logoUrl` is an https URL; there is no upload for it yet. |
+| Shared records that follow their source | An override is a full copy: later changes to the platform's row do not reach it. Only the platform business (`PLATFORM_TENANT_ID`) publishes shared rows. |
 | WebMCP actions | WebMCP tools only read; the API refuses any write on the `webmcp` channel. There are no declarative forms or write tools for a browser agent, and no read tool for a command. Public and share-link screens offer no tools. |
 | One wording for read tools | The assistant's list and get tools (`tool-factory.ts`) still build their own text; WebMCP takes the same wording from `entityReadTools`. Keep the two in step until the assistant uses it. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |

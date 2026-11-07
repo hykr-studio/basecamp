@@ -26,7 +26,14 @@ export async function boot(application: Basecamp) {
   setRuntime(application);
   const { AppModule } = await import('./app.module.js');
   const app = await NestFactory.create(AppModule, { bodyParser: false, logger: false });
-  app.enableCors({ origin, credentials: true });
+  // As startApi does (verified custom domains included), plus the tests' own origin.
+  const { corsOrigin } = await import('./infra/cors.js');
+  const check = corsOrigin();
+  app.enableCors({
+    origin: (o: string | undefined, cb: (err: Error | null, allow?: boolean) => void) =>
+      o === origin ? cb(null, true) : check(o, cb),
+    credentials: true,
+  });
   await app.listen(Number(process.env.TEST_PORT ?? 0)); // a random free port unless pinned
   server.app = app;
   server.base = (await app.getUrl()).replace('[::1]', 'localhost');
@@ -131,6 +138,24 @@ export async function me(person: Person): Promise<{ tenantId: string; roles: str
 export async function settingsChanged(tenantId?: string) {
   const { TenantConfigService } = await import('@hykr/core');
   server.app?.get(TenantConfigService).invalidate(tenantId);
+}
+
+/**
+ * Change a business's settings straight in the database, as an operator would, then drop this
+ * process's cached copy (`TenantConfigService`), so the next request reads the change at once.
+ * Each key of `patch` replaces that whole section (`{ quietHours: {...} }`); null removes it.
+ * Use it instead of a bare UPDATE: any request before it (`GET /api/me`) caches the settings
+ * for a few seconds, and a stale copy makes a test depend on the hour or the timing.
+ */
+export async function setTenantSettings(tenantId: string, patch: Record<string, unknown>) {
+  const removed = Object.keys(patch).filter((k) => patch[k] === null);
+  const merged = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== null));
+  await pool.query(
+    'update app.tenants set settings = (settings || $2::jsonb) - $3::text[] where id = $1',
+    [tenantId, JSON.stringify(merged), removed],
+  );
+  const { TenantConfigService } = await import('@hykr/core');
+  server.app?.get(TenantConfigService, { strict: false }).invalidate(tenantId);
 }
 
 /** Give a person roles in another business (the invitation flow is not built yet). */

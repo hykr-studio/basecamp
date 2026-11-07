@@ -13,3 +13,4 @@ export { modelsFeature } from './models/index.js';
 export { moneyFeature } from './money/index.js';
 export { pushFeature } from './push/index.js';
 export { resumeFeature } from './resume/index.js';
+export { settingsFeature } from './settings/index.js';
