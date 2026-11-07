@@ -1766,9 +1766,9 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
 - **Retention.** A daily runner (`PrivacyService.runRetention()`) applies every target with a
   period: each entity's trait rule (records that are someone's whose date passed, deleted or
   anonymised, then redacted) and the framework's targets, which have no period until the
-  application gives one: `channel.inbound-payloads` (raw WhatsApp payloads, emptied),
-  `chat.messages`, `events.relayed`, `outbox.relayed`, `privacy.archives` (per business) and
-  `assistant.traces` (Mastra, for the deployment). A business changes a period by name
+  application gives one: `chat.messages`, `events.relayed`, `outbox.relayed` and
+  `privacy.archives` (per business), and `channel.inbound-payloads` (raw WhatsApp payloads,
+  emptied) and `assistant.traces` (Mastra) for the whole deployment. A business changes a period by name
   (`privacy.retention: { 'notes.personal': 365 }`, `null` keeps the data). Each run that changes
   something is audited (`privacy.retention.applied`, event of the same name). A module's own table
   is a `retentionTargets` entry `{ name, label, scope, action, apply({ tenantId, before, tx }) }`.
