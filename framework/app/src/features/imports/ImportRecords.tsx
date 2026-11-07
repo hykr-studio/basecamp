@@ -25,6 +25,9 @@ type Props = {
   label?: string;
 };
 
+/** What the file picker offers: the types an import reads, and what phones call a CSV file. */
+const PICK = [...IMPORT_MIME_TYPES, 'text/comma-separated-values', 'text/*'];
+
 /** What an import did, in one line. */
 export function importLine(r: ImportResult): string {
   const did = [
@@ -69,7 +72,7 @@ export function ImportRecords({ entity, options, label }: Props) {
     setError(null);
     setNote(null);
     try {
-      const [file] = await pickDocuments({ types: [...IMPORT_MIME_TYPES] });
+      const [file] = await pickDocuments({ types: PICK });
       if (!file) return;
       const out = await start.mutateAsync({
         file,
