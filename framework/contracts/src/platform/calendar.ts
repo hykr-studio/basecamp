@@ -204,3 +204,21 @@ export const CalendarEventChange = z.object({
   sentEndsAt: z.iso.datetime().nullable(),
 });
 export type CalendarEventChange = z.infer<typeof CalendarEventChange>;
+
+/**
+ * `calendar.invite_sent`, `calendar.invite_cancelled` and `calendar.invite_failed`: what became
+ * of one send of an invite, stored by the worker as the business's system principal (job
+ * `calendar.invites`, resourceType `calendarInvite`), with its audit row. Ids and states only:
+ * the address and the error are in the audit row and on the invite.
+ */
+export const CalendarInviteOutcome = z.object({
+  /** The invite. */
+  id: z.string(),
+  tenantId: z.string(),
+  entity: z.string(),
+  recordId: z.string(),
+  /** What went, or would have gone: REQUEST (an invite or an update) or CANCEL. */
+  method: z.enum(['REQUEST', 'CANCEL']),
+  sequence: z.number().int(),
+});
+export type CalendarInviteOutcome = z.infer<typeof CalendarInviteOutcome>;

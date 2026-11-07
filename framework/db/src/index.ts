@@ -1,10 +1,24 @@
-import { Pool } from 'pg';
+import { Pool, type PoolConfig } from 'pg';
 import { openDatabase } from './database.js';
 import { idempotencyRepo } from './repos/idempotency.js';
 import { userExists } from './repos/users.js';
 
-export function createDb(url: string) {
-  const pool = new Pool({ connectionString: url });
+/**
+ * How long a query waits for a free connection of the pool before it fails. A pool that every
+ * connection of is held fails the work that waits (a job retries, a request answers 500) instead
+ * of hanging it for ever.
+ */
+const CONNECT_TIMEOUT_MS = 30_000;
+
+export function createDb(
+  url: string,
+  options: Pick<PoolConfig, 'max' | 'connectionTimeoutMillis'> = {},
+) {
+  const pool = new Pool({
+    connectionString: url,
+    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+    ...options,
+  });
   const db = openDatabase(pool);
   return {
     pool,

@@ -5,6 +5,7 @@
 
 import { icsCalendar } from '@hykr/connectors';
 import {
+  type CalendarInviteOutcome,
   FrameworkCapabilities,
   type InviteInfo,
   type Principal,
@@ -33,7 +34,7 @@ import type { Jobs, ServerContext } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
 import { JOBS } from '../../queues/define.js';
 import { serverContext } from '../../queues/jobs.service.js';
-import { inviteLock, withLock } from './lock.js';
+import { CalendarLocks, inviteLock } from './lock.js';
 import { CalendarEvent } from './ops.js';
 import { memberPrincipal } from './principal.js';
 import { contentOf, type EventContent, hashOf, schedulable, uidOf } from './schedulable.js';
@@ -227,6 +228,7 @@ export class InvitesService {
   constructor(
     @Inject(DB) private readonly db: Database,
     @Inject(JOBS) private readonly jobs: Jobs,
+    @Inject(CalendarLocks) private readonly locks: CalendarLocks,
     @Inject(ModuleRef) ref: ModuleRef,
   ) {
     this.ctx = serverContext(ref);
@@ -322,7 +324,7 @@ export class InvitesService {
     let failure: unknown;
     for (const { id: inviteId } of rows) {
       try {
-        if (await withLock(this.db, inviteLock(inviteId), () => this.followOne(inviteId, lastTry)))
+        if (await this.locks.run(inviteLock(inviteId), () => this.followOne(inviteId, lastTry)))
           sent++;
       } catch (e) {
         failure ??= e;
@@ -360,7 +362,7 @@ export class InvitesService {
    * cancellation, in turn with every other send of the same invite.
    */
   send(inviteId: string, lastTry: boolean): Promise<string> {
-    return withLock(this.db, inviteLock(inviteId), async () => {
+    return this.locks.run(inviteLock(inviteId), async () => {
       // Under the lock, a row still 'sending' was left by a job that died: this one sends it.
       const [row] = await this.db
         .update(calendarInvites)
@@ -444,7 +446,7 @@ export class InvitesService {
     set: Partial<InviteRow> & { status: 'sent' | 'failed' },
     tried?: { method: 'REQUEST' | 'CANCEL'; sequence: number },
   ) {
-    const method = set.method ?? tried?.method ?? row.method;
+    const method = (set.method ?? tried?.method ?? row.method) as CalendarInviteOutcome['method'];
     const sequence = set.sequence ?? tried?.sequence ?? row.sequence;
     const name =
       set.status === 'failed'
@@ -490,7 +492,7 @@ export class InvitesService {
               recordId: row.resourceId,
               method,
               sequence,
-            },
+            } satisfies CalendarInviteOutcome,
             'calendarInvite',
           ),
         ],

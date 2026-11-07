@@ -16,6 +16,7 @@ import { defineConnectorHandler } from '../integrations/registry.js';
 import { CalendarController, CalendarPublicController } from './calendar.controller.js';
 import { CalendarService } from './calendar.service.js';
 import { INVITES_QUEUE, type InviteJob, InvitesService, SendInvite } from './invites.js';
+import { CalendarLocks } from './lock.js';
 import './routes.js';
 import { schedulable } from './schedulable.js';
 import { CalendarSyncService, SYNC_QUEUE, type SyncJob } from './sync.service.js';
@@ -102,7 +103,13 @@ export const GoogleCalendarChanges = defineConnectorHandler({
 export const calendarFeature = defineFeature({
   name: 'calendar',
   controllers: [CalendarController, CalendarPublicController, commandController(SendInvite)],
-  providers: [CalendarService, CalendarSyncService, InvitesService, commandHandler(SendInvite)],
+  providers: [
+    CalendarLocks,
+    CalendarService,
+    CalendarSyncService,
+    InvitesService,
+    commandHandler(SendInvite),
+  ],
   exports: [CalendarService, CalendarSyncService, InvitesService],
   contributes: {
     capabilities: [CalendarCapabilities.availability],

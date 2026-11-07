@@ -33,7 +33,7 @@ import { DB } from '../../infra/db.module.js';
 import { JOBS } from '../../queues/define.js';
 import { serverContext } from '../../queues/jobs.service.js';
 import { openConnection } from '../integrations/credentials.js';
-import { recordLock, withLock } from './lock.js';
+import { CalendarLocks, recordLock } from './lock.js';
 import { CalendarEvent } from './ops.js';
 import { memberPrincipal } from './principal.js';
 import {
@@ -90,6 +90,7 @@ export class CalendarSyncService implements OnApplicationBootstrap {
   constructor(
     @Inject(DB) private readonly db: Database,
     @Inject(JOBS) private readonly jobs: Jobs,
+    @Inject(CalendarLocks) private readonly locks: CalendarLocks,
     @Inject(ModuleRef) ref: ModuleRef,
   ) {
     this.ctx = serverContext(ref);
@@ -136,7 +137,7 @@ export class CalendarSyncService implements OnApplicationBootstrap {
     const s = schedulable(entity);
     const google = googleSettings();
     if (!s || !google) return Promise.resolve('nothing to do');
-    return withLock(this.db, recordLock(tenantId, s.def.name, id), () =>
+    return this.locks.run(recordLock(tenantId, s.def.name, id), () =>
       this.syncLocked(google, s, tenantId, id),
     );
   }
@@ -359,25 +360,21 @@ export class CalendarSyncService implements OnApplicationBootstrap {
         .limit(BACKFILL_MAX)) as { id: string }[];
       for (const { id } of ids) {
         // In turn with the record's own jobs, and as the record is by then.
-        const sent = await withLock(
-          this.db,
-          recordLock(conn.tenantId, s.def.name, id),
-          async () => {
-            const row = await this.rowOf(s, conn.tenantId, id);
-            const [link] = await this.db
-              .select()
-              .from(calendarEventLinks)
-              .where(
-                and(
-                  eq(calendarEventLinks.connectionId, conn.id),
-                  eq(calendarEventLinks.resourceType, s.def.name),
-                  eq(calendarEventLinks.resourceId, id),
-                ),
-              );
-            const belongs = !!row && peopleOf(s, row).includes(conn.userId);
-            return this.syncOne(google, s, conn, id, belongs, link);
-          },
-        );
+        const sent = await this.locks.run(recordLock(conn.tenantId, s.def.name, id), async () => {
+          const row = await this.rowOf(s, conn.tenantId, id);
+          const [link] = await this.db
+            .select()
+            .from(calendarEventLinks)
+            .where(
+              and(
+                eq(calendarEventLinks.connectionId, conn.id),
+                eq(calendarEventLinks.resourceType, s.def.name),
+                eq(calendarEventLinks.resourceId, id),
+              ),
+            );
+          const belongs = !!row && peopleOf(s, row).includes(conn.userId);
+          return this.syncOne(google, s, conn, id, belongs, link);
+        });
         if (sent) n++;
       }
     }
@@ -517,8 +514,7 @@ export class CalendarSyncService implements OnApplicationBootstrap {
     };
     const first = await linkOf();
     if (first?.status !== 'synced') return false;
-    return withLock(
-      this.db,
+    return this.locks.run(
       recordLock(first.tenantId, first.resourceType, first.resourceId),
       async () => {
         const link = await linkOf();
@@ -618,9 +614,11 @@ export class CalendarSyncService implements OnApplicationBootstrap {
     for (const link of left.links)
       if (link.status === 'synced')
         // After any sync of the record still running: it may have just sent the event again.
-        await withLock(this.db, recordLock(link.tenantId, link.resourceType, link.resourceId), () =>
-          api.deleteEvent(left.row.calendarId, link.externalId),
-        ).catch(quietly(`removing event ${link.externalId}`));
+        await this.locks
+          .run(recordLock(link.tenantId, link.resourceType, link.resourceId), () =>
+            api.deleteEvent(left.row.calendarId, link.externalId),
+          )
+          .catch(quietly(`removing event ${link.externalId}`));
     if (left.row.channelId && left.row.channelResourceId)
       await api
         .stopChannel({ id: left.row.channelId, resourceId: left.row.channelResourceId })
