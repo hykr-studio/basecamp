@@ -27,6 +27,7 @@ import {
 } from '@nestjs/common';
 import { TenantConfigService } from '../tenants/tenant-config.service.js';
 import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
+import { standingProviders } from './standing.js';
 
 /**
  * The part of a principal that says who it is for and what they may do, in which business. No
@@ -36,7 +37,7 @@ import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
 export type Standing = Required<
   Pick<Principal, 'subject' | 'roles' | 'capabilities' | 'assurance'>
 > &
-  Pick<Principal, 'customerId' | 'tenantId' | 'standing'>;
+  Pick<Principal, 'customerId' | 'tenantId' | 'standing' | 'onBehalfOf'>;
 
 /**
  * How sure a channel makes us, at most: WhatsApp vouches only for a number, and a share link
@@ -119,6 +120,9 @@ export class PrincipalResolver {
     if (!membership && opts.tenantId) {
       if (await participatesIn(db, userId, opts.tenantId))
         return this.participant(userId, opts.tenantId, opts.channel);
+      // Neither: a platform standing there (an operator's consented support access), if any.
+      const other = await this.otherStanding(userId, opts.tenantId, opts.channel);
+      if (other) return other;
       throw new ForbiddenException({ error: 'forbidden', rule: 'not_a_member' });
     }
     if (!membership) {
@@ -166,6 +170,33 @@ export class PrincipalResolver {
       assurance: this.assurance(channel),
       standing: 'participant',
     };
+  }
+
+  /**
+   * A person who is neither a member nor a participant here: the first standing provider's answer
+   * (`standingProviders`), with the roles the business has among those it names and only the
+   * capabilities it names. Checked on every request, so an ended grant ends at once.
+   */
+  private async otherStanding(
+    userId: string,
+    tenantId: string,
+    channel: Channel | undefined,
+  ): Promise<Standing | undefined> {
+    for (const provider of standingProviders.all()) {
+      const other = await provider.forUser({ db: this.options.db, userId, tenantId, channel });
+      if (!other) continue;
+      const { roles } = standingOf(other.roles, await this.rolesOf(tenantId));
+      return {
+        subject: { kind: 'user', userId },
+        tenantId,
+        roles,
+        capabilities: [...new Set(other.capabilities)].sort(),
+        assurance: this.assurance(channel),
+        standing: other.standing,
+        onBehalfOf: other.onBehalfOf,
+      };
+    }
+    return undefined;
   }
 
   /**
@@ -236,7 +267,9 @@ export class PrincipalResolver {
       tenantId: stored.tenantId,
       channel: stored.channel,
     });
-    return { ...stored, ...standing };
+    // Today's standing only: a platform standing it had then (support access) is not kept.
+    const { onBehalfOf: _then, ...kept } = stored;
+    return { ...kept, ...standing };
   }
 
   private assurance(channel: Channel | undefined): Assurance {

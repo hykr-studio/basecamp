@@ -1,13 +1,17 @@
-import { randomUUID } from 'node:crypto';
-import { CreditGrantInput, type CreditsStatus } from '@hykr/contracts';
-import { CORE_OPTIONS, type CoreOptions, runWrite, systemPrincipal } from '@hykr/core';
+import { CreditGrantInput, type CreditsStatus, PlatformCapabilities } from '@hykr/contracts';
+import {
+  CORE_OPTIONS,
+  type CoreOptions,
+  RequestMeta,
+  type RequestMetaValue,
+  runWrite,
+} from '@hykr/core';
 import { schema } from '@hykr/db';
 import {
   BadRequestException,
   Body,
   Controller,
   Get,
-  Headers,
   Inject,
   NotFoundException,
   Param,
@@ -17,11 +21,17 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { EventBus } from '@nestjs/cqrs';
-import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
+import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 import { eq } from 'drizzle-orm';
+import {
+  type ActingOperator,
+  CurrentOperator,
+  OperatorCan,
+  OperatorGuard,
+  operatorPrincipal,
+} from '../platform/operators.js';
 import { parseOr400 } from './credits.controller.js';
 import { CreditsService } from './credits.service.js';
-import { OperatorGuard } from './operator.guard.js';
 import {
   grantCredits,
   OPERATOR_JOB,
@@ -33,13 +43,15 @@ import {
 } from './writes.js';
 
 /**
- * The platform operator's view of any business's credits (x-operator-key): its full status and
- * ledger, its plan, an override, and grants. Each write runs through the write path as the
- * operator's system job in that business, so it is audited there.
+ * A platform operator's view of any business's credits (a signed-in operator holding
+ * `platform.credits`): its full status and ledger, its plan, an override, and grants. Each write
+ * runs through the write path as the operator's system job in that business, on behalf of the
+ * operator, so it is audited there.
  */
 @Controller('api/credits/operator/:tenantId')
-@AllowAnonymous()
+@OptionalAuth()
 @UseGuards(OperatorGuard)
+@OperatorCan(PlatformCapabilities.credits)
 export class CreditsOperatorController {
   constructor(
     @Inject(CORE_OPTIONS) private readonly core: CoreOptions,
@@ -58,18 +70,16 @@ export class CreditsOperatorController {
   }
 
   private async write(
+    operator: ActingOperator,
+    meta: RequestMetaValue,
     tenantId: string,
     op: Parameters<typeof runWrite>[2],
     input: unknown,
-    idempotencyKey?: string,
   ) {
-    const principal = systemPrincipal({
-      tenantId: await this.business(tenantId),
-      job: OPERATOR_JOB,
-    });
+    const principal = operatorPrincipal(await this.business(tenantId), OPERATOR_JOB, operator);
     const { result, events } = await runWrite(
       this.core.db,
-      { principal, requestId: randomUUID(), ...(idempotencyKey ? { idempotencyKey } : {}) },
+      { principal, requestId: meta.requestId, idempotencyKey: meta.idempotencyKey },
       op,
       input,
     );
@@ -97,42 +107,47 @@ export class CreditsOperatorController {
   /** Replace the plan. Limits and prices for meters nobody registered are a 400. */
   @Put('settings')
   async settings(
+    @CurrentOperator() operator: ActingOperator,
+    @RequestMeta() meta: RequestMetaValue,
     @Param('tenantId') tenantId: string,
     @Body() body: unknown,
-    @Headers('idempotency-key') key?: string,
   ) {
     const plan = parseOr400(PlanInput, body, 'invalid_plan');
     const problems = planProblems(plan);
     if (problems.length) throw new BadRequestException({ error: 'invalid_plan', problems });
-    return this.write(tenantId, setCreditsPlan(), plan, key);
+    return this.write(operator, meta, tenantId, setCreditsPlan(), plan);
   }
 
   /** Set the override (`{ override: { mode, until?, reason } }`), or clear it (`{ override: null }`). */
   @Put('override')
   async override(
+    @CurrentOperator() operator: ActingOperator,
+    @RequestMeta() meta: RequestMetaValue,
     @Param('tenantId') tenantId: string,
     @Body() body: unknown,
-    @Headers('idempotency-key') key?: string,
   ) {
     return this.write(
+      operator,
+      meta,
       tenantId,
       setCreditsOverride(),
       parseOr400(OverrideInput, body, 'invalid_override'),
-      key,
     );
   }
 
   @Post('grants')
   async grant(
+    @CurrentOperator() operator: ActingOperator,
+    @RequestMeta() meta: RequestMetaValue,
     @Param('tenantId') tenantId: string,
     @Body() body: unknown,
-    @Headers('idempotency-key') key?: string,
   ) {
     return this.write(
+      operator,
+      meta,
       tenantId,
       grantCredits(),
       parseOr400(CreditGrantInput, body, 'invalid_grant'),
-      key,
     );
   }
 }

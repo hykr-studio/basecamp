@@ -11,8 +11,8 @@ import {
   connectMcp,
   type Json,
   MCP_TEST_REDIRECT,
+  makeOperator,
   me,
-  origin,
   Person,
   pool,
   server,
@@ -21,20 +21,18 @@ import {
 } from '../../dist/testing.js';
 import { mcpServer } from '../fixture/dist/features/mcp/index.js';
 
-const OPERATOR_KEY = `operator-${stamp}-${'x'.repeat(32)}`;
-const savedOperator = process.env.OPERATOR_API_KEY;
-
 const ana = new Person('Ana Mcp');
 const sam = new Person('Sam Mcp'); // staff in Ana's business
 const bo = new Person('Bo Mcp'); // another business
+const opal = new Person('Opal Mcp'); // a platform operator holding platform.credits
 let tenant = '';
 let resource = '';
 const REDIRECT = MCP_TEST_REDIRECT;
 
 beforeAll(async () => {
-  process.env.OPERATOR_API_KEY = OPERATOR_KEY;
   await boot(mcpServer);
-  for (const p of [ana, sam, bo]) await p.signUp();
+  for (const p of [ana, sam, bo, opal]) await p.signUp();
+  await makeOperator(opal, ['platform.credits']);
   tenant = (await me(ana)).tenantId;
   await addMember(sam, tenant, ['staff']);
   // Sam's default business is Ana's from now on: a token Sam allows acts there.
@@ -43,8 +41,6 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (savedOperator === undefined) delete process.env.OPERATOR_API_KEY;
-  else process.env.OPERATOR_API_KEY = savedOperator;
   await shutdown();
 });
 
@@ -599,20 +595,14 @@ describe('connections', () => {
 describe('credits', () => {
   it('refuses tool calls while the business is paused', async () => {
     const c = await connectMcp(ana, 'tasks:read');
-    const paused = await fetch(`${server.base}/api/credits/operator/${tenant}/override`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', 'x-operator-key': OPERATOR_KEY, origin },
-      body: JSON.stringify({ override: { mode: 'pause', reason: 'test' } }),
+    const paused = await opal.call('PUT', `/api/credits/operator/${tenant}/override`, {
+      override: { mode: 'pause', reason: 'test' },
     });
     expect(paused.status).toBeLessThan(300);
     const refused = await c.call('tasks_read', { entity: 'tasks' });
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain('402');
-    await fetch(`${server.base}/api/credits/operator/${tenant}/override`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', 'x-operator-key': OPERATOR_KEY, origin },
-      body: JSON.stringify({ override: null }),
-    });
+    await opal.call('PUT', `/api/credits/operator/${tenant}/override`, { override: null });
   });
 });
 

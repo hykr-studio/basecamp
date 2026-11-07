@@ -204,6 +204,25 @@ export {
   ModelRefused,
   SET_MODEL_POLICY,
 } from './features/models/index.js';
+export {
+  type ActingOperator,
+  CurrentOperator,
+  defineInboundRouter,
+  type InboundRequest,
+  type InboundRouter,
+  inboundRouters,
+  OperatorCan,
+  OperatorGuard,
+  operatorOf,
+  operatorPrincipal,
+  PlatformRoutingService,
+  ROUTE_JOB,
+  type RouteContext,
+  type RouteTarget,
+  SupportEvent,
+  supportWithheld,
+  TenantProvisioned,
+} from './features/platform/index.js';
 export { FeatureFlagsService } from './features/settings/flags.service.js';
 export { SlaService } from './features/sla/sla.service.js';
 export {
@@ -269,6 +288,7 @@ export {
 } from './runtime.js';
 export {
   migrate,
+  operators,
   runEval,
   runImport,
   runTemplates,

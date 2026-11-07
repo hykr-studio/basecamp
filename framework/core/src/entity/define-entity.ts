@@ -250,12 +250,20 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
    * Who a new row belongs to. A person's own record is theirs; a customer's record is the
    * customer's, owned by the business's default owner (so it shows in the owner's lists). A
    * registered grant kind may let a person create one too (a child of a record granted to them).
+   * The server's own work (a routed request, a job) makes the business's default owner's rows,
+   * for the customer it works for, if any.
    */
   const ownership = async (tx: Tx, p: Principal, input: Values) => {
     const decision = accessFor(p, access, 'write');
     const grants = decision.kind === 'grants' ? decision.grants : [];
     const subject = subjectOf(p);
     const tenantId = tenantOf(p);
+    if (p.actor.kind === 'system' && grants.includes('tenant'))
+      return {
+        tenantId,
+        ownerId: await defaultOwnerOf(tx, tenantId),
+        ...(customerCol && p.customerId ? { customerId: p.customerId } : {}),
+      };
     if (subject?.kind === 'user' && (grants.includes('own') || grants.includes('tenant')))
       return { tenantId, ownerId: subject.userId };
     if (grants.includes('customer') && customerCol && p.customerId)

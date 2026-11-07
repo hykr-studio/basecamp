@@ -19,6 +19,7 @@ export * from './numbering.js';
 export * from './oauth.js';
 export * from './otp.js';
 export * from './parties.js';
+export * from './platform.js';
 export * from './push.js';
 export * from './roles.js';
 export * from './settings.js';

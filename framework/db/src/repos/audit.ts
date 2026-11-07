@@ -12,6 +12,8 @@ export type WriteCtx = {
   runId?: string | null;
   requestId?: string | null;
   approvedBy?: string | null;
+  /** Through the platform: `operator:<id>` or `support:<grantId>`. */
+  onBehalfOf?: string | null;
   agentVersion?: string | null;
   /** How the call reached the server: app, voice, whatsapp, mcp, background… */
   channel?: string | null;
@@ -42,6 +44,7 @@ const toRow = (input: AuditInput) => ({
   runId: input.runId ?? null,
   requestId: input.requestId ?? null,
   approvedBy: input.approvedBy ?? null,
+  onBehalfOf: input.onBehalfOf ?? null,
   agentVersion: input.agentVersion ?? null,
   channel: input.channel ?? null,
   rule: input.rule ?? null,
@@ -57,7 +60,7 @@ export async function writeAudit(tx: DbOrTx, input: AuditInput) {
   return row;
 }
 
-/** Rows per INSERT: well under Postgres's 65535 bind parameters (18 per row). */
+/** Rows per INSERT: well under Postgres's 65535 bind parameters (19 per row). */
 const AUDIT_CHUNK = 1000;
 
 /**

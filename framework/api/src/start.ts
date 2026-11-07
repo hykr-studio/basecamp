@@ -137,6 +137,45 @@ export async function startStudio(app: Basecamp, dir: string, options: { dev?: b
 }
 
 /**
+ * `basecamp operator add <email> [--capabilities a,b]` (every operator capability by default),
+ * `operator remove <email>` (disabled) and `operator list`: the deployment's operators without
+ * HTTP, for the first one above all (B19). Returns whether it succeeded.
+ */
+export async function operators(
+  app: Basecamp,
+  command: 'add' | 'remove' | 'list',
+  opts: { email?: string; capabilities?: string[] } = {},
+): Promise<boolean> {
+  setRuntime(app);
+  // The features' and the application's operator capabilities.
+  (await import('./features/install.js')).installFeatures();
+  const { sharedDb } = await import('./infra/db.js');
+  const { listOperators, saveOperator } = await import('./features/platform/operators.js');
+  try {
+    if (command === 'list') {
+      for (const o of await listOperators(sharedDb.db))
+        console.log(
+          `${o.email.padEnd(32)} ${o.disabledAt ? 'disabled' : 'enabled '} ${o.capabilities.join(', ')}`,
+        );
+      return true;
+    }
+    if (!opts.email) throw new Error(`operator ${command} needs an email`);
+    const id = await saveOperator(sharedDb.db, {
+      email: opts.email,
+      ...(opts.capabilities ? { capabilities: opts.capabilities } : {}),
+      disable: command === 'remove',
+    });
+    console.log(`${command === 'remove' ? 'disabled' : 'operator'} ${opts.email} (${id})`);
+    return true;
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : e);
+    return false;
+  } finally {
+    await sharedDb.pool.end();
+  }
+}
+
+/**
  * `basecamp import <entity> <file>`: import a file as a member of a business (decisions B20),
  * in a process of its own with no HTTP and no processors; the worker runs the job. Prints its
  * progress and a summary, and saves the error report. Exit code: 0 every row was written (or

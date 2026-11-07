@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { type CapabilityDef, capabilities, type Principal } from '@hykr/contracts';
+import {
+  type CapabilityDef,
+  type Channel,
+  capabilities,
+  OnBehalfOf,
+  type Principal,
+} from '@hykr/contracts';
 import { RUN_ID } from './http/identity.js';
 
 /** A job's name, as audited (the actor id): lower case and dotted, 'reminders.sweep'. */
@@ -14,6 +20,15 @@ export interface SystemPrincipalOptions {
   runId?: string;
   /** What it may do besides reaching its business's rows. Default: nothing. */
   capabilities?: readonly (string | CapabilityDef)[];
+  /**
+   * The business's customer it works for (a routed request's sender): a row it creates gets
+   * this customer. Server code makes sure the customer is this business's.
+   */
+  customerId?: string;
+  /** Done for a platform operator (B19): audited as `on_behalf_of`. */
+  onBehalfOf?: OnBehalfOf;
+  /** How the work reached the server. Default `background`; an operator's action is `api`. */
+  channel?: Extract<Channel, 'background' | 'api'>;
 }
 
 /**
@@ -23,8 +38,9 @@ export interface SystemPrincipalOptions {
  * of its one business and nothing outside it. Server code only: no request header or body
  * ever becomes one, and PrincipalGuard never makes one.
  *
- * It cannot create an entity row (a new row needs an owner) or park (nobody would decide):
- * both are refused for now (decisions F4).
+ * A row it creates is owned by the business's default owner (and gets `customerId`, when given
+ * and the table has a customer column). It cannot park (nobody would decide): refused (409,
+ * decisions F4).
  */
 export function systemPrincipal(options: SystemPrincipalOptions): Principal {
   const { tenantId, job } = options;
@@ -43,6 +59,8 @@ export function systemPrincipal(options: SystemPrincipalOptions): Principal {
     assurance: 'session',
     scopes: [],
     runId,
-    channel: 'background',
+    channel: options.channel ?? 'background',
+    ...(options.customerId ? { customerId: options.customerId } : {}),
+    ...(options.onBehalfOf ? { onBehalfOf: OnBehalfOf.parse(options.onBehalfOf) } : {}),
   };
 }

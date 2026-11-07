@@ -12,6 +12,7 @@ import {
   asAssistant,
   boot,
   eventually,
+  makeOperator,
   me,
   Person,
   pool,
@@ -25,7 +26,6 @@ import {
   started,
 } from '../fixture/dist/features/credits/index.js';
 
-const OPERATOR_KEY = `operator-${'k'.repeat(40)}`;
 const PRICES = {
   tool_calls: 100,
   tokens: 10_000,
@@ -39,15 +39,12 @@ const lee = new Person('Lee Credits'); // on credits: the alert, the pause, the 
 const sam = new Person('Sam Credits'); // staff in Lee's business
 const mia = new Person('Mia Credits'); // limits
 const ravi = new Person('Ravi Credits'); // another business; overrides
+const opal = new Person('Opal Credits'); // a platform operator holding platform.credits
+const otto = new Person('Otto Credits'); // an operator without it
 const tenant: Record<string, string> = {};
+let opalId = '';
 
-const ENV = [
-  'CREDITS_CONFIG',
-  'OPERATOR_API_KEY',
-  'WA_GRAPH_URL',
-  'WA_APP_SECRET',
-  'WA_VERIFY_TOKEN',
-];
+const ENV = ['CREDITS_CONFIG', 'WA_GRAPH_URL', 'WA_APP_SECRET', 'WA_VERIFY_TOKEN'];
 const saved = Object.fromEntries(ENV.map((n) => [n, process.env[n]]));
 
 /** A stand-in for the Cloud API: records what is sent. */
@@ -77,12 +74,14 @@ beforeAll(async () => {
   process.env.WA_APP_SECRET = secret;
   process.env.WA_VERIFY_TOKEN = 'test-verify';
   process.env.CREDITS_CONFIG = JSON.stringify({ currency: 'XXX', prices: PRICES });
-  process.env.OPERATOR_API_KEY = OPERATOR_KEY;
   await boot(creditsApp);
   for (const person of [ana, lee, sam, mia, ravi]) {
     await person.signUp();
     tenant[person.name] = (await me(person)).tenantId;
   }
+  for (const person of [opal, otto]) await person.signUp();
+  opalId = await makeOperator(opal, ['platform.credits']);
+  await makeOperator(otto, ['platform.usage']);
   await addMember(sam, tenant[lee.name], ['staff']);
   await sam.call('GET', '/api/me', undefined, { 'x-tenant-id': tenant[lee.name] });
 });
@@ -95,15 +94,9 @@ afterAll(async () => {
   await shutdown();
 });
 
-const operator = (method: string, path: string, body?: unknown, key = OPERATOR_KEY) =>
-  fetch(`${server.base}/api/credits/operator${path}`, {
-    method,
-    headers: {
-      'content-type': 'application/json',
-      ...(key ? { 'x-operator-key': key } : {}),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  }).then(async (res) => ({ status: res.status, body: await res.json().catch(() => null) }));
+/** A platform operator's call (B19): Opal holds `platform.credits`. */
+const operator = (method: string, path: string, body?: unknown, who: Person = opal) =>
+  who.call(method, `/api/credits/operator${path}`, body);
 
 const setPlan = (person: Person, plan: object) =>
   operator('PUT', `/${tenant[person.name]}/settings`, plan);
@@ -243,16 +236,18 @@ describe('metering, by default', () => {
 });
 
 describe('the operator', () => {
-  it('needs the key: none or a wrong one is 401, an unknown business 404', async () => {
-    expect((await operator('GET', `/${tenant[lee.name]}`, undefined, '')).status).toBe(401);
-    expect((await operator('GET', `/${tenant[lee.name]}`, undefined, 'x'.repeat(48))).status).toBe(
-      401,
-    );
+  it('needs a signed-in operator holding platform.credits; an unknown business is 404', async () => {
+    const anonymous = await fetch(`${server.base}/api/credits/operator/${tenant[lee.name]}`);
+    expect(anonymous.status).toBe(401);
+    // A business's owner is no operator; an operator without the capability is refused too.
+    expect((await operator('GET', `/${tenant[lee.name]}`, undefined, lee)).body).toMatchObject({
+      rule: 'not_an_operator',
+    });
+    expect((await operator('GET', `/${tenant[lee.name]}`, undefined, otto)).body).toMatchObject({
+      rule: 'operator_capability',
+    });
+    expect((await operator('GET', `/${tenant[lee.name]}`)).status).toBe(200);
     expect((await operator('GET', '/no-such-business')).status).toBe(404);
-    // No key configured: the routes are not there.
-    delete process.env.OPERATOR_API_KEY;
-    expect((await operator('GET', `/${tenant[lee.name]}`)).status).toBe(404);
-    process.env.OPERATOR_API_KEY = OPERATOR_KEY;
   });
 
   it('sets a plan, audited in that business; another business is untouched', async () => {
@@ -260,13 +255,15 @@ describe('the operator', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('done');
     const { rows } = await pool.query(
-      `select action, actor_kind, actor_id, before, after from audit.events
-       where tenant_id = $1 and action in ('credits.plan.set', 'tenant.update') order by at`,
+      `select action, actor_kind, actor_id, on_behalf_of, before, after from audit.events
+       where tenant_id = $1 and action in ('credits.plan.set', 'tenant.update')
+       order by at, action desc`,
       [tenant[lee.name]],
     );
-    expect(rows.map((r) => [r.action, r.actor_kind, r.actor_id])).toEqual([
-      ['tenant.update', 'system', 'credits.operator'],
-      ['credits.plan.set', 'system', 'credits.operator'],
+    // The operator's system job, on behalf of the operator.
+    expect(rows.map((r) => [r.action, r.actor_kind, r.actor_id, r.on_behalf_of])).toEqual([
+      ['tenant.update', 'system', 'credits.operator', `operator:${opalId}`],
+      ['credits.plan.set', 'system', 'credits.operator', `operator:${opalId}`],
     ]);
     expect(rows[0].after).toEqual({
       credits: { enforce: true, allowance: 500, prices: { tokens: 0 } },

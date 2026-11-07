@@ -1,11 +1,11 @@
 import { CreditsManageCapability, CreditsViewCapability, reserveRoutes } from '@hykr/contracts';
 import { defineQueue, defineSchedule } from '../../queues/define.js';
 import { defineFeature } from '../feature.js';
+import { OperatorGuard } from '../platform/operators.js';
 import { CreditsController } from './credits.controller.js';
 import { CreditsService } from './credits.service.js';
 import { FrameworkMeters } from './meters.js';
 import { CreditsOperatorController } from './operator.controller.js';
-import { OperatorGuard } from './operator.guard.js';
 import { CreditsTurnHook } from './turn-hook.js';
 
 // /api/credits and the operator's /api/credits/operator: no module may take the segment.

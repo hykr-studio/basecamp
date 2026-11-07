@@ -37,11 +37,37 @@ export const Subject = z.discriminatedUnion('kind', [
 export type Subject = z.infer<typeof Subject>;
 
 /**
- * How a person is in a business: a `member` of its team (a membership with roles), or a
- * `participant` (a member of one of its parties, put on its records; never a member).
+ * How a person is in a business: a `member` of its team (a membership with roles), a
+ * `participant` (a member of one of its parties, put on its records; never a member), a platform
+ * operator's `support` access (time-boxed, consented by the business), or an `operator` working
+ * in the platform's own business (platform scope). The last two are never memberships.
  */
-export const BusinessStanding = z.enum(['member', 'participant']);
+export const BusinessStanding = z.enum(['member', 'participant', 'support', 'operator']);
 export type BusinessStanding = z.infer<typeof BusinessStanding>;
+
+/**
+ * Someone acting in a business through the platform rather than their own standing there, set by
+ * the server only: an operator's platform action (the actor is the system job doing it) or an
+ * operator's support access (the actor is the operator, with what the business consented to).
+ * Audited as `on_behalf_of`: `operator:<operatorId>` or `support:<grantId>`.
+ */
+export const OnBehalfOf = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('operator'), operatorId: z.string() }),
+  z.object({
+    kind: z.literal('support'),
+    operatorId: z.string(),
+    grantId: z.string(),
+    /** `read`: GET and HEAD only. */
+    access: z.enum(['read', 'write']),
+    /** When the access ends (ISO). */
+    until: z.string(),
+  }),
+]);
+export type OnBehalfOf = z.infer<typeof OnBehalfOf>;
+
+/** As audit stores it: `operator:<id>` or `support:<grantId>`. */
+export const onBehalfOfKey = (o: OnBehalfOf | undefined): string | null =>
+  o ? (o.kind === 'support' ? `support:${o.grantId}` : `operator:${o.operatorId}`) : null;
 
 export const Principal = z.object({
   actor: z.object({
@@ -74,6 +100,8 @@ export const Principal = z.object({
    * participant (no membership; what the participant grant reaches). Absent for a contact.
    */
   standing: BusinessStanding.optional(),
+  /** Acting through the platform (an operator's action or support access). Server-set only. */
+  onBehalfOf: OnBehalfOf.optional(),
   assurance: Assurance.optional(),
   runId: z.string().optional(),
   agentVersion: z.string().optional(),

@@ -191,20 +191,6 @@ export const FrameworkCapabilities = {
     },
     roles: ['owner', 'admin'],
   }),
-  /**
-   * The job queues' dashboard (Bull Board, development only). It shows every business's jobs,
-   * so no business may give it to a role.
-   */
-  queues: defineCapability({
-    name: 'queues.admin',
-    label: {
-      en: 'Open the job queues',
-      hi: 'जॉब कतारें खोलें',
-      te: 'జాబ్ క్యూలను తెరవండి',
-    },
-    roles: ['owner', 'admin'],
-    grantable: false,
-  }),
   /** The business's members and roles, read only (GET /api/members). */
   readMembers: defineCapability({
     name: 'members.read',

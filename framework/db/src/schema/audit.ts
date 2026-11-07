@@ -23,6 +23,11 @@ export const events = audit.table(
     requestId: text('request_id'),
     /** For a replayed approval: the person who approved what the actor asked for. */
     approvedBy: text('approved_by'),
+    /**
+     * Done through the platform rather than the actor's own standing in the business: an
+     * operator's action (`operator:<id>`) or an operator's support access (`support:<grantId>`).
+     */
+    onBehalfOf: text('on_behalf_of'),
     agentVersion: text('agent_version'),
     /** How the turn reached the assistant: app, voice or whatsapp (null for direct API use). */
     channel: text('channel'),

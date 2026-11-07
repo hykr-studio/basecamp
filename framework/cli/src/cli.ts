@@ -47,6 +47,10 @@ const HELP = `basecamp: run an application on the Basecamp framework
                                      --empty omit|null, --map col=field, --ref field=entity,
                                      --report path)
   basecamp templates sync|check      WhatsApp templates at the provider
+  basecamp operator add <email> [--capabilities a,b]
+                                     make an account a platform operator (every operator
+                                     capability by default); operator remove <email> disables
+                                     one; operator list
   basecamp eval [assistant|voice|whatsapp] [--module m] [--live [--model <provider>/<model>]]
                                      score the assistant (scripted model, or the deployment's
                                      default model, or one model of MODEL_PROVIDERS), every
@@ -181,6 +185,7 @@ async function main() {
       name: { type: 'string' },
       module: { type: 'string' },
       entity: { type: 'string' },
+      capabilities: { type: 'string' },
       base: { type: 'string', default: 'main' },
       help: { type: 'boolean', short: 'h', default: false },
       ...IMPORT_OPTIONS,
@@ -303,6 +308,23 @@ async function main() {
       if (sub !== 'sync' && sub !== 'check') fail('templates sync or templates check');
       const { api, server: app } = await loadServer(root, config);
       process.exit((await api.runTemplates(app, sub)) ? 0 : 1);
+      break;
+    }
+    case 'operator': {
+      if (sub !== 'add' && sub !== 'remove' && sub !== 'list')
+        fail('operator add <email> [--capabilities a,b], operator remove <email> or operator list');
+      const email = positionals[2];
+      if (sub !== 'list' && !email) fail(`operator ${sub} <email>`);
+      const { api, server: app } = await loadServer(root, config);
+      const capabilities = values.capabilities
+        ?.split(',')
+        .map((c) => c.trim())
+        .filter(Boolean);
+      process.exit(
+        (await api.operators(app, sub, { email, ...(capabilities ? { capabilities } : {}) }))
+          ? 0
+          : 1,
+      );
       break;
     }
     case 'eval': {

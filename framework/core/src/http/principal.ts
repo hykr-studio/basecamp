@@ -127,6 +127,14 @@ export class PrincipalGuard implements CanActivate {
         rule: 'read_only_channel',
         reason: `Calls on the ${channel} channel can only read`,
       });
+    // Support access the business consented to read only: it reads, whoever drives it.
+    const behalf = req.principal.onBehalfOf;
+    if (behalf?.kind === 'support' && behalf.access === 'read' && !READS.has(req.method))
+      throw new ForbiddenException({
+        error: 'forbidden',
+        rule: 'support_read_only',
+        reason: 'This support access can only read',
+      });
     return true;
   }
 

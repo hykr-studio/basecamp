@@ -23,7 +23,7 @@ Node 24 (`.nvmrc`), pnpm 12 (pinned in `packageManager`), Docker.
 pnpm install && cp application/.env.example .env   # .env lives at the repo ROOT
 # Set BETTER_AUTH_SECRET, AGENT_API_KEY, VOICE_AGENT_KEY (must differ from AGENT_API_KEY),
 # APPROVAL_SECRET, SECRETS_KEY (each >= 32 chars: openssl rand -hex 32). Offline: MODEL_MODE=fake VOICE_MODE=fake
-# Optional: CREDITS_CONFIG (prices and plans), OPERATOR_API_KEY (>= 32 chars, the credits operator)
+# Optional: CREDITS_CONFIG (prices and plans). Platform operators: `pnpm --dir application exec basecamp operator add <email>`
 pnpm build            # everything; the basecamp CLI, API and tests all run from dist/
 pnpm infra:up         # Postgres/PostGIS, Redis, MinIO, Mailpit, pgAdmin, LiveKit, whaloc (WhatsApp emulator)
 pnpm db:migrate       # framework migrations first, then the application's
@@ -196,7 +196,10 @@ lists every business a person is in, and `x-tenant-id` switches.
 Anything else is a capability: check `can(p, 'backoffice.use')` (`@hykr/policy`), never a role name; hide a
 field with `traits: { fieldPolicy: { cost: '<module>.cost.read' } }`. A WhatsApp-only principal can be
 refused with `minAssurance: 'session'`. Background work writes as `systemPrincipal({ tenantId, job })` from
-`@hykr/core`.
+`@hykr/core` (it may create rows: the business's default owner owns them). Platform operators
+(`features/platform`, developer guide 6.6) are a tier above businesses with `platform.*` capabilities;
+they reach a business's data only through support access it consented to (`standing: 'support'`,
+audited `on_behalf_of`), never through a role.
 
 ### Non-obvious rules (each one has bitten someone)
 

@@ -168,6 +168,20 @@ export async function addMember(person: Person, tenantId: string, roles: string[
 }
 
 /**
+ * Make a signed-up person a platform operator (B19) holding these operator capabilities (every
+ * one by default), as `basecamp operator add` does. Returns the operator's id.
+ */
+export async function makeOperator(person: Person, capabilities?: string[]): Promise<string> {
+  const { saveOperator } = await import('./features/platform/operators.js');
+  const { sharedDb } = await import('./infra/db.js');
+  return saveOperator(sharedDb.db, {
+    email: person.email,
+    ...(capabilities ? { capabilities } : {}),
+    by: 'test',
+  });
+}
+
+/**
  * A WhatsApp contact without an account: a customer of the business, as the inbound pipeline
  * creates one on a first message.
  */
