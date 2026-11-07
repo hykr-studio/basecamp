@@ -46,6 +46,12 @@ describe('liveKeysFor', () => {
     ]);
   });
 
+  it("an agent's run refreshes the run logs and that run", () => {
+    expect(
+      liveKeysFor({ name: 'agent.run.finished', type: 'agent_run', id: 'r1' }, catalog),
+    ).toEqual([['agent-runs'], ['agent-run', 'r1']]);
+  });
+
   it('an entity write invalidates its plural and history', () => {
     expect(liveKeysFor({ name: 'task.updated', type: 'task', id: 't1' }, catalog)).toEqual([
       ['tasks'],
