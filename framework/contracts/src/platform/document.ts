@@ -31,10 +31,12 @@ export const DocumentRecipient = z.union([
 export type DocumentRecipient = z.infer<typeof DocumentRecipient>;
 
 /**
- * One send: waiting for the document to be made, queued, sent (handed to WhatsApp, or emailed),
- * or failed (`unreachable`: no channel could reach the recipient).
+ * One send: waiting for the document to be made, queued, sending (one job has claimed it and is
+ * delivering it), sent (handed to WhatsApp, or emailed), or failed (`unreachable`: no channel
+ * could reach the recipient; `interrupted`: its delivery stopped part way, and it is never sent
+ * twice).
  */
-export const DocumentSendStatus = z.enum(['waiting', 'queued', 'sent', 'failed']);
+export const DocumentSendStatus = z.enum(['waiting', 'queued', 'sending', 'sent', 'failed']);
 export type DocumentSendStatus = z.infer<typeof DocumentSendStatus>;
 
 export const DocumentSendInfo = z.object({

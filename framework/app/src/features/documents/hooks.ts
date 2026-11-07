@@ -42,7 +42,9 @@ export function useDocument(id: string | undefined) {
     refetchInterval: (q) => {
       const d = q.state.data;
       if (!d) return false;
-      const going = (d.sends ?? []).some((s) => s.status === 'queued' || s.status === 'waiting');
+      const going = (d.sends ?? []).some(
+        (s) => s.status === 'queued' || s.status === 'waiting' || s.status === 'sending',
+      );
       return d.status === 'pending' || going ? 1500 : 4 * 60_000;
     },
   });

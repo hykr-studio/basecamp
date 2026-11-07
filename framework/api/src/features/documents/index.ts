@@ -26,13 +26,20 @@ export const DocumentsRenderQueue = defineQueue<{ documentId: string }, string>(
   process: (job, ctx) => ctx.get(DocumentsService).render(job.data.documentId, lastTry(job)),
 });
 
-/** Delivers one send, three tries. */
+/**
+ * Delivers one send, three tries. A send can have two jobs (asked, and made when its document
+ * was pending): the one that claims it delivers it, the other returns (decisions B2, 26).
+ */
 export const DocumentsSendQueue = defineQueue<{ sendId: string }, string>({
   name: SEND_QUEUE,
   concurrency: 4,
   attempts: 3,
   backoffMs: 2000,
-  process: (job, ctx) => ctx.get(DocumentSender).send(job.data.sendId, lastTry(job)),
+  process: (job, ctx) =>
+    ctx.get(DocumentSender).send(job.data.sendId, {
+      by: job.id ?? `send-${job.data.sendId}`,
+      lastTry: lastTry(job),
+    }),
 });
 
 /** A document asked for (stored with its write): draw it. */

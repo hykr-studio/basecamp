@@ -15,7 +15,7 @@ import { langOf } from '@hykr/i18n';
 import type { Reader } from '@hykr/notifications';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { type Contact, ContactsService } from '../../channels/contacts.service.js';
 import { MailerService } from '../../channels/notify/mailer.service.js';
 import { OutboundService } from '../../channels/outbound.service.js';
@@ -35,6 +35,25 @@ interface Target {
   email?: string;
   reader: Reader;
 }
+
+/** One try of a send's job: the job's id (the same on each of its retries), and whether it is the last. */
+export interface SendTry {
+  by: string;
+  lastTry: boolean;
+}
+
+/** How a send went out. */
+interface Outcome {
+  channel: DocumentChannel;
+  address: string;
+  messageId: string;
+}
+
+/**
+ * A claim older than this is stale (its job is gone): another job finishes it from what is
+ * recorded. Far longer than an upload and a send take.
+ */
+const SENDING_LEASE_MS = 5 * 60_000;
 
 /** A failure's message, short enough to keep. */
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 500);
@@ -207,34 +226,98 @@ export class DocumentSender {
   }
 
   /**
-   * Deliver one send: when its document is made, by the first channel that takes it (the one
-   * asked for, or the document's order). None: failed `unreachable`. On the last try, an error
-   * fails it with its message.
+   * Deliver one send, at most once: when its document is made, the job claims it (one statement:
+   * only one job wins), then the first channel that takes it (the one asked for, or the
+   * document's order) delivers it. None: failed `unreachable`. An error before anything left
+   * lets the claim go for a retry; on the last try it fails with its message (decisions B2, 26).
    */
-  async send(sendId: string, lastTry: boolean): Promise<string> {
+  async send(sendId: string, t: SendTry): Promise<string> {
     const [send] = await this.db.select().from(documentSends).where(eq(documentSends.id, sendId));
-    if (!send || (send.status !== 'queued' && send.status !== 'waiting')) return 'not queued';
+    if (!send) return 'no such send';
+    if (send.status === 'sent' || send.status === 'failed') return `already ${send.status}`;
+    if (send.status === 'sending') return this.resume(send, t);
     const [doc] = await this.db.select().from(documents).where(eq(documents.id, send.documentId));
     if (!doc) return this.finish(send, 'failed', { error: 'document_gone' });
     if (doc.status === 'failed') return this.finish(send, 'failed', { error: 'document_failed' });
     if (doc.status === 'pending') {
+      // Waiting: the render queues every waiting send once it has made the document.
       await this.db
         .update(documentSends)
         .set({ status: 'waiting' })
         .where(and(eq(documentSends.id, send.id), eq(documentSends.status, 'queued')));
-      // Made meanwhile (its render may have looked for waiting sends just before): go now.
+      // Made meanwhile (its render may have looked for waiting sends just before): the claim
+      // below decides, so the render's own job cannot deliver it too.
       const [now] = await this.db
         .select({ status: documents.status })
         .from(documents)
         .where(eq(documents.id, doc.id));
       if (now?.status !== 'ready') return 'waiting';
-      await this.db
-        .update(documentSends)
-        .set({ status: 'queued' })
-        .where(and(eq(documentSends.id, send.id), eq(documentSends.status, 'waiting')));
-      return this.send(sendId, lastTry);
     }
+    const claimed = await this.claim(send.id, t.by);
+    if (!claimed) return 'claimed by another job';
+    return this.deliver(claimed, t);
+  }
+
+  /**
+   * Take a queued or waiting send whose document is ready, in one statement: of two jobs at
+   * once, Postgres lets one update the row and the other finds it `sending` and gets nothing.
+   */
+  private async claim(id: string, by: string): Promise<DocumentSendRow | undefined> {
+    const [claimed] = await this.db
+      .update(documentSends)
+      .set({ status: 'sending', claimedBy: by, claimedAt: new Date() })
+      .where(
+        and(
+          eq(documentSends.id, id),
+          inArray(documentSends.status, ['queued', 'waiting']),
+          sql`exists (select 1 from ${documents} where ${documents.id} = ${documentSends.documentId} and ${documents.status} = 'ready')`,
+        ),
+      )
+      .returning();
+    return claimed;
+  }
+
+  /** Let a claim go (nothing left yet): a retry, or the send's other job, may claim it again. */
+  private async release(send: DocumentSendRow, by: string) {
+    await this.db
+      .update(documentSends)
+      .set({ status: 'queued', claimedBy: null, claimedAt: null })
+      .where(
+        and(
+          eq(documentSends.id, send.id),
+          eq(documentSends.status, 'sending'),
+          eq(documentSends.claimedBy, by),
+        ),
+      );
+  }
+
+  /**
+   * A send found `sending`. Another job's fresh claim is that job's to finish. A later try of the
+   * job that claimed it (it stopped before finishing), or a claim older than the lease, is
+   * finished from what is recorded: sent when a channel's outcome was written, else failed
+   * `interrupted`: it may or may not have gone, and it is never sent twice.
+   */
+  private async resume(send: DocumentSendRow, t: SendTry): Promise<string> {
+    const stale = !send.claimedAt || Date.now() - send.claimedAt.getTime() > SENDING_LEASE_MS;
+    if (send.claimedBy !== t.by && !stale) return 'claimed by another job';
+    const by = send.claimedBy;
+    if (send.address && send.channel)
+      return this.finish(
+        send,
+        'sent',
+        { channel: send.channel, address: send.address, messageId: send.messageId ?? undefined },
+        by,
+      );
+    log.warn(`send ${send.id} stopped while sending: failed, interrupted (never sent twice)`);
+    return this.finish(send, 'failed', { error: 'interrupted' }, by);
+  }
+
+  /** Deliver a send this job has claimed. */
+  private async deliver(send: DocumentSendRow, t: SendTry): Promise<string> {
+    const [doc] = await this.db.select().from(documents).where(eq(documents.id, send.documentId));
+    if (!doc) return this.finish(send, 'failed', { error: 'document_gone' }, t.by);
     const def = documentDefs.get(doc.name);
+    let gone: Outcome | undefined;
     try {
       if (!def) throw new Error(`No document "${doc.name}" is declared`);
       if (!doc.fileId) throw new Error('The document has no file');
@@ -248,28 +331,46 @@ export class DocumentSender {
           channel === 'whatsapp'
             ? await this.viaWhatsApp(def, doc, to, file)
             : await this.viaEmail(def, doc, send, to, file);
-        if (done)
-          return this.finish(send, 'sent', {
-            channel,
-            address: done.address,
-            messageId: done.messageId,
-          });
+        if (done) {
+          gone = { channel, address: done.address, messageId: done.messageId };
+          break;
+        }
       }
-      return this.finish(send, 'failed', { error: 'unreachable' });
+      if (!gone) return await this.finish(send, 'failed', { error: 'unreachable' }, t.by);
+      // It left: written first, so a try after a failure from here on finishes it, never resends.
+      await this.db
+        .update(documentSends)
+        .set({
+          channel: gone.channel,
+          address: gone.address,
+          messageId: gone.channel === 'whatsapp' ? gone.messageId : null,
+        })
+        .where(and(eq(documentSends.id, send.id), eq(documentSends.claimedBy, t.by)));
+      return await this.finish(send, 'sent', gone, t.by);
     } catch (e) {
-      if (!lastTry) throw e;
+      // It left: the claim stays, and the next try (resume) records it from the row.
+      if (gone) throw e;
+      if (!t.lastTry) {
+        await this.release(send, t.by);
+        throw e;
+      }
       log.error(`send ${send.id} of ${doc.id} failed: ${messageOf(e)}`);
-      return this.finish(send, 'failed', { error: messageOf(e) });
+      return this.finish(send, 'failed', { error: messageOf(e) }, t.by);
     }
   }
 
-  /** A send's outcome: recorded once, audited, and stored as an event. */
+  /**
+   * A send's outcome: recorded once, audited, and stored as an event. A claimed send is finished
+   * only by the job that holds the claim (`claimedBy`); an unclaimed one only while queued or
+   * waiting.
+   */
   private async finish(
     send: DocumentSendRow,
     status: 'sent' | 'failed',
     a: { channel?: DocumentChannel; address?: string; messageId?: string; error?: string },
+    claimedBy?: string | null,
   ): Promise<string> {
-    await this.db.transaction(async (tx) => {
+    const recorded = await this.db.transaction(async (tx) => {
       const [done] = await tx
         .update(documentSends)
         .set({
@@ -281,10 +382,20 @@ export class DocumentSender {
           ...(status === 'sent' ? { sentAt: new Date() } : {}),
         })
         .where(
-          and(eq(documentSends.id, send.id), inArray(documentSends.status, ['queued', 'waiting'])),
+          and(
+            eq(documentSends.id, send.id),
+            claimedBy === undefined
+              ? inArray(documentSends.status, ['queued', 'waiting'])
+              : and(
+                  eq(documentSends.status, 'sending'),
+                  claimedBy === null
+                    ? isNull(documentSends.claimedBy)
+                    : eq(documentSends.claimedBy, claimedBy),
+                ),
+          ),
         )
         .returning();
-      if (!done) return;
+      if (!done) return false;
       await writeAudit(tx, {
         action: status === 'sent' ? 'document.sent' : 'document.send_failed',
         resourceType: 'document',
@@ -317,7 +428,9 @@ export class DocumentSender {
           ),
         ],
       });
+      return true;
     });
+    if (!recorded) return 'finished by another job';
     return status === 'sent' ? `sent by ${a.channel}` : `failed: ${a.error}`;
   }
 }

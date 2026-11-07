@@ -83,9 +83,15 @@ export const documentSends = app.table(
     channel: text('channel', { enum: ['whatsapp', 'email'] }),
     /** Where it went: the WhatsApp number or the email address. */
     address: text('address'),
-    status: text('status', { enum: ['waiting', 'queued', 'sent', 'failed'] })
+    status: text('status', { enum: ['waiting', 'queued', 'sending', 'sent', 'failed'] })
       .notNull()
       .default('queued'),
+    /**
+     * The job delivering it ('sending'), and since when: only the job that claimed a send
+     * delivers it, so it leaves at most once.
+     */
+    claimedBy: text('claimed_by'),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
     /** The WhatsApp message it became. */
     messageId: text('message_id').references(() => messages.id, { onDelete: 'set null' }),
     error: text('error'),
