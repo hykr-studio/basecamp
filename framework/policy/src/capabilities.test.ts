@@ -36,7 +36,8 @@ describe('the framework roles and capabilities', () => {
   it('give what the hard-coded role checks gave, settings to owners and admins (A11), and the comment capabilities', () => {
     // Deciding: owner and ops decided the business's requests, owner and admin marketing sends.
     // Plus the members feature's (A4): the team reads members, owner and admin manage them,
-    // and owner, admin and ops give access to single records.
+    // and owner, admin and ops give access to single records. Owners export the business's
+    // data (A11X).
     expect(capabilitiesOf(['owner'])).toEqual([
       'approvals.decide',
       'backoffice.use',
@@ -44,6 +45,7 @@ describe('the framework roles and capabilities', () => {
       'comments.internal',
       'comments.moderate',
       'customers.message',
+      'data.export',
       'marketing.approve',
       'members.manage',
       'members.read',

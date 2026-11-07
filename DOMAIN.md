@@ -368,6 +368,11 @@ From the contracts declaration alone:
   (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
   (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
   sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+- Exporting a business's data (`POST /api/exports`, `data.export`, owners by default): a job that
+  reads every entity as the person who asked (their access and hidden fields) and keeps one zip of
+  JSON and CSV files on the job; a module adds data no entity serves as a `dataExportSources`
+  entry. `exportPlugin` in the app, a section of the back office's Settings (developer guide,
+  section 5.22).
 - Each business's setup: feature flags, custom field definitions (`app.custom_fields`), branding
   and verified web addresses (`app.tenant_domains`), shared records and wording (`/api/settings`,
   `/api/features`, `/api/custom-fields`, the back office's Settings screen, `settingsPlugin` in the

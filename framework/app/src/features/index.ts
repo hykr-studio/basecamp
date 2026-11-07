@@ -2,6 +2,7 @@
 // parallel). Each is an AppPlugin factory an application lists in `<AppShell plugins>`.
 export * from './comments';
 export * from './inbox';
+export * from './export';
 export { type LiveOptions, livePlugin } from './live/LivePlugin';
 export { onLiveEvent } from './live/listeners';
 export { type PushOptions, pushPlugin } from './push/PushPlugin';

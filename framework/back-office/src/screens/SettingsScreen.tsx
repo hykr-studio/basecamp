@@ -3,6 +3,7 @@ import {
   AddDomainSpec,
   type CustomField,
   CustomFieldSpec,
+  DataExportCapability,
   RemoveDomainSpec,
   SetFeatureSpec,
   SettingsCapability,
@@ -14,6 +15,7 @@ import { type ReactNode, useState } from 'react';
 import { ScrollView, Switch, Text, TextInput, View } from 'react-native';
 import { api, reasonOf } from '../api';
 import { Badge, Button, Empty, ErrorLine } from '../components/ui';
+import { DataExport } from './DataExport';
 
 const INPUT = 'min-h-9 rounded-control border border-border bg-card px-3 text-body text-text';
 
@@ -312,18 +314,20 @@ function Domains() {
   );
 }
 
-/** The business's setup: branding, features, custom fields and web addresses. */
+/** The business's setup: branding, features, custom fields, web addresses and data export. */
 export function SettingsScreen() {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   if (me.isPending) return <Empty title="Loading…" />;
   if (me.isError) return <Empty title="Can't load settings">{reasonOf(me.error)}</Empty>;
   const canManage = me.data.capabilities.includes(SettingsCapability.name);
+  const canExport = me.data.capabilities.includes(DataExportCapability.name);
   return (
     <ScrollView contentContainerClassName="gap-4 p-4">
       <Branding canManage={canManage} />
       <Features canManage={canManage} />
       <CustomFields canManage={canManage} />
       {canManage ? <Domains /> : null}
+      {canExport ? <DataExport /> : null}
     </ScrollView>
   );
 }

@@ -6,6 +6,7 @@ export { commentsFeature } from './comments/index.js';
 export { creditsFeature } from './credits/index.js';
 export { documentsFeature } from './documents/index.js';
 export { eventsFeature } from './events/index.js';
+export { exportFeature } from './export/index.js';
 export { filesFeature } from './files/index.js';
 export { inboxFeature } from './inbox/index.js';
 export { integrationsFeature } from './integrations/index.js';

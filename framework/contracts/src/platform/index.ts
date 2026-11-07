@@ -12,6 +12,7 @@ import { SavedPageSpec } from './page.js';
 export * from './backoffice.js';
 export * from './comment.js';
 export * from './document.js';
+export * from './export.js';
 export * from './file.js';
 export * from './handoff.js';
 export * from './job.js';
