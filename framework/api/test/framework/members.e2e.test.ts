@@ -1,6 +1,6 @@
 // Roles, members, invitations, per-record grants and field policy (A4). The fixture's
-// src/features/members adds a `jobs` module (a cost only some capabilities read, steps that
-// follow their job's grants, a command hiding the cost), its own roles and capabilities, an
+// src/features/members adds a `projects` module (a cost only some capabilities read, steps that
+// follow their project's grants, a command hiding the cost), its own roles and capabilities, an
 // override of the framework's staff, and the roles a creator and a contact get.
 import { entitySpec, type Principal } from '@hykr/contracts';
 import {
@@ -61,8 +61,8 @@ const audits = async (action: string, outcome?: string) =>
     )
   ).rows;
 
-const newJob = async (body: { title: string; cost?: number }, who = ana) =>
-  (await inAna(who)('POST', '/api/jobs', body)).body.value;
+const newProject = async (body: { title: string; cost?: number }, who = ana) =>
+  (await inAna(who)('POST', '/api/projects', body)).body.value;
 
 beforeAll(async () => {
   await boot(membersServer);
@@ -121,27 +121,27 @@ describe("a business's own roles", () => {
     const defined = await ana.call('POST', '/api/members/roles', {
       name: 'site_lead',
       label: { en: 'Site lead' },
-      capabilities: ['fixture.jobs.all', 'members.read'],
+      capabilities: ['fixture.projects.all', 'members.read'],
     });
     expect(defined.status).toBe(200);
     expect(defined.body.value).toMatchObject({
       name: 'site_lead',
       label: { en: 'Site lead', hi: 'Site lead', te: 'Site lead' },
       source: 'business',
-      capabilities: ['fixture.jobs.all', 'members.read'],
+      capabilities: ['fixture.projects.all', 'members.read'],
     });
-    const job = await newJob({ title: 'Lead sees every job', cost: 100 });
-    expect((await inAna(lead)('GET', `/api/jobs/${job.id}`)).status).toBe(404);
+    const project = await newProject({ title: 'Lead sees every project', cost: 100 });
+    expect((await inAna(lead)('GET', `/api/projects/${project.id}`)).status).toBe(404);
 
     expect(
       (await ana.call('PATCH', `/api/members/${lead.id}`, { roles: ['site_lead'] })).status,
     ).toBe(200);
     expect((await inAna(lead)('GET', '/api/me')).body).toMatchObject({
       roles: ['site_lead'],
-      capabilities: ['fixture.jobs.all', 'members.read'],
+      capabilities: ['fixture.projects.all', 'members.read'],
     });
-    // The capability key in the jobs' access reaches every job; the cost stays hidden.
-    const seen = await inAna(lead)('GET', `/api/jobs/${job.id}`);
+    // The capability key in the projects' access reaches every project; the cost stays hidden.
+    const seen = await inAna(lead)('GET', `/api/projects/${project.id}`);
     expect(seen.status).toBe(200);
     expect(seen.body).not.toHaveProperty('cost');
 
@@ -151,7 +151,7 @@ describe("a business's own roles", () => {
       label: { en: 'Lead', hi: 'लीड' },
     });
     expect(edited.body.value).toMatchObject({ label: { en: 'Lead', hi: 'लीड', te: 'Lead' } });
-    expect((await inAna(lead)('GET', `/api/jobs/${job.id}`)).status).toBe(404);
+    expect((await inAna(lead)('GET', `/api/projects/${project.id}`)).status).toBe(404);
     expect(await audits('roles.edit')).toHaveLength(1);
   });
 
@@ -389,10 +389,10 @@ describe('members and invitations', () => {
   });
 
   it('removes a member and their record grants; never the default owner', async () => {
-    const job = await newJob({ title: 'Invitee job' });
+    const project = await newProject({ title: 'Invitee project' });
     await ana.call('POST', '/api/grants', {
-      resourceType: 'job',
-      resourceId: job.id,
+      resourceType: 'project',
+      resourceId: project.id,
       userId: invitee.id,
     });
     expect((await ana.call('DELETE', `/api/members/${invitee.id}`)).status).toBe(200);
@@ -410,73 +410,76 @@ describe('record grants', () => {
   let b: { id: string };
 
   beforeAll(async () => {
-    a = await newJob({ title: 'Job A', cost: 500 });
-    b = await newJob({ title: 'Job B', cost: 700 });
+    a = await newProject({ title: 'Project A', cost: 500 });
+    b = await newProject({ title: 'Project B', cost: 700 });
   });
 
   it('a granted role reaches only the records granted to its person', async () => {
-    const before = (await inAna(crew)('GET', '/api/jobs')).body.items;
+    const before = (await inAna(crew)('GET', '/api/projects')).body.items;
     expect(before.map((j: { id: string }) => j.id)).not.toContain(a.id);
     const granted = await ana.call('POST', '/api/grants', {
-      resourceType: 'job',
+      resourceType: 'project',
       resourceId: a.id,
       userId: crew.id,
     });
     expect(granted.body.value).toMatchObject({
-      resourceType: 'job',
+      resourceType: 'project',
       resourceId: a.id,
       userId: crew.id,
     });
     // The same grant again is the same grant.
     const again = await ana.call('POST', '/api/grants', {
-      resourceType: 'job',
+      resourceType: 'project',
       resourceId: a.id,
       userId: crew.id,
     });
     expect(again.body.value.id).toBe(granted.body.value.id);
 
-    const items = (await inAna(crew)('GET', '/api/jobs')).body.items;
+    const items = (await inAna(crew)('GET', '/api/projects')).body.items;
     expect(items.map((j: { id: string }) => j.id)).toEqual([a.id]);
-    // Their own jobs too (the rule is a list): one they make is theirs.
-    const mine = (await inAna(crew)('POST', '/api/jobs', { title: 'Crew job' })).body.value;
-    const both = (await inAna(crew)('GET', '/api/jobs')).body.items;
+    // Their own projects too (the rule is a list): one they make is theirs.
+    const mine = (await inAna(crew)('POST', '/api/projects', { title: 'Crew project' })).body.value;
+    const both = (await inAna(crew)('GET', '/api/projects')).body.items;
     expect(both.map((j: { id: string }) => j.id)).toEqual([a.id, mine.id]);
-    expect((await inAna(crew)('GET', `/api/jobs/${a.id}`)).status).toBe(200);
-    expect((await inAna(crew)('GET', `/api/jobs/${b.id}`)).status).toBe(404);
-    expect((await inAna(crew)('PATCH', `/api/jobs/${b.id}`, { title: 'Not mine' })).status).toBe(
-      404,
-    );
+    expect((await inAna(crew)('GET', `/api/projects/${a.id}`)).status).toBe(200);
+    expect((await inAna(crew)('GET', `/api/projects/${b.id}`)).status).toBe(404);
     expect(
-      (await inAna(crew)('PATCH', `/api/jobs/${a.id}`, { title: 'Job A, crew' })).body.value,
-    ).toMatchObject({ title: 'Job A, crew' });
+      (await inAna(crew)('PATCH', `/api/projects/${b.id}`, { title: 'Not mine' })).status,
+    ).toBe(404);
+    expect(
+      (await inAna(crew)('PATCH', `/api/projects/${a.id}`, { title: 'Project A, crew' })).body
+        .value,
+    ).toMatchObject({ title: 'Project A, crew' });
 
-    const grants = (await ana.call('GET', `/api/grants?resourceType=job&resourceId=${a.id}`)).body;
+    const grants = (await ana.call('GET', `/api/grants?resourceType=project&resourceId=${a.id}`))
+      .body;
     expect(grants.map((g: { userId: string }) => g.userId)).toEqual([crew.id]);
     expect(
-      (await inAna(crew)('GET', `/api/grants?resourceType=job&resourceId=${a.id}`)).status,
+      (await inAna(crew)('GET', `/api/grants?resourceType=project&resourceId=${a.id}`)).status,
     ).toBe(403);
   });
 
   it("a child follows its parent's grant: read, and created only under a granted parent", async () => {
-    const stepA = (await ana.call('POST', '/api/steps', { jobId: a.id, title: 'Measure' })).body
+    const stepA = (await ana.call('POST', '/api/steps', { projectId: a.id, title: 'Measure' })).body
       .value;
-    await ana.call('POST', '/api/steps', { jobId: b.id, title: 'Not for crew' });
+    await ana.call('POST', '/api/steps', { projectId: b.id, title: 'Not for crew' });
     const steps = (await inAna(crew)('GET', '/api/steps')).body.items;
     expect(steps.map((s: { id: string }) => s.id)).toEqual([stepA.id]);
 
-    const added = await inAna(crew)('POST', '/api/steps', { jobId: a.id, title: 'Cut' });
+    const added = await inAna(crew)('POST', '/api/steps', { projectId: a.id, title: 'Cut' });
     expect(added.status).toBe(201);
-    const refused = await inAna(crew)('POST', '/api/steps', { jobId: b.id, title: 'Sneak in' });
+    const refused = await inAna(crew)('POST', '/api/steps', { projectId: b.id, title: 'Sneak in' });
     expect(refused.status).toBe(403);
     expect(refused.body.rule).toBe('no_access');
   });
 
   it("another business's record or person cannot be granted", async () => {
-    const theirs = (await stranger.call('POST', '/api/jobs', { title: 'Stranger job' })).body.value;
+    const theirs = (await stranger.call('POST', '/api/projects', { title: 'Stranger project' }))
+      .body.value;
     expect(
       (
         await ana.call('POST', '/api/grants', {
-          resourceType: 'job',
+          resourceType: 'project',
           resourceId: theirs.id,
           userId: crew.id,
         })
@@ -485,7 +488,7 @@ describe('record grants', () => {
     expect(
       (
         await ana.call('POST', '/api/grants', {
-          resourceType: 'job',
+          resourceType: 'project',
           resourceId: a.id,
           userId: stranger.id,
         })
@@ -501,39 +504,41 @@ describe('record grants', () => {
       ).status,
     ).toBe(404);
     // Reaching the record is not enough: giving access needs records.grant.
-    const own = await newJob({ title: 'Staff job' }, staffer);
+    const own = await newProject({ title: 'Staff project' }, staffer);
     expect(
       (
         await inAna(staffer)('POST', '/api/grants', {
-          resourceType: 'job',
+          resourceType: 'project',
           resourceId: own.id,
           userId: crew.id,
         })
       ).body.rule,
     ).toBe('records_grant');
     // Stranger cannot read Ana's grants, or take one back.
-    const [grant] = (await ana.call('GET', `/api/grants?resourceType=job&resourceId=${a.id}`)).body;
+    const [grant] = (await ana.call('GET', `/api/grants?resourceType=project&resourceId=${a.id}`))
+      .body;
     expect((await stranger.call('DELETE', `/api/grants/${grant.id}`)).status).toBe(404);
     expect(
-      (await stranger.call('GET', `/api/grants?resourceType=job&resourceId=${a.id}`)).status,
+      (await stranger.call('GET', `/api/grants?resourceType=project&resourceId=${a.id}`)).status,
     ).toBe(404);
   });
 
   it('revoking hides the record again, and a deleted record takes its grants', async () => {
-    const [grant] = (await ana.call('GET', `/api/grants?resourceType=job&resourceId=${a.id}`)).body;
+    const [grant] = (await ana.call('GET', `/api/grants?resourceType=project&resourceId=${a.id}`))
+      .body;
     expect((await ana.call('DELETE', `/api/grants/${grant.id}`)).status).toBe(200);
-    expect((await inAna(crew)('GET', `/api/jobs/${a.id}`)).status).toBe(404);
+    expect((await inAna(crew)('GET', `/api/projects/${a.id}`)).status).toBe(404);
     expect(await audits('grants.remove')).toHaveLength(1);
 
-    const c = await newJob({ title: 'Job C' });
+    const c = await newProject({ title: 'Project C' });
     await ana.call('POST', '/api/grants', {
-      resourceType: 'job',
+      resourceType: 'project',
       resourceId: c.id,
       userId: crew.id,
     });
-    expect((await ana.call('DELETE', `/api/jobs/${c.id}`)).status).toBe(200);
+    expect((await ana.call('DELETE', `/api/projects/${c.id}`)).status).toBe(200);
     const { rows } = await pool.query(
-      `select count(*)::int as n from app.record_grants where resource_type = 'job' and resource_id = $1`,
+      `select count(*)::int as n from app.record_grants where resource_type = 'project' and resource_id = $1`,
       [c.id],
     );
     expect(rows[0].n).toBe(0);
@@ -541,90 +546,96 @@ describe('record grants', () => {
 });
 
 describe('field policy', () => {
-  let job: { id: string };
+  let project: { id: string };
 
   beforeAll(async () => {
-    job = await newJob({ title: 'Costed job', cost: 1200 });
+    project = await newProject({ title: 'Costed project', cost: 1200 });
     await ana.call('POST', '/api/grants', {
-      resourceType: 'job',
-      resourceId: job.id,
+      resourceType: 'project',
+      resourceId: project.id,
       userId: crew.id,
     });
   });
 
   it('a field is hidden from whoever lacks its capability, in lists, gets and tool calls', async () => {
-    expect((await ana.call('GET', `/api/jobs/${job.id}`)).body.cost).toBe(1200);
-    const listed = (await inAna(crew)('GET', '/api/jobs')).body.items;
-    expect(listed.find((j: { id: string }) => j.id === job.id)).not.toHaveProperty('cost');
-    expect((await inAna(crew)('GET', `/api/jobs/${job.id}`)).body).not.toHaveProperty('cost');
+    expect((await ana.call('GET', `/api/projects/${project.id}`)).body.cost).toBe(1200);
+    const listed = (await inAna(crew)('GET', '/api/projects')).body.items;
+    expect(listed.find((j: { id: string }) => j.id === project.id)).not.toHaveProperty('cost');
+    expect((await inAna(crew)('GET', `/api/projects/${project.id}`)).body).not.toHaveProperty(
+      'cost',
+    );
     // The assistant's tools call the same API, so they see what the person sees.
     const agent = asAssistant(`user:${crew.id}`, { 'x-tenant-id': tenantId });
-    const viaTool = await agent('GET', `/api/jobs/${job.id}`);
+    const viaTool = await agent('GET', `/api/projects/${project.id}`);
     expect(viaTool.status).toBe(200);
     expect(viaTool.body).not.toHaveProperty('cost');
   });
 
   it('refuses a filter or a sort on it', async () => {
-    const filtered = await inAna(crew)('GET', '/api/jobs?cost[gt]=100');
+    const filtered = await inAna(crew)('GET', '/api/projects?cost[gt]=100');
     expect(filtered.status).toBe(403);
     expect(filtered.body.rule).toBe('field_hidden');
-    expect((await inAna(crew)('GET', '/api/jobs?sort=-cost')).body.rule).toBe('field_hidden');
-    expect((await ana.call('GET', '/api/jobs?cost[gt]=100')).status).toBe(200);
+    expect((await inAna(crew)('GET', '/api/projects?sort=-cost')).body.rule).toBe('field_hidden');
+    expect((await ana.call('GET', '/api/projects?cost[gt]=100')).status).toBe(200);
   });
 
   it('refuses a summary that names it, even to someone who reaches no record', async () => {
     for (const q of ['sum=cost', 'avg=cost&groupBy=title', 'cost[gt]=100', 'max=cost']) {
-      const res = await inAna(crew)('GET', `/api/jobs/summary?${q}`);
+      const res = await inAna(crew)('GET', `/api/projects/summary?${q}`);
       expect(res.status, q).toBe(403);
       expect(res.body.rule, q).toBe('field_hidden');
     }
-    // Staff reach only their own jobs, and have none: still refused, not zeros.
-    const none = await inAna(staffer)('GET', '/api/jobs/summary?sum=cost');
+    // Staff reach only their own projects, and have none: still refused, not zeros.
+    const none = await inAna(staffer)('GET', '/api/projects/summary?sum=cost');
     expect(none.status).toBe(403);
     expect(none.body.rule).toBe('field_hidden');
     // A summary that does not name it counts what the crew member reaches.
-    const counted = await inAna(crew)('GET', '/api/jobs/summary');
+    const counted = await inAna(crew)('GET', '/api/projects/summary');
     expect(counted.status).toBe(200);
     expect(counted.body.totals[0].count).toBeGreaterThanOrEqual(1);
     // Its holder sums it.
-    const held = await ana.call('GET', '/api/jobs/summary?sum=cost&title=Costed%20job');
+    const held = await ana.call('GET', '/api/projects/summary?sum=cost&title=Costed%20project');
     expect(held.status).toBe(200);
     expect(held.body.totals[0].sum).toEqual({ cost: 1200 });
   });
 
   it('refuses a write to it, on CRUD and inside a command, and audits the refusal', async () => {
-    const crud = await inAna(crew)('PATCH', `/api/jobs/${job.id}`, { cost: 1 });
+    const crud = await inAna(crew)('PATCH', `/api/projects/${project.id}`, { cost: 1 });
     expect(crud.status).toBe(403);
     expect(crud.body.rule).toBe('field_hidden');
-    expect((await inAna(crew)('POST', '/api/jobs', { title: 'Mine', cost: 3 })).status).toBe(403);
-    const cmd = await inAna(crew)('POST', `/api/jobs/${job.id}/reprice`, { cost: 2 });
+    expect((await inAna(crew)('POST', '/api/projects', { title: 'Mine', cost: 3 })).status).toBe(
+      403,
+    );
+    const cmd = await inAna(crew)('POST', `/api/projects/${project.id}/reprice`, { cost: 2 });
     expect(cmd.status).toBe(403);
     expect(cmd.body.rule).toBe('field_hidden');
-    expect((await audits('job.update', 'denied')).some((r) => r.rule === 'field_hidden')).toBe(
+    expect((await audits('project.update', 'denied')).some((r) => r.rule === 'field_hidden')).toBe(
       true,
     );
-    expect((await ana.call('GET', `/api/jobs/${job.id}`)).body.cost).toBe(1200);
+    expect((await ana.call('GET', `/api/projects/${project.id}`)).body.cost).toBe(1200);
   });
 
   it("hides a command's own output field from whoever may write but not read it", async () => {
-    const set = await inAna(estimator)('POST', `/api/jobs/${job.id}/reprice`, { cost: 900 });
+    const set = await inAna(estimator)('POST', `/api/projects/${project.id}/reprice`, {
+      cost: 900,
+    });
     expect(set.status).toBe(200);
-    expect(set.body.value).toEqual({ jobId: job.id, title: 'Costed job' });
+    expect(set.body.value).toEqual({ projectId: project.id, title: 'Costed project' });
     expect(
-      (await ana.call('POST', `/api/jobs/${job.id}/reprice`, { cost: 950 })).body.value,
+      (await ana.call('POST', `/api/projects/${project.id}/reprice`, { cost: 950 })).body.value,
     ).toEqual({
-      jobId: job.id,
-      title: 'Costed job',
+      projectId: project.id,
+      title: 'Costed project',
       cost: 950,
     });
   });
 
   it('a parked write is audited, and its approval hides the field from a decider without it', async () => {
     const agent = asAssistant(`user:${ana.id}`, { 'x-tenant-id': tenantId });
-    const parked = await agent('PATCH', `/api/jobs/${job.id}`, { cost: 1234 });
+    const parked = await agent('PATCH', `/api/projects/${project.id}`, { cost: 1234 });
     expect(parked.body.status).toBe('needs_approval');
     const id = parked.body.approval.id;
-    expect((await audits('job.update', 'needs_approval')).length).toBeGreaterThanOrEqual(1);
+    expect((await audits('project.update', 'needs_approval')).length).toBeGreaterThanOrEqual(1);
 
     const forCrew = (await inAna(crew)('GET', '/api/approvals')).body.find(
       (x: { id: string }) => x.id === id,
@@ -643,13 +654,13 @@ describe('field policy', () => {
     const [row] = await db
       .select()
       .from(domainEvents)
-      .where(and(eq(domainEvents.resourceId, job.id), eq(domainEvents.name, 'job.created')))
+      .where(and(eq(domainEvents.resourceId, project.id), eq(domainEvents.name, 'project.created')))
       .orderBy(desc(domainEvents.seq))
       .limit(1);
     const event = toEnvelope(row);
     expect(eventFor(event, await principalOf(ana))?.row).toMatchObject({ cost: 1200 });
     const seen = eventFor(event, await principalOf(crew));
-    expect(seen?.row).toMatchObject({ id: job.id, title: 'Costed job' });
+    expect(seen?.row).toMatchObject({ id: project.id, title: 'Costed project' });
     expect(seen?.row).not.toHaveProperty('cost');
     expect(eventFor(event, await principalOf(stranger, strangerTenant))).toBeNull();
   });

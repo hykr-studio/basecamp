@@ -1,7 +1,7 @@
 // Roles, grants and field policy as an application uses them (A4): its own roles and
 // capabilities, an override of a framework role, the roles handed to a creator and a contact,
-// a `jobs` module whose `cost` only some capabilities read, rows reached through record grants
-// (a job, and its steps through `via`) and through a capability key, and a command whose output
+// a `projects` module whose `cost` only some capabilities read, rows reached through record grants
+// (a project, and its steps through `via`) and through a capability key, and a command whose output
 // hides the cost too. Only the members test's server (`membersServer`) adds the module.
 import { defineModule, defineServer } from '@hykr/api';
 import {
@@ -26,13 +26,13 @@ import type { Access } from '@hykr/policy';
 import { Module } from '@nestjs/common';
 import { z } from 'zod';
 import { fixture } from '../../index.js';
-import { jobSteps, jobs } from './schema.js';
+import { projectSteps, projects } from './schema.js';
 
 const label = (en: string) => ({ en, hi: en, te: en });
 const title = z.string().min(1).max(200);
 const cost = z.number().int().min(0);
 
-export const Job = z.object({
+export const Project = z.object({
   id: z.string(),
   title,
   // Optional: removed for whoever may not read it.
@@ -41,19 +41,19 @@ export const Job = z.object({
   createdAt: z.iso.datetime(),
 });
 
-/** Deciding the assistant's changes to a job: owners and crew, who do not read the cost. */
-export const ApproveJobs = defineCapability({
-  name: 'fixture.jobs.approve',
-  label: label('Approve job changes'),
+/** Deciding the assistant's changes to a project: owners and crew, who do not read the cost. */
+export const ApproveProjects = defineCapability({
+  name: 'fixture.projects.approve',
+  label: label('Approve project changes'),
   roles: ['owner', 'fixture_crew'],
 });
 
-export const JobSpec = entitySpec({
-  name: 'job',
-  label: 'job',
-  description: 'Jobs: a title and what it costs.',
+export const ProjectSpec = entitySpec({
+  name: 'project',
+  label: 'project',
+  description: 'Projects: a title and what it costs.',
   schemas: {
-    read: Job,
+    read: Project,
     create: z.object({ title, cost: cost.optional() }),
     update: z.object({ title: title.optional(), cost: cost.nullable().optional() }),
   },
@@ -67,14 +67,14 @@ export const JobSpec = entitySpec({
   },
   // The assistant's changes wait for an owner or a crew member.
   approval: {
-    update: { when: (p) => p.actor.kind === 'agent', by: { capability: ApproveJobs.name } },
+    update: { when: (p) => p.actor.kind === 'agent', by: { capability: ApproveProjects.name } },
   },
   traits: { fieldPolicy: { cost: { read: 'fixture.cost.read', write: 'fixture.cost.write' } } },
 });
 
 export const Step = z.object({
   id: z.string(),
-  jobId: z.string(),
+  projectId: z.string(),
   title,
   createdAt: z.iso.datetime(),
 });
@@ -82,50 +82,50 @@ export const Step = z.object({
 export const StepSpec = entitySpec({
   name: 'step',
   label: 'step',
-  description: "A job's steps.",
+  description: "A project's steps.",
   schemas: {
     read: Step,
-    create: z.object({ jobId: z.uuid(), title }),
+    create: z.object({ projectId: z.uuid(), title }),
     update: z.object({ title: title.optional() }),
   },
   list: {
-    filterable: { jobId: 'id' },
+    filterable: { projectId: 'id' },
     sortable: ['createdAt'],
     defaultSort: [['createdAt', 'asc']],
     pageSize: { default: 50, max: 100 },
   },
 });
 
-export const RepriceJobSpec = commandSpec({
-  name: 'job.reprice',
-  description: 'Set what a job costs.',
-  input: z.object({ jobId: z.uuid(), cost }),
+export const RepriceProjectSpec = commandSpec({
+  name: 'project.reprice',
+  description: 'Set what a project costs.',
+  input: z.object({ projectId: z.uuid(), cost }),
   // Not the entity's read schema: the command's own policy hides the cost.
-  output: z.object({ jobId: z.string(), title, cost: cost.nullable().optional() }),
-  http: { method: 'POST', path: '/api/jobs/:jobId/reprice' },
+  output: z.object({ projectId: z.string(), title, cost: cost.nullable().optional() }),
+  http: { method: 'POST', path: '/api/projects/:projectId/reprice' },
   expose: 'all',
-  touches: ['job'],
+  touches: ['project'],
   traits: { fieldPolicy: { cost: 'fixture.cost.read' } },
 });
 
-export const jobsSpec = moduleSpec({
-  name: 'jobs',
-  entities: { jobs: JobSpec, steps: StepSpec },
-  commands: [RepriceJobSpec],
+export const projectsSpec = moduleSpec({
+  name: 'projects',
+  entities: { projects: ProjectSpec, steps: StepSpec },
+  commands: [RepriceProjectSpec],
 });
 
 /**
- * Owners and admins every job; crew their own and the jobs granted to them; a capability key
- * every job.
+ * Owners and admins every project; crew their own and the projects granted to them; a capability key
+ * every project.
  */
-const JOB_ACCESS: Access = {
+const PROJECT_ACCESS: Access = {
   read: {
     owner: 'tenant',
     admin: 'tenant',
     staff: 'own',
     fixture_crew: ['own', { grant: 'granted' }],
     fixture_estimator: 'tenant',
-    'fixture.jobs.all': 'tenant',
+    'fixture.projects.all': 'tenant',
   },
   write: {
     owner: 'tenant',
@@ -133,67 +133,75 @@ const JOB_ACCESS: Access = {
     staff: 'own',
     fixture_crew: ['own', { grant: 'granted' }],
     fixture_estimator: 'tenant',
-    'fixture.jobs.all': 'tenant',
+    'fixture.projects.all': 'tenant',
   },
 };
 
 /**
- * A step follows its job: crew reach the steps of jobs granted to them, and add steps there.
- * Not 'own': with it, anyone could add a step to a job they cannot see.
+ * A step follows its project: crew reach the steps of projects granted to them, and add steps there.
+ * Not 'own': with it, anyone could add a step to a project they cannot see.
  */
 const STEP_ACCESS: Access = {
   read: {
     owner: 'tenant',
     admin: 'tenant',
-    fixture_crew: { grant: 'granted', of: 'job', via: 'jobId' },
+    fixture_crew: { grant: 'granted', of: 'project', via: 'projectId' },
   },
   write: {
     owner: 'tenant',
     admin: 'tenant',
-    fixture_crew: { grant: 'granted', of: 'job', via: 'jobId' },
+    fixture_crew: { grant: 'granted', of: 'project', via: 'projectId' },
   },
 };
 
-export const JobDef = defineEntity(JobSpec, {
-  table: jobs,
+export const ProjectDef = defineEntity(ProjectSpec, {
+  table: projects,
   owner: (t) => t.ownerId,
   customer: (t) => t.customerId,
-  access: JOB_ACCESS,
+  access: PROJECT_ACCESS,
 });
 
 export const StepDef = defineEntity(StepSpec, {
-  table: jobSteps,
+  table: projectSteps,
   owner: (t) => t.ownerId,
   access: STEP_ACCESS,
 });
 
-export const RepriceJob = defineCommand(RepriceJobSpec, {
-  resource: { type: 'job', id: (input) => input.jobId },
-  load: (tx, p, input) => JobDef.repo.get(tx, p, input.jobId),
+export const RepriceProject = defineCommand(RepriceProjectSpec, {
+  resource: { type: 'project', id: (input) => input.projectId },
+  load: (tx, p, input) => ProjectDef.repo.get(tx, p, input.projectId),
   authorize: () => allow('reprice'),
   summarize: (input) => `Set the cost to ${input.cost}`,
   run: async ({ tx, principal, input, loaded, via }) => {
-    const after = await JobDef.repo.update(tx, principal, loaded, { cost: input.cost }, via);
+    const after = await ProjectDef.repo.update(tx, principal, loaded, { cost: input.cost }, via);
     return {
-      value: { jobId: after.id, title: after.title, cost: after.cost },
-      touched: [{ type: 'job', id: after.id, change: 'updated', before: loaded, after }],
+      value: { projectId: after.id, title: after.title, cost: after.cost },
+      touched: [{ type: 'project', id: after.id, change: 'updated', before: loaded, after }],
     };
   },
 });
 
 @Module({
-  controllers: [entityController(JobDef), entityController(StepDef), commandController(RepriceJob)],
-  providers: [...entityHandlers(JobDef), ...entityHandlers(StepDef), commandHandler(RepriceJob)],
+  controllers: [
+    entityController(ProjectDef),
+    entityController(StepDef),
+    commandController(RepriceProject),
+  ],
+  providers: [
+    ...entityHandlers(ProjectDef),
+    ...entityHandlers(StepDef),
+    commandHandler(RepriceProject),
+  ],
 })
-class JobsModule {}
+class ProjectsModule {}
 
-export const jobsModule = defineModule({
-  ...jobsSpec,
-  server: JobsModule,
-  tables: { jobs, jobSteps },
+export const projectsModule = defineModule({
+  ...projectsSpec,
+  server: ProjectsModule,
+  tables: { projects, projectSteps },
 });
 
-/** Crew: only the jobs granted to them, and those jobs' steps. Not the cost. */
+/** Crew: only the projects granted to them, and those projects' steps. Not the cost. */
 export const Crew = defineRole({ name: 'fixture_crew', label: label('Crew') });
 /** Sets costs it cannot read. */
 export const Estimator = defineRole({
@@ -216,9 +224,9 @@ export const membersContributions: Partial<Contributions> = {
       label: label('Set costs'),
       roles: ['owner', 'admin'],
     }),
-    // Not given to any declared role: a business's own role reaches every job through it.
-    defineCapability({ name: 'fixture.jobs.all', label: label('Every job') }),
-    ApproveJobs,
+    // Not given to any declared role: a business's own role reaches every project through it.
+    defineCapability({ name: 'fixture.projects.all', label: label('Every project') }),
+    ApproveProjects,
   ],
   roles: [Crew, Estimator, Client],
   // The application relabels the framework's staff and replaces what it may do.
@@ -236,9 +244,9 @@ export const membersContributions: Partial<Contributions> = {
   ],
 };
 
-/** The fixture with the jobs module and these contributions. */
+/** The fixture with the projects module and these contributions. */
 export const membersServer = defineServer({
   ...fixture.definition,
-  modules: [...fixture.definition.modules, jobsModule],
+  modules: [...fixture.definition.modules, projectsModule],
   contributes: membersContributions,
 });

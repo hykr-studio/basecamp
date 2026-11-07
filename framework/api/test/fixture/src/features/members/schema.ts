@@ -1,5 +1,5 @@
-// The members feature's fixture tables (A4): jobs with a cost only some roles see, and their
-// steps, which follow a job's grants. Generate with
+// The members feature's fixture tables (A4): projects with a cost only some roles see, and their
+// steps, which follow a project's grants. Generate with
 // `FIXTURE_FEATURE=members pnpm fixture:generate --name members`.
 // Import `app` from @hykr/db, never export it: an exported schema would be created again.
 import { app, customerColumn, id, tenantColumn, user } from '@hykr/db';
@@ -22,21 +22,21 @@ const common = () => ({
     .notNull(),
 });
 
-export const jobs = app.table('fixture_jobs', {
+export const projects = app.table('fixture_projects', {
   ...common(),
   title: text('title').notNull(),
   /** Minor units of the business's currency: only some roles see it. */
   cost: integer('cost'),
 });
 
-export const jobSteps = app.table(
-  'fixture_jobs_steps',
+export const projectSteps = app.table(
+  'fixture_projects_steps',
   {
     ...common(),
-    jobId: text('job_id')
+    projectId: text('project_id')
       .notNull()
-      .references(() => jobs.id, { onDelete: 'cascade' }),
+      .references(() => projects.id, { onDelete: 'cascade' }),
     title: text('title').notNull(),
   },
-  (table) => [index('fixture_jobs_steps_job_idx').on(table.jobId)],
+  (table) => [index('fixture_projects_steps_project_idx').on(table.projectId)],
 );
