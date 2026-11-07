@@ -97,6 +97,8 @@ export const HistoryEntry = z.object({
   resourceType: z.string().optional(),
   resourceId: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
+  /** A state change on this line: the state field's value before and after. */
+  transition: z.object({ from: z.string().nullable(), to: z.string() }).nullable().optional(),
 });
 export type HistoryEntry = z.infer<typeof HistoryEntry>;
 

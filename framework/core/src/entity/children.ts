@@ -66,6 +66,10 @@ const links = new Map<string, ChildLink>();
 /** The link of a child entity, by its name; undefined for any other entity. */
 export const childLinkOf = (name: string): ChildLink | undefined => links.get(name);
 
+/** The child entities whose parent is this entity, by the parent's name. */
+export const childLinksOf = (parentName: string): ChildLink[] =>
+  [...links.values()].filter((l) => l.parent.name === parentName);
+
 /** A child entity: an entity whose rows are written through their parent, a whole tree at once. */
 export interface ChildEntityDef<S extends EntitySpec = EntitySpec, T extends Table = Table>
   extends EntityDef<S, T> {
@@ -221,6 +225,12 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
         error: 'not_found',
         message: `No such ${parentDef.spec.label}`,
       });
+    // The parent's plugins may refuse a write to its children (a frozen record's lines).
+    const target = { spec: parentDef.spec, table: parentDef.table };
+    for (const x of parentDef.plugins()) {
+      const r = x.childWrite?.(row, target);
+      if (r?.decision === 'deny') throw new RuleDenied(r);
+    }
     return row;
   }
 

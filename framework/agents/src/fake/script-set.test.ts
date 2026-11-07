@@ -35,6 +35,7 @@ describe('script sets', () => {
       'document-status',
       'job-status',
       'jobs-running',
+      'apply-transition',
       'fail',
     ]);
   });
