@@ -872,7 +872,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources`,
   `fileHolders` (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
   `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21),
-  `dataExportSources` (section 5.22) and `uploadTargets` (section 5.23) in `@hykr/api`.
+  `dataExportSources` (section 5.22), `uploadTargets` (section 5.23), and `processors`,
+  `privacyPolicies`, `retentionTargets` and `retentionPeriods` (section 5.24) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -973,8 +974,10 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   `inboundHooks` before its turn: `{ handled: true }` keeps it out, `{ context }` adds lines the turn
   reads. A hook that throws is logged and skipped. A burst that says "delete my data" passes no hook:
   the erasure is queued and the rest of the burst is dropped.
-- **Personal data.** "Delete my data" runs `erasureContributors` in its transaction and audits their
-  counts. `exportPersonalData({ subject, db })` collects `exportContributors` by kind.
+- **Personal data.** A person's erasure (section 5.24) runs `erasureContributors` in its
+  transaction and records their counts; their copy of their data takes `exportContributors` by
+  kind (`exportPersonalData({ subject, db })`). A feature that keeps something about a person
+  contributes both.
 - **Hooks that need services.** Queue processors and subscriber handlers get `ctx`. A turn, inbound
   or delivery hook that needs DI is a Nest provider that registers itself in `onModuleInit`
   (`inboundHooks.register(this)`).
@@ -1697,6 +1700,90 @@ pnpm exec basecamp import todo domain/src/modules/todos/import/todos.csv \
 - **Limits.** `IMPORTS_MAX_ROWS` (50 000), `IMPORTS_BATCH_SIZE` (100), `IMPORTS_REPORT_ROWS`
   (10 000), `IMPORTS_TIMEOUT_S` (14 400); the file's size is `FILES_MAX_BYTES`.
 
+### 5.24 Personal data: requests, erasure, retention, the register
+
+The **privacy** feature (`framework/api/src/features/privacy`, `docs/decisions/B18.md`) answers
+what a data protection law such as DPDP asks of a business: a person may ask for a copy of what it
+keeps about them, or to be forgotten, within a deadline; personal data is kept no longer than a
+period; and the business can say who processes it. The framework has no period, purpose,
+processor or legal wording of its own: modules declare their personal data, the application its
+policy, processors and periods, and each business overrides them (settings `privacy`).
+
+```ts
+// contracts: which records are someone's personal data, and what forgetting them does
+traits: {
+  privacy: {
+    subject: { customer: ['customerId'] },   // table keys holding a user, customer or contact id
+    fields: ['title', 'body', 'photos'],     // what a copy carries and erasure removes
+    erase: 'delete',                         // or 'anonymise' (replace: { title: '—' }), or 'keep'
+                                             // with keepReason: 'legal_hold'
+    retention: { name: 'notes.personal', days: 730, from: 'updatedAt', action: 'delete' },
+    purpose: { en: 'Notes about a customer', hi: '…', te: '…' },
+  },
+},
+
+// the application (defineServer contributes)
+processors: [defineProcessor({ name: 'Email provider', purpose: { … }, data: ['email address'] })],
+privacyPolicies: [definePrivacyPolicy({ name: 'app', respondWithinDays: 30 })],
+retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
+```
+
+- **Requests.** `POST /api/privacy/requests { kind: 'export' | 'erase', for?, intake?, note? }`
+  (`privacy.request`, people only). A person files for themselves; someone with `privacy.manage`
+  (owners and admins) for anyone the business knows (`for: { email }`, `{ address }` (WhatsApp),
+  `{ userId }`, `{ contactId }`; anyone else is 404). A second open request of the same kind is
+  409 `request_open`; the business's default owner cannot be erased (`default_owner`). On WhatsApp,
+  "delete my data" files one (intake `whatsapp`) and carries it out there and then. Each request
+  has its due time: the business's `privacy.respondWithinDays`, else the policy's, else none.
+- **Review.** A person's own request runs at once unless its kind is in the business's
+  `privacy.review` (or the policy's `review`): then it waits (`received`, event
+  `privacy.request.received`) until `POST /api/privacy/requests/:id/process` or `/refuse
+  { reason }` (`privacy.manage`). A request the team files runs at once. These are ordinary
+  writes: a level rule on `privacy.process` or `privacy.request` can make them wait for an
+  approval (the sample sends the team's erasures to `irreversible`).
+- **Reading.** `GET /api/privacy/requests` (yours; the business's with `privacy.manage`;
+  `?mine=true`, `status`, `kind`) and `/:id`; anything else, another business's included, is 404.
+  The assistant gets no privacy tool.
+- **A copy** is made in the worker: one zip kept on the request (`api.files.get(request.files[0])`),
+  reached by the person and the privacy team. It holds `manifest.json` and a JSON file per part:
+  the account, memberships, customer records, contacts, consents and messages, threads and their
+  messages, saved pages, approvals asked, the activity audit names them in, their assistant runs,
+  `records/<plural>` (each declared entity's records, **personal fields only**, with ids and dates),
+  `features/<kind>` (every export contributor) and their earlier requests.
+- **Erasure** is one transaction, through `runWrite` as the system principal (audited
+  `privacy.erase` and `privacy.erased`): declared records deleted, anonymised or counted as kept;
+  every erasure contributor (files, comments, memory, documents, jobs, parties, push, inbox, the
+  WhatsApp channel's trail); threads, pages, links, pending approvals, the membership, customer
+  records and contacts; the `mastra` and `mastra_obs` rows of their runs; their earlier archives.
+  **Audit redaction** then takes the erased records' personal fields out of `audit.events`
+  before and after, `app.domain_events`, `app.approvals` (and its summary), `app.outbox` and
+  `channel.messages` copies, keeping every row and id, and erases their files and memory vectors.
+  A person in no business and no party any more loses their login too (name, email, sessions).
+  The request's `outcome` holds the counts, never the data.
+- **Deadlines.** A sweeper (every 5 minutes) marks open requests past due once (`overdueAt`,
+  audited, event `privacy.request.overdue`). The application's notifications say what that means
+  to whom (the sample's account module tells holders of `privacy.manage` in the inbox).
+- **Retention.** A daily runner (`PrivacyService.runRetention()`) applies every target with a
+  period: each entity's trait rule (records that are someone's whose date passed, deleted or
+  anonymised, then redacted) and the framework's targets, which have no period until the
+  application gives one: `channel.inbound-payloads` (raw WhatsApp payloads, emptied),
+  `chat.messages`, `events.relayed`, `outbox.relayed`, `privacy.archives` (per business) and
+  `assistant.traces` (Mastra, for the deployment). A business changes a period by name
+  (`privacy.retention: { 'notes.personal': 365 }`, `null` keeps the data). Each run that changes
+  something is audited (`privacy.retention.applied`, event of the same name). A module's own table
+  is a `retentionTargets` entry `{ name, label, scope, action, apply({ tenantId, before, tx }) }`.
+- **The register.** `GET /api/privacy/register?lang=hi`, for anyone in the business: the business as
+  fiduciary (name, `grievanceContact`, `privacyUrl`), how requests are answered, the processors
+  (the application's and the business's own, `privacy.processors`), every entity's personal data
+  and what erasure does to it, and every retention rule with its period here.
+- **Screens.** The back office's Privacy screen (`/privacy`, with `privacy.manage`): requests with
+  their deadlines, process, refuse, download, file one received by email or phone, the register.
+  In the app, `privacyPlugin` gives everyone "Your data" (`/privacy`): a copy, erasure (asked
+  twice), their requests. `api.privacy.*` in `@hykr/api-client`.
+- The fixture's `features/privacy` (a module whose records are deleted, kept and anonymised) and
+  `test/framework/privacy.e2e.test.ts` show every part; the sample's notes and
+  `application/domain/src/server/privacy.ts` its configuration.
+
 ---
 
 ## 6. Principals and policy
@@ -1831,6 +1918,7 @@ capabilities, with the roles that hold them by default (its features add their o
 | `memory.write` | owner, admin, ops, staff | Adding to the business's memory, and changing your own |
 | `memory.manage` | owner, admin | Changing or deleting anyone's memories |
 | `data.export` | owner | Exporting the business's data, and keeping one's export archives (section 5.22) |
+| `privacy.manage` | owner, admin | The business's privacy requests: reading, filing for someone, processing, refusing (section 5.24) |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -2404,6 +2492,9 @@ Give it `{ grant: 'granted' }` in the entity's `access`, and its children `{ gra
 **…hide a field (cost, margin) from some roles?**
 `traits: { fieldPolicy: { cost: '<module>.cost.read' } }` on the spec, with the capability defined by the module (section 6.4).
 
+**…say which records hold someone's personal data, and for how long?**
+`traits: { privacy: { subject, fields, erase, retention } }` on the spec; a table no entity serves is a `retentionTargets` entry, and its rows an `erasureContributors` and `exportContributors` entry. Periods and processors are the application's (`retentionPeriods`, `processors`); each business overrides them in its `privacy` settings. Section 5.24.
+
 **…put data no entity serves (a module's own table) in a business's export?**
 Contribute a `dataExportSources` entry, `{ name, rows(ctx) }`, that yields only what `ctx.principal` may read. Let admins export too: give them `data.export` (`roleOverrides`, or a role's `capabilities`). Section 5.22.
 
@@ -2588,12 +2679,12 @@ These are not built. Each has a workaround for now.
 | A summary's view of hiding | The field check reads one record of the reader's scope through `toRead` and assumes a projector hides a field on every record alike. A projector that hides a field on some records only lets a summary over it through. |
 | A summary's scope without a recorder | `listWhere` reads the list's WHERE by running `repo.list` against a connection that records it (`define-entity.ts` gets a `repo.where` when it is next opened). |
 | Server geocoding, polygons, tracking | Addresses are typed or found by the phone's geocoder; `within` is a box, not a shape; a check-in is one point in time. |
-| Erasing check-in locations | A check-in keeps the person's point until its record is deleted; retention and erasure come with privacy (B18). |
+| Erasing check-in locations | A check-in keeps the person's point until its record is deleted, or until the module lists its location field in the record's `privacy` trait (section 5.24). |
 | A point column narrowed to points | `geoPoint` is plain `geography` (drizzle-kit quotes `geography(Point,4326)` as one name). Write it only through the column (`pointSql`); a read throws on anything but a point. |
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in and nav filter slots; `inboxPlugin()` (section 5.21) and `exportPlugin` (section 5.22) use routes and nav; `creditsPlugin` and `businessesPlugin` use routes, nav and nav filters too. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in and nav filter slots; `inboxPlugin()` (section 5.21), `exportPlugin` (section 5.22) and `privacyPlugin` (section 5.24) use routes and nav; `creditsPlugin` and `businessesPlugin` use routes, nav and nav filters too. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
 | Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
@@ -2607,7 +2698,11 @@ These are not built. Each has a workaround for now.
 | Missed live events | A reconnect refetches every query; `Last-Event-ID` replay is not supported. |
 | Files' bytes in a data export | An export lists file ids on records, not the files themselves. Download them with `GET /api/files/:id`. |
 | Large data exports | An export is built in the worker's memory, one entity at a time, and fails `too_large` past `FILES_MAX_BYTES` (compressed): raise the limit, or export a few entities at a time (`only`). |
-| Telling someone an export is ready, export retention | Nothing notifies the person; the export screen polls. Archives stay until "delete my data" (B11). |
+| Telling someone an export is ready, export retention | Nothing notifies the person; the export screen polls. Archives stay until "delete my data" (B11). A person's copy of their own data (section 5.24) expires with `privacy.archives`. |
+| Correction, nomination, grievances, a breach log | Privacy requests are `export` and `erase` only. Record the rest outside the product. |
+| Copies erasure does not reach | BullMQ's kept jobs (`removeOnComplete`, `removeOnFail`) still hold their data until they are trimmed; other people's conversation messages that quoted the person stay; backups are the deployment's. |
+| Checking who asks before a copy is released | A signed-in person's own request runs as they are; there is no OTP step, and the copy is not sent on WhatsApp or by email. The team downloads it for a contact. |
+| A privacy tool for the assistant | Requests are filed by people (the app, the back office, WhatsApp's keyword). |
 | Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
 | A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
 | Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |

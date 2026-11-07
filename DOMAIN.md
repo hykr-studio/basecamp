@@ -36,7 +36,7 @@ and registers it.
 
 | Layer | In the module | It must export |
 |---|---|---|
-| Contracts | `contracts/` (isomorphic) | Its `entitySpec`s and `commandSpec`s, and `<name>Spec = moduleSpec({ name, dependsOn, entities, commands })` from `@hykr/contracts`, entities keyed by plural. A field that keeps files is a `FileRef` or `fileRefs(max)`, listed in the spec's `files` trait with what it accepts. Records take comments unless the spec says `comments: false`; the `comments` trait can also park the assistant's comments and give an anchor schema |
+| Contracts | `contracts/` (isomorphic) | Its `entitySpec`s and `commandSpec`s, and `<name>Spec = moduleSpec({ name, dependsOn, entities, commands })` from `@hykr/contracts`, entities keyed by plural. A field that keeps files is a `FileRef` or `fileRefs(max)`, listed in the spec's `files` trait with what it accepts. Records take comments unless the spec says `comments: false`; the `comments` trait can also park the assistant's comments and give an anchor schema. Records that are someone's personal data say so in the `privacy` trait: whose they are, which fields, what erasure does, how long they are kept |
 | Database | `db/schema.ts` | Drizzle tables in the `app` schema (`app`, `id`, `tenantColumn()`, `customerColumn()`, `user`, `tableRef` from `@hykr/db`), named after the module (`orders`, `orders_lines`), each with `id`, `tenantColumn()`, an owner column, `customerColumn()` (when customers have rows), `createdBy`, `createdAt`, `updatedAt`. A file field's column is `fileColumn(<field>)` or `fileColumns(<field>)` |
 | API | `server/` | A Nest module with one `defineEntity` / `defineCommand` per spec (`entityController` / `entityHandlers` / `commandController`); who sees what in `access` (see below). `server/public.ts`: what other modules may call |
 | Notifications | `notifications/` (isomorphic) | Its templates (`defineTemplate`) and notifications (`defineNotification`), among them what an SLA breach (`<entity>.sla.breached`) says to whom |
@@ -52,7 +52,7 @@ Around the modules, the application keeps:
 | Aggregates for the apps | `application/domain/src/contracts/index.ts`, `src/views/index.ts` | Every module's specs and views (`moduleSpecs`, `moduleViews`), one line per module. The apps import `@application/domain/contracts` and `/views`, or one module's `@application/domain/modules/<name>/contracts` and `/views` |
 | Migrations | `application/domain/drizzle/`, `src/db/index.ts` | One journal for every module, generated from `src/modules/*/db/schema.ts`; `migrations` |
 | Shared server code | `application/domain/src/server/` | What several modules use, such as `BUSINESS_ACCESS` |
-| Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`: what the product is called, who the assistant is, and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools, delivery channels, connectors and connector handlers (developer guide, sections 5.9, 5.10 and 5.14), and the application's approval levels and level rules (section 5.8.1; the sample's are in `application/domain/src/server/approval-levels.ts`, passed through `@application/domain/server`) |
+| Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`: what the product is called, who the assistant is, and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools, delivery channels, connectors and connector handlers (developer guide, sections 5.9, 5.10 and 5.14), the application's approval levels and level rules (section 5.8.1; the sample's are in `application/domain/src/server/approval-levels.ts`, passed through `@application/domain/server`), and what it says about personal data: its processors, its request policy and its retention periods (section 5.24; the sample's are in `application/domain/src/server/privacy.ts`) |
 | App modules | `application/mobile/src/modules/<name>/` and the barrel `src/modules/index.ts` (one line per module) | The app half of each module: `defineAppModule({ name, nav, suggestions, bind, hrefFor, webmcp })` from `@hykr/app`, in `index.tsx`: destinations under `/<name>`; `bind` calls `bindView` / `bindScreen` for the module's views and screens; `hrefFor` says where each of its records opens. Other modules import only that `index.tsx` |
 | App | `application/mobile/src/catalog.ts`, `settings.ts`, `home/` | `catalog = createCatalog(...moduleSpecs)` and `registry = createUiRegistry(...moduleViews)` with the `Register` declaration; `settings: AppSettings` (`title`, `tagline`, `home`, and the nav and suggestions of the screens that combine modules, such as the home screen) |
 | App routes | `application/mobile/src/app/<name>/` and `src/app/index.tsx` | One-line re-exports of each module's route components (Expo Router only knows files); `index.tsx` is the home screen |
@@ -182,6 +182,10 @@ setup, changed by people with `settings.manage` (owners and admins) through the 
 - **Wording.** The application rewords framework phrases and notifications in `defineServer({
   wording })` instead of declaring them again; a business words phrases and notification emails
   in its `wording` settings.
+
+- **Personal data.** How soon it answers requests about personal data, which requests a person
+  on its team reviews first, its own retention periods and its own processors (`privacy`
+  settings, developer guide 5.24).
 
 The sample's to-dos take custom fields (a business adds its `priority`; the to-dos screen sets it
 in its add form and each row's editor with `<CustomFieldInputs>`), and "clear done to-dos"
@@ -364,9 +368,9 @@ From the contracts declaration alone:
   entity keeps its events inside with `traits: { webhooks: false }` (developer guide, 5.14).
 - The WhatsApp channel (`framework/api/src/channels`, `framework/channels`): the webhook, the queues
   (`/admin/queues` in development) and the worker, contacts and linking by code, consent and the
-  keywords (STOP, START, HELP, talk to a person, delete my data) in every language, erasure,
-  voice notes, approvals by signed button, and handoff to a person with the back office
-  (`framework/back-office`, `/api/backoffice`).
+  keywords (STOP, START, HELP, talk to a person, delete my data: a privacy request) in every
+  language, erasure, voice notes, approvals by signed button, and handoff to a person with the
+  back office (`framework/back-office`, `/api/backoffice`).
 - The framework's templates and notifications: login codes, approval requests and outcomes,
   staff replies after the 24-hour window, and a mention in a comment (in the in-app inbox). The agent tools `send-template` (a template to a
   customer; marketing waits for approval) and `request-human`.
@@ -390,6 +394,17 @@ From the contracts declaration alone:
   JSON and CSV files on the job; a module adds data no entity serves as a `dataExportSources`
   entry. `exportPlugin` in the app, a section of the back office's Settings (developer guide,
   section 5.22).
+- Personal data (`/api/privacy`, `app.privacy_requests`, developer guide section 5.24): a person
+  asks a business for a copy of what it keeps about them, or to be forgotten (in the app, on
+  WhatsApp, or through the team, `privacy.manage`), answered by a deadline; the copy is one zip of
+  their data from every part; erasure deletes, blanks or keeps each declared record as its module
+  says, runs every feature's erasure, clears the framework's and Mastra's records of the person
+  and takes their personal fields out of the audit trail's and events' copies; a daily runner
+  expires personal data after its period; the register lists the business, its processors, its
+  personal data and its periods. The framework has no period, purpose or processor of its own:
+  the sample's notes are a customer's personal data, deleted two years after their last change,
+  and `application/domain/src/server/privacy.ts` gives its processors, a 30-day deadline and its
+  periods; its account module tells the privacy team when a request waits or is late.
 - Each business's setup: feature flags, custom field definitions (`app.custom_fields`), branding
   and verified web addresses (`app.tenant_domains`), shared records and wording (`/api/settings`,
   `/api/features`, `/api/custom-fields`, the back office's Settings screen, `settingsPlugin` in the
