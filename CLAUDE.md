@@ -49,6 +49,9 @@ pnpm dev              # framework tsc -w watchers + `basecamp dev` (API, worker,
   `framework/api/test/fixture/src/features/<f>/migrations/` from that folder's `schema.ts`.
 - `pnpm --dir application exec basecamp module add <name> [--entity <singular>]` scaffolds a module (both
   halves) and adds its line to each module list.
+- `pnpm --dir application exec basecamp import <entity> <file> --as <email> [--key col] [--source s]
+  [--dry-run]` imports a CSV/JSON/NDJSON file through the write path as that member; the worker runs
+  it, and rows not written land in `<name>.errors.csv` beside the file (developer guide 5.23).
 - `pnpm eval` runs the scripted assistant eval and needs the API running. From `application/`:
   `pnpm exec basecamp eval [assistant|voice|whatsapp] [--module <name>] [--live [--model <ref>]]`
   (`--model` runs the evals on one model of `MODEL_PROVIDERS`).

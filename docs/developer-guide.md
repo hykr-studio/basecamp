@@ -872,8 +872,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources`,
   `fileHolders` (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
   `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21),
-  `dataExportSources` (section 5.22), and `acceptances` and `esignProviders` (section 5.23) in
-  `@hykr/api`.
+  `dataExportSources` (section 5.22), `uploadTargets` (section 5.23), and `acceptances` and
+  `esignProviders` (section 5.24) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -1644,7 +1644,61 @@ export const AuditSource: DataExportSource = {
 - The fixture's `features/export` and `test/framework/export.e2e.test.ts` show a switched-off
   module, a hidden field, an export source and a business role that may export.
 
-### 5.23 Acceptance: one-time codes and evidence
+### 5.23 Bulk import
+
+Records from another system (a spreadsheet, another product's export) come in through the
+**imports** feature (`docs/decisions/B20.md`): a CSV, JSON or NDJSON file of one entity's records,
+written row by row **through the write path**, as the person who imports it. Nothing to declare:
+every served entity can be imported, unless its spec says `traits: { imports: false }` (a record
+with a parent is saved through its parent's command and is never imported on its own).
+
+```bash
+# From application/, once built, with the worker running (basecamp dev, or basecamp start worker):
+pnpm exec basecamp import todo domain/src/modules/todos/import/todos.csv \
+  --as owner@example.com --key legacy_id --source legacy --dry-run
+# Options: --tenant <id>, --format csv|json|ndjson, --existing update|skip, --empty omit|null,
+# --map <column>=<field> (or <column>= to leave it out), --ref <field>=<entity>, --report <path>
+```
+
+- **Who.** A person holding `imports.run` (owners and admins; re-grant it with `roleOverrides` or
+  a business role) who may create the entity. The assistant cannot start one. Starting is the
+  command `import.start` (`POST /api/imports`), so it is audited and an application's level rule
+  on `import.start` can make imports wait for someone.
+- **The file.** Upload it with `for: { entity: 'import', field: 'file' }` (`IMPORT_UPLOAD`; CSV,
+  JSON, NDJSON or plain text), then start: `api.imports.upload(bytes, { name, mime })` and
+  `api.imports.start({ entity, file, key, source, ... })` in `@hykr/api-client`. The CLI stores the
+  file itself. Non-entity upload targets like this one are an `uploadTargets` contribution.
+- **The job.** An import is a job of kind `imports.records` (section 5.17) that the worker runs as
+  its starter. Rows are written in batches (`IMPORTS_BATCH_SIZE`, 100 per transaction, one savepoint
+  per row): each is the entity's own `create` (then an `update` for fields only the update schema
+  has, such as a to-do's `done`) or `update` through `runWrite`, so access, rules, plugins, field
+  policy, feature flags, level rules, undo windows and audit all apply. Each record's audit row
+  carries the job's id as its run id. A row whose write would wait for an approval is not written
+  (`needs_approval`): an import never parks rows, and an approved import does not approve them.
+- **Keys.** Every row needs its id in the other system (the `key` column, default `id`). Which record
+  each key became is kept per business, entity and `source` (`app.import_keys`), so running the same
+  import again updates those records (`existing: 'update'`), or leaves them (`'skip'`), and a row
+  that would change nothing counts as `unchanged`. A key whose record was deleted is `not_found`: a
+  re-run never brings it back. `refs: { shelfId: 'shelf' }` says a column holds another entity's
+  keys in the same source; each becomes that record's id.
+- **Values.** Columns are fields by name, or by `columns: { 'Old name': 'field' }` (`null` leaves a
+  column out); columns starting with `_` are ignored; any other unknown column fails the import
+  before it writes anything. A CSV cell is given to the field's schema as text, or as the number,
+  `true`/`false` or JSON it spells when the schema refuses the text. An empty cell leaves the field
+  out (`empty: 'null'` sets null).
+- **The result.** The job's output is the counts (`ImportResult`: created, updated, unchanged,
+  skipped, failed, errors by code). Rows not written are in the job's result file
+  `<name>.errors.csv` (or `.ndjson`): `_row`, `_code`, `_field`, `_message`, then the row as given.
+  Fix the rows in the report and import the report itself. A **dry run** (`dryRun: true`,
+  `--dry-run`) does everything in transactions it rolls back: the counts and the report say what a
+  real run would do. Its refusals are still audited as refused writes.
+- **In the app.** `<ImportRecords entity="todo" options={{ key: 'legacy_id' }} />` (people with
+  `imports.run` only): check a file, import it, follow `<JobProgress>`. `useStartImport()` and
+  `useCanImport()` under it. The sample's to-dos screen shows it; `import/todos.csv` is its file.
+- **Limits.** `IMPORTS_MAX_ROWS` (50 000), `IMPORTS_BATCH_SIZE` (100), `IMPORTS_REPORT_ROWS`
+  (10 000), `IMPORTS_TIMEOUT_S` (14 400); the file's size is `FILES_MAX_BYTES`.
+
+### 5.24 Acceptance: one-time codes and evidence
 
 A person accepts one PDF of a record with a one-time code sent to their own WhatsApp number or
 email (`docs/decisions/B8.md`). What can be accepted, by whom and what follows is the module's;
@@ -1727,7 +1781,7 @@ Every request becomes a `Principal` (`framework/contracts/src/principal.ts`). Th
 | `tenantId`, `roles`, `customerId` | The business, your roles in it, and your customer record if you are one. No `tenantId`: a person in no business yet (section 6.5) |
 | `standing` | `'member'` (a membership of the team) or `'participant'` (a member of one of its parties, never of the team; section 6.5). Absent for a contact |
 | `capabilities` | What your roles allow there, by name (`'backoffice.use'`). Worked out by the server; check it with `can(p, …)` (6.4) |
-| `assurance` | `'whatsapp_number'` (a number alone) < `'otp'` (a one-time code; nothing sets it yet: an acceptance's code proves the act, not the session, section 5.23) < `'session'` (signed in) |
+| `assurance` | `'whatsapp_number'` (a number alone) < `'otp'` (a one-time code; nothing sets it yet: an acceptance's code proves the act, not the session, section 5.24) < `'session'` (signed in) |
 | `channel` | `'app'`, `'voice'`, `'whatsapp'`, `'mcp'`, `'webmcp'`, `'api'`, `'background'` or `'share'`. A session request has none, unless it names `app` or `webmcp` in `x-channel` (any other value is 400 `bad_channel`). `webmcp` (a page's WebMCP tools) only reads and is refused on people-only routes. |
 | `runId`, `agentVersion` | Set on agent calls, and written to audit |
 | `approvedBy` | Set on an approval replay |
@@ -1845,7 +1899,7 @@ capabilities, with the roles that hold them by default (its features add their o
 | `memory.write` | owner, admin, ops, staff | Adding to the business's memory, and changing your own |
 | `memory.manage` | owner, admin | Changing or deleting anyone's memories |
 | `data.export` | owner | Exporting the business's data, and keeping one's export archives (section 5.22) |
-| `acceptances.evidence` | owner, admin | An acceptance's full evidence: where the code went, the IP, user agent and device (section 5.23) |
+| `acceptances.evidence` | owner, admin | An acceptance's full evidence: where the code went, the IP, user agent and device (section 5.24) |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -2362,6 +2416,9 @@ Add it to the read, create and update schemas. Add the column to the table. Run 
 **…keep photos or documents on a record?**
 Give it a file field (`fileRefs()` or `FileRef`, a `files` trait, a `fileColumns()` column) and use `<FileField>` in its form. Section 5.12.
 
+**…bring in records from another system?**
+Export them as CSV or JSON with each record's old id, then `basecamp import <entity> <file> --as <email> --key <id column> --source <system> --dry-run`, read the report, and run it again without `--dry-run`. Section 5.23.
+
 **…make a PDF of a record and send it?**
 Declare it with `defineDocument` in the module's `server/` (what it reads, how it lays out, how it is named and sent), contribute it as `documents`, add its WhatsApp template (with `header: { type: 'document' }`) to the module's templates, and show `<RecordDocuments entity id />` on the record's screen. Section 5.19; the sample's `orders/server/document.ts`.
 
@@ -2528,7 +2585,7 @@ These are not built. Each has a workaround for now.
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
 | Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
 | Images in documents (a logo, a signature, photos) | The layout has no image block. Put the business's name in the header. |
-| A Chromium engine, digital signatures, PDF/A | Documents are drawn by pdfkit only, unsigned; their SHA-256 is kept, and an acceptance binds it (section 5.23). |
+| A Chromium engine, digital signatures, PDF/A | Documents are drawn by pdfkit only, unsigned; their SHA-256 is kept, and an acceptance binds it (section 5.24). |
 | Notifications that carry a document | The dispatcher sends no files. Send a document with `document.send` (a subscriber can call it as the person). |
 | A WhatsApp document's later failure | A send is `sent` once WhatsApp has it; its message's own status shows a later failure, and no email follows. |
 | Other scripts in documents (Tamil, Kannada, right to left) | Only the Noto Latin, Devanagari and Telugu fonts are bundled. |
@@ -2542,6 +2599,10 @@ These are not built. Each has a workaround for now.
 | Retention of finished jobs | Jobs and their result files are kept until "delete my data" (jobs about no record only). |
 | A result file on a record | Result files stay on their job; `complete` puts a copy on a record (`ctx.copyFile`). |
 | Every job of a business | `GET /api/jobs` lists a record's jobs or the caller's own; there is no operations view. |
+| Importing children, owners and dates | An import writes top-level records only (a record with a parent comes in with its parent's command), owned by the importer, with today's `createdAt`. Set owners afterwards with the entity's own writes. |
+| Files inside imported rows, Excel files | A row cannot carry a file to fetch into a file field, and `.xlsx` is not read: export CSV. |
+| Reading or forgetting an import's keys | `app.import_keys` has no API: a source's keys stay as long as the business. Import under a new `source` to start over. |
+| Importing with no worker | `basecamp import` starts the job and follows it; the worker runs it. With no worker running it waits (and says so). Large JSON files through the local storage drivers (memory, fs) also pass the API's JSON body limit (`JSON_BODY_LIMIT`) on upload; S3 has no such limit. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
 | Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.7) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
