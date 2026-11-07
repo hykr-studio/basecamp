@@ -11,13 +11,16 @@ const CRUD = /\.(created|updated|deleted)$/;
 
 /**
  * The query keys a live event invalidates. An approval: the approvals list and that approval.
- * A job: every jobs query (`useJob`, `useJobs`). An entity's record: its plural (lists and records) and history; an event that is not a create,
- * update or delete (a command's) also what the type's commands say they touch. Anything else:
- * nothing.
+ * A job: every jobs query (`useJob`, `useJobs`). A comment: comment lists and history (its
+ * record's history shows it). An inbox item: the inbox. An entity's record: its plural (lists and
+ * records) and history; an event that is not a create, update or delete (a command's) also what
+ * the type's commands say they touch. Anything else: nothing.
  */
 export function liveKeysFor(event: LiveEvent, catalog: LiveCatalog): string[][] {
   if (event.type === 'approval') return [['approvals'], ['approval', event.id]];
   if (event.type === 'job') return [['jobs']];
+  if (event.type === 'comment') return [['comments'], ['history']];
+  if (event.type === 'inbox') return [['inbox']];
   const specs = Object.values(catalog.entities);
   const pluralOf = (name: string) => specs.find((s) => s.name === name)?.plural;
   const own = pluralOf(event.type);
