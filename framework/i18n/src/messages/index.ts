@@ -2,6 +2,7 @@
 // sides' lines; see .gitattributes). A new feature adds its file and its line here.
 export { approvalMessages } from './approvals.js';
 export { assistantMessages } from './assistant.js';
+export { calendarMessages } from './calendar.js';
 export { channelMessages } from './channels.js';
 export { creditsMessages } from './credits.js';
 export { documentMessages } from './documents.js';

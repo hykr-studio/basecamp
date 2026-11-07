@@ -1,0 +1,700 @@
+// Calendars and calls (B17), on the fixture's appointments (fixture/src/features/calendar):
+// connecting a Google calendar by OAuth (the in-memory fake Google), records reaching it as each
+// person may read them, changes made in Google coming back as events, busy and free time, invites
+// by email with an .ics (Mailpit), private feeds, and the call log with a fixture provider.
+process.env.SECRETS_KEY ||= 'test-secrets-key-0123456789abcdef0123456789';
+process.env.GOOGLE_CALENDAR_TRANSPORT = 'fake';
+
+import { createHmac, randomUUID } from 'node:crypto';
+import { fakeGoogle } from '@hykr/connectors/google-calendar';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  addMember,
+  asAssistant,
+  boot,
+  eventually,
+  me,
+  Person,
+  pool,
+  server,
+  setTenantSettings,
+  shutdown,
+} from '../../dist/testing.js';
+import { calendarApp, dialled, REFUSED_NUMBER } from '../fixture/dist/features/calendar/index.js';
+
+const google = fakeGoogle();
+const owner = new Person('Owner Cal');
+const staff = new Person('Staff Cal');
+const admin = new Person('Admin Cal');
+const other = new Person('Other Cal');
+let tenantId = '';
+
+const inBusiness = (p: Person) => (method: string, path: string, body?: unknown) =>
+  p.call(method, path, body, { 'x-tenant-id': tenantId });
+
+const HOUR = 3_600_000;
+/** Whole hours from now, on the hour, as ISO. */
+const hoursAhead = (h: number) => {
+  const d = new Date(Date.now() + h * HOUR);
+  d.setUTCMinutes(0, 0, 0);
+  return d.toISOString();
+};
+
+/** Connect a person's calendar: the API's URL (the fake agrees at once), then the callback. */
+async function connect(p: Person, inTenant = true) {
+  const call = inTenant ? inBusiness(p) : p.call.bind(p);
+  const res = await call('POST', '/api/calendar/connections', { provider: 'google' });
+  expect(res.status, JSON.stringify(res.body)).toBe(201);
+  const back = await fetch(res.body.url, { redirect: 'manual' });
+  expect(back.status).toBe(302);
+  return back.headers.get('location') ?? '';
+}
+
+const events = (email: string) =>
+  google.events(email).filter((e) => e.extendedProperties?.private?.basecamp === '1');
+const eventFor = (email: string, recordId: string) =>
+  events(email).find((e) => e.extendedProperties?.private?.record === recordId);
+
+const createAppointment = async (p: Person, body: Record<string, unknown>) => {
+  const res = await inBusiness(p)('POST', '/api/appointments', {
+    startsAt: hoursAhead(24),
+    endsAt: hoursAhead(25),
+    ...body,
+  });
+  expect(res.status, JSON.stringify(res.body)).toBe(201);
+  return res.body.value.id as string;
+};
+
+const storedEvents = async (name: string, recordId: string) =>
+  (
+    await pool.query(
+      "select row from app.domain_events where tenant_id = $1 and name = $2 and row->>'recordId' = $3",
+      [tenantId, name, recordId],
+    )
+  ).rows.map((r) => r.row as Record<string, unknown>);
+
+/** Mailpit's messages to one address, newest first, with their raw text. */
+async function mailTo(email: string) {
+  const res = await fetch(
+    `http://localhost:8025/api/v1/search?query=${encodeURIComponent(`to:"${email}"`)}`,
+  );
+  const messages = ((await res.json()) as { messages: { ID: string; Subject: string }[] }).messages;
+  return Promise.all(
+    messages.map(async (m) => ({
+      ...m,
+      raw: await (await fetch(`http://localhost:8025/api/v1/message/${m.ID}/raw`)).text(),
+    })),
+  );
+}
+const unfolded = (raw: string) => raw.replace(/\r\n[ \t]/g, '');
+
+beforeAll(async () => {
+  await boot(calendarApp);
+  process.env.CALENDAR_PUBLIC_URL = server.base;
+  process.env.GOOGLE_CALENDAR_REDIRECT_URL = `${server.base}/api/calendar/google/callback`;
+  for (const p of [owner, staff, admin, other]) await p.signUp();
+  tenantId = (await me(owner)).tenantId;
+  await addMember(staff, tenantId, ['staff']);
+  await addMember(admin, tenantId, ['admin']);
+});
+afterAll(shutdown);
+
+describe('connecting a calendar', () => {
+  it('offers Google', async () => {
+    const res = await owner.call('GET', '/api/calendar/providers');
+    expect(res.body).toEqual([{ name: 'google', available: true }]);
+  });
+
+  it('asks Google for offline access with PKCE, as the person only', async () => {
+    const assistant = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
+    expect(
+      (await assistant('POST', '/api/calendar/connections', { provider: 'google' })).status,
+    ).toBe(403);
+    const res = await owner.call('POST', '/api/calendar/connections', { provider: 'google' });
+    const back = new URL(res.body.url);
+    expect(back.pathname).toBe('/api/calendar/google/callback');
+    expect(back.searchParams.get('code')).toBeTruthy();
+    expect(back.searchParams.get('state')).toMatch(/^v1\./);
+  });
+
+  it('stores the grant sealed, audited without a token, and lands back in the app', async () => {
+    const location = await connect(owner, false);
+    expect(location).toContain('connected=google');
+    const { rows } = await pool.query(
+      'select id, account, tokens_sealed, inbound_connection_id from app.calendar_connections where tenant_id = $1 and user_id = $2',
+      [tenantId, owner.id],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].account).toBe(owner.email);
+    expect(rows[0].tokens_sealed).toMatch(/^v1\./);
+    expect(rows[0].tokens_sealed).not.toContain('fake-rt-');
+    const audit = await pool.query(
+      "select outcome, after::text as after from audit.events where action = 'calendar.connection.connect' and resource_id = $1",
+      [rows[0].id],
+    );
+    expect(audit.rows.map((r) => r.outcome)).toContain('committed');
+    expect(JSON.stringify(audit.rows)).not.toMatch(/fake-(rt|at)-/);
+    // Its push inbox is a connection of the integration bus.
+    const inbound = await pool.query(
+      'select connector from app.integration_connections where id = $1',
+      [rows[0].inbound_connection_id],
+    );
+    expect(inbound.rows[0].connector).toBe('google-calendar');
+    const list = await owner.call('GET', '/api/calendar/connections');
+    expect(list.body).toEqual([
+      expect.objectContaining({ provider: 'google', account: owner.email, status: 'active' }),
+    ]);
+    // The channel opens once the connection is looked after.
+    await eventually(() => google.channels(owner.email).length === 1);
+    await eventually(
+      async () => (await owner.call('GET', '/api/calendar/connections')).body[0].push,
+    );
+  });
+
+  it('refuses a state that was changed, and lands with an error when Google refuses', async () => {
+    const res = await owner.call('POST', '/api/calendar/connections', { provider: 'google' });
+    const url = new URL(res.body.url);
+    const tampered = new URL(url);
+    tampered.searchParams.set('state', `${url.searchParams.get('state')}x`);
+    expect((await fetch(tampered, { redirect: 'manual' })).status).toBe(400);
+    const badCode = new URL(url);
+    badCode.searchParams.set('code', 'not-a-code');
+    const back = await fetch(badCode, { redirect: 'manual' });
+    expect(back.status).toBe(302);
+    expect(back.headers.get('location')).toContain('error=google_refused');
+  });
+
+  it('connects the other people of the test, each in their own calendar', async () => {
+    await connect(staff);
+    await connect(admin);
+    await connect(other, false);
+    expect((await inBusiness(staff)('GET', '/api/calendar/connections')).body).toHaveLength(1);
+  });
+
+  it("is the person's own: someone else's connection is a 404", async () => {
+    const [mine] = (await owner.call('GET', '/api/calendar/connections')).body;
+    expect((await other.call('DELETE', `/api/calendar/connections/${mine.id}`)).status).toBe(404);
+    expect((await inBusiness(admin)('DELETE', `/api/calendar/connections/${mine.id}`)).status).toBe(
+      404,
+    );
+  });
+});
+
+describe('records in calendars', () => {
+  it('a new record reaches its owner’s calendar, with every field they see', async () => {
+    const id = await createAppointment(owner, {
+      title: 'Planning',
+      place: '12 First Street',
+      notes: 'Bring the samples',
+    });
+    const e = await eventually(() => eventFor(owner.email, id));
+    expect(e).toMatchObject({
+      summary: 'Planning',
+      location: '12 First Street',
+      description: 'Bring the samples',
+      status: 'confirmed',
+    });
+    expect(e.extendedProperties?.private).toMatchObject({
+      entity: 'appointment',
+      tenant: tenantId,
+    });
+  });
+
+  it('a field hidden from the person never reaches their calendar', async () => {
+    const id = await createAppointment(staff, { title: 'Staff call', notes: 'Hidden from staff' });
+    const e = await eventually(() => eventFor(staff.email, id));
+    expect(e.summary).toBe('Staff call');
+    expect(e.description).toBeUndefined();
+  });
+
+  it('reaches a second person only if they may read it', async () => {
+    // Staff read their own appointments only: assigned one, they still cannot read it.
+    const toStaff = await createAppointment(owner, { title: 'For staff', assigneeId: staff.id });
+    const toAdmin = await createAppointment(owner, {
+      title: 'For admin',
+      assigneeId: admin.id,
+      notes: 'Admins see notes',
+    });
+    await eventually(() => eventFor(admin.email, toAdmin));
+    expect(eventFor(admin.email, toAdmin)?.description).toBe('Admins see notes');
+    await eventually(() => eventFor(owner.email, toStaff));
+    expect(eventFor(staff.email, toStaff)).toBeUndefined();
+  });
+
+  it("another business's records never reach this business's calendars", async () => {
+    const theirs = await other.call('POST', '/api/appointments', {
+      title: 'Theirs',
+      startsAt: hoursAhead(30),
+      endsAt: hoursAhead(31),
+    });
+    const id = theirs.body.value.id;
+    await eventually(() => eventFor(other.email, id));
+    expect(eventFor(owner.email, id)).toBeUndefined();
+    expect(eventFor(admin.email, id)).toBeUndefined();
+  });
+
+  it('follows changes, sends nothing for an unchanged record, and leaves when cancelled or deleted', async () => {
+    const id = await createAppointment(owner, { title: 'Moving' });
+    await eventually(() => eventFor(owner.email, id));
+    const moved = await inBusiness(owner)('PATCH', `/api/appointments/${id}`, {
+      title: 'Moved',
+      startsAt: hoursAhead(48),
+      endsAt: hoursAhead(49),
+    });
+    expect(moved.status).toBe(200);
+    await eventually(() => eventFor(owner.email, id)?.summary === 'Moved');
+    expect(eventFor(owner.email, id)?.start?.dateTime).toBe(hoursAhead(48));
+
+    const puts = () =>
+      google.requests.filter(
+        (r) => r.method === 'PUT' && r.url.includes(eventFor(owner.email, id)?.id ?? '-'),
+      ).length;
+    const before = puts();
+    // A change the calendar does not show (the same title): nothing goes to Google.
+    await inBusiness(owner)('PATCH', `/api/appointments/${id}`, { title: 'Moved' });
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(puts()).toBe(before);
+
+    await inBusiness(owner)('PATCH', `/api/appointments/${id}`, { status: 'cancelled' });
+    await eventually(() => eventFor(owner.email, id)?.status === 'cancelled');
+    await inBusiness(owner)('PATCH', `/api/appointments/${id}`, { status: 'booked' });
+    await eventually(() => eventFor(owner.email, id)?.status === 'confirmed');
+    expect((await inBusiness(owner)('DELETE', `/api/appointments/${id}`)).status).toBe(200);
+    await eventually(() => eventFor(owner.email, id)?.status === 'cancelled');
+    const { rows } = await pool.query(
+      'select count(*)::int as n from app.calendar_event_links where resource_id = $1',
+      [id],
+    );
+    expect(rows[0].n).toBe(0);
+  });
+});
+
+describe('changes made in Google', () => {
+  let id = '';
+  let inboundId = '';
+
+  beforeAll(async () => {
+    id = await createAppointment(owner, { title: 'In Google' });
+    await eventually(() => eventFor(owner.email, id));
+    const { rows } = await pool.query(
+      'select inbound_connection_id from app.calendar_connections where user_id = $1 and tenant_id = $2',
+      [owner.id, tenantId],
+    );
+    inboundId = rows[0].inbound_connection_id;
+    // Where changes are read from starts after the record went in.
+    await eventually(async () => {
+      const r = await pool.query(
+        'select sync_token from app.calendar_connections where user_id = $1 and tenant_id = $2',
+        [owner.id, tenantId],
+      );
+      return r.rows[0].sync_token;
+    });
+  });
+
+  it('a moved event comes back as calendar.event_moved, through the push channel', async () => {
+    const e = eventFor(owner.email, id);
+    const sent = e?.start?.dateTime;
+    const start = hoursAhead(72);
+    google.edit(owner.email, e?.id as string, {
+      start: { dateTime: start },
+      end: { dateTime: hoursAhead(73) },
+    });
+    expect(await google.push(owner.email)).toEqual([200]);
+    const [moved] = await eventually(async () => {
+      const found = await storedEvents('calendar.event_moved', id);
+      return found.length ? found : undefined;
+    });
+    expect(moved).toMatchObject({
+      entity: 'appointment',
+      recordId: id,
+      userId: owner.id,
+      startsAt: start,
+      sentStartsAt: sent,
+    });
+    // Stored once, handled as the system.
+    const inbound = await pool.query(
+      "select status, handled from app.integration_inbound where connection_id = $1 and type = 'calendar.changed'",
+      [inboundId],
+    );
+    expect(inbound.rows.some((r) => r.status === 'processed')).toBe(true);
+  });
+
+  it('a deleted event comes back as calendar.event_removed, and stays out until the record changes', async () => {
+    google.remove(owner.email, eventFor(owner.email, id)?.id as string);
+    await google.push(owner.email);
+    await eventually(async () => (await storedEvents('calendar.event_removed', id)).length > 0);
+    await inBusiness(owner)('PATCH', `/api/appointments/${id}`, { title: 'Back again' });
+    await eventually(() => eventFor(owner.email, id)?.status === 'confirmed');
+    expect(eventFor(owner.email, id)?.summary).toBe('Back again');
+  });
+
+  it('a notification with the wrong token is 401; an unknown connection 404', async () => {
+    const [ch] = google.channels(owner.email);
+    const post = (path: string, token: string) =>
+      fetch(`${server.base}${path}`, {
+        method: 'POST',
+        headers: {
+          'x-goog-channel-id': ch.id,
+          'x-goog-channel-token': token,
+          'x-goog-resource-id': ch.resourceId,
+          'x-goog-resource-state': 'exists',
+          'x-goog-message-number': '999',
+        },
+      });
+    expect((await post(`/webhooks/google-calendar/${inboundId}`, 'x'.repeat(43))).status).toBe(401);
+    expect((await post(`/webhooks/google-calendar/${randomUUID()}`, ch.token)).status).toBe(404);
+  });
+});
+
+describe('busy and free time', () => {
+  const from = () => hoursAhead(100);
+  const to = () => hoursAhead(110);
+
+  // Slots start on the hour of the business's zone: UTC here, so they match the hours above.
+  beforeAll(() => setTenantSettings(tenantId, { timeZone: 'UTC' }));
+
+  it("reads busy times from the person's calendar, and free slots around them", async () => {
+    google.addOwnEvent(owner.email, { start: hoursAhead(102), end: hoursAhead(104) });
+    const busy = await owner.call(
+      'GET',
+      `/api/calendar/busy?from=${encodeURIComponent(from())}&to=${encodeURIComponent(to())}`,
+    );
+    expect(busy.body).toEqual({
+      connected: true,
+      busy: [{ start: hoursAhead(102), end: hoursAhead(104) }],
+    });
+    const free = await owner.call(
+      'GET',
+      `/api/calendar/free?from=${encodeURIComponent(from())}&to=${encodeURIComponent(to())}&minutes=60`,
+    );
+    const starts = free.body.slots.map((s: { start: string }) => s.start);
+    expect(starts).toContain(hoursAhead(100));
+    expect(starts).toContain(hoursAhead(104));
+    expect(starts).not.toContain(hoursAhead(102));
+    expect(starts).not.toContain(hoursAhead(103));
+    expect(free.body.timeZone).toBe('UTC');
+  });
+
+  it("another member's time needs the capability; the assistant reads its person's", async () => {
+    const q = `from=${encodeURIComponent(from())}&to=${encodeURIComponent(to())}&minutes=30&userId=${owner.id}`;
+    expect((await inBusiness(staff)('GET', `/api/calendar/free?${q}`)).status).toBe(403);
+    expect((await inBusiness(admin)('GET', `/api/calendar/free?${q}`)).status).toBe(200);
+    const outsider = await other.call('GET', `/api/calendar/free?${q}`);
+    expect(outsider.status).toBe(404);
+    const assistant = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
+    const res = await assistant(
+      'GET',
+      `/api/calendar/free?from=${encodeURIComponent(from())}&to=${encodeURIComponent(to())}&minutes=60`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.connected).toBe(true);
+  });
+
+  it('a window over 31 days is refused', async () => {
+    const res = await owner.call(
+      'GET',
+      `/api/calendar/busy?from=${encodeURIComponent(hoursAhead(1))}&to=${encodeURIComponent(hoursAhead(24 * 40))}`,
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('invites', () => {
+  const guest = `guest-${Date.now()}@example.test`;
+  let id = '';
+
+  it('emails an .ics invite (METHOD:REQUEST) and lists it on the record', async () => {
+    id = await createAppointment(owner, { title: 'Walkthrough', place: 'Front desk' });
+    const res = await inBusiness(owner)('POST', '/api/calendar/invites', {
+      entity: 'appointment',
+      id,
+      to: [{ email: guest, name: 'Guest' }],
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.value.invites[0]).toMatchObject({ email: guest, status: 'queued' });
+    const [mail] = await eventually(async () => {
+      const m = await mailTo(guest);
+      return m.length ? m : undefined;
+    });
+    expect(mail.Subject).toBe('Invitation: Walkthrough');
+    const raw = unfolded(mail.raw);
+    expect(raw).toContain('METHOD:REQUEST');
+    expect(raw).toContain('SUMMARY:Walkthrough');
+    expect(raw).toContain('SEQUENCE:0');
+    expect(raw).toContain(`UID:appointment-${id}@`);
+    const list = await inBusiness(owner)(
+      'GET',
+      `/api/calendar/invites?entity=appointment&id=${id}`,
+    );
+    await eventually(
+      async () =>
+        (await inBusiness(owner)('GET', `/api/calendar/invites?entity=appointment&id=${id}`)).body
+          .items[0].status === 'sent',
+    );
+    expect(list.body.items).toHaveLength(1);
+  });
+
+  it('moving the record sends an update; deleting it a cancellation', async () => {
+    await inBusiness(owner)('PATCH', `/api/appointments/${id}`, {
+      startsAt: hoursAhead(50),
+      endsAt: hoursAhead(51),
+    });
+    const update = await eventually(async () =>
+      (await mailTo(guest)).find((m) => m.Subject === 'Updated: Walkthrough'),
+    );
+    expect(unfolded(update.raw)).toContain('SEQUENCE:1');
+    await inBusiness(owner)('DELETE', `/api/appointments/${id}`);
+    const cancel = await eventually(async () =>
+      (await mailTo(guest)).find((m) => m.Subject === 'Cancelled: Walkthrough'),
+    );
+    expect(unfolded(cancel.raw)).toContain('METHOD:CANCEL');
+    expect(unfolded(cancel.raw)).toContain('SEQUENCE:2');
+  });
+
+  it('shows only what the person who invites may see', async () => {
+    const mine = await createAppointment(staff, { title: 'Staff invite', notes: 'Secret notes' });
+    const to = `staffguest-${Date.now()}@example.test`;
+    const res = await inBusiness(staff)('POST', '/api/calendar/invites', {
+      entity: 'appointment',
+      id: mine,
+      to: [{ email: to }],
+    });
+    expect(res.status).toBe(200);
+    const [mail] = await eventually(async () => {
+      const m = await mailTo(to);
+      return m.length ? m : undefined;
+    });
+    expect(unfolded(mail.raw)).toContain('SUMMARY:Staff invite');
+    expect(mail.raw).not.toContain('Secret notes');
+  });
+
+  it("the assistant's invite to someone else waits for approval, and is audited", async () => {
+    const appt = await createAppointment(owner, { title: 'Assistant asks' });
+    const assistant = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
+    const res = await assistant('POST', '/api/calendar/invites', {
+      entity: 'appointment',
+      id: appt,
+      to: [{ email: `asked-${Date.now()}@example.test` }],
+    });
+    expect(res.body.status).toBe('needs_approval');
+    const audit = await pool.query(
+      "select outcome, rule from audit.events where action = 'calendar.invite' and actor_kind = 'agent' order by at desc limit 1",
+    );
+    expect(audit.rows[0]).toMatchObject({ outcome: 'needs_approval', rule: 'agent_sends_invite' });
+  });
+
+  it("another business's record is a 404; a record without a time is refused", async () => {
+    const theirs = await other.call('POST', '/api/appointments', {
+      title: 'Not yours',
+      startsAt: hoursAhead(5),
+      endsAt: hoursAhead(6),
+    });
+    const res = await inBusiness(owner)('POST', '/api/calendar/invites', {
+      entity: 'appointment',
+      id: theirs.body.value.id,
+      to: [{ email: guest }],
+    });
+    expect(res.status).toBe(404);
+    expect(
+      (
+        await inBusiness(owner)(
+          'GET',
+          `/api/calendar/invites?entity=appointment&id=${theirs.body.value.id}`,
+        )
+      ).status,
+    ).toBe(404);
+    const cancelled = await createAppointment(owner, { title: 'Off' });
+    await inBusiness(owner)('PATCH', `/api/appointments/${cancelled}`, { status: 'cancelled' });
+    const refused = await inBusiness(owner)('POST', '/api/calendar/invites', {
+      entity: 'appointment',
+      id: cancelled,
+      to: [{ email: guest }],
+    });
+    expect(refused.status).toBe(403);
+    expect(refused.body.rule).toBe('no_time');
+  });
+});
+
+describe('feeds', () => {
+  let url = '';
+  let feedId = '';
+
+  it('makes a private feed: its URL once, the person’s records, as they see them', async () => {
+    const res = await inBusiness(staff)('POST', '/api/calendar/feeds', { label: 'Phone' });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    url = res.body.url;
+    feedId = res.body.value.id;
+    expect(url).toMatch(/\/api\/calendar\/feed\/cf[\w-]{43}\.ics$/);
+    const list = await inBusiness(staff)('GET', '/api/calendar/feeds');
+    expect(list.body).toEqual([expect.objectContaining({ id: feedId, label: 'Phone' })]);
+    expect(JSON.stringify(list.body)).not.toContain(url.split('/').pop()?.replace('.ics', ''));
+    const { rows } = await pool.query('select token_hash from app.calendar_feeds where id = $1', [
+      feedId,
+    ]);
+    expect(rows[0].token_hash).toMatch(/^[0-9a-f]{64}$/);
+
+    const feed = await fetch(url);
+    expect(feed.status).toBe(200);
+    expect(feed.headers.get('content-type')).toContain('text/calendar');
+    const text = unfolded(await feed.text());
+    expect(text).toContain('SUMMARY:Staff call');
+    expect(text).not.toContain('Hidden from staff');
+    // The owner's records (and another business's) are not in the staff member's feed.
+    expect(text).not.toContain('SUMMARY:Planning');
+    expect(text).not.toContain('SUMMARY:Theirs');
+  });
+
+  it('is gone once revoked; an unknown token is a 404', async () => {
+    expect((await inBusiness(staff)('DELETE', `/api/calendar/feeds/${feedId}`)).status).toBe(200);
+    expect((await fetch(url)).status).toBe(404);
+    expect((await fetch(`${server.base}/api/calendar/feed/cf${'a'.repeat(43)}.ics`)).status).toBe(
+      404,
+    );
+    // Someone else's feed id is a 404 too.
+    const mine = await owner.call('POST', '/api/calendar/feeds', {});
+    expect((await other.call('DELETE', `/api/calendar/feeds/${mine.body.value.id}`)).status).toBe(
+      404,
+    );
+  });
+});
+
+describe('calls', () => {
+  let appt = '';
+  let callId = '';
+
+  it('logs a call on a record, read by whoever reads the record', async () => {
+    appt = await createAppointment(owner, { title: 'Call me' });
+    const res = await inBusiness(owner)('POST', '/api/calls', {
+      direction: 'outbound',
+      status: 'completed',
+      to: '+14155550123',
+      entity: 'appointment',
+      id: appt,
+      durationS: 90,
+      notes: 'Agreed on Tuesday',
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    callId = res.body.value.id;
+    expect(res.body.value).toMatchObject({
+      about: { entity: 'appointment', id: appt },
+      createdBy: 'person',
+      userId: owner.id,
+    });
+    const list = await inBusiness(owner)('GET', `/api/calls?entity=appointment&id=${appt}`);
+    expect(list.body.items.map((c: { id: string }) => c.id)).toEqual([callId]);
+    // Staff cannot read the owner's appointment, so neither its calls.
+    expect(
+      (await inBusiness(staff)('GET', `/api/calls?entity=appointment&id=${appt}`)).status,
+    ).toBe(404);
+    expect((await inBusiness(staff)('GET', `/api/calls/${callId}`)).status).toBe(404);
+    expect((await other.call('GET', `/api/calls/${callId}`)).status).toBe(404);
+    expect((await inBusiness(admin)('GET', `/api/calls/${callId}`)).status).toBe(200);
+  });
+
+  it('only whoever logged a call changes it', async () => {
+    const mine = await inBusiness(owner)('PATCH', `/api/calls/${callId}`, {
+      notes: 'Tuesday 10:00',
+    });
+    expect(mine.status).toBe(200);
+    expect(mine.body.value.notes).toBe('Tuesday 10:00');
+    const theirs = await inBusiness(admin)('PATCH', `/api/calls/${callId}`, { notes: 'x' });
+    expect(theirs.status).toBe(403);
+    expect(theirs.body.rule).toBe('not_your_call');
+  });
+
+  it('dialling needs a provider the business connected', async () => {
+    const res = await inBusiness(owner)('POST', '/api/calls/dial', { to: '+14155550124' });
+    expect(res.status).toBe(403);
+    expect(res.body.rule).toBe('no_telephony_provider');
+  });
+
+  it("dials through the business's provider, which reports back as the system", async () => {
+    const conn = await inBusiness(owner)('POST', '/api/integrations/connections', {
+      connector: 'fixture-phone',
+    });
+    expect(conn.status, JSON.stringify(conn.body)).toBe(201);
+    const secret = conn.body.credentials.secret as string;
+    const res = await inBusiness(owner)('POST', '/api/calls/dial', {
+      to: '+14155550124',
+      entity: 'appointment',
+      id: appt,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const id = res.body.value.id;
+    expect(res.body.value.status).toBe('requested');
+    const ringing = await eventually(async () => {
+      const c = await inBusiness(owner)('GET', `/api/calls/${id}`);
+      return c.body.status === 'ringing' && c.body.provider ? c.body : undefined;
+    });
+    expect(ringing.provider).toBe('fixture-phone');
+    const asked = dialled.find((d) => d.request.callId === id);
+    expect(asked?.request).toMatchObject({
+      to: '+14155550124',
+      record: { entity: 'appointment', id: appt },
+    });
+    expect(asked?.credentials).toEqual({ secret });
+
+    const body = JSON.stringify({
+      type: 'call.status',
+      externalId: `ext-${id}`,
+      status: 'completed',
+      durationS: 42,
+    });
+    const update = await fetch(`${server.base}/webhooks/fixture-phone/${conn.body.value.id}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-fixture-phone-event': `evt-${id}`,
+        'x-fixture-phone-signature': createHmac('sha256', secret).update(body).digest('hex'),
+      },
+      body,
+    });
+    expect(update.status).toBe(200);
+    const done = await eventually(async () => {
+      const c = await inBusiness(owner)('GET', `/api/calls/${id}`);
+      return c.body.status === 'completed' ? c.body : undefined;
+    });
+    expect(done.durationS).toBe(42);
+    const audit = await pool.query(
+      "select actor_kind, channel from audit.events where action = 'call.provider_update' and resource_id = $1",
+      [id],
+    );
+    expect(audit.rows[0]).toEqual({ actor_kind: 'system', channel: 'background' });
+  });
+
+  it('a refused dial ends failed; the assistant’s dial waits for approval', async () => {
+    const res = await inBusiness(owner)('POST', '/api/calls/dial', { to: REFUSED_NUMBER });
+    const id = res.body.value.id;
+    const failed = await eventually(async () => {
+      const c = await inBusiness(owner)('GET', `/api/calls/${id}`);
+      return c.body.status === 'failed' ? c.body : undefined;
+    });
+    expect(failed.error).toContain('refused');
+    const assistant = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
+    const parked = await assistant('POST', '/api/calls/dial', { to: '+14155550125' });
+    expect(parked.body.status).toBe('needs_approval');
+  });
+});
+
+describe('disconnecting', () => {
+  it('takes our events out of Google, closes the channel and revokes the grant', async () => {
+    const [mine] = (await owner.call('GET', '/api/calendar/connections')).body;
+    const ours = events(owner.email).filter((e) => e.status === 'confirmed');
+    expect(ours.length).toBeGreaterThan(0);
+    const res = await owner.call('DELETE', `/api/calendar/connections/${mine.id}`);
+    expect(res.status).toBe(200);
+    expect(events(owner.email).filter((e) => e.status === 'confirmed')).toEqual([]);
+    expect(google.channels(owner.email)).toEqual([]);
+    expect(google.revoked().length).toBeGreaterThan(0);
+    expect((await owner.call('GET', '/api/calendar/connections')).body).toEqual([]);
+    const { rows } = await pool.query(
+      "select count(*)::int as n from app.integration_connections where tenant_id = $1 and connector = 'google-calendar' and public->>'userId' = $2",
+      [tenantId, owner.id],
+    );
+    expect(rows[0].n).toBe(0);
+    // New records no longer reach it.
+    const later = await createAppointment(owner, { title: 'After' });
+    await new Promise((r) => setTimeout(r, 2000));
+    expect(eventFor(owner.email, later)).toBeUndefined();
+  });
+});
