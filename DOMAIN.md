@@ -214,6 +214,17 @@ their own. A read projector for resource type `document` or `documentSend` can h
 The sample's `orders` module ships `orders.order`, its template `order_document_v1`, and
 scripts that make and send it.
 
+## Accepting a document
+
+A module declares what its records' customers (or capability holders) accept with
+`defineAcceptance` (`@hykr/api`), contributed as `acceptances` (developer guide, section 5.21):
+which document's PDF, who signs (`by`), the words they agree to (`statement`), where codes may go
+(`channels`), and the transition the record takes once accepted. The framework sends a one-time
+code to the signer's own WhatsApp number or email, binds the acceptance to that PDF's hash and
+the record's version (so the entity must be versioned), and keeps append-only, hash-chained
+evidence. The sample's `orders` module ships `OrderAcceptance`: an approved order's customer
+accepts its PDF, and the order moves to `accepted`, frozen.
+
 ## States, deadlines and versions
 
 The framework has no workflow of its own either; a module declares it on the spec (the
@@ -312,6 +323,10 @@ From the contracts declaration alone:
   Telugu), stored as files the document holds, reached through their record, and sent by
   WhatsApp or email (`document.render`, `document.send`, the tools `render-document`,
   `send-document`, `get-document`, `list-documents`, and `<RecordDocuments>` in the app).
+- Acceptance (`/api/acceptances`, `channel.otp_challenges`, `audit.acceptances`): one-time codes
+  (`OtpService`, which WhatsApp linking uses too), a record's PDF accepted with one, append-only
+  evidence chained by hash, the `ESignProvider` interface (no provider ships), and
+  `<RecordAcceptance>` in the app.
 - Threads (one saved conversation per person, shared by every channel), voice sessions
   (`/api/voice/*`, LiveKit, the voice worker), and the framework's phrases in `@hykr/i18n`.
 - Businesses, memberships and customers (`/api/me`), and the scope engine behind `access`.

@@ -1494,6 +1494,73 @@ who hears about it are the application's. The sample's `orders` module uses ever
   `GET /api/history/versions?resourceType&resourceId` lists a series as the caller may read it
   (`<VersionList>`); `diffFields` and `diffLists` compare two revisions.
 
+### 5.21 Acceptance: one-time codes and evidence
+
+A person accepts one PDF of a record with a one-time code sent to their own WhatsApp number or
+email (`docs/decisions/B8.md`). What can be accepted, by whom and what follows is the module's;
+the framework sends and checks the code, binds the acceptance to the PDF and the record's
+version, and keeps append-only evidence.
+
+```ts
+// a module's server/acceptance.ts, contributed in its index.ts: contributes: { acceptances: [OrderAcceptance] }
+export const OrderAcceptance = defineAcceptance<OrderDocumentData>({
+  name: 'orders.order',
+  document: 'orders.order',             // the declared document whose PDF is accepted
+  label: { en: 'Accept the order', … },
+  statement: ({ order }, ctx) => `I accept order ${order.number} for ${ctx.money(order.total)}, as shown in this PDF.`,
+  by: 'customer',                       // or { capability: '…' }, or (p, row) => boolean
+  channels: ['whatsapp', 'email'],      // where codes may go, in order
+  transition: 'accept',                 // the record's move when accepted (expose: 'system')
+});
+```
+
+- **What it binds.** The PDF's id and SHA-256 and the record's version when the PDF was made
+  (`documents.record_version`), so the entity must be versioned (checked at start). A PDF not
+  made yet is `document_not_ready`; one made before the record's last write is
+  `document_stale` (make it again). If the record or the PDF moved after the code was sent, the
+  acceptance is refused (`record_changed`, `document_changed`).
+- **The calls**, people only (the assistant is refused `humans_only`):
+  `GET /api/acceptances/documents/:documentId` (the statement, where a code would go, masked,
+  and `can`), `POST /api/acceptances/challenges { documentId, channel?, lang? }` and
+  `POST /api/acceptances { challengeId, code, device? }`. Both writes go through `runWrite`
+  (`acceptance.challenge`, `acceptance.accept`), are audited, never park and open no undo
+  window. Refusals: `not_signer`, `no_whatsapp_number`, `no_email`, `channel_unavailable`,
+  `already_accepted`, the transition's own (`not_from_state`). `api.acceptances.*` in the client.
+- **Codes** (`OtpService`, `channel.otp_challenges`, which WhatsApp linking also uses): 6 digits,
+  only their hash stored, 10 minutes, 5 attempts spent before each guess is compared (a wrong
+  guess counts even though the write rolls back), used once, 5 an hour per person and per
+  address for each purpose (429 `too_many_codes`). A code goes only to an address the business
+  holds for the signer: their contact's number, the number linked to their account here, or
+  their account email. It is made and sent in the worker (`otp.requested`, the subscriber
+  `acceptance.otp`): WhatsApp's `verification_code_v1` authentication template, or the
+  `otp.email.*` phrases by email. `otp: { ttlMinutes, attempts }` changes the defaults.
+- **When accepted**, in one transaction: the code is used, the evidence row written, the record
+  moved along `transition` (as the business's system principal, with `via: '<entity>.transition'`)
+  and `accepted(ctx)` runs (more work of the module's, returning touched rows and events). The
+  stored events are `acceptance.recorded` (ids, the PDF's version and hash) and the transition's.
+  Without a transition, a signer accepts a PDF once.
+- **Evidence** (`audit.acceptances`): who signed, the code's challenge, channel, address, sent
+  and verified times, the request's IP (`req.ip`), `x-forwarded-for` as sent, user agent and the
+  device the client reports, the record and its version, the PDF's id, version, hash and file
+  name, and the words agreed to. A trigger (`framework/db/sql/post/acceptances.sql`) refuses
+  UPDATE, DELETE and TRUNCATE; each row is chained to the business's previous one by hash
+  (`GET /api/acceptances/:id` says `verified`; `AcceptanceService.verifyChain(tenantId)` checks
+  all). "Delete my data" keeps it.
+- **Who reads it.** `GET /api/acceptances?entity=&id=` and `/:id`, for people who reach the
+  record (404 otherwise). The full address, the request and an e-sign certificate are for holders
+  of `acceptances.evidence` (owner and admin); others see the address masked. Read projectors
+  run with resource type `acceptance`.
+- **E-sign.** `ESignProvider { name, start(request) }` (contributed as `esignProviders`; none
+  ships). An acceptance with `esign: '<provider>'` is signed there: `POST /api/acceptances/esign
+  { documentId }` starts a signing (the provider gets the PDF's bytes, the signer and the
+  statement) and answers with where to sign; the provider's verified webhook calls
+  `AcceptanceService.completeESign({ provider, ref, status, certificate? })`, which records the
+  evidence (method `esign`) after the same checks.
+- **In the app** `<RecordAcceptance entity id />` (the newest made PDF of the record's
+  acceptance) or `<AcceptDocument documentId />`: the statement, a button per channel, the code
+  entry, then who accepted when. Hooks: `useAcceptanceStatus`, `useAcceptances`,
+  `useRequestAcceptanceCode`, `useAccept`, `useStartESign`.
+
 ---
 
 ## 6. Principals and policy
@@ -1509,7 +1576,7 @@ Every request becomes a `Principal` (`framework/contracts/src/principal.ts`). Th
 | `subject` | Whose business this is: `{ kind: 'user', userId }` or `{ kind: 'contact', contactId }`. Set by the server only. |
 | `tenantId`, `roles`, `customerId` | The business, your roles in it, and your customer record if you are one |
 | `capabilities` | What your roles allow there, by name (`'backoffice.use'`). Worked out by the server; check it with `can(p, …)` (6.4) |
-| `assurance` | `'whatsapp_number'` (a number alone) < `'otp'` (a one-time code; nothing sets it yet) < `'session'` (signed in) |
+| `assurance` | `'whatsapp_number'` (a number alone) < `'otp'` (a one-time code; nothing sets it yet: an acceptance's code proves the act, not the session, section 5.21) < `'session'` (signed in) |
 | `channel` | `'app'`, `'voice'`, `'whatsapp'`, `'mcp'`, `'webmcp'`, `'api'`, `'background'` or `'share'`. A session request has none, unless it names `app` or `webmcp` in `x-channel` (any other value is 400 `bad_channel`). `webmcp` (a page's WebMCP tools) only reads and is refused on people-only routes. |
 | `runId`, `agentVersion` | Set on agent calls, and written to audit |
 | `approvedBy` | Set on an approval replay |
@@ -2169,7 +2236,7 @@ These are not built. Each has a workaround for now.
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
 | Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
 | Images in documents (a logo, a signature, photos) | The layout has no image block. Put the business's name in the header. |
-| A Chromium engine, digital signatures, PDF/A | Documents are drawn by pdfkit only, unsigned; their SHA-256 is kept. |
+| A Chromium engine, digital signatures, PDF/A | Documents are drawn by pdfkit only, unsigned; their SHA-256 is kept, and an acceptance binds it (section 5.21). |
 | Notifications that carry a document | The dispatcher sends no files. Send a document with `document.send` (a subscriber can call it as the person). |
 | A WhatsApp document's later failure | A send is `sent` once WhatsApp has it; its message's own status shows a later failure, and no email follows. |
 | Other scripts in documents (Tamil, Kannada, right to left) | Only the Noto Latin, Devanagari and Telugu fonts are bundled. |
@@ -2196,7 +2263,12 @@ These are not built. Each has a workaround for now.
 | OAuth connectors | Credentials are stored as given; no OAuth flow or token refresh yet (B17 adds the first). |
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
 | Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
-| Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
+| Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. A contact without an account cannot accept a document in the app until share links (B9) give them a principal; the acceptance routes take only signed-in people (`HumanOnlyGuard`). |
+| An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
+| Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders allow cancelling an accepted order). |
+| The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set Express's `trust proxy` (not done by the framework). |
+| Acceptance tools for the assistant | The assistant can neither ask for a code nor accept (on purpose), and has no tool to read acceptances yet. |
+| Retiring `channel.link_codes` | Linking codes now live in `channel.otp_challenges`; the old table stays, unused, until a migration may drop it. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
 | Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); `roleOverrides`, `roleDefaults` and `grantKinds` (A4); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
