@@ -824,7 +824,10 @@ When a write the assistant makes parks, its run is suspended, not ended (`docs/d
 3. The decision (app, WhatsApp button, or the expiry sweeper) stores `approval.decided`. The
    `resume.approvals` subscriber puts it on the `agent-resume` queue. `ResumeService` finds the run,
    checks the business, the requester, that they still belong, and the thread, passes the turn hooks
-   (`TurnInfo.kind` `'resume'`: credits and the model policy apply), and resumes it.
+   (`TurnInfo.kind` `'resume'`: credits and the model policy apply), and resumes it. One resume
+   runs per run at a time (a Redis lock; a second decision waits on its queue). Hold no database
+   transaction open around a model run: Mastra's first use of its storage builds indexes
+   concurrently, which waits for every open transaction.
 4. The tool does not call the API again (the approval's replay already wrote, or nothing did). It
    answers `{ ok: true, result: { status: 'approved' | 'rejected' | 'expired', approval } }`, or a
    refusal for `failed`. The model says what happened and carries on with the rest of the request,
