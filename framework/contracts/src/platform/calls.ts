@@ -36,6 +36,17 @@ export const FINISHED_CALL_STATUSES: readonly CallStatus[] = [
   'cancelled',
 ];
 
+/**
+ * Whether the business can place calls: the first telephony provider it may use (one that needs
+ * no credentials, or one whose connector the business has an active connection to).
+ */
+export const CallProviderInfo = z.object({
+  available: z.boolean(),
+  /** The provider's name ('acme-voice'), when one is available. */
+  name: z.string().nullable(),
+});
+export type CallProviderInfo = z.infer<typeof CallProviderInfo>;
+
 /** The record a call is about. */
 export const CallAbout = z.object({ entity: z.string(), id: z.string() });
 

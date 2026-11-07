@@ -15,6 +15,7 @@ import {
   isValidDate,
   isValidTime,
   listRow,
+  RecordCalls,
   RecordInvites,
   SectionHeading,
   space,
@@ -285,6 +286,12 @@ export function MeetingDetail({ id, embedded = false }: { id: string; embedded?:
       <View style={styles.section}>
         <View style={styles.card}>
           <RecordInvites entity="meeting" id={m.id} />
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <View style={styles.card}>
+          <RecordCalls entity="meeting" id={m.id} />
         </View>
       </View>
 

@@ -14,7 +14,7 @@ import { defineFeature } from '../feature.js';
 import { CallsService, DIAL_QUEUE, type DialJob } from './calls.service.js';
 import { DialCall, LogCall, UpdateCall } from './commands.js';
 
-/** A record's calls, the ones the person may see, and one call. */
+/** A record's calls, the ones the person may see, one call, and whether calls can be placed. */
 @Controller('api/calls')
 @OptionalAuth()
 @UseGuards(PrincipalGuard)
@@ -24,6 +24,12 @@ export class CallsController {
   @Get()
   async list(@CurrentPrincipal() p: Principal, @Query() q: { entity?: string; id?: string }) {
     return { items: await this.calls.list(p, q) };
+  }
+
+  /** Whether this business can place calls (a telephony provider it may use). */
+  @Get('provider')
+  provider(@CurrentPrincipal() p: Principal) {
+    return this.calls.provider(p);
   }
 
   @Get(':id')

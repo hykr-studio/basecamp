@@ -8,6 +8,7 @@ import {
   type CalendarFeedInfo,
   type CalendarProviderInfo,
   type CallInfo,
+  type CallProviderInfo,
   type ChatRequest,
   type ChatResponse,
   type ChatStreamRequest,
@@ -687,6 +688,8 @@ export function createApiClient(opts: ApiClientOptions) {
         },
         key = newKey(),
       ) => command(UpdateCallSpec, { callId, ...patch }, key),
+      /** Whether the business can place calls (a telephony provider it may use). */
+      provider: () => call<CallProviderInfo>('GET', '/api/calls/provider'),
       get: (id: string) => call<CallInfo>('GET', `/api/calls/${encodeURIComponent(id)}`),
       /** A record's calls (`entity` and `id`), or else the ones the person may see. */
       list: async (about?: { entity: string; id: string }) =>

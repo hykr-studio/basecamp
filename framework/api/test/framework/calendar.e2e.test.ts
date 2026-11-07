@@ -603,6 +603,10 @@ describe('calls', () => {
   });
 
   it('dialling needs a provider the business connected', async () => {
+    expect((await inBusiness(owner)('GET', '/api/calls/provider')).body).toEqual({
+      available: false,
+      name: null,
+    });
     const res = await inBusiness(owner)('POST', '/api/calls/dial', { to: '+14155550124' });
     expect(res.status).toBe(403);
     expect(res.body.rule).toBe('no_telephony_provider');
@@ -614,6 +618,12 @@ describe('calls', () => {
     });
     expect(conn.status, JSON.stringify(conn.body)).toBe(201);
     const secret = conn.body.credentials.secret as string;
+    // This business can call now; another business, without a connection, still cannot.
+    expect((await inBusiness(staff)('GET', '/api/calls/provider')).body).toEqual({
+      available: true,
+      name: 'fixture-phone',
+    });
+    expect((await other.call('GET', '/api/calls/provider')).body.available).toBe(false);
     const res = await inBusiness(owner)('POST', '/api/calls/dial', {
       to: '+14155550124',
       entity: 'appointment',

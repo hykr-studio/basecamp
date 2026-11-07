@@ -1,4 +1,9 @@
-import { type CallInfo, CallsCapabilities, type Principal } from '@hykr/contracts';
+import {
+  type CallInfo,
+  type CallProviderInfo,
+  CallsCapabilities,
+  type Principal,
+} from '@hykr/contracts';
 import { entityDef } from '@hykr/core';
 import { callLogs, type Database } from '@hykr/db';
 import { can, subjectOf } from '@hykr/policy';
@@ -83,6 +88,12 @@ export class CallsService implements OnModuleInit {
         .limit(LIST_LIMIT);
     }
     return rows.map((r) => presentCall(r, p) as unknown as CallInfo);
+  }
+
+  /** Whether the person's business can place calls now (`call.dial` decides who may). */
+  async provider(p: Principal): Promise<CallProviderInfo> {
+    const found = p.tenantId ? await providerFor(this.db, p.tenantId) : null;
+    return { available: !!found, name: found?.provider.name ?? null };
   }
 
   queueDial(callId: string, eventId: string) {
