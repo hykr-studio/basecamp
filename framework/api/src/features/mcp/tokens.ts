@@ -9,7 +9,6 @@ import {
   oauthClient,
   oauthConsent,
   oauthRefreshToken,
-  session,
 } from '@hykr/db';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { ACCESS_PREFIX } from './config.js';
@@ -36,8 +35,7 @@ export const isAccessToken = (value: string) =>
 
 /**
  * The grant behind an access token, or null when it is not valid: unknown, revoked, expired, its
- * client gone or disabled, the session it was issued in over, bound to another resource, or
- * without a person or business.
+ * client gone or disabled, bound to another resource, or without a person or business.
  */
 export async function verifyAccessToken(
   db: Database,
@@ -62,14 +60,9 @@ export async function verifyAccessToken(
   if (!t.expiresAt || t.expiresAt < now || t.revoked || row.clientDisabled) return null;
   if (!t.userId || !t.referenceId) return null;
   if (t.resources?.length && !t.resources.includes(resource)) return null;
-  if (t.sessionId) {
-    const [s] = await db
-      .select({ expiresAt: session.expiresAt })
-      .from(session)
-      .where(eq(session.id, t.sessionId))
-      .limit(1);
-    if (!s || s.expiresAt < now) return null;
-  }
+  // The browser session the person consented in is not consulted: a connection lives as long as
+  // its tokens (refreshed for thirty days) until the person disconnects it. Signing out deletes
+  // that session and the provider then unlinks it (set null), so it never revoked anything.
   return {
     token: raw,
     clientId: t.clientId,
