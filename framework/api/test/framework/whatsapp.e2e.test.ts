@@ -330,6 +330,7 @@ describe('whatsapp', () => {
         `insert into channel.consents (contact_id, topic, granted, source) values ($1, 'reminders', true, 'test')`,
         [id],
       );
+      const before = to(customer).length;
       // Two messages inside one burst: "ok", then STOP.
       for (const text of ['ok', 'STOP']) {
         const raw = delivery(customer, text);
@@ -343,6 +344,14 @@ describe('whatsapp', () => {
         );
         return rows[0]?.granted === false ? true : undefined;
       });
+      // Its reply has gone out too, so the next test reads only its own.
+      await eventually(() =>
+        to(customer)
+          .slice(before)
+          .some((s) => s.body.text?.body?.includes("won't get reminders"))
+          ? true
+          : undefined,
+      );
     });
 
     it('"Stop offers" on a marketing template turns offers off', async () => {
