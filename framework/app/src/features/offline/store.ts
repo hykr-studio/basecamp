@@ -23,7 +23,8 @@ const done = (tx: IDBTransaction) =>
     tx.onabort = () => reject(tx.error);
   });
 
-function open(factory: IDBFactory): Promise<IDBDatabase> {
+/** Open (or make) the offline database. */
+export function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
   const r = factory.open(DB, 1);
   r.onupgradeneeded = () => {
     const db = r.result;
@@ -74,7 +75,7 @@ export function deviceStore(): Promise<DeviceStore> {
     try {
       const factory = (globalThis as { indexedDB?: IDBFactory }).indexedDB;
       if (!factory) return memoryDeviceStore();
-      return indexedDbStore(await open(factory));
+      return indexedDbStore(await openIndexedDb(factory));
     } catch (e) {
       console.warn('Offline storage is not available here; writes are kept for this page only', e);
       return memoryDeviceStore();

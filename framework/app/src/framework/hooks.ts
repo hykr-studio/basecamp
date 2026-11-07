@@ -260,11 +260,22 @@ export async function writeEntity(
       mapRows(data, id, (r) =>
         action === 'delete'
           ? null
-          : { ...r, ...input, ...(field && next !== undefined ? { [field]: next } : {}) },
+          : { ...patched(r, input), ...(field && next !== undefined ? { [field]: next } : {}) },
       ),
     );
   }
   return result;
+}
+
+const isPlain = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** A cached row with a queued patch on it: fields replaced, a nested object (custom) merged. */
+function patched(row: Row, patch: Record<string, unknown>): Row {
+  const out: Row = { ...row };
+  for (const [k, v] of Object.entries(patch))
+    out[k] = isPlain(v) && isPlain(row[k]) ? { ...row[k], ...v } : v;
+  return out;
 }
 
 /** One command, the same way: queued when its module marks it `offline`, else straight to the API. */
