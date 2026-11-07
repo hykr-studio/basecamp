@@ -1,9 +1,11 @@
 /**
  * The meetings module, server side: meetings with a time and attendees, closed into a summary
- * note and to-dos, or moved with their open to-dos. Builds on the to-dos and notes modules.
+ * note and to-dos, or moved with their open to-dos. Builds on the to-dos and notes modules, and
+ * offers two ready-made agents.
  */
 import { defineModule } from '@hykr/api';
 import { meetingsAgent } from './agent/index.js';
+import { meetingsAgentTemplates } from './agent/templates.js';
 import { meetingsSpec } from './contracts/index.js';
 import * as tables from './db/schema.js';
 import { meetingsNotifications } from './notifications/index.js';
@@ -19,4 +21,6 @@ export const meetings = defineModule({
   notifications: meetingsNotifications.notifications,
   agent: meetingsAgent,
   tables,
+  // Ready-made agents for a business: a Monday summary, a follow-up when a meeting closes (A6).
+  contributes: { agentTemplates: meetingsAgentTemplates },
 });

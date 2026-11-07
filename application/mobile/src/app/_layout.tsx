@@ -1,6 +1,7 @@
 import '../../global.css';
 import {
   AppShell,
+  agentsPlugin,
   creditsPlugin,
   inboxPlugin,
   livePlugin,
@@ -25,8 +26,8 @@ const config = {
  * and phrases, live updates (other people's changes show without a reload), push notifications
  * (the to-do reminder goes to the phone first), WebMCP (each screen's read tools, the modules'
  * `webmcp`, offered to the browser's agent where the browser supports it), the business's
- * credits (usage, the pause, buying more: `/credits`) and the in-app inbox (mentions in
- * comments).
+ * credits (usage, the pause, buying more: `/credits`), the in-app inbox (mentions in comments)
+ * and the business's agents (`/agents`: the meetings module's ready-made ones among them).
  */
 const plugins = [
   settingsPlugin(),
@@ -35,6 +36,7 @@ const plugins = [
   webMcpPlugin(),
   creditsPlugin,
   inboxPlugin(),
+  agentsPlugin(),
 ];
 
 export default function RootLayout() {
