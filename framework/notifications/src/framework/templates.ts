@@ -14,6 +14,22 @@ export const LoginCode = defineTemplate({
   example: { code: '482913' },
 });
 
+/**
+ * A one-time code for anything but linking (accepting a document): Meta lets an authentication
+ * template carry only the code, so what it is for is on the page that asked for it.
+ */
+export const VerificationCode = defineTemplate({
+  name: 'verification_code_v1',
+  category: 'authentication',
+  params: z.object({ code: z.string().regex(/^\d{6}$/) }),
+  body: {
+    en: '{{code}} is your verification code. Do not share it with anyone. It expires in 10 minutes.',
+    hi: '{{code}} आपका सत्यापन कोड है। इसे किसी के साथ साझा न करें। यह 10 मिनट में खत्म हो जाएगा।',
+    te: '{{code}} మీ ధృవీకరణ కోడ్. దీన్ని ఎవరితోనూ పంచుకోకండి. ఇది 10 నిమిషాల్లో ముగుస్తుంది.',
+  },
+  example: { code: '482913' },
+});
+
 /** An approval waiting for this person, outside the 24-hour window: decide with a tap. */
 export const ApprovalRequest = defineTemplate({
   name: 'approval_request_v1',
@@ -83,6 +99,7 @@ export const MonthlyUpdate = defineTemplate({
 
 export const frameworkTemplates = [
   LoginCode,
+  VerificationCode,
   ApprovalRequest,
   ApprovalOutcome,
   HandoffReply,

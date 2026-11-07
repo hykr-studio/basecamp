@@ -20,6 +20,8 @@ import { MailerService } from './notify/mailer.service.js';
 import { NotifyService } from './notify/notify.service.js';
 import { OutboxRelay } from './notify/outbox.relay.js';
 import { SendTemplate } from './notify/send-template.command.js';
+import { OtpService } from './otp/otp.service.js';
+import { OtpSender } from './otp/sender.js';
 import { OutboundService } from './outbound.service.js';
 import { TemplatesProcessor } from './templates/templates.processor.js';
 import { TenantsService } from './tenants.service.js';
@@ -77,6 +79,8 @@ export class ChannelsModule implements OnApplicationShutdown {
         HandoffService,
         ErasureService,
         LinkingService,
+        OtpService,
+        OtpSender,
         SttService,
         NotifyService,
         MailerService,
@@ -90,6 +94,8 @@ export class ChannelsModule implements OnApplicationShutdown {
         TenantsService,
         HandoffService,
         NotifyService,
+        OtpService,
+        OtpSender,
         whatsappProvider,
       ],
     };
