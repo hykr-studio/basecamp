@@ -2,12 +2,14 @@
 import { createCatalog } from '@hykr/contracts';
 import { describe, expect, it } from 'vitest';
 import {
+  canonicalJson,
   cronProblem,
   eventMatches,
   messageMatches,
   movingValue,
   nextRun,
   resolveWhere,
+  sameTrigger,
   scopesFor,
   triggerLabel,
   webhookMatches,
@@ -78,6 +80,62 @@ describe('matching', () => {
       'on the schedule "0 9 * * 1"',
     );
     expect(triggerLabel({ kind: 'manual' })).toBe('run now');
+  });
+});
+
+describe('an edited trigger', () => {
+  it('is the same whatever order its keys come back in (jsonb sorts them its own way)', () => {
+    const condition = {
+      kind: 'condition' as const,
+      entity: 'task',
+      where: { title: { contains: 'x' }, done: false },
+      everyMinutes: 5,
+    };
+    // As Postgres gives jsonb back: shorter keys first, at every level.
+    const stored = JSON.parse(
+      '{"kind":"condition","where":{"done":false,"title":{"contains":"x"}},"entity":"task","everyMinutes":5}',
+    );
+    expect(JSON.stringify(stored)).not.toBe(JSON.stringify(condition));
+    expect(sameTrigger(stored, condition)).toBe(true);
+    expect(
+      sameTrigger(
+        { at: '2026-12-01T09:00:00Z', kind: 'once' },
+        {
+          kind: 'once',
+          at: '2026-12-01T09:00:00Z',
+        },
+      ),
+    ).toBe(true);
+    expect(
+      sameTrigger(
+        { cron: '0 9 * * 1', kind: 'recurring' },
+        {
+          kind: 'recurring',
+          cron: '0 9 * * 1',
+        },
+      ),
+    ).toBe(true);
+    // A default the schema adds is the same as one written out.
+    expect(
+      sameTrigger(
+        { kind: 'condition', entity: 'task', where: {} },
+        {
+          kind: 'condition',
+          entity: 'task',
+          where: {},
+          everyMinutes: 15,
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it('changed: another value, another order of a list, or a spec the schema no longer reads', () => {
+    const t = { kind: 'event' as const, on: ['task.created', 'task.updated'] };
+    expect(sameTrigger({ kind: 'event', on: ['task.updated', 'task.created'] }, t)).toBe(false);
+    expect(sameTrigger({ kind: 'event', on: ['task.created'] }, t)).toBe(false);
+    expect(sameTrigger({ kind: 'mention' }, t)).toBe(false);
+    expect(sameTrigger({ kind: 'event', on: [], extra: 1 }, t)).toBe(false);
+    expect(canonicalJson({ b: [{ d: 1, c: 2 }], a: null })).toBe('{"a":null,"b":[{"c":2,"d":1}]}');
   });
 });
 

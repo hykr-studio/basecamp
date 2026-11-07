@@ -1,6 +1,6 @@
 // What a trigger means, without the database: when a schedule fires next, whether an event or a
 // message matches, a condition's moving times, and how a run says what started it.
-import type { AgentTrigger, DomainEventEnvelope } from '@hykr/contracts';
+import { AgentTrigger, type DomainEventEnvelope } from '@hykr/contracts';
 import { Cron } from 'croner';
 import { matchesEvent } from '../events/subscriber.js';
 
@@ -128,6 +128,31 @@ export const webhookMatches = (
   connectionId: string,
   type: string,
 ) => t.connectionId === connectionId && t.on.some((p) => p === '*' || matchesEvent(p, type));
+
+/* ── Whether a trigger changed ─────────────────────────────────────────── */
+
+/** JSON with every object's keys sorted: jsonb keeps its own key order, zod the schema's. */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.entries(v as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        )
+      : v,
+  );
+}
+
+/**
+ * Is a stored trigger (its row's spec, as jsonb gives it back) the same as this one? Both are read
+ * through the schema (its defaults) and compared key by key, not in the order the keys came.
+ * A stored spec the schema no longer reads is a changed trigger.
+ */
+export function sameTrigger(stored: unknown, t: AgentTrigger): boolean {
+  const was = AgentTrigger.safeParse(stored);
+  return was.success && canonicalJson(was.data) === canonicalJson(AgentTrigger.parse(t));
+}
 
 /* ── How a run says what started it ────────────────────────────────────── */
 

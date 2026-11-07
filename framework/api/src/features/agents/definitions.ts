@@ -20,7 +20,7 @@ import { runtime } from '../../runtime.js';
 import { connectorHandlers } from '../integrations/registry.js';
 import { allToolIds, readableIn, unscoped } from './scope.js';
 import { agentTemplates } from './templates.js';
-import { cronProblem, firstDue, knownZone, resolveWhere } from './triggers.js';
+import { cronProblem, firstDue, knownZone, resolveWhere, sameTrigger } from './triggers.js';
 
 /** The parts of a definition that say what it does. */
 export const Definition = z.object({
@@ -132,7 +132,8 @@ export function setZoneOf(f: ZoneOf) {
 
 /**
  * The definition's triggers as rows: one per position. A trigger that did not change keeps its
- * row (when it fires next, a condition's records seen); a changed one starts again.
+ * row (its id, when it fires next, a condition's records seen), whatever order its keys come
+ * back in; a changed one starts again. A change of `status` alone changes no trigger.
  */
 async function syncTriggers(tx: Tx, row: Row, zone: string, now: Date) {
   const triggers = z.array(AgentTrigger).parse(row.triggers);
@@ -141,7 +142,7 @@ async function syncTriggers(tx: Tx, row: Row, zone: string, now: Date) {
   for (const [position, t] of triggers.entries()) {
     const old = byPosition.get(position);
     byPosition.delete(position);
-    if (old && JSON.stringify(old.spec) === JSON.stringify(t)) continue;
+    if (old && sameTrigger(old.spec, t)) continue;
     if (old) await tx.delete(agentTriggers).where(eq(agentTriggers.id, old.id));
     await tx.insert(agentTriggers).values({
       tenantId: row.tenantId,

@@ -12,12 +12,14 @@ export {
   defineAgentTemplate,
 } from './templates.js';
 export {
+  canonicalJson,
   cronProblem,
   eventMatches,
   messageMatches,
   movingValue,
   nextRun,
   resolveWhere,
+  sameTrigger,
   triggerLabel,
   webhookMatches,
 } from './triggers.js';
