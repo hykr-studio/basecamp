@@ -12,9 +12,12 @@ export { Button } from './components/Button';
 export { ScreenTitle, SectionHeading } from './components/ScreenTitle';
 export { type AppConfig, appConfig, configure } from './config';
 export {
+  type AcceptanceClient,
+  AcceptanceClientProvider,
   AcceptDocument,
   RecordAcceptance,
   useAccept,
+  useAcceptanceClient,
   useAcceptanceKinds,
   useAcceptanceStatus,
   useAcceptances,
@@ -177,3 +180,4 @@ export { colors, fonts, listRow, space, styles } from './theme';
 export { InlineView } from './views/InlineView';
 export { OpenRow, Rows, ViewCard } from './views/parts';
 export { useAct } from './views/useAct';
+export { type ProvidedData, useViewData, type ViewData, ViewDataProvider } from './views/view-data';

@@ -48,6 +48,11 @@ export interface AppRoute {
    * The API still decides what it may load. Off by default: a route needs a session.
    */
   public?: boolean;
+  /**
+   * With `public`: shown on its own for everyone, signed in or not, before the shell looks for a
+   * session (a share link's page: what a guest sees is what anyone holding the link sees).
+   */
+  standalone?: boolean;
 }
 
 /**
@@ -74,6 +79,11 @@ export interface AppPlugin {
   routes?: readonly AppRoute[];
   /** Destinations for its screens, after the modules' and before the framework's. */
   nav?: readonly NavItem[];
+  /**
+   * The product's mark in the rail and the phone's top bar (the business's logo and name). The
+   * first plugin that has one draws it; without any, the shell prints `app.title`.
+   */
+  Brand?: ComponentType<{ fallback: string }>;
   /**
    * A hook that narrows the destinations (feature flags, roles). It runs on every render of the
    * shell, in plugin order. It may hide or reorder destinations, not add them: an item it

@@ -13,5 +13,6 @@ export { documentMessages } from './documents.js';
 export { exportMessages } from './export.js';
 export { mcpMessages } from './mcp.js';
 export { runMessages } from './runs.js';
+export { shareMessages } from './share.js';
 export { summaryMessages } from './summary.js';
 export { voiceMessages } from './voice.js';

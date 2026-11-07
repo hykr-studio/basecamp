@@ -11,6 +11,7 @@ import { colors, space, styles } from '../../theme';
 import { useDocuments } from '../documents/hooks';
 import {
   useAccept,
+  useAcceptanceClient,
   useAcceptanceKinds,
   useAcceptanceStatus,
   useRequestAcceptanceCode,
@@ -91,6 +92,7 @@ function Ask({ status }: { status: AcceptanceStatus }) {
   const { t } = useT();
   const ask = useRequestAcceptanceCode();
   const esign = useStartESign();
+  const canSign = !!useAcceptanceClient().esign;
   const [sent, setSent] = useState<{ id: string; sentTo: string } | null>(null);
   const request = (channel?: 'whatsapp' | 'email') =>
     ask.mutate(
@@ -130,7 +132,7 @@ function Ask({ status }: { status: AcceptanceStatus }) {
               onPress={() => request(c.channel)}
             />
           ))}
-          {status.esign && (
+          {status.esign && canSign && (
             <Button
               title={t('acceptance.esign', { provider: status.esign })}
               icon="pen-tool"

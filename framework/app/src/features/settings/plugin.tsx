@@ -119,6 +119,7 @@ export function settingsPlugin(): AppPlugin {
   return {
     name: 'settings',
     Provider: SettingsProvider,
+    Brand: BrandMark,
     onSignedIn: (user) => {
       useSignedIn.setState({ userId: user.id });
       return () => useSignedIn.setState({ userId: null });

@@ -112,6 +112,7 @@ import {
 } from '@hykr/contracts';
 import type { z } from 'zod';
 import { type LiveMessage, liveMessages, textOf } from './live.js';
+import { sharesMethods } from './share.js';
 
 export {
   type LiveMessage,
@@ -120,6 +121,12 @@ export {
   type ServerSentEvent,
   textOf,
 } from './live.js';
+export {
+  createShareClient,
+  type ShareClient,
+  type ShareClientOptions,
+  ShareError,
+} from './share.js';
 
 export class ApiError extends Error {
   constructor(
@@ -491,6 +498,8 @@ export function createApiClient(opts: ApiClientOptions) {
     documents,
     /** Accepting a record's PDF with a one-time code, and the evidence each acceptance leaves. */
     acceptances,
+    /** Share links: a record, a page or a form shown by link (people only). */
+    shares: sharesMethods(call, newKey),
     /** Comments and @-mentions on records. */
     comments,
     /** The signed-in person's in-app inbox. */
