@@ -4,6 +4,7 @@ import { type ReactNode, useEffect, useSyncExternalStore } from 'react';
 import { touchedBy } from '../../chat/touched';
 import type { AppPlugin } from '../../framework/app-domain';
 import { currentBusiness, onBusinessChange } from '../../framework/business';
+import { cacheWritten } from '../../framework/cached-rows';
 import { useT } from '../../framework/lang';
 import { useToast } from '../../framework/Toast';
 import { setWriteQueue } from '../../framework/write-queue';
@@ -90,6 +91,15 @@ function OfflineProvider({ children, options }: { children: ReactNode; options: 
   useEffect(
     () =>
       theOutbox().onSettled((s) => {
+        // The record as the server left it, in every cached copy (its new version included).
+        const { op } = s.item;
+        if (
+          op.kind === 'entity' &&
+          op.recordId &&
+          s.outcome === 'done' &&
+          s.result.status === 'done'
+        )
+          cacheWritten(client, op.entity, op.recordId, s.result.value);
         void Promise.all(
           [...keysOf(s), 'approvals', 'history'].map((k) =>
             client.invalidateQueries({ queryKey: [k] }),

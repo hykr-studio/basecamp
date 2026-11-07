@@ -27,6 +27,7 @@ import {
 import type { z } from 'zod';
 import { api } from '../api';
 import { getCatalog } from '../runtime';
+import { cachedRecord, cacheWritten, patchCached, patched } from './cached-rows';
 import { useToast } from './Toast';
 import { isQueued, type QueuedWrite, writeQueue } from './write-queue';
 
@@ -173,42 +174,6 @@ function useInvalidate() {
     );
 }
 
-type Row = Record<string, unknown> & { id?: unknown };
-
-/** Each cached copy of a record in a query's data: a get's row, or a row of a list's pages. */
-function mapRows(data: unknown, id: string, fn: (row: Row) => Row | null): unknown {
-  if (!data || typeof data !== 'object') return data;
-  const d = data as Row & { pages?: { items?: Row[] }[] };
-  if (d.id === id) return fn(d) ?? data;
-  if (!Array.isArray(d.pages)) return data;
-  let touched = false;
-  const pages = d.pages.map((page) => {
-    if (!Array.isArray(page?.items) || !page.items.some((i) => i?.id === id)) return page;
-    touched = true;
-    return {
-      ...page,
-      items: page.items.flatMap((i) => (i?.id === id ? (fn(i) ?? []) : [i])),
-    };
-  });
-  return touched ? { ...d, pages } : data;
-}
-
-/** The record as the app last read it (a get, or an item of a list), if it is cached. */
-export function cachedRecord(
-  client: QueryClient,
-  name: string,
-  id: string,
-): Record<string, unknown> | undefined {
-  let found: Row | undefined;
-  for (const [, data] of client.getQueriesData({ queryKey: [name] }))
-    if (!found)
-      mapRows(data, id, (row) => {
-        found = row;
-        return row;
-      });
-  return found;
-}
-
 const titleOf = (...from: (Record<string, unknown> | undefined)[]) => {
   for (const v of from) if (typeof v?.title === 'string' && v.title) return v.title;
   return undefined;
@@ -231,13 +196,19 @@ export async function writeEntity(
   const queue = writeQueue();
   if (!queue || !queuesOffline(spec, action)) {
     const c = api.entity(spec);
-    if (action === 'create') return c.create(args.input as never);
-    if (action === 'update') return c.update(String(args.id), args.input as never);
-    return c.remove(String(args.id));
+    const result =
+      action === 'create'
+        ? await c.create(args.input as never)
+        : action === 'update'
+          ? await c.update(String(args.id), args.input as never)
+          : await c.remove(String(args.id));
+    if (args.id && result.status === 'done') cacheWritten(client, name, args.id, result.value);
+    return result;
   }
   const trait = versionedOf(spec);
   const field = trait ? versionField(trait) : undefined;
-  const row = args.id ? cachedRecord(client, name, args.id) : undefined;
+  // The freshest copy: an older one kept by a list not shown now would send a stale If-Match.
+  const row = args.id ? cachedRecord(client, name, args.id, { versionField: field }) : undefined;
   const input =
     action === 'create'
       ? { id: crypto.randomUUID(), ...args.input }
@@ -253,29 +224,16 @@ export async function writeEntity(
     versioned: trait !== undefined,
     ...(seen !== undefined && Number.isFinite(seen) ? { baseVersion: seen } : {}),
   });
-  if (isQueued(result) && args.id) {
-    const id = args.id;
+  if (!args.id) return result;
+  if (isQueued(result)) {
     const next = result.item.ifMatch !== undefined ? result.item.ifMatch + 1 : undefined;
-    client.setQueriesData({ queryKey: [name] }, (data: unknown) =>
-      mapRows(data, id, (r) =>
-        action === 'delete'
-          ? null
-          : { ...patched(r, input), ...(field && next !== undefined ? { [field]: next } : {}) },
-      ),
+    patchCached(client, name, args.id, (r) =>
+      action === 'delete'
+        ? null
+        : { ...patched(r, input), ...(field && next !== undefined ? { [field]: next } : {}) },
     );
-  }
+  } else if (result.status === 'done') cacheWritten(client, name, args.id, result.value);
   return result;
-}
-
-const isPlain = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v);
-
-/** A cached row with a queued patch on it: fields replaced, a nested object (custom) merged. */
-function patched(row: Row, patch: Record<string, unknown>): Row {
-  const out: Row = { ...row };
-  for (const [k, v] of Object.entries(patch))
-    out[k] = isPlain(v) && isPlain(row[k]) ? { ...row[k], ...v } : v;
-  return out;
 }
 
 /** One command, the same way: queued when its module marks it `offline`, else straight to the API. */

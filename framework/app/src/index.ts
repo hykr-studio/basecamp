@@ -93,6 +93,7 @@ export {
 } from './framework/app-domain';
 export { AssistantProvider, useAssistant, useScreenContext } from './framework/assistant-context';
 export { chooseBusiness, currentBusiness } from './framework/business';
+export { cachedRecord, cacheWritten } from './framework/cached-rows';
 export {
   bindAll,
   type ComposedApp,
@@ -124,7 +125,6 @@ export { type Chip, FilterChips, SearchBox } from './framework/FilterChips';
 export { History } from './framework/History';
 export {
   type CatalogOf,
-  cachedRecord,
   type EntityList,
   type EntityMutations,
   type EntityName,
