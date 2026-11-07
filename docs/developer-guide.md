@@ -2199,23 +2199,31 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   remembered per client, person and business. Tokens are opaque (`mcp_at_…`, refresh `mcp_rt_…`),
   stored hashed: one hour, thirty days.
 - **Who it is.** The `mcp` identity provider makes a token an agent (`mcp:<client id>`) acting for
-  its person, in the business they consented in (their default one), on the `mcp` channel, with
+  its person, in the business they consented in (their default one, else the one they last became
+  a participant in; a person in none gets their own unless `signUp.createBusiness` is `false`, and
+  then cannot connect), on the `mcp` channel, with
   the token's scopes cut down to what the person's consent allows now. A token works only while
   that consent exists, so a token the provider mints during or after a disconnect is dead.
-  Everything else is the API's: access, field hiding, approvals, audit, the throttle. A person
-  who left the business gets 403.
+  Everything else is the API's: access, field hiding, approvals, audit. A person who left the
+  business gets 403. The throttle counts each client for its person and business (any
+  contributed identity provider's credential gets its own bucket, as the agent key does), not
+  the address: every tool call reaches the API from the API's own process.
 - **Scopes** are `<module>:read` and `<module>:write` for each application module (`write` covers
   `read`), plus `offline_access`. `PrincipalGuard` enforces them for any scoped credential (any
   identity provider that returns `scopes`): it reaches only routes that declare a scope
   (`RequireScope`; the generated entity routes declare their module's read or write scope, a
-  command route its module's write), and only with that scope. Every other route is 403
+  command route its module's write, `/api/transitions/:plural` the write scope of the records'
+  module, read from the request), and only with that scope. Every other route is 403
   `out_of_scope`. Sessions and the agent key are not scoped.
 - **Tools** are two per module: `<module>_read` (`{ entity, id }`, `{ entity, query }` with the
   list grammar, or `{ entity, summary }` for counts and totals) and `<module>_write` (`{ action,
   input }`, the action being one of the module's agent tool ids: `create-<name>`,
-  `update-<name>`, `delete-<name>` or a command's `tool`). Only what is exposed to agents. A token
-  lists only the modules its scopes reach. Each call goes to the HTTP API with the token, and
-  answers text (a sentence, then the API's JSON); a refusal is an error result.
+  `update-<name>`, `delete-<name>`, a command's `tool`, or `transition-<plural>` for an entity
+  with states (`{ id, transition, ...its fields }`, the moves with `expose: 'all'`)). Only what is
+  exposed to agents. A token lists only the modules its scopes reach. Each call goes to the HTTP
+  API with the token, and answers text (a sentence, then the API's JSON); a refusal is an error
+  result. The framework features' own tools (files, documents, jobs, memory, comments) are not
+  offered over MCP yet (section 14).
 - **Approvals.** A write that parks answers with who decides it, its level, and the link
   `<APP_URL>/approvals/<id>`, where a person decides it in the app. An MCP client never decides.
   Which writes wait (the PRD's tier 3) is the application's approval levels.
@@ -2225,8 +2233,8 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   ends every token of it at once, tokens revoked too, audited as `mcp.connection.revoke`). In the app, list
   `connectionsPlugin` in `<AppShell plugins>`: a `/connections` screen with both (the sample does).
 - **In tests.** `framework/api/test/framework/mcp.e2e.test.ts` runs the whole flow with
-  `MCPClient` from `@mastra/mcp`; `application/api/test/domain/mcp.e2e.test.ts` runs the sample
-  modules' tools.
+  `MCPClient` from `@mastra/mcp`, `mcp-states.e2e.test.ts` the transitions;
+  `application/api/test/domain/mcp.e2e.test.ts` runs the sample modules' tools.
 
 ---
 
@@ -2541,6 +2549,7 @@ These are not built. Each has a workaround for now.
 | MCP: several businesses | A token acts in the person's default business when they consent; the consent screen cannot choose another. Hiding the tools of a module a business's feature flag switches off is not done (the API answers 404 for its calls). |
 | MCP: older clients, other client registration | `@mastra/mcp` 2.x serves MCP revision 2026-07-28 only. Client ID metadata documents, the device grant, JWT access tokens and DPoP are not enabled. A client registered before a module existed registers again to ask for its scopes. Browser-based MCP clients from other origins are refused by CORS. |
 | MCP: screens | The app's `connectionsPlugin` lists and disconnects a person's clients; the back office has no view of every client in a business. The consent screen shows the application's name, not a business's branding. MCP Apps cards, resources and prompts are not served. |
+| MCP: framework features' tools | The MCP tools cover each module's entities, commands and state transitions. The framework features' own assistant tools (files, documents, jobs, memory recall, comments, handoff) are not offered, and their routes declare no scope, so a token gets 403 `out_of_scope` there. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
 | Agent tools for parties | `/api/parties` and `/api/participants` are people-only routes; the assistant cannot add someone to a record. |
 | A participant who decides | A participant reaches records (and writes them, in the roles `as` names) but is never a named approver: A5's named approvers are members. Capabilities per participant role are not built either. |
