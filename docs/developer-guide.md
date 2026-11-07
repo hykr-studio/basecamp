@@ -1723,11 +1723,20 @@ kinds of participant exist and what each may do is the application's.
   member (roles, default) or participant (participant roles there). A client sends `x-tenant-id`
   to work in another; `PUT /api/me/default { tenantId }` makes one of their memberships the
   default. In the app, list `businessesPlugin` first in `<AppShell plugins>`: a Businesses screen
-  (in the navigation when there is more than one), the choice kept per person on the device and
-  sent on every call, and everything under it started again on a switch.
+  (in the navigation when there are several, or none), the choice kept per person on the device
+  and sent on every call, and everything under it started again on a switch.
+- **Joining in the app.** The Businesses screen ends with "Join a business": the person pastes
+  the invitation link or code they were sent. An invitation link is
+  `<app>/businesses/join?token=<token>` (the plugin's `JOIN_PATH`; on a phone, the app's scheme),
+  which opens the same form filled in. Joining tries the token as a party's invitation
+  (`parties.join`: a participant) and, when no party invitation has it (404), as the team's
+  (`members.acceptInvite`: a member). Any other refusal (another email's invitation) is shown as
+  it is. Then the app works in the business joined. `JoinForm` is exported for a screen of your
+  own. The inviter shares the link: nothing emails it yet.
 - **No business on sign-up.** With `signUp: { createBusiness: false }`, a new account is in no
-  business: `/api/me` answers with `tenantId: null`, scoped routes and chat answer 403
-  `no_tenant`, and invitations (members or parties) can be accepted.
+  business: `/api/me` answers with `tenantId: null` (and no feature flags), scoped routes and
+  chat answer 403 `no_tenant`, and invitations (members or parties) can be accepted. In the app
+  such a person sees the Businesses screen in the navigation, to join one.
 - **Channels.** A notification can go to `{ partyId }` (every joined member of the party) or
   `{ participantsOf: { type, id }, as? }` (everyone on a record), each person once. A business's
   `parties.unknownSenders` setting (`'customer'`, the default, or `'contact'`) says whether a
@@ -2260,7 +2269,7 @@ These are not built. Each has a workaround for now.
 | A participant who decides | A participant reaches records (and writes them, in the roles `as` names) but is never a named approver: A5's named approvers are members. Capabilities per participant role are not built either. |
 | Parties shared across businesses | A party belongs to one business: the same organisation at two businesses is two parties, and its details are kept twice. |
 | Party screens | Parties and participants have an HTTP API and typed `@hykr/api-client` methods, but no app or back-office screen; the back office has no business switcher. |
-| Emailing a party invitation | `POST /api/parties/:id/members { email }` returns the token; the business shares the link. |
+| Emailing a party invitation | `POST /api/parties/:id/members { email }` returns the token; the business shares the link (`<app>/businesses/join?token=<token>`). The back office's join field takes team invitations only. |
 | A WhatsApp contact adding child rows | Under the participant grant only a person with an account creates a child row (an owner column needs a user). |
 | A participant's assistant writing outside its roles | Its change parks (if the operation parks for agents) and the approved replay finds no row (404); the business sees a request it cannot carry out. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
