@@ -7,6 +7,7 @@ import { RequestHumanSpec } from './handoff.js';
 import { SendTemplateSpec } from './notify.js';
 import { SavedPageSpec } from './page.js';
 
+export * from './acceptance.js';
 export * from './backoffice.js';
 export * from './document.js';
 export * from './file.js';

@@ -1,3 +1,4 @@
+export * from './acceptance.js';
 export * from './app.js';
 export * from './audit.js';
 export * from './auth.js';
@@ -8,6 +9,7 @@ export * from './files.js';
 export * from './integrations.js';
 export * from './jobs.js';
 export * from './numbering.js';
+export * from './otp.js';
 export * from './push.js';
 export * from './roles.js';
 export * from './settings.js';

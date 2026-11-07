@@ -29,6 +29,11 @@ export const documents = app.table(
     /** What it shows, as its definition's `load` read it for the requester. */
     data: jsonb('data').notNull(),
     /**
+     * The record's version when it was read (a versioned entity): an acceptance of this PDF
+     * holds only while the record is still at it.
+     */
+    recordVersion: integer('record_version'),
+    /**
      * The requester's roles and capabilities: who reads a copy must hold them (or the ones the
      * definition says matter).
      */

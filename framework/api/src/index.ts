@@ -3,6 +3,22 @@
 // environment when it loads.
 
 export {
+  type AcceptanceDef,
+  AcceptanceEvidenceCapability,
+  AcceptanceService,
+  type AcceptanceSigner,
+  type AcceptedContext,
+  acceptances,
+  defineAcceptance,
+  defineESignProvider,
+  type ESignProvider,
+  type ESignResult,
+  type ESignStart,
+  type ESignStarted,
+  esignProviders,
+  evidenceHash,
+} from './features/acceptance/public.js';
+export {
   BUY_CREDITS,
   type CreditPurchaseProvider,
   CreditPurchaseRequested,

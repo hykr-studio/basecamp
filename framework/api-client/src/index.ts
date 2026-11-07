@@ -1,5 +1,12 @@
 import {
+  type AcceptanceChallengeInput,
+  AcceptanceChallengeSpec,
+  type AcceptanceInfo,
+  type AcceptanceKindInfo,
+  type AcceptanceStatus,
   type AcceptedInvite,
+  type AcceptInput,
+  AcceptSpec,
   type AddGrantInput,
   type Approval,
   type BusinessRoles,
@@ -19,6 +26,8 @@ import {
   type DocumentRecipient,
   type EditRoleInput,
   type EntitySpec,
+  type ESignStartInput,
+  ESignStartSpec,
   type FeatureState,
   type FileInfo,
   type FileTarget,
@@ -344,6 +353,43 @@ export function createApiClient(opts: ApiClientOptions) {
       ).items,
   };
 
+  const acceptanceUrl = (rest = '') => `/api/acceptances${rest}`;
+  const acceptances = {
+    /** One PDF: what accepting it means, where a code would go (masked), whether you may. */
+    status: (documentId: string, lang?: string) =>
+      call<AcceptanceStatus>(
+        'GET',
+        acceptanceUrl(
+          `/documents/${encodeURIComponent(documentId)}${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`,
+        ),
+      ),
+    /** Send a one-time code to your own WhatsApp number or email, to accept this PDF. */
+    challenge: (input: AcceptanceChallengeInput, key = newKey()) =>
+      command(AcceptanceChallengeSpec, input, key),
+    /** Accept with the code received. */
+    accept: (input: AcceptInput, key = newKey()) => command(AcceptSpec, input, key),
+    /** Sign at the acceptance's e-sign provider: where to go. */
+    esign: (input: ESignStartInput, key = newKey()) => command(ESignStartSpec, input, key),
+    /** A record's acceptances you may see, newest first. */
+    list: async (entity: string, id: string) =>
+      (
+        await call<{ items: AcceptanceInfo[] }>(
+          'GET',
+          acceptanceUrl(`?entity=${encodeURIComponent(entity)}&id=${encodeURIComponent(id)}`),
+        )
+      ).items,
+    /** One acceptance, and whether its evidence still matches its hash. */
+    get: (id: string) => call<AcceptanceInfo>('GET', acceptanceUrl(`/${encodeURIComponent(id)}`)),
+    /** The acceptances an entity's records have. */
+    kinds: async (entity?: string) =>
+      (
+        await call<{ items: AcceptanceKindInfo[] }>(
+          'GET',
+          acceptanceUrl(`/kinds${entity ? `?entity=${encodeURIComponent(entity)}` : ''}`),
+        )
+      ).items,
+  };
+
   return {
     entity,
     summary,
@@ -354,6 +400,8 @@ export function createApiClient(opts: ApiClientOptions) {
     jobs,
     /** Documents (PDFs) of records: make, read, send. */
     documents,
+    /** Accepting a record's PDF with a one-time code, and the evidence each acceptance leaves. */
+    acceptances,
     /** Who is signed in, in which business, with which roles. */
     me: () => call<Me>('GET', '/api/me'),
     /** The back office: conversations staff have taken from the assistant (staff only). */
