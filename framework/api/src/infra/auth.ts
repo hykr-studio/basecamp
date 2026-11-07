@@ -2,7 +2,6 @@ import { ensureDefaultTenant, schema } from '@hykr/db';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { config } from '../config.js';
-import { installFeatures } from '../features/install.js';
 import { authPlugins } from '../hooks.js';
 import { createsBusinessOnSignUp, runtime } from '../runtime.js';
 import { sharedDb } from './db.js';
@@ -96,8 +95,6 @@ let built: ReturnType<typeof createAuth> | undefined;
  */
 export function getAuth() {
   runtime();
-  // The framework features' auth plugins too: they are installed with their contributions.
-  installFeatures();
   built ??= createAuth();
   return built;
 }

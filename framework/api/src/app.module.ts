@@ -7,6 +7,7 @@ import { ZodValidationPipe } from 'nestjs-zod';
 import { ChannelsModule } from './channels/channels.module.js';
 import { config } from './config.js';
 import { FeaturesModule } from './features/features.module.js';
+import { installFeatures } from './features/install.js';
 import { HealthController } from './health/health.controller.js';
 import { getAuth } from './infra/auth.js';
 import { coreImports } from './infra/core-imports.js';
@@ -17,13 +18,23 @@ import { MeModule } from './modules/me/me.controller.js';
 import { VoiceModule } from './modules/voice/voice.module.js';
 import { QueuesModule } from './queues/queues.module.js';
 
+/**
+ * Better Auth for the API, built once the application is registered and the framework features'
+ * contributions are installed: their auth plugins (the MCP authorization server, custom domains)
+ * are then in. FeaturesModule installs them too, but after this runs.
+ */
+function authWithFeatures() {
+  installFeatures();
+  return getAuth();
+}
+
 @Module({
   imports: [
     // Registers a global guard: every route needs a session unless marked
     // @AllowAnonymous() or @OptionalAuth(). CORS is set once, in main.ts.
     // Better Auth is built here, once the application (and its auth plugins) is registered.
     AuthModule.forRoot({
-      auth: getAuth(),
+      auth: authWithFeatures(),
       disableTrustedOriginsCors: true,
       // Webhooks are verified by an HMAC over the exact bytes received. JSON bodies up to
       // JSON_BODY_LIMIT (1mb): a whole order of a few hundred lines in one request.
