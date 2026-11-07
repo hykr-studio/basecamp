@@ -27,6 +27,7 @@ import { TenantsService } from '../tenants.service.js';
 import { WHATSAPP } from '../whatsapp/adapter.provider.js';
 import { MailerService } from './mailer.service.js';
 import { type DispatchJob, NotifyService } from './notify.service.js';
+import { partiesTo } from './parties-to.js';
 import { TEMPLATE_KEY } from './send-template.command.js';
 
 /** Read when used: this module may load before the application registers. */
@@ -289,9 +290,11 @@ export class DispatchProcessor extends WorkerHost {
   }
 
   /**
-   * Every member of the business whose roles hold the capability there (the declared roles with
-   * the business's edits, and its own roles), as people, each once, without the ones it leaves
-   * out (the requester of an approval decides nothing of their own).
+   * Recipients that name many people, as each one: every member of the business whose roles hold
+   * the capability there (the declared roles with the business's edits, and its own roles), and
+   * every person of a party or of the parties on a record (`partiesTo`). Each once, without the
+   * ones a capability recipient leaves out (the requester of an approval decides nothing of
+   * their own).
    */
   private async expand(
     tenantId: string,
@@ -302,6 +305,15 @@ export class DispatchProcessor extends WorkerHost {
     const seen = new Set<string>();
     const business = rolesOfBusiness(settings);
     for (const r of recipients) {
+      if ('partyId' in r || 'participantsOf' in r) {
+        for (const to of await partiesTo(this.db, tenantId, r)) {
+          const key = 'userId' in to ? to.userId : `contact:${to.contactId}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push(to);
+        }
+        continue;
+      }
       if (!('capability' in r)) {
         out.push(r);
         continue;

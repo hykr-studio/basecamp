@@ -2,14 +2,18 @@ import type { Labels, Lang } from '@hykr/i18n';
 import type { TemplateDef } from './define-template.js';
 
 /**
- * Who a notification is for: a person with an account, a customer, a contact, or every member
- * of the business whose roles hold a capability (`except` these people: the one who asked).
+ * Who a notification is for: a person with an account, a customer, a contact, every member of
+ * the business whose roles hold a capability (`except` these people: the one who asked), every
+ * person of a party (`partyId`), or every person of every party on a record (`participantsOf`,
+ * only in the participant roles `as` names, if any).
  */
 export type Recipient =
   | { userId: string }
   | { customerId: string }
   | { contactId: string }
-  | { capability: string; except?: string[] };
+  | { capability: string; except?: string[] }
+  | { partyId: string }
+  | { participantsOf: { type: string; id: string }; as?: string[] };
 
 /** How a recipient reads: their language and time zone. */
 export type Reader = { lang: Lang; timeZone: string };

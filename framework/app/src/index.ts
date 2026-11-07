@@ -59,6 +59,7 @@ export {
   type WebMcpScreens,
 } from './framework/app-domain';
 export { AssistantProvider, useAssistant, useScreenContext } from './framework/assistant-context';
+export { chooseBusiness, currentBusiness } from './framework/business';
 export {
   bindAll,
   type ComposedApp,

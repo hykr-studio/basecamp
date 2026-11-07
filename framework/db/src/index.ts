@@ -40,6 +40,14 @@ export { type AuditInput, type WriteCtx, writeAudit, writeAuditMany } from './re
 export { idempotencyRepo } from './repos/idempotency.js';
 export { takeNumber } from './repos/numbering.js';
 export {
+  businessesOf,
+  customerOfUser,
+  latestParticipation,
+  type PersonBusiness,
+  participatesIn,
+  personMembers,
+} from './repos/parties.js';
+export {
   type Contact,
   contactById,
   defaultOwnerOf,

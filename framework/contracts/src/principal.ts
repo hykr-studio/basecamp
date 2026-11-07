@@ -36,6 +36,13 @@ export const Subject = z.discriminatedUnion('kind', [
 ]);
 export type Subject = z.infer<typeof Subject>;
 
+/**
+ * How a person is in a business: a `member` of its team (a membership with roles), or a
+ * `participant` (a member of one of its parties, put on its records; never a member).
+ */
+export const BusinessStanding = z.enum(['member', 'participant']);
+export type BusinessStanding = z.infer<typeof BusinessStanding>;
+
 export const Principal = z.object({
   actor: z.object({
     kind: ActorKind,
@@ -62,6 +69,11 @@ export const Principal = z.object({
   capabilities: z.array(z.string()).optional(),
   /** The customer record this principal is, when they act as a customer. */
   customerId: z.string().optional(),
+  /**
+   * A person's standing in this business, set by the server: a member of its team, or a
+   * participant (no membership; what the participant grant reaches). Absent for a contact.
+   */
+  standing: BusinessStanding.optional(),
   assurance: Assurance.optional(),
   runId: z.string().optional(),
   agentVersion: z.string().optional(),
@@ -86,14 +98,33 @@ export function parseSubjectKey(value: string): Subject | undefined {
   return undefined;
 }
 
+/** One business a person is in, for the switcher. */
+export const Business = z.object({
+  tenantId: z.string(),
+  name: z.string(),
+  as: BusinessStanding,
+  /** Their roles there: a member's, or the roles every participant holds there. */
+  roles: z.array(TenantRole),
+  /** As a participant: the participant roles their parties hold on its records. */
+  participantRoles: z.array(z.string()),
+  /** The business a session works in when it names none (a membership's). */
+  isDefault: z.boolean(),
+});
+export type Business = z.infer<typeof Business>;
+
 /** What the signed-in person is, in the business they are working in (GET /api/me). */
 export const Me = z.object({
   userId: z.string(),
-  tenantId: z.string(),
+  /** Null: they are in no business yet (sign-up made none, and nobody invited them). */
+  tenantId: z.string().nullable(),
   roles: z.array(TenantRole),
   /** What those roles allow here, by name: what a client checks before showing a feature. */
   capabilities: z.array(z.string()),
   customerId: z.string().nullable(),
+  /** How they are in this business; null with no business. */
+  as: BusinessStanding.nullable(),
+  /** Every business they are in, as a member or a participant. Send `x-tenant-id` to switch. */
+  businesses: z.array(Business),
 });
 export type Me = z.infer<typeof Me>;
 

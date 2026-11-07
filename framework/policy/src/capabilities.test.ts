@@ -36,7 +36,8 @@ describe('the framework roles and capabilities', () => {
   it('give exactly what the hard-coded role checks gave', () => {
     // Deciding: owner and ops decided the business's requests, owner and admin marketing sends.
     // Plus the members feature's (A4): the team reads members, owner and admin manage them,
-    // and owner, admin and ops give access to single records.
+    // and owner, admin and ops give access to single records. And the parties' (B7): the team
+    // reads them, owner, admin and ops manage them.
     expect(capabilitiesOf(['owner'])).toEqual([
       'approvals.decide',
       'backoffice.use',
@@ -45,6 +46,8 @@ describe('the framework roles and capabilities', () => {
       'marketing.approve',
       'members.manage',
       'members.read',
+      'parties.manage',
+      'parties.read',
       'queues.admin',
       'records.grant',
     ]);
@@ -56,6 +59,8 @@ describe('the framework roles and capabilities', () => {
       'marketing.approve',
       'members.manage',
       'members.read',
+      'parties.manage',
+      'parties.read',
       'queues.admin',
       'records.grant',
     ]);
@@ -65,12 +70,15 @@ describe('the framework roles and capabilities', () => {
       'customers.message',
       'history.all',
       'members.read',
+      'parties.manage',
+      'parties.read',
       'records.grant',
     ]);
     expect(capabilitiesOf(['staff'])).toEqual([
       'backoffice.use',
       'customers.message',
       'members.read',
+      'parties.read',
     ]);
     expect(capabilitiesOf(['customer'])).toEqual([]);
   });

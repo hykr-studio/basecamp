@@ -14,6 +14,7 @@ export * from './job.js';
 export * from './members.js';
 export * from './notify.js';
 export * from './page.js';
+export * from './parties.js';
 
 export const platformEntities = { pages: SavedPageSpec } as const;
 export const platformCommands: readonly CommandSpec[] = [SendTemplateSpec, RequestHumanSpec];

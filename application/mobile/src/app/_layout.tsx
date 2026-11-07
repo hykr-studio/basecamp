@@ -1,5 +1,12 @@
 import '../../global.css';
-import { AppShell, creditsPlugin, livePlugin, pushPlugin, webMcpPlugin } from '@hykr/app';
+import {
+  AppShell,
+  businessesPlugin,
+  creditsPlugin,
+  livePlugin,
+  pushPlugin,
+  webMcpPlugin,
+} from '@hykr/app';
 import { catalog, registry } from '@/catalog';
 import * as modules from '@/modules';
 import { settings } from '@/settings';
@@ -16,9 +23,13 @@ const config = {
  * The framework features the app uses: live updates (other people's changes show without a
  * reload), push notifications (the to-do reminder goes to the phone first), WebMCP (each
  * screen's read tools, the modules' `webmcp`, offered to the browser's agent where the browser
- * supports it) and the business's credits (usage, the pause, buying more: `/credits`).
+ * supports it), the business's credits (usage, the pause, buying more: `/credits`) and the
+ * business switcher (`/businesses`: a person in several businesses, as a member or a
+ * participant, chooses the one they work in). The switcher goes first: switching starts
+ * everything after it again in the other business.
  */
 const plugins = [
+  businessesPlugin,
   livePlugin(),
   pushPlugin({ androidChannel: 'Reminders' }),
   webMcpPlugin(),

@@ -49,6 +49,12 @@ export interface ServerDefinition {
    * are `orders` and `orders_…`.
    */
   tablePrefix?: string;
+  /**
+   * What signing up gives a person. `createBusiness` (default true): a business of their own,
+   * as its creator. False: none; they are in no business until someone invites them (members)
+   * or makes them a party member (a participant somewhere).
+   */
+  signUp?: { createBusiness?: boolean };
 }
 
 /** An application as the server runs it: its definition, built into the framework's parts. */
@@ -123,6 +129,9 @@ export function defineServer(definition: ServerDefinition): Basecamp {
 }
 
 let current: Basecamp | undefined;
+
+/** Does signing up give a person a business of their own? (`signUp.createBusiness`, default yes.) */
+export const createsBusinessOnSignUp = () => runtime().definition.signUp?.createBusiness !== false;
 
 /**
  * The application this process serves. Set once, before the Nest modules load (startApi,
