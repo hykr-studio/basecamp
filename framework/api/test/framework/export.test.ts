@@ -5,9 +5,10 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { cellText, csvOf, exportColumns, jsonOf } from '../../dist/features/export/csv.js';
 import { archiveName } from '../../dist/features/export/job.js';
+import { dataExportSources, exportSourceProblems } from '../../dist/features/export/sources.js';
 import { readZip, writeZip, ZipWriter } from '../../dist/features/export/zip.js';
 
-const BOM = '﻿';
+const BOM = '\uFEFF';
 
 describe('CSV', () => {
   it('wraps cells that need it in "…", doubles " inside, ends lines with CRLF, starts with a BOM', () => {
@@ -115,5 +116,23 @@ describe('the zip archive', () => {
 
   it('is named for the day it was made', () => {
     expect(archiveName(new Date('2026-11-07T23:59:00Z'))).toBe('export-2026-11-07.zip');
+  });
+});
+
+describe('export sources', () => {
+  it('a bad name, a name taken by the manifest or no rows stops the start', async () => {
+    // This file's own copy of the registry: Vitest loads each test file's modules afresh.
+    dataExportSources.register(
+      { name: 'audit-log', rows: async () => [] },
+      { name: 'Audit Log', rows: async () => [] },
+      { name: 'MANIFEST', rows: async () => [] },
+      { name: 'no-rows' } as never,
+    );
+    expect(exportSourceProblems()).toEqual([
+      'Export source "Audit Log": use lower case letters, digits and "-"',
+      'Export source "MANIFEST": use lower case letters, digits and "-"',
+      'Export source "MANIFEST" takes the file name of the manifest',
+      'Export source "no-rows": give rows(ctx)',
+    ]);
   });
 });

@@ -36,7 +36,7 @@ export function exportColumns(rows: readonly Values[], schemaKeys: readonly stri
 export function csvOf(rows: readonly Values[], columns: readonly string[]): string {
   const lines = [columns.map((c) => quoted(cellText(c))).join(',')];
   for (const row of rows) lines.push(columns.map((c) => quoted(cellText(row[c]))).join(','));
-  return `﻿${lines.join('\r\n')}\r\n`;
+  return `\uFEFF${lines.join('\r\n')}\r\n`;
 }
 
 /** The JSON text: an array, one record per line. */

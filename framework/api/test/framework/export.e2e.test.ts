@@ -29,7 +29,7 @@ let tenantId = '';
 let strangerTenant = '';
 const here = () => ({ 'x-tenant-id': tenantId });
 
-const BOM = '﻿';
+const BOM = '\uFEFF';
 
 /** Start an export as this person, in our business unless told otherwise. */
 const start = (p: Person, body: Json = {}, headers: Record<string, string> = here()) =>
@@ -310,9 +310,14 @@ describe('limits', () => {
       const again = await start(owner);
       expect(again.status).toBe(409);
       expect(again.body.error).toBe('export_running');
+      // Another business's export starts meanwhile.
+      const elsewhere = { 'x-tenant-id': strangerTenant };
+      const theirs = await start(stranger, {}, elsewhere);
+      expect(theirs.status).toBe(200);
       release();
       exportGate.hold = undefined;
       expect((await finished(owner, first.body.value.id)).status).toBe('succeeded');
+      expect((await finished(stranger, theirs.body.value.id, elsewhere)).status).toBe('succeeded');
       // Once it finished, the next one may start.
       const next = await exported(owner, { only: ['task'] });
       expect(next.job.status).toBe('succeeded');
