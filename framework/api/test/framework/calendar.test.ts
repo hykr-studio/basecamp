@@ -133,6 +133,34 @@ describe('freeSlots', () => {
       '2026-11-09T23:00:00.000Z',
       '2026-11-10T00:00:00.000Z',
     ]);
+    // Closed from midnight on the Tuesday: the slots over midnight go.
+    const mondayOnly = freeSlots([], {
+      from: '2026-11-09T22:00:00Z',
+      to: '2026-11-10T02:00:00Z',
+      minutes: 120,
+      stepMinutes: 60,
+      open: { week: { mon: allDay } },
+    });
+    expect(mondayOnly.map((s) => s.start)).toEqual(['2026-11-09T22:00:00.000Z']);
+  });
+
+  it('runs on past midnight with no hours at all, and keeps to one day with hours', () => {
+    const window = {
+      from: '2026-11-09T22:00:00Z',
+      to: '2026-11-10T02:00:00Z',
+      minutes: 120,
+      stepMinutes: 60,
+    };
+    expect(freeSlots([], window).map((s) => s.start.slice(11, 16))).toEqual([
+      '22:00',
+      '23:00',
+      '00:00',
+    ]);
+    expect(
+      freeSlots([], { ...window, hours: { from: '00:00', to: '23:59' } }).map((s) =>
+        s.start.slice(11, 16),
+      ),
+    ).toEqual(['00:00']);
   });
 
   it('knows a zone’s offset at a moment', () => {

@@ -170,7 +170,9 @@ export function freeSlots(busy: readonly Interval[], o: FreeSlotOptions): Interv
     const dayStart = Math.floor(localStart / (1440 * MINUTE)) * 1440 * MINUTE;
     const startMin = (localStart - dayStart) / MINUTE;
     const endMin = startMin + length / MINUTE;
-    if (startMin < open || endMin > close) continue;
+    // Hours asked for keep a slot inside one local day. Without them a slot may run on past
+    // local midnight; `open`'s spans bound it (below) when the business's week is given.
+    if (o.hours && (startMin < open || endMin > close)) continue;
     if (o.days) {
       const weekday = ((new Date(dayStart).getUTCDay() + 6) % 7) + 1;
       if (!o.days.includes(weekday)) continue;
