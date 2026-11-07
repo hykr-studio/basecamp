@@ -12,7 +12,7 @@ import {
   underMarketingCap,
 } from '@hykr/notifications';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Inject, Logger } from '@nestjs/common';
+import { HttpException, Inject, Logger } from '@nestjs/common';
 import { EventsHandler, type IEventHandler } from '@nestjs/cqrs';
 import type { Job } from 'bullmq';
 import { and, arrayOverlaps, desc, eq, gt, sql } from 'drizzle-orm';
@@ -223,8 +223,10 @@ export class DispatchProcessor extends WorkerHost {
           channel: 'whatsapp',
         };
       }
-    } catch {
-      // Not in this business (any more): they read nothing of it.
+    } catch (e) {
+      // Not in this business (any more), or unknown: they read nothing of it. Anything else
+      // (the database) fails the job, which is tried again.
+      if (!(e instanceof HttpException)) throw e;
     }
     return null;
   }

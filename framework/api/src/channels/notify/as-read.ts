@@ -23,7 +23,7 @@ export function readAs(resourceType: string, row: Row, p: Principal): Row | null
   if (!def) return { ...projectRead(resourceType, row, p), ...keep } as Row;
   const json = def.readJson(row);
   const schema = def.spec.schemas.read as z.ZodType;
-  const object = schema instanceof Object && 'shape' in schema ? (schema as z.ZodObject) : null;
+  const object = 'shape' in schema ? (schema as z.ZodObject) : null;
   const whole = schema.safeParse(json);
   const read = whole.success ? whole : object?.partial().safeParse(json);
   if (!read?.success) return null;

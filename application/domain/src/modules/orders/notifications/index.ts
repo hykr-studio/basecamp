@@ -28,12 +28,14 @@ export const OrderDocumentTemplate = defineTemplate({
   example: { number: 'ORD/2026-27/0001', total: '₹1,500.00' },
 });
 
-/** The breach event's row: the order as stored, with the SLA that ran out. */
+/**
+ * The breach event's row: the order with the SLA that ran out. Who hears it reads `sla` as
+ * stored; the words read the order as each recipient may (its read shape: `total` is money).
+ */
 type BreachedOrder = Row & {
   number: string;
   title: string;
-  total: number;
-  currency: string;
+  total: { minor: number; currency: string };
   sla: { id: string; name: string; dueAt: string; escalate: { notify?: string[] } | null };
 };
 
@@ -48,8 +50,7 @@ const SINCE: Labels = {
   te: 'దీన్ని ఒక పని దినం కంటే ముందు సమర్పించారు.',
 };
 
-const total = (o: BreachedOrder, lang: Parameters<typeof moneyText>[1]) =>
-  moneyText({ minor: o.total, currency: o.currency }, lang);
+const total = (o: BreachedOrder, lang: Parameters<typeof moneyText>[1]) => moneyText(o.total, lang);
 
 /**
  * A submitted order nobody decided within its `orders.decision` SLA (24 business hours): to the
