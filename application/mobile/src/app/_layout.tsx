@@ -2,6 +2,7 @@ import '../../global.css';
 import {
   AppShell,
   creditsPlugin,
+  exportPlugin,
   livePlugin,
   pushPlugin,
   settingsPlugin,
@@ -23,8 +24,9 @@ const config = {
  * The framework features the app uses, made once, outside render: the business's flags, branding
  * and phrases, live updates (other people's changes show without a reload), push notifications
  * (the to-do reminder goes to the phone first), WebMCP (each screen's read tools, the modules'
- * `webmcp`, offered to the browser's agent where the browser supports it) and the business's
- * credits (usage, the pause, buying more: `/credits`).
+ * `webmcp`, offered to the browser's agent where the browser supports it), the business's
+ * credits (usage, the pause, buying more: `/credits`) and exporting the business's data
+ * (`/export`, for people who may: owners, unless the business grants it to another role).
  */
 const plugins = [
   settingsPlugin(),
@@ -32,6 +34,7 @@ const plugins = [
   pushPlugin({ androidChannel: 'Reminders' }),
   webMcpPlugin(),
   creditsPlugin,
+  exportPlugin,
 ];
 
 export default function RootLayout() {
