@@ -3,9 +3,10 @@
 // `privacy` feature (`/api/privacy`); every step goes through the write path and is audited.
 // docs/decisions/B18.md.
 import { z } from 'zod';
+import { RETENTION_NAME } from '../framework/privacy.js';
 import { commandSpec } from '../framework/spec.js';
 import { capabilities, defineCapability } from '../roles.js';
-import { PrivacyRequestKind } from '../settings/privacy.js';
+import { PrivacyRequestKind, ProcessorRecord } from '../settings/privacy.js';
 
 /** Answer the business's privacy requests: see them, file one for someone, process or refuse. */
 export const PrivacyManageCapability = defineCapability({
@@ -140,6 +141,69 @@ export const RefusePrivacyRequestSpec = commandSpec({
   touches: [],
 });
 
+/**
+ * A business's privacy setup as its privacy team edits it (GET and PATCH /api/privacy/settings):
+ * its `privacy` settings and its contact details as the fiduciary. Values as they apply now:
+ * an unset deadline or contact shows the application's, or the framework's default.
+ */
+export const PrivacyConfiguration = z.object({
+  /** Its own deadline in days; null: the application's policy (`register.requests` says which). */
+  respondWithinDays: z.number().int().nullable(),
+  /** A person's own requests of these kinds wait for review here, besides the application's. */
+  review: z.array(PrivacyRequestKind),
+  /** Its own periods by rule or target name: days, or null (that data is kept). */
+  retention: z.record(z.string(), z.number().int().nullable()),
+  /** Its own processors, listed on its register after the application's. */
+  processors: z.array(ProcessorRecord),
+  /** Who to contact about personal data: on the register and in WhatsApp's HELP. */
+  grievanceContact: z.string(),
+  /** Its privacy notice: in WhatsApp's welcome and on the register. */
+  privacyUrl: z.string().nullable(),
+});
+export type PrivacyConfiguration = z.infer<typeof PrivacyConfiguration>;
+
+/**
+ * What `privacy.configure` changes. A field left out stays as it is; a list given replaces the
+ * stored one; null goes back to the default.
+ */
+export const ConfigurePrivacyInput = z.object({
+  /** null: the application's deadline. */
+  respondWithinDays: z.int().min(1).max(365).nullable().optional(),
+  review: z.array(PrivacyRequestKind).max(2).optional(),
+  /**
+   * Every period the business sets itself, by the name of a retention rule or target the
+   * business may change (one per business, not the deployment's): whole days, or null to keep
+   * that data. A name left out follows the application's period.
+   */
+  retention: z
+    .record(
+      z.string().regex(RETENTION_NAME, 'A retention rule or target name'),
+      z.int().min(1).max(36_500).nullable(),
+    )
+    .optional(),
+  processors: z.array(ProcessorRecord).max(50).optional(),
+  /** An email, phone number or address; null: the default. */
+  grievanceContact: z.string().trim().min(3).max(320).nullable().optional(),
+  privacyUrl: z
+    .url({ protocol: /^https?$/ })
+    .max(2048)
+    .nullable()
+    .optional(),
+});
+export type ConfigurePrivacyInput = z.input<typeof ConfigurePrivacyInput>;
+
+export const ConfigurePrivacySpec = commandSpec({
+  name: 'privacy.configure',
+  description:
+    'Change how the business answers privacy requests, how long it keeps personal data, its own processors and its privacy contact.',
+  input: ConfigurePrivacyInput,
+  output: PrivacyConfiguration,
+  http: { method: 'PATCH', path: '/api/privacy/settings' },
+  expose: 'human',
+  verb: { do: 'change the privacy settings', did: 'changed the privacy settings' },
+  touches: [],
+});
+
 /** GET /api/privacy/requests. */
 export const ListPrivacyRequestsQuery = z.object({
   status: PrivacyRequestStatus.optional(),
@@ -194,6 +258,8 @@ export const RegisterRetention = z.object({
   label: z.string(),
   scope: z.enum(['tenant', 'deployment']),
   days: z.number().int().nullable(),
+  /** The application's period, before this business's own (null: none). */
+  defaultDays: z.number().int().nullable(),
   action: z.string(),
 });
 export type RegisterRetention = z.infer<typeof RegisterRetention>;

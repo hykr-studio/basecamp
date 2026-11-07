@@ -791,6 +791,7 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
         label: pick(x.label, lang),
         scope: x.scope,
         days: this.daysIn(x, settings.privacy.retention),
+        defaultDays: this.appDays(x),
         action: x.action,
       })),
     };

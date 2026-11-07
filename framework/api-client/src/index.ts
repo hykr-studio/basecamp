@@ -21,6 +21,8 @@ import {
   type CommandSpec,
   type Comment,
   type CommentPage,
+  type ConfigurePrivacyInput,
+  ConfigurePrivacySpec,
   type CreatedInvite,
   type CreateInviteInput,
   type CreatePartyInput,
@@ -72,6 +74,7 @@ import {
   type PartyMember,
   type PresignFileInput,
   type PresignFileResult,
+  type PrivacyConfiguration,
   type PrivacyRegister,
   type PrivacyRequest,
   ProcessPrivacyRequestSpec,
@@ -433,6 +436,15 @@ export function createApiClient(opts: ApiClientOptions) {
       ).items;
     },
     get: (id: string) => call<PrivacyRequest>('GET', privacyUrl(id)),
+    /** The business's own privacy settings (`privacy.manage`). */
+    settings: () => call<PrivacyConfiguration>('GET', '/api/privacy/settings'),
+    /**
+     * Change them (`privacy.manage`): the deadline, the requests it reviews, its own retention
+     * periods and processors, its privacy contact and notice. A field left out stays as it is; a
+     * list replaces the stored one; null goes back to the default.
+     */
+    configure: (input: ConfigurePrivacyInput, key = newKey()) =>
+      command(ConfigurePrivacySpec, input, key),
     /** Who holds personal data in the business, what, and for how long. */
     register: (lang?: string) =>
       call<PrivacyRegister>(

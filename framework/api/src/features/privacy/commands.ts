@@ -1,20 +1,38 @@
-// Filing, processing and refusing privacy requests: writes like any other (validated,
-// idempotent, authorized, audited, and open to the application's level rules), people only.
+// Filing, processing and refusing privacy requests, and the business's own privacy settings:
+// writes like any other (validated, idempotent, authorized, audited, and open to the
+// application's level rules), people only.
 import { randomUUID } from 'node:crypto';
 import {
+  ConfigurePrivacySpec,
+  drivenByAgent,
   FilePrivacyRequestSpec,
   OPEN_PRIVACY_STATUSES,
   PRIVACY_REQUEST,
+  type PrivacyConfiguration,
   PrivacyManageCapability,
+  PrivacySettings,
   ProcessPrivacyRequestSpec,
   RefusePrivacyRequestSpec,
   type Subject,
+  type TenantConfig,
+  TenantSettings,
 } from '@hykr/contracts';
-import { allow, defineCommand, deny, eventQueues, settingsIn, type Tx, tenantOf } from '@hykr/core';
+import {
+  allow,
+  defineCommand,
+  deny,
+  eventQueues,
+  settingsIn,
+  type Tx,
+  tenantOf,
+} from '@hykr/core';
 import { privacyRequests, tenants } from '@hykr/db';
 import { can, subjectOf } from '@hykr/policy';
-import { ConflictException, NotFoundException } from '@nestjs/common';
-import { and, eq, inArray } from 'drizzle-orm';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { and, eq, inArray, type SQL, sql } from 'drizzle-orm';
+import { SettingsChanged } from '../settings/commands.js';
+import { recordTargets } from './records.js';
+import { retentionTargets } from './registry.js';
 import {
   dueFrom,
   effectivePolicy,
@@ -264,5 +282,139 @@ export const RefusePrivacyRequest = defineCommand(RefusePrivacyRequestSpec, {
   present: (row: RequestRow) => requestOut(row),
 });
 
+/* ── The business's own privacy settings ─────────────────────────────────── */
+
+type Values = Record<string, unknown>;
+/** What `privacy.configure` loads: the business and its stored settings (locked). */
+type Configuring = { tenantId: string; settings: Values };
+
+/** The business's privacy setup as its team edits it, from its settings. */
+export function configurationOf(
+  settings: Pick<TenantConfig, 'privacy' | 'grievanceContact' | 'privacyUrl'>,
+): PrivacyConfiguration {
+  return {
+    respondWithinDays: settings.privacy.respondWithinDays ?? null,
+    review: [...settings.privacy.review],
+    retention: { ...settings.privacy.retention },
+    processors: [...settings.privacy.processors],
+    grievanceContact: settings.grievanceContact,
+    privacyUrl: settings.privacyUrl ?? null,
+  };
+}
+
+/** The fiduciary's contact details, top-level settings keys: unset stays unset. */
+const FIDUCIARY = ['grievanceContact', 'privacyUrl'] as const;
+
+/**
+ * What is wrong with a business's own periods and processors: a name no retention rule or
+ * target has, one the business may not change (the deployment's), a processor listed twice.
+ */
+function settingsProblems(next: PrivacySettings): string[] {
+  const problems: string[] = [];
+  const scopes = new Map(
+    [...retentionTargets.all(), ...recordTargets()].map((t) => [t.name, t.scope] as const),
+  );
+  for (const name of Object.keys(next.retention)) {
+    const scope = scopes.get(name);
+    if (!scope) problems.push(`"${name}" is not a retention rule or target`);
+    else if (scope !== 'tenant')
+      problems.push(`"${name}" is kept for the whole deployment: a business cannot change it`);
+  }
+  const seen = new Set<string>();
+  for (const p of next.processors) {
+    const key = p.name.toLowerCase();
+    if (seen.has(key)) problems.push(`The processor "${p.name}" is listed twice`);
+    seen.add(key);
+  }
+  return problems;
+}
+
+/**
+ * PATCH /api/privacy/settings: the business's deadline, the requests it reviews, its own
+ * retention periods and processors, and its contact as the fiduciary. The business's row is
+ * locked, only these keys change, the before and after are audited, and `settings.changed`
+ * drops every cached copy.
+ */
+export const ConfigurePrivacy = defineCommand(ConfigurePrivacySpec, {
+  resource: { type: 'tenant', id: (_input, loaded: Configuring) => loaded.tenantId },
+  load: async (tx, p): Promise<Configuring> => {
+    const tenantId = tenantOf(p);
+    const [row] = await tx
+      .select({ settings: tenants.settings })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId))
+      .for('update');
+    if (!row) throw new NotFoundException({ error: 'not_found', message: 'No business' });
+    return { tenantId, settings: (row.settings as Values | null) ?? {} };
+  },
+  authorize: (p) => {
+    if (p.actor.kind !== 'user' || drivenByAgent(p))
+      return deny('people_only', 'A person changes the privacy settings');
+    return can(p, PrivacyManageCapability) ? allow('privacy_manager') : MAY_MANAGE();
+  },
+  summarize: () => 'Change the privacy settings',
+  run: async ({ tx, input, loaded: { tenantId, settings } }) => {
+    // A section stored badly (by hand) is replaced, not kept: this is how it is mended.
+    const stored = PrivacySettings.safeParse(settings.privacy);
+    const before = stored.success ? stored.data : PrivacySettings.parse(undefined);
+    const next: PrivacySettings = { ...before };
+    if (input.respondWithinDays === null) delete next.respondWithinDays;
+    else if (input.respondWithinDays !== undefined)
+      next.respondWithinDays = input.respondWithinDays;
+    if (input.review) next.review = [...new Set(input.review)].sort();
+    if (input.retention) next.retention = input.retention;
+    if (input.processors) next.processors = input.processors;
+    const after = PrivacySettings.parse(next);
+    const problems = settingsProblems(after);
+    if (problems.length)
+      throw new BadRequestException({
+        error: 'privacy_settings_invalid',
+        message: problems.join('; '),
+        problems,
+      });
+
+    const fiduciaryBefore: Values = Object.fromEntries(
+      FIDUCIARY.filter((k) => settings[k] !== undefined).map((k) => [k, settings[k]]),
+    );
+    const fiduciaryAfter: Values = { ...fiduciaryBefore };
+    const removed: string[] = [];
+    for (const k of FIDUCIARY) {
+      const v = input[k];
+      if (v === undefined) continue;
+      if (v === null) {
+        delete fiduciaryAfter[k];
+        removed.push(k);
+      } else fiduciaryAfter[k] = v;
+    }
+    // Only these keys: every other section stays as it is.
+    let value: SQL = sql`jsonb_set(coalesce(${tenants.settings}, '{}'::jsonb), '{privacy}', ${JSON.stringify(after)}::jsonb)`;
+    value = sql`(${value}) || ${JSON.stringify(fiduciaryAfter)}::jsonb`;
+    for (const k of removed) value = sql`(${value}) - ${k}::text`;
+    await tx.update(tenants).set({ settings: value }).where(eq(tenants.id, tenantId));
+
+    const fiduciary = TenantSettings.pick({ grievanceContact: true, privacyUrl: true }).parse(
+      fiduciaryAfter,
+    );
+    return {
+      value: configurationOf({ privacy: after, ...fiduciary }),
+      touched: [
+        {
+          type: 'tenant',
+          id: tenantId,
+          change: 'updated' as const,
+          before: { privacy: before, ...fiduciaryBefore },
+          after: { privacy: after, ...fiduciaryAfter },
+        },
+      ],
+      events: [new SettingsChanged(tenantId, 'privacy')],
+    };
+  },
+});
+
 /** Every privacy command. */
-export const privacyCommands = [FilePrivacyRequest, ProcessPrivacyRequest, RefusePrivacyRequest];
+export const privacyCommands = [
+  FilePrivacyRequest,
+  ProcessPrivacyRequest,
+  RefusePrivacyRequest,
+  ConfigurePrivacy,
+];

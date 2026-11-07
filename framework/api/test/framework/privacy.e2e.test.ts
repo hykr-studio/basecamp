@@ -5,7 +5,8 @@
 // request nor the archive; erasure deletes, keeps and blanks as declared, redacts the copies the
 // server keeps, and forgets the account; a business that reviews erasures makes them wait, and
 // processing one parks for an approval; deadlines are marked once; retention runs per business
-// with its own periods; the register lists who holds what.
+// with its own periods; the register lists who holds what; the business's privacy team changes
+// its own settings, audited, and the register and the runner follow them.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrivacyService, readZip } from '../../dist/index.js';
 import {
@@ -630,5 +631,167 @@ describe('the register', () => {
     });
     expect(theirs.body.fiduciary.tenantId).toBe(raviTenant);
     expect(theirs.body.processors.map((p: Json) => p.name)).toEqual(['Fixture mail']);
+  });
+});
+
+describe("the business's own privacy settings", () => {
+  const age = (id: string, days: number) =>
+    pool.query(
+      `update app.fixture_ledgers_cards set created_at = now() - make_interval(days => $2) where id = $1`,
+      [id, days],
+    );
+  const patch = {
+    respondWithinDays: 12,
+    review: ['erase'],
+    retention: { 'ledgers.cards': 5, 'outbox.relayed': null },
+    processors: [{ name: 'Our printer', purpose: 'Prints the letters', data: ['addresses'] }],
+    grievanceContact: 'privacy-desk@fixture.test',
+    privacyUrl: 'https://fixture.test/privacy',
+  };
+  const stored = async (id: string) =>
+    (await pool.query('select settings from app.tenants where id = $1', [id])).rows[0].settings;
+
+  it('are changed by its privacy team only, audited, and only in its own business', async () => {
+    await setTenantSettings(tenantId, { privacy: null, grievanceContact: null, privacyUrl: null });
+    const theirsBefore = await stored(raviTenant);
+
+    // Staff without privacy.manage neither read nor change them; nor does the assistant.
+    const refused = await call(bob, 'PATCH', '/api/privacy/settings', patch);
+    expect(refused.status).toBe(403);
+    expect(refused.body).toMatchObject({ rule: 'needs_privacy_manage' });
+    expect((await call(bob, 'GET', '/api/privacy/settings')).status).toBe(403);
+    const assistant = asAssistant(`user:${carol.id}`, { 'x-tenant-id': tenantId });
+    expect((await assistant('PATCH', '/api/privacy/settings', patch)).status).toBe(403);
+    expect((await assistant('GET', '/api/privacy/settings')).status).toBe(403);
+    // Another business's owner does not reach this one.
+    expect((await ravi.call('PATCH', '/api/privacy/settings', patch, here())).status).not.toBe(200);
+    expect(await stored(tenantId)).not.toHaveProperty('grievanceContact');
+
+    const res = await call(carol, 'PATCH', '/api/privacy/settings', patch);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: 'done', value: patch });
+    expect((await call(carol, 'GET', '/api/privacy/settings')).body).toEqual(res.body.value);
+    const mine = await stored(tenantId);
+    expect(mine).toMatchObject({
+      grievanceContact: patch.grievanceContact,
+      privacyUrl: patch.privacyUrl,
+      privacy: { respondWithinDays: 12, review: ['erase'], retention: patch.retention },
+    });
+    // Ravi's business is as it was, and its register still its own.
+    expect(await stored(raviTenant)).toEqual(theirsBefore);
+    const theirs = await ravi.call('GET', '/api/privacy/register', undefined, {
+      'x-tenant-id': raviTenant,
+    });
+    expect(theirs.body.fiduciary.grievanceContact).not.toBe(patch.grievanceContact);
+    expect(theirs.body.processors.map((p: Json) => p.name)).toEqual(['Fixture mail']);
+
+    // Audited: Bob's refusal, Carol's change with the business before and after.
+    const trail = await pool.query(
+      `select action, outcome, actor_id, before, after from audit.events
+       where tenant_id = $1 and resource_type = 'tenant' and resource_id = $1
+         and action in ('privacy.configure', 'tenant.update')
+       order by at`,
+      [tenantId],
+    );
+    expect(trail.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: 'privacy.configure', outcome: 'denied' }),
+        expect.objectContaining({
+          action: 'privacy.configure',
+          outcome: 'committed',
+          actor_id: carol.id,
+        }),
+        expect.objectContaining({
+          action: 'tenant.update',
+          after: expect.objectContaining({
+            grievanceContact: patch.grievanceContact,
+            privacy: expect.objectContaining({ respondWithinDays: 12 }),
+          }),
+        }),
+      ]),
+    );
+    // Every process drops its cached copy.
+    const changed = await pool.query(
+      `select "row" from app.domain_events where name = 'settings.changed' and resource_id = $1`,
+      [tenantId],
+    );
+    expect(changed.rows.map((r) => r.row.section)).toContain('privacy');
+  });
+
+  it('are what the register, the deadline and the retention runner follow', async () => {
+    const reg = (await call(bob, 'GET', '/api/privacy/register')).body;
+    expect(reg.fiduciary).toMatchObject({
+      grievanceContact: patch.grievanceContact,
+      privacyUrl: patch.privacyUrl,
+    });
+    expect(reg.requests).toEqual({ respondWithinDays: 12, review: ['erase'] });
+    expect(reg.processors.map((p: Json) => [p.name, p.source])).toEqual([
+      ['Fixture mail', 'application'],
+      ['Our printer', 'business'],
+    ]);
+    const period = (name: string) => reg.retention.find((r: Json) => r.name === name);
+    expect(period('ledgers.cards')).toMatchObject({ days: 5, defaultDays: 30 });
+    expect(period('outbox.relayed')).toMatchObject({ days: null, defaultDays: 1 });
+
+    const req = (await file(eve, 'export')).body.value;
+    expect(Date.parse(req.dueAt) - Date.parse(req.receivedAt)).toBe(12 * 86_400_000);
+    await finished(eve, req.id);
+
+    // A week-old card goes with the business's 5 days (the application's 30 would keep it);
+    // an old relayed notification stays, as the business keeps them.
+    const card = (await call(eve, 'POST', '/api/cards', { name: 'Eve, a week ago' })).body.value;
+    await age(card.id, 7);
+    await pool.query(
+      `insert into app.outbox (tenant_id, key, payload, created_at, relayed_at)
+       values ($1, 'fixture.kept', '{}', now() - interval '3 days', now() - interval '3 days')`,
+      [tenantId],
+    );
+    const ran = await privacy().runRetention({ tenantId });
+    expect(ran).toMatchObject({ 'ledgers.cards': 1 });
+    expect(ran).not.toHaveProperty('outbox.relayed');
+    expect(
+      (await pool.query('select 1 from app.fixture_ledgers_cards where id = $1', [card.id])).rows,
+    ).toEqual([]);
+  });
+
+  it('refuse a period nothing has or the deployment keeps, and go back to the defaults with null', async () => {
+    const bad = await call(carol, 'PATCH', '/api/privacy/settings', {
+      retention: { 'no.such.rule': 3, 'assistant.traces': 3 },
+    });
+    expect(bad.status).toBe(400);
+    expect(bad.body).toMatchObject({ error: 'privacy_settings_invalid' });
+    expect(bad.body.problems).toHaveLength(2);
+    expect(
+      (await call(carol, 'PATCH', '/api/privacy/settings', { respondWithinDays: 0 })).status,
+    ).toBe(400);
+    expect(
+      (
+        await call(carol, 'PATCH', '/api/privacy/settings', {
+          processors: [patch.processors[0], patch.processors[0]],
+        })
+      ).status,
+    ).toBe(400);
+
+    const back = await call(carol, 'PATCH', '/api/privacy/settings', {
+      respondWithinDays: null,
+      grievanceContact: null,
+      privacyUrl: null,
+    });
+    expect(back.status).toBe(200);
+    expect(back.body.value).toMatchObject({
+      respondWithinDays: null,
+      privacyUrl: null,
+      review: ['erase'],
+      processors: [expect.objectContaining({ name: 'Our printer' })],
+    });
+    expect(back.body.value.grievanceContact).not.toBe(patch.grievanceContact);
+    const mine = await stored(tenantId);
+    expect(mine).not.toHaveProperty('grievanceContact');
+    expect(mine).not.toHaveProperty('privacyUrl');
+    expect(mine.privacy).not.toHaveProperty('respondWithinDays');
+    // The application's deadline again.
+    expect((await call(bob, 'GET', '/api/privacy/register')).body.requests.respondWithinDays).toBe(
+      30,
+    );
   });
 });

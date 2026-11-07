@@ -2,6 +2,7 @@ import {
   ListPrivacyRequestsQuery,
   PRIVACY_REQUEST,
   type Principal,
+  type PrivacyConfiguration,
   PrivacyManageCapability,
   type PrivacyRegister,
   type PrivacyRequest,
@@ -10,8 +11,11 @@ import {
   CORE_OPTIONS,
   type CoreOptions,
   CurrentPrincipal,
+  HumanOnlyGuard,
   PrincipalGuard,
   projectRead,
+  requireCapability,
+  settingsIn,
   tenantOf,
 } from '@hykr/core';
 import { type Database, privacyRequests } from '@hykr/db';
@@ -29,6 +33,7 @@ import {
 import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 import { and, desc, eq, type SQL } from 'drizzle-orm';
 import { createZodDto } from 'nestjs-zod';
+import { configurationOf } from './commands.js';
 import { PrivacyService } from './privacy.service.js';
 import { reachesRequest, requestOut } from './requests.js';
 
@@ -40,8 +45,8 @@ const notFound = () =>
 
 /**
  * Privacy requests as people read them: a person their own, the business's privacy team
- * (`privacy.manage`) every one of the business; anything else is 404. And the register, for
- * anyone in the business.
+ * (`privacy.manage`) every one of the business; anything else is 404. The register, for anyone
+ * in the business; the business's own privacy settings, for its privacy team.
  */
 @Controller('api/privacy')
 @OptionalAuth()
@@ -111,6 +116,20 @@ export class PrivacyController {
       .where(and(eq(privacyRequests.id, id), eq(privacyRequests.tenantId, tenantOf(p))));
     if (!row || !reachesRequest(p, row)) throw notFound();
     return this.out(p, row);
+  }
+
+  /**
+   * The business's own privacy settings, as `PATCH /api/privacy/settings` changes them: for its
+   * privacy team (people only), read fresh, never from the cache.
+   */
+  @Get('settings')
+  @UseGuards(HumanOnlyGuard)
+  async settings(@CurrentPrincipal() p: Principal): Promise<PrivacyConfiguration> {
+    requireCapability(p, PrivacyManageCapability, {
+      rule: 'needs_privacy_manage',
+      reason: 'Only someone who handles privacy requests can do this',
+    });
+    return configurationOf(await settingsIn(this.db, tenantOf(p)));
   }
 
   /** Who holds personal data here, what, for how long; `lang` picks the words (default en). */

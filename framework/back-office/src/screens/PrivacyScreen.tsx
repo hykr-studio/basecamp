@@ -1,9 +1,12 @@
 import { ApiError } from '@hykr/api-client';
 import {
+  type PrivacyConfiguration,
   type PrivacyIntake,
   PrivacyManageCapability,
+  type PrivacyRegister,
   type PrivacyRequest,
   type PrivacyRequestKind,
+  type ProcessorRecord,
   type WriteResult,
 } from '@hykr/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -47,10 +50,15 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   );
 }
 
-function Chip(props: { label: string; on: boolean; onPress: () => void }) {
+function Chip(props: {
+  label: string;
+  on: boolean;
+  onPress: () => void;
+  role?: 'radio' | 'checkbox';
+}) {
   return (
     <Pressable
-      accessibilityRole="radio"
+      accessibilityRole={props.role ?? 'radio'}
       accessibilityState={{ checked: props.on }}
       onPress={props.onPress}
       className={`rounded-full border px-2.5 py-1 ${props.on ? 'border-primary bg-primary-tint' : 'border-border bg-card'}`}
@@ -263,6 +271,7 @@ function Register() {
     <View className="gap-3 p-4">
       <Text className="text-small text-muted">
         {r.fiduciary.name} answers for its personal data · contact {r.fiduciary.grievanceContact}
+        {r.fiduciary.privacyUrl ? ` · notice ${r.fiduciary.privacyUrl}` : ''}
         {r.requests.respondWithinDays
           ? ` · requests answered within ${r.requests.respondWithinDays} days`
           : ' · no deadline set for requests'}
@@ -295,10 +304,310 @@ function Register() {
   );
 }
 
+const INPUT = 'min-h-10 rounded-control border border-border bg-card px-3 text-body text-text';
+const WHOLE = /^\d{1,5}$/;
+
+/** A retention period as the business sets it: the application's, its own days, or kept. */
+type Period = { mode: 'default' | 'days' | 'keep'; days: string };
+
+const periodOf = (v: number | null | undefined): Period =>
+  v === undefined
+    ? { mode: 'default', days: '' }
+    : v === null
+      ? { mode: 'keep', days: '' }
+      : { mode: 'days', days: String(v) };
+
+const NO_PROCESSOR = { name: '', purpose: '', data: '', location: '', url: '' };
+
+/**
+ * The business's own privacy settings: its deadline, the requests that wait for review, how long
+ * it keeps each kind of personal data, its own processors and its privacy contact and notice.
+ */
+function SettingsForm(props: {
+  current: PrivacyConfiguration;
+  register: PrivacyRegister;
+  /** What the last save said: kept above the form, which starts again with the saved values. */
+  said?: string;
+  onSaid: (said: string | undefined) => void;
+}) {
+  const { current, register, said, onSaid: setSaid } = props;
+  const qc = useQueryClient();
+  // Only the periods a business may change: the deployment's are the platform's.
+  const targets = register.retention.filter((r) => r.scope === 'tenant');
+  const [deadline, setDeadline] = useState(
+    current.respondWithinDays ? String(current.respondWithinDays) : '',
+  );
+  const [review, setReview] = useState<PrivacyRequestKind[]>(current.review);
+  const [periods, setPeriods] = useState<Record<string, Period>>(() =>
+    Object.fromEntries(targets.map((t) => [t.name, periodOf(current.retention[t.name])])),
+  );
+  const [processors, setProcessors] = useState<ProcessorRecord[]>(current.processors);
+  const [adding, setAdding] = useState(NO_PROCESSOR);
+  const [contact, setContact] = useState(current.grievanceContact);
+  const [notice, setNotice] = useState(current.privacyUrl ?? '');
+  const invalid =
+    (deadline.trim() !== '' && !WHOLE.test(deadline.trim())) ||
+    Object.values(periods).some((p) => p.mode === 'days' && !WHOLE.test(p.days.trim()));
+  const save = useMutation({
+    mutationFn: () => {
+      const retention: Record<string, number | null> = {};
+      for (const [name, p] of Object.entries(periods))
+        if (p.mode === 'keep') retention[name] = null;
+        else if (p.mode === 'days') retention[name] = Number(p.days.trim());
+      return api.privacy.configure({
+        respondWithinDays: deadline.trim() ? Number(deadline.trim()) : null,
+        review,
+        retention,
+        processors,
+        // Unchanged, a contact or notice that is the default stays unset.
+        ...(contact !== current.grievanceContact
+          ? { grievanceContact: contact.trim() || null }
+          : {}),
+        ...(notice !== (current.privacyUrl ?? '') ? { privacyUrl: notice.trim() || null } : {}),
+      });
+    },
+    onSuccess: () => {
+      setSaid('Saved.');
+      return qc.invalidateQueries({ queryKey: ['privacy'] });
+    },
+    onError: () => setSaid(undefined),
+  });
+  const setPeriod = (name: string, p: Partial<Period>) =>
+    setPeriods((all) => ({ ...all, [name]: { ...all[name], ...p } }));
+  const add = () => {
+    const data = adding.data
+      .split(',')
+      .map((d) => d.trim())
+      .filter(Boolean);
+    setProcessors((all) => [
+      ...all,
+      {
+        name: adding.name.trim(),
+        purpose: adding.purpose.trim(),
+        data,
+        ...(adding.location.trim() ? { location: adding.location.trim() } : {}),
+        ...(adding.url.trim() ? { url: adding.url.trim() } : {}),
+      },
+    ]);
+    setAdding(NO_PROCESSOR);
+  };
+  return (
+    <View className="gap-4 p-4">
+      <View className="gap-1">
+        <Text className="text-body font-heading text-text">Answer requests within</Text>
+        <TextInput
+          accessibilityLabel="Days to answer a request"
+          placeholder="Days (empty: the application's deadline)"
+          keyboardType="number-pad"
+          value={deadline}
+          onChangeText={setDeadline}
+          className={INPUT}
+        />
+      </View>
+      <View className="gap-1">
+        <Text className="text-body font-heading text-text">Wait for review</Text>
+        <Text className="text-small text-muted">
+          A person's own request of these kinds waits for your team before it runs.
+        </Text>
+        <View className="flex-row flex-wrap gap-2">
+          {(Object.keys(KIND) as PrivacyRequestKind[]).map((k) => (
+            <Chip
+              key={k}
+              role="checkbox"
+              label={KIND[k]}
+              on={review.includes(k)}
+              onPress={() =>
+                setReview((r) => (r.includes(k) ? r.filter((x) => x !== k) : [...r, k]))
+              }
+            />
+          ))}
+        </View>
+      </View>
+      <View className="gap-2">
+        <Text className="text-body font-heading text-text">Kept for</Text>
+        {targets.length === 0 ? (
+          <Text className="text-small text-muted">Nothing the business can change.</Text>
+        ) : null}
+        {targets.map((t) => {
+          const p = periods[t.name] ?? periodOf(undefined);
+          return (
+            <View key={t.name} className="gap-1">
+              <Text className="text-small text-text">
+                {t.label}
+                <Text className="text-muted">
+                  {t.defaultDays
+                    ? ` · the application keeps it ${t.defaultDays} days`
+                    : ' · the application sets no period'}
+                </Text>
+              </Text>
+              <View className="flex-row flex-wrap items-center gap-2">
+                <Chip
+                  label="As the application"
+                  on={p.mode === 'default'}
+                  onPress={() => setPeriod(t.name, { mode: 'default' })}
+                />
+                <Chip
+                  label="Days"
+                  on={p.mode === 'days'}
+                  onPress={() => setPeriod(t.name, { mode: 'days' })}
+                />
+                <Chip
+                  label="Keep it"
+                  on={p.mode === 'keep'}
+                  onPress={() => setPeriod(t.name, { mode: 'keep' })}
+                />
+                {p.mode === 'days' ? (
+                  <TextInput
+                    accessibilityLabel={`Days to keep ${t.label}`}
+                    placeholder="Days"
+                    keyboardType="number-pad"
+                    value={p.days}
+                    onChangeText={(days) => setPeriod(t.name, { days })}
+                    className={`${INPUT} w-24`}
+                  />
+                ) : null}
+              </View>
+            </View>
+          );
+        })}
+      </View>
+      <View className="gap-2">
+        <Text className="text-body font-heading text-text">Your processors</Text>
+        <Text className="text-small text-muted">
+          Services you use that receive personal data, besides the application's.
+        </Text>
+        {processors.map((x, i) => (
+          <View key={x.name} className="flex-row items-center gap-2">
+            <Text className="flex-1 text-small text-text">
+              {x.name}: {x.purpose}
+              {x.data.length ? ` (${x.data.join(', ')})` : ''}
+              {x.location ? ` · ${x.location}` : ''}
+            </Text>
+            <Button
+              label="Remove"
+              tone="quiet"
+              onPress={() => setProcessors((all) => all.filter((_, j) => j !== i))}
+            />
+          </View>
+        ))}
+        <TextInput
+          accessibilityLabel="Processor's name"
+          placeholder="Name"
+          value={adding.name}
+          onChangeText={(name) => setAdding((a) => ({ ...a, name }))}
+          className={INPUT}
+        />
+        <TextInput
+          accessibilityLabel="What they do with it"
+          placeholder="What they do with the data"
+          value={adding.purpose}
+          onChangeText={(purpose) => setAdding((a) => ({ ...a, purpose }))}
+          className={INPUT}
+        />
+        <TextInput
+          accessibilityLabel="What data they get"
+          placeholder="What data they get, separated by commas (optional)"
+          value={adding.data}
+          onChangeText={(data) => setAdding((a) => ({ ...a, data }))}
+          className={INPUT}
+        />
+        <View className="flex-row gap-2">
+          <TextInput
+            accessibilityLabel="Where they keep it"
+            placeholder="Where they keep it (optional)"
+            value={adding.location}
+            onChangeText={(location) => setAdding((a) => ({ ...a, location }))}
+            className={`${INPUT} flex-1`}
+          />
+          <TextInput
+            accessibilityLabel="Their address"
+            placeholder="https://… (optional)"
+            autoCapitalize="none"
+            value={adding.url}
+            onChangeText={(url) => setAdding((a) => ({ ...a, url }))}
+            className={`${INPUT} flex-1`}
+          />
+        </View>
+        <Button
+          label="Add the processor"
+          disabled={
+            !adding.name.trim() ||
+            !adding.purpose.trim() ||
+            processors.some((x) => x.name.toLowerCase() === adding.name.trim().toLowerCase())
+          }
+          onPress={add}
+        />
+      </View>
+      <View className="gap-1">
+        <Text className="text-body font-heading text-text">Privacy contact</Text>
+        <Text className="text-small text-muted">
+          Who people contact about their personal data: on the register and in WhatsApp's HELP.
+        </Text>
+        <TextInput
+          accessibilityLabel="Privacy contact"
+          placeholder="An email, phone number or address"
+          autoCapitalize="none"
+          value={contact}
+          onChangeText={setContact}
+          className={INPUT}
+        />
+        <TextInput
+          accessibilityLabel="Privacy notice address"
+          placeholder="Your privacy notice, https://…"
+          autoCapitalize="none"
+          value={notice}
+          onChangeText={setNotice}
+          className={INPUT}
+        />
+      </View>
+      {said ? <Text className="text-small text-muted">{said}</Text> : null}
+      <ErrorLine message={save.isError ? reasonOf(save.error) : undefined} />
+      <Button
+        label="Save the privacy settings"
+        tone="primary"
+        disabled={invalid}
+        busy={save.isPending}
+        onPress={() => save.mutate()}
+      />
+    </View>
+  );
+}
+
+/** The form, once the settings and the register are loaded; again after each save. */
+function Settings() {
+  const [said, setSaid] = useState<string>();
+  const current = useQuery({ queryKey: ['privacy', 'settings'], queryFn: api.privacy.settings });
+  const register = useQuery({
+    queryKey: ['privacy', 'register'],
+    queryFn: () => api.privacy.register(),
+  });
+  if (!current.data || !register.data)
+    return (
+      <ErrorLine
+        message={
+          current.isError
+            ? reasonOf(current.error)
+            : register.isError
+              ? reasonOf(register.error)
+              : undefined
+        }
+      />
+    );
+  return (
+    <SettingsForm
+      key={`${current.dataUpdatedAt}:${register.dataUpdatedAt}`}
+      current={current.data}
+      register={register.data}
+      said={said}
+      onSaid={setSaid}
+    />
+  );
+}
+
 /**
  * Requests about personal data (people with `privacy.manage`): the business's requests, open
  * and past their deadline first; carry one out, refuse it, download a copy; file one someone made
- * by email or phone; and the register of who holds what.
+ * by email or phone; the business's own privacy settings; and the register of who holds what.
  */
 export function PrivacyScreen() {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
@@ -339,6 +648,12 @@ export function PrivacyScreen() {
         hint="Someone asked by email, phone or post: file it for them. An erasure cannot be undone."
       >
         <FileRequest />
+      </Section>
+      <Section
+        title="Privacy settings"
+        hint="How your business answers requests, how long it keeps personal data, and whom people contact."
+      >
+        <Settings />
       </Section>
       <Section title="Register">
         <Register />
