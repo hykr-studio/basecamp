@@ -185,7 +185,20 @@ export const SummaryDocument = defineDocument<AgreementData>({
   fileName: (d) => `summary-${d.title}`,
 });
 
-/** Accepted by the agreement's customer, by a code by email or WhatsApp: it is then accepted. */
+/** The application's own work in the accepting transaction (a schedule, say): one event. */
+class AgreementFollowUp {
+  readonly eventName = 'agreement.followup';
+  readonly resourceType = 'agreement';
+  constructor(
+    readonly resourceId: string,
+    readonly row: Record<string, unknown>,
+  ) {}
+}
+
+/**
+ * Accepted by the agreement's customer, by a code by email or WhatsApp: it is then accepted, and
+ * a follow-up event names the acceptance and the state the record moved to.
+ */
 export const AgreementAcceptance: AcceptanceDef<AgreementData> = defineAcceptance<AgreementData>({
   name: 'agreements.agreement',
   document: 'agreements.agreement',
@@ -194,6 +207,17 @@ export const AgreementAcceptance: AcceptanceDef<AgreementData> = defineAcceptanc
   by: 'customer',
   channels: ['email', 'whatsapp'],
   transition: 'accept',
+  accepted: async ({ row, evidence }) => ({
+    events: [
+      new AgreementFollowUp(String(row.id), {
+        id: row.id,
+        tenantId: row.tenantId,
+        acceptanceId: evidence.id,
+        status: row.status,
+        sha256: evidence.sha256,
+      }),
+    ],
+  }),
 });
 
 /** Signed by holders of fixture.agreements.sign, at the provider only; the record stays. */

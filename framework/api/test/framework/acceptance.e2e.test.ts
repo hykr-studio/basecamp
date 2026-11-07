@@ -283,17 +283,21 @@ describe('accepting a PDF by a code', () => {
     });
     const { rows } = await pool.query(
       `select name, row from app.domain_events where tenant_id = $1 and name in
-       ('acceptance.recorded', 'agreement.accept', 'otp.requested') order by occurred_at, name`,
+       ('acceptance.recorded', 'agreement.accept', 'agreement.followup', 'otp.requested')
+       order by occurred_at, name`,
       [tenantId],
     );
     expect(rows.map((r) => r.name)).toEqual([
       'otp.requested',
       'acceptance.recorded',
       'agreement.accept',
+      'agreement.followup',
     ]);
     // Ids, never the code or the address.
     expect(JSON.stringify(rows[0].row)).not.toContain(buyer.email);
     expect(rows[1].row).toMatchObject({ id: accepted.id, sha256: doc.sha256, documentId: doc.id });
+    // The application's `accepted` ran in the same write, after the record moved.
+    expect(rows[3].row).toMatchObject({ id, acceptanceId: accepted.id, status: 'accepted' });
   });
 
   it('the business sees the full evidence; colleagues see it masked', async () => {
