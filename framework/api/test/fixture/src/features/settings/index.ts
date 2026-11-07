@@ -1,9 +1,10 @@
 // The settings feature in use (A11): a `gadgets` module whose entity takes custom fields and is
 // shared from the platform's business, with a command a platform flag gates; an `extras` module
 // a business-managed flag switches off as a whole; a gadgets command that writes an extra
-// (the write hook's cross-module case); and one that makes a gadget itself, as a meeting's close
-// makes to-dos (a required custom field is not the command's to fill). Only the settings test's server (`settingsApp`) adds
-// these modules; the other tests never load this file.
+// (the write hook's cross-module case); and one that makes a gadget itself, as any command makes
+// records of an entity whose business may require custom fields the command cannot know about.
+// Only the settings test's server (`settingsApp`) adds these modules; the other tests never load
+// this file.
 import { defineModule, defineServer } from '@hykr/api';
 import {
   CreatedBy,

@@ -157,8 +157,9 @@ const invalid = (problems: string[]) =>
  *
  * A required field is enforced only where the writer could supply it: the entity's own create,
  * and any write that sets custom values on the record. A record another operation makes without
- * custom values (a command that turns a meeting's action items into to-dos) is not refused for a
- * field that operation cannot know about; it shows the field as unset until someone fills it.
+ * custom values (a command that makes records of this entity from its own input) is not refused
+ * for a field that operation cannot know about; it shows the field as unset until someone fills
+ * it.
  */
 export const customFieldsHook: WriteHook = {
   name: 'custom-fields',
