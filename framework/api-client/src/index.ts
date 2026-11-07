@@ -1,11 +1,18 @@
 import {
+  type AcceptedInvite,
+  type AddGrantInput,
   type Approval,
+  type BusinessRoles,
   type ChatRequest,
   type ChatResponse,
   type ChatStreamRequest,
   type CommandSpec,
+  type CreatedInvite,
+  type CreateInviteInput,
   type CreditPurchase,
   type CreditsStatus,
+  type DefineRoleInput,
+  type EditRoleInput,
   type EntitySpec,
   type FileInfo,
   type FileTarget,
@@ -13,17 +20,21 @@ import {
   type HandoffThread,
   type HistoryEntry,
   type Inbox,
+  type Invite,
   type JobInfo,
   type LedgerEntry,
   type ListInput,
   type ListJobsQuery,
   type Me,
+  type Member,
   type Page,
   type PresignFileInput,
   type PresignFileResult,
   type PushDevice,
   pathParams,
+  type RecordGrant,
   type RegisterPushToken,
+  type RoleView,
   type Summary,
   type SummaryInput,
   type TemplateStatus,
@@ -332,6 +343,77 @@ export function createApiClient(opts: ApiClientOptions) {
           'POST',
           `/api/backoffice/contacts/${encodeURIComponent(contactId)}/consent`,
           input,
+        ),
+    },
+    /**
+     * The business's people, roles and invitations (people only). Reading needs `members.read`,
+     * changing anything `members.manage`.
+     */
+    members: {
+      list: () => call<Member[]>('GET', '/api/members'),
+      setRoles: (userId: string, roles: string[], key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'PATCH',
+          `/api/members/${encodeURIComponent(userId)}`,
+          { roles },
+          key,
+        ),
+      remove: (userId: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/members/${encodeURIComponent(userId)}`,
+          undefined,
+          key,
+        ),
+      /** Every role the business has (declared, with its edits, and its own), and every capability. */
+      roles: () => call<BusinessRoles>('GET', '/api/members/roles'),
+      defineRole: (input: DefineRoleInput, key = newKey()) =>
+        call<WriteResult<RoleView>>('POST', '/api/members/roles', input, key),
+      /** `null` puts a declared role's label or capabilities back as the application has them. */
+      editRole: (name: string, input: EditRoleInput, key = newKey()) =>
+        call<WriteResult<RoleView>>(
+          'PATCH',
+          `/api/members/roles/${encodeURIComponent(name)}`,
+          input,
+          key,
+        ),
+      removeRole: (name: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/members/roles/${encodeURIComponent(name)}`,
+          undefined,
+          key,
+        ),
+      invites: () => call<Invite[]>('GET', '/api/members/invites'),
+      /** The answer carries the link's token, this once. */
+      invite: (input: CreateInviteInput) =>
+        call<WriteResult<CreatedInvite>>('POST', '/api/members/invites', input),
+      revokeInvite: (id: string, key = newKey()) =>
+        call<WriteResult<Invite>>(
+          'DELETE',
+          `/api/members/invites/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+      /** Join the business an invitation is for, signed in with the email it was sent to. */
+      acceptInvite: (token: string, key = newKey()) =>
+        call<WriteResult<AcceptedInvite>>('POST', '/api/members/invites/accept', { token }, key),
+    },
+    /** Who reaches one record by a grant (`records.grant`), and giving or taking it. */
+    grants: {
+      list: (resourceType: string, resourceId: string) =>
+        call<RecordGrant[]>(
+          'GET',
+          `/api/grants?resourceType=${encodeURIComponent(resourceType)}&resourceId=${encodeURIComponent(resourceId)}`,
+        ),
+      add: (input: AddGrantInput, key = newKey()) =>
+        call<WriteResult<RecordGrant>>('POST', '/api/grants', input, key),
+      remove: (id: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/grants/${encodeURIComponent(id)}`,
+          undefined,
+          key,
         ),
     },
     /** People only: the agent gets 403. */

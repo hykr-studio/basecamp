@@ -98,6 +98,9 @@ export function entityHandlers(def: AnyEntityDef): Type[] {
     constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {}
     async execute(q: InstanceType<typeof cqrs.ListQuery>): Promise<Page<unknown>> {
       assertExposed(def, 'list', q.principal);
+      // Plugins may refuse the request itself (a filter on a field this person cannot see).
+      for (const x of def.plugins())
+        x.query?.(q.query, q.principal, { spec: def.spec, table: def.table });
       const page = await def.repo.list(this.options.db, q.principal, q.query);
       return { ...page, items: page.items.map((row) => def.toRead(row, q.principal)) };
     }

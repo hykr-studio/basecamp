@@ -14,6 +14,8 @@ import {
   accessFor,
   DEFAULT_ACCESS,
   type Grant,
+  type GrantRule,
+  isBuiltinGrant,
   rowAllowed,
   subjectOf,
 } from '@hykr/policy';
@@ -35,6 +37,9 @@ import {
   type EntityPlugin,
   type EntityPluginTarget,
   entityPlugins,
+  type GrantKind,
+  type GrantTarget,
+  grantKinds,
   projectRead,
 } from '../hooks.js';
 import { buildListSql, decodeCursor, encodeCursor } from '../query/list-grammar.js';
@@ -183,6 +188,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
   const label = spec.label;
   const access = config.access ?? DEFAULT_ACCESS;
   const target: EntityPluginTarget = { spec, table };
+  const grantTarget: GrantTarget = { spec, table, columns };
 
   // Plugins are read when a call runs (contributions install after modules load), and the
   // ones that apply are worked out once per registry snapshot.
@@ -209,6 +215,13 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     return customerCol && p.customerId ? eq(customerCol, p.customerId) : undefined;
   };
 
+  /** A grant kind a feature registered (`granted`, a participant's): unknown ones throw. */
+  const kindOf = (r: GrantRule): GrantKind => {
+    const kind = grantKinds.get(r.grant);
+    if (!kind) throw new Error(`${spec.name}: access grant "${r.grant}" is not a registered kind`);
+    return kind;
+  };
+
   /**
    * The rows this principal reaches, for reading or writing: its tenant, then any of its
    * grants. No grant: no rows (a 404 for someone else's id, never a hint it exists).
@@ -216,7 +229,14 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
   const scoped = (p: Principal, op: 'read' | 'write', ...more: (SQL | undefined)[]) => {
     const decision = accessFor(p, access, op);
     const grants =
-      decision.kind === 'grants' ? decision.grants.flatMap((g) => grantSql(p, g) ?? []) : [];
+      decision.kind === 'grants'
+        ? [
+            ...decision.grants.filter(isBuiltinGrant).flatMap((g) => grantSql(p, g) ?? []),
+            ...decision.rules
+              .filter((r) => !isBuiltinGrant(r.grant))
+              .flatMap((r) => kindOf(r).where(p, r, grantTarget) ?? []),
+          ]
+        : [];
     return and(
       eq(tenantCol, tenantOf(p)),
       grants.length ? or(...grants) : sql`false`,
@@ -228,9 +248,10 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
 
   /**
    * Who a new row belongs to. A person's own record is theirs; a customer's record is the
-   * customer's, owned by the business's default owner (so it shows in the owner's lists).
+   * customer's, owned by the business's default owner (so it shows in the owner's lists). A
+   * registered grant kind may let a person create one too (a child of a record granted to them).
    */
-  const ownership = async (tx: Tx, p: Principal) => {
+  const ownership = async (tx: Tx, p: Principal, input: Values) => {
     const decision = accessFor(p, access, 'write');
     const grants = decision.kind === 'grants' ? decision.grants : [];
     const subject = subjectOf(p);
@@ -239,6 +260,10 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       return { tenantId, ownerId: subject.userId };
     if (grants.includes('customer') && customerCol && p.customerId)
       return { tenantId, ownerId: await defaultOwnerOf(tx, tenantId), customerId: p.customerId };
+    if (subject?.kind === 'user' && decision.kind === 'grants')
+      for (const r of decision.rules.filter((x) => !isBuiltinGrant(x.grant)))
+        if (await kindOf(r).creates?.(tx, p, r, input, grantTarget))
+          return { tenantId, ownerId: subject.userId };
     throw new ForbiddenException({ error: 'forbidden', rule: 'no_access' });
   };
 
@@ -367,7 +392,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     async insert(tx, p, input, ctx = { via: 'crud' }) {
       const parsed = spec.schemas.create.parse(input) as Record<string, unknown>;
       checkRules(p, 'create', null, parsed, ctx);
-      const owned = await ownership(tx, p);
+      const owned = await ownership(tx, p, parsed);
       const [row] = await tx
         .insert(table as Table)
         .values({

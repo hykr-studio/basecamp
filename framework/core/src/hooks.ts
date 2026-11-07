@@ -6,12 +6,14 @@ import type {
   AuthorizeResult,
   Channel,
   EntitySpec,
+  ListQuery,
   Principal,
   WriteAction,
   WriteResult,
 } from '@hykr/contracts';
 import { createHookRegistry } from '@hykr/contracts';
-import type { SQL, Table } from 'drizzle-orm';
+import type { GrantRule } from '@hykr/policy';
+import type { Column, SQL, Table } from 'drizzle-orm';
 import type { EntityRule } from './entity/define-entity.js';
 import type { Tx } from './tokens.js';
 import type { Touched, WriteCtx, WriteOp } from './write/pipeline.js';
@@ -24,6 +26,7 @@ declare module '@hykr/contracts' {
     writeHooks: readonly WriteHook[];
     readProjectors: readonly ReadProjector[];
     identityProviders: readonly AgentIdentityProvider[];
+    grantKinds: readonly GrantKind[];
   }
 }
 
@@ -80,11 +83,51 @@ export interface EntityPlugin {
   updateWhere?(row: Values, input: Values | null, target: EntityPluginTarget): SQL | undefined;
   /** The record as this principal may see it: fields removed, never added. */
   project?(read: Values, p: Principal, target: EntityPluginTarget): Values;
+  /**
+   * A list request (HTTP or an agent tool) as this principal makes it: throw to refuse it (a
+   * filter or sort on a field they cannot see is an oracle). Not called for a command's own
+   * `repo.list`, which is server code.
+   */
+  query?(q: ListQuery, p: Principal, target: EntityPluginTarget): void;
 }
 
 /** Entity plugins, in the order they run. */
 export const entityPlugins = createHookRegistry<EntityPlugin>('entity plugin', (x) => x.name, {
   collects: 'entityPlugins',
+});
+
+/** What a grant kind sees of the entity: its table, by column key. */
+export interface GrantTarget extends EntityPluginTarget {
+  columns: Readonly<Record<string, Column>>;
+}
+
+/**
+ * A way an access rule reaches rows beyond the built-in `own`, `customer` and `tenant`: records
+ * granted one by one (`granted`), a participant's records, a share link's. `defineEntity` ORs
+ * its rows with the principal's other grants, inside the tenant. An access rule naming a kind
+ * nobody registered throws.
+ */
+export interface GrantKind {
+  /** The access rule's `grant`: 'granted'. */
+  name: string;
+  /** The rows it reaches for p, as SQL on the entity's table; undefined: none. */
+  where(p: Principal, rule: GrantRule, target: GrantTarget): SQL | undefined;
+  /**
+   * May p create this row under it alone (a child of a record granted to them)? They own it
+   * then. Absent: no.
+   */
+  creates?(
+    tx: Tx,
+    p: Principal,
+    rule: GrantRule,
+    input: Values,
+    target: GrantTarget,
+  ): Promise<boolean>;
+}
+
+/** Grant kinds, by name. */
+export const grantKinds = createHookRegistry<GrantKind>('grant kind', (x) => x.name, {
+  collects: 'grantKinds',
 });
 
 /** One write as a hook sees it. */

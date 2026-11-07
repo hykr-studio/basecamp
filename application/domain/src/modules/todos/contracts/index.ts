@@ -2,6 +2,7 @@
 import { moduleSpec } from '@hykr/contracts';
 import { TodoSpec } from './todo.js';
 
+export * from './roles.js';
 export * from './todo.js';
 
 export const todosSpec = moduleSpec({

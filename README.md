@@ -38,7 +38,7 @@ agent version, and a chat's `runId` is its trace id in Mastra Studio.
 | **Agent-driven UI** | Tool results carry a view and a query, not data. The client renders them inline or on a canvas, and saved pages hold queries |
 | **Voice** | LiveKit plus a voice worker using Sarvam speech-to-text and text-to-speech, in English, Hindi and Telugu |
 | **WhatsApp** | Cloud API adapter, signed webhooks, consent and keywords, templates as code, approvals by button, handoff to a back office |
-| **Tenancy** | Businesses, memberships with roles (`owner`, `admin`, `ops`, `staff`, `customer`) and customers, with a scope engine behind each entity's `access` |
+| **Tenancy** | Businesses, memberships with roles (`owner`, `admin`, `ops`, `staff`, `customer`, plus the application's and each business's own), invitations, per-record grants, fields hidden by capability, and customers, with a scope engine behind each entity's `access` |
 | **Tooling** | pnpm workspaces, Turborepo, Biome, dependency-cruiser, Vitest, Maestro, GitHub Actions |
 
 ## Repository layout

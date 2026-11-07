@@ -11,6 +11,7 @@ export * from './backoffice.js';
 export * from './file.js';
 export * from './handoff.js';
 export * from './job.js';
+export * from './members.js';
 export * from './notify.js';
 export * from './page.js';
 

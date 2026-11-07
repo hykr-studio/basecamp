@@ -1,12 +1,13 @@
 import {
   type Assurance,
   type Channel,
-  capabilitiesOf,
   checkRoles,
-  knownRoles,
+  givenRoles,
   type Principal,
   parseSubjectKey,
+  type RolesSettings,
   type Subject,
+  standingIn,
 } from '@hykr/contracts';
 import { contactById, ensureDefaultTenant, membershipOf, userExists } from '@hykr/db';
 import {
@@ -16,6 +17,7 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
+import { TenantConfigService } from '../tenants/tenant-config.service.js';
 import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
 
 /** The part of a principal that says who it is for and what they may do, in which business. */
@@ -42,22 +44,21 @@ const CHANNEL_ASSURANCE: Record<Channel, Assurance> = {
 const logger = new Logger('PrincipalResolver');
 const warned = new Set<string>();
 
-/** The registered roles among these; an unknown one grants nothing, and is logged once. */
-function rolesOf(values: readonly string[]): string[] {
-  const known = knownRoles(values);
-  for (const r of values)
-    if (!known.includes(r) && !warned.has(r)) {
+/**
+ * Roles and what they allow in this business, as a principal carries them: the declared roles
+ * (with the application's overrides and the business's edits) and the business's own. A name
+ * it does not have grants nothing, and is logged once.
+ */
+function standingOf(values: readonly string[], section: RolesSettings | null) {
+  const { roles, capabilities, unknown } = standingIn(values, section ? { roles: section } : {});
+  for (const r of unknown)
+    if (!warned.has(r)) {
       warned.add(r);
-      logger.warn(`Role "${r}" is in a membership but nobody registered it: it grants nothing`);
+      logger.warn(`Role "${r}" is in a membership but nobody declared it: it grants nothing`);
     }
-  return known;
+  // A roles section that does not parse may hide an edit that took capabilities away: allow none.
+  return { roles, capabilities: section ? capabilities : [] };
 }
-
-/** Roles and what they allow, as a principal carries them. */
-const standingOf = (values: readonly string[]) => {
-  const roles = rolesOf(values);
-  return { roles, capabilities: capabilitiesOf(roles) };
-};
 
 /**
  * Who a request is for, from facts the server holds: the session, the person or contact an
@@ -67,9 +68,28 @@ const standingOf = (values: readonly string[]) => {
  */
 @Injectable()
 export class PrincipalResolver {
-  constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {
-    // When the API or worker starts: a role naming a capability nobody defines stops it.
+  constructor(
+    @Inject(CORE_OPTIONS) private readonly options: CoreOptions,
+    @Inject(TenantConfigService) private readonly tenants: TenantConfigService,
+  ) {
+    // When the API or worker starts: a role, override or role default naming a capability or
+    // role nobody declares stops it.
     checkRoles();
+  }
+
+  /**
+   * A business's roles section. It is read alone, so another broken section (a feature's) leaves
+   * the capabilities in place and its owner can still repair it. A roles section that does not
+   * parse is null: the declared roles still reach their rows, but nobody holds a capability
+   * there until it is fixed (fail closed: a business's edit may have taken some away).
+   */
+  private async rolesOf(tenantId: string): Promise<RolesSettings | null> {
+    try {
+      return await this.tenants.section(tenantId, 'roles');
+    } catch (e) {
+      logger.error(`Roles of business ${tenantId} do not parse; no capabilities there: ${e}`);
+      return null;
+    }
   }
 
   /**
@@ -92,7 +112,7 @@ export class PrincipalResolver {
     return {
       subject: { kind: 'user', userId },
       tenantId: membership.tenantId,
-      ...standingOf(membership.roles),
+      ...standingOf(membership.roles, await this.rolesOf(membership.tenantId)),
       ...(membership.customerId ? { customerId: membership.customerId } : {}),
       assurance: this.assurance(opts.channel),
     };
@@ -123,7 +143,8 @@ export class PrincipalResolver {
     return {
       subject: { kind: 'contact', contactId },
       tenantId: contact.tenantId,
-      ...standingOf(['customer']),
+      // The roles the application gives a contact (the framework's: customer).
+      ...standingOf(givenRoles('contact'), await this.rolesOf(contact.tenantId)),
       ...(contact.customerId ? { customerId: contact.customerId } : {}),
       assurance: 'whatsapp_number',
     };

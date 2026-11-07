@@ -1,6 +1,6 @@
 /** The to-dos module's tables. */
 import { app, customerColumn, id, tableRef, tenantColumn, user } from '@hykr/db';
-import { boolean, date, index, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, date, index, integer, text, timestamp } from 'drizzle-orm/pg-core';
 
 export const todos = app.table(
   'todos',
@@ -14,6 +14,8 @@ export const todos = app.table(
     title: text('title').notNull(),
     done: boolean('done').default(false).notNull(),
     dueOn: date('due_on'),
+    /** What it costs, in minor units of the business's currency (hidden by field policy). */
+    cost: integer('cost'),
     // The meeting it belongs to: meetings builds on notes, so the table is named, not imported.
     meetingId: text('meeting_id').references(() => tableRef('meetings').id, {
       onDelete: 'set null',
