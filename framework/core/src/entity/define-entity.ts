@@ -7,8 +7,8 @@ import type {
   Principal,
   WriteAction,
 } from '@hykr/contracts';
-import { listInputSchema, parksFor } from '@hykr/contracts';
-import { defaultOwnerOf } from '@hykr/db';
+import { ClientId, listInputSchema, parksFor, takesClientIds } from '@hykr/contracts';
+import { events as auditEvents, defaultOwnerOf } from '@hykr/db';
 import {
   type Access,
   accessFor,
@@ -19,7 +19,12 @@ import {
   rowAllowed,
   subjectOf,
 } from '@hykr/policy';
-import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   and,
   type Column,
@@ -339,6 +344,65 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     throw new NotFoundException({ error: 'not_found', message: `No such ${label}` });
   }
 
+  const idTaken = () =>
+    new ConflictException({
+      error: 'id_taken',
+      message: `That id is already used: a new ${label} needs another`,
+    });
+
+  /**
+   * The id a person chose for a new record (B12): only for an entity that takes client ids, only
+   * a UUID, only from a person (the assistant, a guest and the server's own work never choose
+   * one), and never one this entity has ever used, in any business (409 `id_taken`, the same for
+   * everyone). A deleted record's id stays used: comments, call logs, acceptances and other rows
+   * keyed by (type, id) outlive it, and a new record under its id would inherit them. A committed
+   * audit row naming the id says it was used; a parked create's (`needs_approval`) does not, so
+   * its approved replay still makes the record. Undefined when none was sent: the database makes
+   * one.
+   */
+  async function clientIdOf(tx: Tx, p: Principal, input: Values): Promise<string | undefined> {
+    if (!takesClientIds(spec) || input.id === undefined || input.id === null) return undefined;
+    const parsed = ClientId.safeParse(input.id);
+    if (!parsed.success)
+      throw new BadRequestException({
+        error: 'bad_client_id',
+        reason: `A new ${label}'s id must be a UUID`,
+      });
+    if (p.actor.kind !== 'user')
+      throw new BadRequestException({
+        error: 'client_id_people_only',
+        reason: `Only a person's app chooses a new ${label}'s id`,
+      });
+    const [used] = await tx
+      .select({ id: sql<string>`${idCol}` })
+      .from(table as Table)
+      .where(eq(idCol, parsed.data))
+      .limit(1);
+    if (used) throw idTaken();
+    const [once] = await tx
+      .select({ id: auditEvents.id })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.resourceType, spec.name),
+          eq(auditEvents.resourceId, parsed.data),
+          eq(auditEvents.outcome, 'committed'),
+        ),
+      )
+      .limit(1);
+    if (once) throw idTaken();
+    return parsed.data;
+  }
+
+  /** The primary key refused the insert: the same id, chosen twice at the same moment. */
+  const isIdClash = (e: unknown) => {
+    const cause = ((e as { cause?: unknown })?.cause ?? e) as {
+      code?: string;
+      constraint?: string;
+    };
+    return cause?.code === '23505' && /_pkey$/.test(cause.constraint ?? '');
+  };
+
   function checkRules(
     p: Principal,
     action: WriteAction,
@@ -401,10 +465,12 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       const parsed = spec.schemas.create.parse(input) as Record<string, unknown>;
       checkRules(p, 'create', null, parsed, ctx);
       const owned = await ownership(tx, p, parsed);
+      const clientId = await clientIdOf(tx, p, input);
       const [row] = await tx
         .insert(table as Table)
         .values({
           ...toValues(p, 'create', null, parsed),
+          ...(clientId ? { id: clientId } : {}),
           tenantId: owned.tenantId,
           [ownerKey]: owned.ownerId,
           ...(owned.customerId && customerCol
@@ -415,7 +481,11 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
             ? { createdBy: p.actor.kind === 'agent' ? 'assistant' : 'person' }
             : {}),
         } as never)
-        .returning();
+        .returning()
+        .catch((e: unknown) => {
+          if (clientId && isIdClash(e)) throw idTaken();
+          throw e;
+        });
       return row as Row<T>;
     },
     async update(tx, p, row, patch, ctx = { via: 'crud' }) {

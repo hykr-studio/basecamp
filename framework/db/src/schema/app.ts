@@ -75,7 +75,11 @@ export const idempotencyKeys = app.table(
     response: jsonb('response').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
-  (table) => [primaryKey({ columns: [table.key, table.principalId] })],
+  (table) => [
+    primaryKey({ columns: [table.key, table.principalId] }),
+    // The hourly purge of replies past their retention (B12).
+    index('idempotency_created_at_idx').on(table.createdAt),
+  ],
 );
 
 /** A canvas page the person saved: a PageSpec of queries, so it always shows today's data. */

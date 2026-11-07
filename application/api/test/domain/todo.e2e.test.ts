@@ -63,7 +63,8 @@ describe('to-dos, end to end', () => {
     expect(await titles(alice)).toContain('Call the plumber'); // parked, not deleted
 
     const [approval] = (await alice.call('GET', '/api/approvals')).body;
-    expect(approval.summary).toBe('Delete "Call the plumber"');
+    // To-dos are versioned: the request names the version it was asked for.
+    expect(approval.summary).toBe('Delete "Call the plumber" (version 1)');
     expect(approval.requestedBy).toBe('agent');
     // This application's level for a to-do write, and Alice decides her assistant's request.
     expect(approval).toMatchObject({

@@ -35,7 +35,11 @@ export type ApiRequest = Request & {
   requestId?: string;
 };
 
-export type RequestMetaValue = { requestId: string; idempotencyKey?: string };
+/**
+ * What a write request says besides its body: its id, its idempotency key, and its `If-Match`
+ * (the record version the caller based it on, B12).
+ */
+export type RequestMetaValue = { requestId: string; idempotencyKey?: string; ifMatch?: string };
 
 export const header = (req: Request, name: string) => {
   const value = req.headers[name];
@@ -274,6 +278,7 @@ export const RequestMeta = createParamDecorator(
     return {
       requestId: req.requestId ?? randomUUID(),
       idempotencyKey: header(req, 'idempotency-key'),
+      ifMatch: header(req, 'if-match'),
     };
   },
 );

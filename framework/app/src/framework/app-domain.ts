@@ -75,6 +75,18 @@ export interface AppPlugin {
    */
   // biome-ignore lint/suspicious/noConfusingVoidType: a callback may return nothing, a cleanup or a promise
   onSignedIn?: (user: SessionUser) => void | (() => void) | Promise<unknown>;
+  /**
+   * Runs when the person signs out, before the session ends (not when the app remounts, which
+   * `onSignedIn`'s cleanup covers): forget what the plugin kept on the device for them. A throw
+   * or a rejected promise is logged; the sign-out goes on.
+   */
+  // biome-ignore lint/suspicious/noConfusingVoidType: a callback may return nothing or a promise
+  onSignOut?: (user: SessionUser) => void | Promise<unknown>;
+  /**
+   * A strip the shell draws above the screen while someone is signed in (offline, changes waiting
+   * to sync). It draws nothing when it has nothing to say.
+   */
+  Banner?: ComponentType;
   /** Its screens, at paths no route file claims. */
   routes?: readonly AppRoute[];
   /** Destinations for its screens, after the modules' and before the framework's. */

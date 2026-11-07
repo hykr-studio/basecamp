@@ -93,7 +93,7 @@ Every write, from any caller, follows these steps in `runWrite`:
 | Step | What happens | Where |
 |---|---|---|
 | Validate | `op.input.parse(rawInput)`, again, even after the controller parsed it | `pipeline.ts` |
-| Idempotency | Same `idempotency-key` and same body returns the stored answer. Same key with a different body is a 409. | `app.idempotency` table |
+| Idempotency | Same `idempotency-key` and same body returns the stored answer, also for two at the same moment (an advisory lock per key). Same key with a different body is a 409. Kept `IDEMPOTENCY_KEEP_DAYS`. | `app.idempotency` table |
 | Load | `op.load(tx, p, input)` through scoped repos. A row that is not yours is a 404. | entity repo |
 | Authorize | Returns `allow`, `deny` or `needs_approval`. Then each write hook may refuse or park, never loosen (`strongerDecision`). Then the application's level rules, and the level's policy: a level that waits parks the write, one that runs gives it an undo window (section 5.8.1). | `def.decide` or your command's `authorize`, then `writeHooks`, then `levelRules` |
 | Deny | The transaction rolls back. A `denied` audit row is written. The caller gets 403 `{ error: 'forbidden', rule, reason }`. | |
@@ -2119,6 +2119,70 @@ export const BriefForm = definePublicForm({
   their code went; their data export lists those links.
 - **No SSR or SEO.** Share pages are the single-page web app: not indexed, no link previews.
 
+### 5.29 Offline capture
+
+People on weak networks keep working (`docs/decisions/B12.md`). A module marks the writes the app
+may keep on the device and send later; the framework queues them with their idempotency key,
+sends them in order through the usual write path, and stops two phones from silently
+overwriting each other.
+
+```ts
+// contracts: an entity whose writes may be made offline (every write, or some)
+traits: { offline: {}, versioned: {} },        // offline: { writes: ['create', 'update'] }
+// a command too: commandSpec({ ..., traits: { offline: {} } })
+
+// the app's root _layout: list the plugin
+<AppShell plugins={[..., offlinePlugin()]} … />   // offlinePlugin({ maxAgeMs, cacheVersion })
+```
+
+- **Client ids.** An entity with the trait takes a client-chosen `id` (a UUID) on create, so a
+  record made offline has its id before it syncs and later writes can name it. The framework adds
+  `id` to the create input (`createInputOf(spec)`); the spec's schemas, the assistant's tools and
+  MCP stay without it. Only a person's request may choose one (400 `client_id_people_only`); an
+  id the entity has ever used, in any business, is 409 `id_taken`, the same for everyone. That
+  includes a deleted record's id (a committed audit row names it): its comments, call logs and
+  acceptances outlive it, and a new record must not inherit them. Without the trait an `id` in
+  the body is dropped. A parked create names its id as the approval's `resourceId`, and the
+  approved replay makes the record with it.
+- **`If-Match`.** `PATCH` and `DELETE /api/<plural>/:id` take `If-Match: "<version>"` (also
+  `W/"3"`, a bare `3`, a list, or `*`): for a versioned entity (section 5.20) the record must have
+  one of those versions, or the write is 409 `stale` and nothing changes. A tag on an entity
+  without versions, on a create, a command or any other route is 400 `if_match_unsupported`: a
+  precondition the server cannot check is never ignored. `*` only says the record exists.
+- **One write per key.** `runWrite` takes an advisory lock on (principal, `idempotency-key`) in
+  the write's transaction and looks for the stored reply again: two requests with one key at the
+  same moment run once, and both answer the first reply.
+- **Replies are kept** for `IDEMPOTENCY_KEEP_DAYS` (default 30); the `idempotency.purge` schedule
+  forgets older ones every hour (`IdempotencyService.purge`). A key reused later runs again.
+- **The outbox** (`@hykr/app`, `features/offline`). `useEntityMutation`, `useCommand` and a
+  view's actions hand a write on a marked spec to the outbox: it is stored first (SQLite on iOS
+  and Android, IndexedDB on the web, memory where neither works), then sent with a key fixed when
+  it was queued, its business (`x-tenant-id` as captured) and, for a versioned entity, the
+  version it was based on: the freshest cached copy of the record (the highest version among the
+  lists and gets that hold it, `cachedRecord`). Online, the screen gets the server's answer as
+  before (a refusal is an error, and nothing is kept), and the record it returns replaces every
+  cached copy (`cacheWritten`), so the next write is based on its new version. Without a network
+  the write resolves `{ status: 'queued' }` and waits; a queued update shows in the cached lists
+  at once (`writeEntity`, `writeCommand` for code outside the hooks).
+- **Syncing.** First in, first out, on reconnect and with back-off. A network failure keeps the
+  item; a 5xx or 429 is tried 5 times; a 401 pauses until the person signs in again; a refusal
+  (400, 403, 404, 409) keeps the item with the server's reason and the next one goes on. A write
+  that parks when it syncs leaves the outbox and is told ("Synced. Waiting for approval: …"); the
+  approval card shows it. After a `stale` conflict the person discards their change or saves it
+  over the other one (a new key, no `If-Match`).
+- **Reads offline.** The query cache is kept per person and business (7 days by default, only
+  answers that succeeded) and removed at sign-out; queries pause offline (`EntityList.offline`).
+  The shell opens on the last signed-in person when the session cannot be checked for want of a
+  network, and checks again when it is back. Whenever the person shown changes (a refused
+  re-check shows the sign-in screen, or the server knows someone else), the query client is
+  cleared first, so nothing the last person read reaches the next one or is kept under their name.
+- **On screen.** The plugin's strip (`AppPlugin.Banner`) says when the device is offline or
+  changes wait, and links to `/offline` (`OfflineScreen`: each change, its state, Try again or
+  Discard). `usePendingWrites(plural, actions?)` and `<PendingWriteRow>` list a screen's own (the
+  sample's to-dos screen lists to-dos not synced yet); `useOutbox()` and `useOnline()` for more.
+- **Not queued**: files (a photo needs the network to upload), and writes on specs without the
+  trait, which fail at once offline ("You're offline…").
+
 ---
 
 ## 6. Principals and policy
@@ -3176,7 +3240,10 @@ These are not built. Each has a workaround for now.
 | Business-editable workflows | States, transitions and SLAs are declared by modules. A business can change an SLA's duration or switch it off (`sla` settings) but cannot add a state or a transition. |
 | Editing `businessHours` and `sla` settings | Nothing in the API changes them yet: set them in `app.tenants.settings` with SQL. Half days and per-branch calendars are not supported. |
 | Escalations that ask a person | An SLA's escalation transition runs as the system principal, which cannot park; one that would wait is refused and kept on the clock. Notify the people instead (`escalate.notify`). |
-| `If-Match` on HTTP writes | Send the version in the body (`version`, when the update schema has it). |
+| `If-Match` beyond entity writes | Only an entity's `PATCH` and `DELETE` check it (section 5.29); transitions and commands refuse it. Send the version in a command's input when it takes one. Reads send no `ETag` (the version is in the body). |
+| Files captured offline | The outbox queues records, not files: a photo needs the network (B1's presign, upload, confirm). |
+| Offline conflicts per field | A queued change conflicts when anything in the record changed since the person saw it; there is no per-field merge. A list refetched on reconnect shows the server's rows until the outbox has sent the person's changes. |
+| Background sync | The outbox sends while the app is open; nothing syncs while it is closed. |
 | A per-field approval pin | A parked write fails on approval when the record's version changed at all, even for a field it does not touch. |
 | Revisions without copying | A revision is a copy (its own id). There is no snapshot of one record in place. |
 | Memory recall at scale | Recall compares every vector of one business (no approximate index), and the compose and CI images have no pgvector, so it runs on `app.memory_cosine`. Fine for thousands of memories per business; beyond that, install pgvector and add an index. |
@@ -3203,7 +3270,7 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter, brand). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in, nav filter and brand slots; `inboxPlugin()` (section 5.21), `exportPlugin` (section 5.22) and `privacyPlugin` (section 5.27) use routes and nav; `creditsPlugin`, `businessesPlugin` and `agentsPlugin()` (section 5.26) use routes, nav and nav filters too; `sharePlugin()` (section 5.28) a public, standalone route. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, sign-out, routes, nav, nav filter, brand, banner); `offlinePlugin()` (section 5.29) uses the provider, sign-in, sign-out, route and banner slots. `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in, nav filter and brand slots; `inboxPlugin()` (section 5.21), `exportPlugin` (section 5.22) and `privacyPlugin` (section 5.27) use routes and nav; `creditsPlugin`, `businessesPlugin` and `agentsPlugin()` (section 5.26) use routes, nav and nav filters too; `sharePlugin()` (section 5.28) a public, standalone route. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
 | Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
@@ -3236,7 +3303,7 @@ These are not built. Each has a workaround for now.
 | One wording for read tools | The assistant's list and get tools (`tool-factory.ts`) still build their own text; WebMCP takes the same wording from `entityReadTools`. Keep the two in step until the assistant uses it. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |
 | Per-module tools for the assistant | The assistant sees every module's tools on every turn. |
-| Concurrent duplicate requests | Two requests with the same idempotency key at the same moment can both run. Only the first answer is stored. |
+| Replies kept for retries | A stored reply is forgotten after `IDEMPOTENCY_KEEP_DAYS` (30): a device offline longer may apply a queued update twice if its first try reached the server (a create is safe: its id is taken). |
 | Opt-out from a marketing quick reply | The `stop_offers` button is not handled. The STOP keyword is the only working opt-out. |
 | Clearing "unreachable" on WhatsApp | Only the START keyword clears it. |
 | Other channels (SMS, Telegram) | `ChannelAdapter.channel` is `'whatsapp'` only. |

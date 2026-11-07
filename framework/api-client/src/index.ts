@@ -167,6 +167,42 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The request never reached the API (no network, the server unreachable): nothing was answered,
+ * so a write may or may not have happened. Retry it with the same idempotency key.
+ */
+export class NetworkError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'The network request failed', { cause });
+    this.name = 'NetworkError';
+  }
+}
+
+/** Did this call fail for want of a network, rather than an answer? */
+export const isNetworkError = (e: unknown): boolean =>
+  e instanceof NetworkError ||
+  (!(e instanceof ApiError) && e instanceof TypeError) ||
+  (e instanceof Error && e.name === 'NetworkError');
+
+/**
+ * How a write is sent. `key`: its idempotency key (a fresh one by default; a retry passes the
+ * same). `ifMatch`: the record version it was based on (an entity update or delete: 409 `stale`
+ * when the record moved on). `headers`: extra headers for this call only (a queued write's
+ * business, `x-tenant-id`). A string is the key alone.
+ */
+export type WriteOptions = {
+  key?: string;
+  ifMatch?: string | number;
+  headers?: Record<string, string>;
+};
+
+const writeOptions = (opts: string | WriteOptions | undefined): WriteOptions =>
+  typeof opts === 'string' ? { key: opts } : (opts ?? {});
+
+/** A version as `If-Match` sends it: '"3"'; a tag already quoted (or `*`) as it is. */
+const ifMatchHeader = (v: string | number) =>
+  typeof v === 'number' || /^\d+$/.test(v) ? `"${v}"` : v;
+
 export type ApiClientOptions = {
   baseUrl: string;
   /**
@@ -217,36 +253,55 @@ function eventOf(event: string): ChatChunk | undefined {
 /** Every write gets a fresh idempotency key by default. A caller that retries passes the same key. */
 const newKey = () => crypto.randomUUID();
 
+/** A write's options, with a fresh key unless it brings its own. */
+const keyed = (o: string | WriteOptions | undefined): WriteOptions => {
+  const w = writeOptions(o);
+  return w.key ? w : { ...w, key: newKey() };
+};
+
 /** Typed methods for one entity, from its spec: the Expo app and the agent's tools use these. */
 export type EntityClient<S extends EntitySpec> = {
   list(query?: ListInput): Promise<Page<z.infer<S['schemas']['read']>>>;
   get(id: string): Promise<z.infer<S['schemas']['read']>>;
   create(
     input: z.input<S['schemas']['create']>,
-    key?: string,
+    opts?: string | WriteOptions,
   ): Promise<WriteResult<z.infer<S['schemas']['read']>>>;
   update(
     id: string,
     patch: z.input<S['schemas']['update']>,
-    key?: string,
+    opts?: string | WriteOptions,
   ): Promise<WriteResult<z.infer<S['schemas']['read']>>>;
-  remove(id: string, key?: string): Promise<WriteResult<null>>;
+  remove(id: string, opts?: string | WriteOptions): Promise<WriteResult<null>>;
   /** Counts and totals (GET /api/<plural>/summary): the list's filters, groupBy, sum, avg… */
   summary(query?: SummaryInput): Promise<Summary>;
 };
 
 export function createApiClient(opts: ApiClientOptions) {
-  async function call<T>(method: string, path: string, body?: unknown, key?: string): Promise<T> {
-    const res = await fetch(`${opts.baseUrl}${path}`, {
-      method,
-      credentials: opts.credentials,
-      headers: {
-        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        ...(key ? { 'idempotency-key': key } : {}),
-        ...(await opts.headers?.()),
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    write?: string | WriteOptions,
+  ): Promise<T> {
+    const w = writeOptions(write);
+    let res: Response;
+    try {
+      res = await fetch(`${opts.baseUrl}${path}`, {
+        method,
+        credentials: opts.credentials,
+        headers: {
+          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+          ...(w.key ? { 'idempotency-key': w.key } : {}),
+          ...(w.ifMatch !== undefined ? { 'if-match': ifMatchHeader(w.ifMatch) } : {}),
+          ...(await opts.headers?.()),
+          ...w.headers,
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch (e) {
+      throw new NetworkError(e);
+    }
     const json = parseBody(await res.text());
     if (!res.ok) throw new ApiError(res.status, json);
     return json as T;
@@ -310,9 +365,9 @@ export function createApiClient(opts: ApiClientOptions) {
       list: (query) => call('GET', `${base}${toQueryString(query)}`),
       summary: (query) => summary(spec.plural, query),
       get: (id) => call('GET', one(id)),
-      create: (input, key = newKey()) => call('POST', base, input, key),
-      update: (id, patch, key = newKey()) => call('PATCH', one(id), patch, key),
-      remove: (id, key = newKey()) => call('DELETE', one(id), undefined, key),
+      create: (input, o) => call('POST', base, input, keyed(o)),
+      update: (id, patch, o) => call('PATCH', one(id), patch, keyed(o)),
+      remove: (id, o) => call('DELETE', one(id), undefined, keyed(o)),
     };
   }
 
@@ -320,7 +375,7 @@ export function createApiClient(opts: ApiClientOptions) {
   function command<S extends CommandSpec>(
     spec: S,
     input: z.input<S['input']>,
-    key: string = newKey(),
+    write?: string | WriteOptions,
   ): Promise<WriteResult<z.infer<S['output']>>> {
     const values = { ...(input as Record<string, unknown>) };
     let path = spec.http.path;
@@ -328,7 +383,7 @@ export function createApiClient(opts: ApiClientOptions) {
       path = path.replace(`:${name}`, encodeURIComponent(String(values[name])));
       delete values[name];
     }
-    return call(spec.http.method, path, values, key);
+    return call(spec.http.method, path, values, keyed(write));
   }
 
   /** `?a=1&b=x` from the values that are set. */

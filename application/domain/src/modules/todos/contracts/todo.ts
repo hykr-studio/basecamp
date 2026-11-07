@@ -23,6 +23,8 @@ export const Todo = z.object({
   cost: cost.nullable().optional(),
   /** The business's own fields (a priority, say), defined in its settings. */
   custom: CustomFieldValues,
+  /** How many times it was written: a change made offline is sent with the one it saw. */
+  version: z.number().int(),
   createdBy: CreatedBy,
   createdAt: z.iso.datetime(),
 });
@@ -98,6 +100,12 @@ export const TodoSpec = entitySpec({
     customFields: {},
     // The cost is for people who buy, and the business's owners and admins (roles.ts).
     fieldPolicy: { cost: 'todos.cost.read' },
+    // Added, ticked, renamed or deleted on a phone without a network: kept on the phone and
+    // synced when it is back (a new to-do's id is chosen there).
+    offline: {},
+    // A version per change: a to-do ticked on two phones offline syncs once; the second is a
+    // conflict its person resolves, never a silent overwrite.
+    versioned: {},
   },
 });
 

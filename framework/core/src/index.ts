@@ -39,7 +39,7 @@ export {
   tenantOf,
   toJson,
 } from './entity/define-entity.js';
-export { entityHandlers, entityOp } from './entity/handlers.js';
+export { entityHandlers, entityOp, ifMatchFor } from './entity/handlers.js';
 export {
   entityDef,
   entityDefForSchema,
@@ -70,6 +70,7 @@ export { ApprovalsController } from './http/approvals.controller.js';
 export { requireCapability } from './http/capability.js';
 export { commandController, entityController } from './http/controller-factory.js';
 export { agentKeyProvider, identifyAgent, RUN_ID } from './http/identity.js';
+export { HonorsIfMatch, IfMatchInterceptor } from './http/if-match.js';
 export {
   type ApiRequest,
   ChatAccessGuard,

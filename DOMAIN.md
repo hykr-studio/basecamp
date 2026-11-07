@@ -308,6 +308,16 @@ sample's `orders` module does, developer guide 5.20):
 A state column can also get a CHECK in the module's `sql/post` hook (the sample's
 `orders-states.sql`); keep it in step with the states.
 
+## Offline capture
+
+Which writes the app may keep on a phone without a network and send later is the module's
+(developer guide, section 5.29): `traits: { offline: {} }` on an entity (or `{ writes: [...] }`
+for some of them) or a command. A marked entity's create takes the id the phone chose. Add
+`traits.versioned` (and `versionColumn()`) so a change made offline is sent with the version it
+was based on, and a change from another phone in between is a conflict, not an overwrite. The
+sample's `todos` module does both; its screen lists to-dos not synced yet, and the app lists
+`offlinePlugin()`.
+
 ## Calendars and calls
 
 A module puts its records with a time in people's calendars with one trait (developer guide,

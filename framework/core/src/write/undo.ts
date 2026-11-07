@@ -9,6 +9,8 @@ import {
   type Principal,
   type UndoResult,
   type UndoTicket,
+  versionedOf,
+  versionField,
 } from '@hykr/contracts';
 import { type Database, domainEvents, undoWindows } from '@hykr/db';
 import { subjectOf, userIdOf } from '@hykr/policy';
@@ -125,12 +127,15 @@ function canonical(value: unknown): string {
 
 /**
  * Is the row as the write left it? Every column but `updatedAt`, which only says when it was
- * last written (an undo of a later write puts the values back, not the time).
+ * last written, and a versioned record's version, which only counts writes (an undo of a later
+ * write puts the values back, not the time or the count).
  */
-function unchanged(current: unknown, after: Values): boolean {
-  const { updatedAt: _now, ...rest } = (toJson(current) ?? {}) as Values;
-  const { updatedAt: _then, ...was } = after;
-  return canonical(rest) === canonical(was);
+function unchanged(def: AnyEntityDef, current: unknown, after: Values): boolean {
+  const trait = versionedOf(def.spec);
+  const skip = new Set(['updatedAt', ...(trait ? [versionField(trait)] : [])]);
+  const keep = (row: Values) =>
+    Object.fromEntries(Object.entries(row).filter(([k]) => !skip.has(k)));
+  return canonical(keep((toJson(current) ?? {}) as Values)) === canonical(keep(after));
 }
 
 const changedSince = () =>
@@ -182,7 +187,7 @@ async function reverse(
 
   if (t.change === 'created' || t.change === 'updated') {
     const current = await def.repo.find(tx, p, t.id);
-    if (!current || !unchanged(current, after)) throw changedSince();
+    if (!current || !unchanged(def, current, after)) throw changedSince();
     if (t.change === 'created') {
       const gone = await def.repo.delete(tx, p, current, via);
       return {

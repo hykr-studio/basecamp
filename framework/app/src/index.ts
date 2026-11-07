@@ -93,6 +93,7 @@ export {
 } from './framework/app-domain';
 export { AssistantProvider, useAssistant, useScreenContext } from './framework/assistant-context';
 export { chooseBusiness, currentBusiness } from './framework/business';
+export { cachedRecord, cacheWritten } from './framework/cached-rows';
 export {
   bindAll,
   type ComposedApp,
@@ -140,6 +141,8 @@ export {
   useEntityMutation,
   useEntitySummary,
   useUndoableDelete,
+  writeCommand,
+  writeEntity,
 } from './framework/hooks';
 export { isFocused, isHovered } from './framework/hover';
 export { Icon, type IconName } from './framework/Icon';
@@ -160,6 +163,14 @@ export { useUndo } from './framework/undo';
 export { type Verb, verbOf } from './framework/verbs';
 export { WaitingForYou } from './framework/WaitingForYou';
 export { inApp, webHref } from './framework/web-link';
+export {
+  isQueued,
+  type PendingError,
+  type PendingOp,
+  type PendingState,
+  type PendingWrite,
+  type QueuedWrite,
+} from './framework/write-queue';
 export { cn } from './lib/utils';
 export {
   type AppRuntime,

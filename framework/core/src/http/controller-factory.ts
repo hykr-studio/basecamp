@@ -1,4 +1,5 @@
 import {
+  createInputOf,
   type ListQuery,
   listQuerySchema,
   type Principal,
@@ -28,6 +29,7 @@ import { z } from 'zod';
 import type { AnyCommandDef } from '../command/define-command.js';
 import type { AnyEntityDef } from '../entity/define-entity.js';
 import type { WriteCtx } from '../write/pipeline.js';
+import { HonorsIfMatch } from './if-match.js';
 import {
   CurrentPrincipal,
   HumanOnlyGuard,
@@ -42,6 +44,7 @@ const writeCtx = (p: Principal, meta: RequestMetaValue): WriteCtx => ({
   principal: p,
   requestId: meta.requestId,
   idempotencyKey: meta.idempotencyKey,
+  ...(meta.ifMatch ? { ifMatch: meta.ifMatch } : {}),
 });
 
 type ParamDecorator = (target: object, key: string, index: number) => void;
@@ -53,6 +56,8 @@ interface Route {
   human: boolean;
   /** What a scoped credential needs here (its module's read or write scope). */
   scope: RouteScope;
+  /** It checks the request's `If-Match` (an entity update or delete); every other route refuses one. */
+  ifMatch?: boolean;
   // biome-ignore lint/suspicious/noExplicitAny: bound to the generated controller
   fn: (this: { commands: CommandBus; queries: QueryBus }, ...args: any[]) => unknown;
 }
@@ -71,6 +76,7 @@ function addRoute(proto: object, name: string, route: Route) {
   route.verb(route.path)(proto, name, descriptor);
   UseGuards(PrincipalGuard, ...(route.human ? [HumanOnlyGuard] : []))(proto, name, descriptor);
   RequireScope(route.scope)(proto, name, descriptor);
+  if (route.ifMatch) HonorsIfMatch()(proto, name, descriptor);
   if (route.status) HttpCode(route.status)(proto, name, descriptor);
 }
 
@@ -102,7 +108,8 @@ export function entityController(def: AnyEntityDef): Type {
   const { spec, cqrs } = def;
   const ListDto = createZodDto(listQuerySchema(spec));
   const SummaryDto = createZodDto(summaryQuerySchema(spec));
-  const CreateDto = createZodDto(spec.schemas.create);
+  // With a client-chosen id when the entity takes them (B12).
+  const CreateDto = createZodDto(createInputOf(spec));
   const UpdateDto = createZodDto(spec.schemas.update);
   const human = (action: keyof typeof spec.expose) => spec.expose[action] === 'human';
   // Read when the request is made: a spec may be stamped with its module after this runs.
@@ -157,6 +164,7 @@ export function entityController(def: AnyEntityDef): Type {
       path: ':id',
       human: human('update'),
       scope: write,
+      ifMatch: true,
       params: [principal, idParam, { decorator: Body() as ParamDecorator, type: UpdateDto }, meta],
       fn(p: Principal, id: string, body: unknown, m: RequestMetaValue) {
         return this.commands.execute(new cqrs.UpdateCommand(writeCtx(p, m), id, body));
@@ -167,6 +175,7 @@ export function entityController(def: AnyEntityDef): Type {
       path: ':id',
       human: human('delete'),
       scope: write,
+      ifMatch: true,
       params: [principal, idParam, meta],
       fn(p: Principal, id: string, m: RequestMetaValue) {
         return this.commands.execute(new cqrs.DeleteCommand(writeCtx(p, m), id));
