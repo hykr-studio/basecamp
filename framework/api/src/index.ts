@@ -204,6 +204,7 @@ export {
   ModelRefused,
   SET_MODEL_POLICY,
 } from './features/models/index.js';
+export { IdempotencyService, idempotencyKeepDays } from './features/offline/index.js';
 export {
   type ActingOperator,
   CurrentOperator,

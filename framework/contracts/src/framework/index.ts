@@ -13,6 +13,7 @@ export * from './memory.js';
 export * from './module.js';
 export * from './money.js';
 export * from './numbering.js';
+export * from './offline.js';
 export * from './present.js';
 export * from './privacy.js';
 export * from './read-tools.js';

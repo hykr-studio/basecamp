@@ -20,7 +20,7 @@ import {
 } from '@hykr/db';
 import { subjectKeyOf, subjectOf } from '@hykr/policy';
 import { ConflictException, ForbiddenException, HttpException } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import { allow, RuleDenied } from '../authorize.js';
 import { writeHooks } from '../hooks.js';
@@ -36,6 +36,11 @@ export interface WriteCtx {
   principal: Principal;
   requestId: string;
   idempotencyKey?: string;
+  /**
+   * The request's `If-Match`: the record version the caller based its write on (B12). Entity
+   * updates and deletes check it against the row they load; nothing else takes one.
+   */
+  ifMatch?: string;
   /** Run inside this transaction instead of opening one (an approval replay). */
   tx?: Tx;
   /**
@@ -167,21 +172,32 @@ export async function runWrite<I, L, V>(
     .update(JSON.stringify([op.name, op.args ?? null, input]))
     .digest('hex');
   const key = ctx.idempotencyKey;
-  if (key) {
-    const [hit] = await (ctx.tx ?? db)
+  const storedReply = async (conn: Database | Tx): Promise<WriteOutcome | undefined> => {
+    if (!key) return undefined;
+    const [hit] = await conn
       .select()
       .from(idempotencyKeys)
       .where(and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.principalId, principalKey(p))));
-    if (hit) {
-      if (hit.requestHash !== requestHash) {
-        throw new ConflictException('idempotency-key was already used for a different request');
-      }
-      return { result: hit.response as WriteResult, events: [] };
-    }
-  }
+    if (!hit) return undefined;
+    if (hit.requestHash !== requestHash)
+      throw new ConflictException('idempotency-key was already used for a different request');
+    return { result: hit.response as WriteResult, events: [] };
+  };
+  // A repeat answers at once, without a transaction.
+  const repeat = await storedReply(ctx.tx ?? db);
+  if (repeat) return repeat;
 
   let refusal: { result: AuthorizeResult; resourceId: string | null } | undefined;
   const work = async (tx: Tx): Promise<WriteOutcome> => {
+    // Two requests with one key at the same moment: the second waits here for the first to
+    // commit, then answers with its stored reply (B12). One write, one audit row.
+    if (key) {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${`idempotency:${principalKey(p)}:${key}`}, 0))`,
+      );
+      const first = await storedReply(tx);
+      if (first) return first;
+    }
     // 3. Load what the rules need, scoped to the principal (404 if not theirs).
     const loaded = (op.load ? await op.load(tx, p, input) : undefined) as L;
     const resourceId = op.resourceId(input, loaded);

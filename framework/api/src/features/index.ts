@@ -22,6 +22,7 @@ export { membersFeature } from './members/index.js';
 export { memoryFeature } from './memory/index.js';
 export { modelsFeature } from './models/index.js';
 export { moneyFeature } from './money/index.js';
+export { offlineFeature } from './offline/index.js';
 export { partiesFeature } from './parties/index.js';
 export { platformFeature } from './platform/index.js';
 export { privacyFeature } from './privacy/index.js';

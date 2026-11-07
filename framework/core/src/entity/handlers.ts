@@ -1,5 +1,22 @@
-import type { Page, Principal, Summary, WriteAction } from '@hykr/contracts';
-import { ForbiddenException, Inject, type Type } from '@nestjs/common';
+import {
+  createInputOf,
+  type IfMatch,
+  IfMatchError,
+  ifMatchHolds,
+  type Page,
+  type Principal,
+  parseIfMatch,
+  type Summary,
+  versionedOf,
+  type WriteAction,
+} from '@hykr/contracts';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  type Type,
+} from '@nestjs/common';
 import { CommandHandler, EventBus, QueryHandler } from '@nestjs/cqrs';
 import { z } from 'zod';
 import { summarize } from '../query/aggregate.js';
@@ -12,24 +29,55 @@ import { registerEntityDef } from './registry.js';
 
 type Row = Record<string, unknown> & { id: string };
 
+/** The 400 for an `If-Match` the server cannot check: never ignored. */
+const unsupported = (reason: string) =>
+  new BadRequestException({ error: 'if_match_unsupported', reason });
+
+/**
+ * A request's `If-Match` for an entity write, read and checked against what the entity can
+ * honour: versions need a versioned entity (B4), and only an update or a delete takes one.
+ */
+export function ifMatchFor(
+  def: AnyEntityDef,
+  action: WriteAction,
+  header: string | undefined,
+): IfMatch | undefined {
+  let want: IfMatch | undefined;
+  try {
+    want = parseIfMatch(header);
+  } catch (e) {
+    if (e instanceof IfMatchError) throw unsupported(e.message);
+    throw e;
+  }
+  if (!want) return undefined;
+  if (action === 'create') throw unsupported('A new record has no version to match');
+  if ('versions' in want && !versionedOf(def.spec))
+    throw unsupported(`A ${def.spec.label} has no version to match: send If-Match: * or none`);
+  return want;
+}
+
 /**
  * The write op for one CRUD action: the same shape a hand-written command builds. An update or
  * delete pins the record it loads (its plugins' `onPark`, a version) in its `args`, which a park
  * stores: the approved replay gets them back and refuses (409) if the record moved on since.
+ * With `ifMatch` (the request's If-Match, B12) the record it loads must have one of those
+ * versions, or it refuses (409 `stale`) before anything runs; the update or delete is then
+ * conditional on that version (the versioned plugin's `updateWhere`).
  */
 export function entityOp(
   def: AnyEntityDef,
   action: WriteAction,
-  args: { id?: string; pins?: Pins } | null,
+  args: { id?: string; pins?: Pins; ifMatch?: IfMatch } | null,
 ): WriteOp<Record<string, unknown>, Row | null, Row> {
   const { spec, repo } = def;
   const id = args?.id;
+  const ifMatch = args?.ifMatch;
   // On a replay, what the request pinned; otherwise what load pins now (read when it parks).
   const pinned = args?.pins;
   let pins = pinned;
   const schema =
     action === 'create'
-      ? spec.schemas.create
+      ? createInputOf(spec)
       : action === 'update'
         ? spec.schemas.update
         : z.object({}).strict();
@@ -49,15 +97,22 @@ export function entityOp(
     name: `${def.name}.${action}`,
     kind: 'entity',
     resourceType: def.name,
-    resourceId: (_input, loaded) => loaded?.id ?? null,
+    // A create names the id it makes when the client chose one (B12), so a parked create does too.
+    resourceId: (input, loaded) =>
+      loaded?.id ?? (action === 'create' && typeof input.id === 'string' ? input.id : null),
     input: schema as z.ZodType<Record<string, unknown>>,
     get args() {
-      return id ? { id, ...(pins ? { pins } : {}) } : undefined;
+      return id ? { id, ...(pins ? { pins } : {}), ...(ifMatch ? { ifMatch } : {}) } : undefined;
     },
     approval: def.spec.approval[action],
     load: id
       ? async (tx, p) => {
           const row = (await repo.get(tx, p, id)) as Row;
+          if (ifMatch && !ifMatchHolds(spec, row, ifMatch))
+            throw new ConflictException({
+              error: 'stale',
+              message: `This ${spec.label} changed since it was read. Load it again and retry.`,
+            });
           if (pinned) checkPins([{ def, row }], pinned);
           else pins = pinsOf([{ def, row }]);
           return row;
@@ -109,7 +164,7 @@ export function entityHandlers(def: AnyEntityDef): Type[] {
   for (const action of ['create', 'update', 'delete'] as const) {
     registerOp(
       `${def.name}.${action}`,
-      (args) => entityOp(def, action, args as { id?: string } | null),
+      (args) => entityOp(def, action, args as Parameters<typeof entityOp>[2]),
       def,
     );
   }
@@ -159,7 +214,8 @@ export function entityHandlers(def: AnyEntityDef): Type[] {
       ) {}
       async execute(cmd: { ctx: WriteCtx; id?: string; input?: unknown }) {
         const id = idOf(cmd);
-        const op = entityOp(def, action, id ? { id } : null);
+        const ifMatch = ifMatchFor(def, action, cmd.ctx.ifMatch);
+        const op = entityOp(def, action, id ? { id, ...(ifMatch ? { ifMatch } : {}) } : null);
         const { result, events } = await runWrite(this.options.db, cmd.ctx, op, cmd.input ?? {});
         // After commit: a handler that runs early or fails can never see an uncommitted write.
         for (const event of events) this.events.publish(event);
