@@ -694,6 +694,29 @@ describe('a form link', () => {
     expect(rows[0].customer_id).toBe(contact.customerId);
   });
 
+  it("a contact's “delete my data” revokes the links made for them, and forgets their address", async () => {
+    const other = await seedContact(
+      tenantId,
+      'Erased Contact',
+      `9177${String(Date.now()).slice(-8)}`,
+    );
+    const item = await inquiry(owner, { name: 'For erasure' });
+    const theirs = await shared(owner, {
+      target: { entity: 'inquiry', id: item.id },
+      to: { contactId: other.contactId },
+      otp: 'whatsapp',
+    });
+    const { ErasureService } = await import('../../dist/channels/maintenance/erasure.service.js');
+    await server.app?.get(ErasureService).erase(other.contactId);
+    const { rows } = await pool.query(
+      'select revoked_at, contact_id, otp_address from app.share_links where id = $1',
+      [theirs.id],
+    );
+    expect(rows[0].revoked_at).not.toBeNull();
+    expect(rows[0]).toMatchObject({ contact_id: null, otp_address: null });
+    expect((await open(theirs.token)).status).toBe(410);
+  });
+
   it('a form that must be gated, briefly', async () => {
     const target = { form: 'inquiries.private' };
     expect((await share(owner, { target })).body.rule).toBe('code_needed');

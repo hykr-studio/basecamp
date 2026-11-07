@@ -3,6 +3,7 @@ import { shareGrantKind, shareGuestsHook, shareLinksCleanup } from '@hykr/core';
 import { defineSubscriber } from '../events/subscriber.js';
 import { defineFeature } from '../feature.js';
 import { ShareCodes } from './codes.js';
+import { shareLinksErasure, shareLinksExport } from './privacy.js';
 import { ShareService } from './share.service.js';
 import { SharedController } from './shared.controller.js';
 import { SharesController } from './shares.controller.js';
@@ -34,5 +35,7 @@ export const shareFeature = defineFeature({
     writeHooks: [shareGuestsHook, shareLinksCleanup],
     subscribers: [ShareCodeRequested],
     capabilities: [ShareCapabilities.create, ShareCapabilities.manage],
+    erasureContributors: [shareLinksErasure],
+    exportContributors: [shareLinksExport],
   },
 });
