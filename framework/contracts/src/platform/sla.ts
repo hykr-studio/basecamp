@@ -30,10 +30,19 @@ export const SlaTimer = z.object({
 });
 export type SlaTimer = z.infer<typeof SlaTimer>;
 
-/** GET /api/sla: the business's timers in one status, on records the caller reads. */
+/**
+ * GET /api/sla: the business's timers in one status, on records the caller reads, earliest due
+ * first. `open=true` keeps only the clocks whose record is still in the state (a breach still
+ * late: what a Today view shows), `open=false` only the ended ones; without it, both.
+ */
 export const SlaQuery = z.object({
   status: SlaStatus.default('breached'),
+  open: z
+    .preprocess((v) => (v === 'true' ? true : v === 'false' ? false : v), z.boolean())
+    .optional(),
   resourceType: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 export type SlaQuery = z.infer<typeof SlaQuery>;
+/** What a client asks GET /api/sla for (each part optional: the server fills the defaults). */
+export type SlaListInput = Partial<SlaQuery>;

@@ -2,7 +2,7 @@ import type {
   EntitySpec,
   Principal,
   RecordVersion,
-  SlaStatus,
+  SlaListInput,
   SlaTimer,
   WriteResult,
 } from '@hykr/contracts';
@@ -69,10 +69,11 @@ export function useActingPrincipal(): Principal | undefined {
     : undefined;
 }
 
-/** The business's SLA clocks in one status (breached by default) on records the person reads. */
-export function useSlaList(
-  q: { status?: SlaStatus; resourceType?: string; limit?: number } = {},
-): UseQueryResult<SlaTimer[]> {
+/**
+ * The business's SLA clocks in one status (breached by default) on records the person reads;
+ * `open: true` for only those still running late.
+ */
+export function useSlaList(q: SlaListInput = {}): UseQueryResult<SlaTimer[]> {
   return useQuery({
     queryKey: ['sla', 'list', q],
     queryFn: () => api.sla.list(q),

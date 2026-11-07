@@ -7,9 +7,9 @@ import { colors, space, styles } from '../../theme';
 import { useSlaList } from './hooks';
 
 /**
- * What ran out of time: the business's breached SLA clocks on records the person reads (each
- * opening where the app shows its record), newest deadline last. Nothing when none is late.
- * For a Today screen.
+ * What ran out of time: the business's breached SLA clocks still running late (the server
+ * leaves out the ones whose record has moved on), on records the person reads, each opening where
+ * the app shows its record, newest deadline last. Nothing when none is late. For a Today screen.
  */
 export function OverdueList({
   resourceType,
@@ -18,8 +18,8 @@ export function OverdueList({
   resourceType?: string;
   limit?: number;
 }) {
-  const q = useSlaList({ status: 'breached', resourceType, limit });
-  const late = (q.data ?? []).filter((t) => !t.endedAt);
+  const q = useSlaList({ status: 'breached', open: true, resourceType, limit });
+  const late = q.data ?? [];
   if (!late.length) return null;
   return (
     <View style={{ gap: space.xs }}>

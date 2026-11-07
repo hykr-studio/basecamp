@@ -20,7 +20,7 @@ import {
   pathParams,
   type RecordVersion,
   type RegisterPushToken,
-  type SlaStatus,
+  type SlaListInput,
   type SlaTimer,
   type TemplateStatus,
   type Thread,
@@ -347,7 +347,7 @@ export function createApiClient(opts: ApiClientOptions) {
     sla: {
       of: (plural: string, id: string) =>
         call<SlaTimer[]>('GET', `/api/sla/${plural}/${encodeURIComponent(id)}`),
-      list: (q: { status?: SlaStatus; resourceType?: string; limit?: number } = {}) => {
+      list: (q: SlaListInput = {}) => {
         const params = new URLSearchParams();
         for (const [k, v] of Object.entries(q)) if (v !== undefined) params.set(k, String(v));
         const qs = params.toString();

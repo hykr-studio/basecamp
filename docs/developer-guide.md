@@ -1185,7 +1185,8 @@ who hears about it are the application's. The sample's `orders` module uses ever
   settings (`week`, `holidays`, in its `timeZone`) decide what `hours: 'business'` counts; its
   `sla` settings override a duration by name (`within: { 'orders.decision': '36h' }`) or switch
   one off (`off`). `GET /api/sla/<plural>/:id` and `GET /api/sla?status=breached` read clocks on
-  records the caller reads; `<SlaBadge>` shows a record's, `<OverdueList>` the late ones (Today).
+  records the caller reads (`&open=true`: only those whose record is still in the state, i.e.
+  still late); `<SlaBadge>` shows a record's, `<OverdueList>` the late ones (Today).
 - **Versions.** `traits.versioned: { field?, frozenWhen?, editableWhenFrozen?, revisions? }` and
   a `versionColumn()` (`@hykr/db`). Every update bumps the version; an update carrying `version`
   (put it in the update schema) or a write whose row moved since it was loaded answers 409

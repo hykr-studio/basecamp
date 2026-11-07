@@ -215,4 +215,75 @@ describe('who sees the clocks', () => {
     expect(all.length).toBeGreaterThan(0);
     expect(all.every((x) => x.status === 'breached')).toBe(true);
   });
+
+  it('a breach still late is listed however many ended ones were due before it', async () => {
+    // Three records that moved on after their time ran out: six ended breaches, due long ago.
+    for (const n of [1, 2, 3]) {
+      const t = await create(owner, `Moved on late ${n}`);
+      await pool.query(
+        "update app.sla_timers set due_at = now() - interval '30 days' where resource_id = $1",
+        [t.id],
+      );
+      await owner.call('POST', `/api/transitions/tickets/${t.id}/start`, {});
+    }
+    // One still waiting, due after them: its notify-only clock breaches and the record stays.
+    const late = await create(owner, 'Still late');
+    await pool.query(
+      `update app.sla_timers set due_at = case when sla = 'fixture.tickets.respond'
+         then now() - interval '20 days' else now() + interval '60 days' end
+       where resource_id = $1`,
+      [late.id],
+    );
+    await sweeper().sweep(new Date());
+    // Without `open`, the earliest due are the ended ones: a client filtering them would see none.
+    const both = (await owner.call('GET', '/api/sla?status=breached&limit=5')).body as SlaTimer[];
+    expect(both).toHaveLength(5);
+    expect(both.every((x) => x.endedAt)).toBe(true);
+    const open = (await owner.call('GET', '/api/sla?status=breached&open=true&limit=5'))
+      .body as SlaTimer[];
+    expect(open[0]).toMatchObject({
+      resourceId: late.id,
+      sla: 'fixture.tickets.respond',
+      status: 'breached',
+      endedAt: null,
+    });
+    expect(open.every((x) => x.status === 'breached' && x.endedAt === null)).toBe(true);
+    const ended = (await owner.call('GET', '/api/sla?status=breached&open=false&limit=100'))
+      .body as SlaTimer[];
+    expect(ended.length).toBeGreaterThanOrEqual(6);
+    expect(ended.every((x) => x.endedAt !== null)).toBe(true);
+    expect(ended.some((x) => x.resourceId === late.id)).toBe(false);
+    // Another business sees none of them.
+    expect((await stranger.call('GET', '/api/sla?status=breached&open=true')).body).toEqual([]);
+  });
+
+  it("others' earlier clocks never crowd out the caller's own", async () => {
+    // More breaches on a record staff can't read than a page of timers holds, all due first.
+    const theirs = await create(owner, 'Owner late often');
+    await pool.query(
+      `insert into app.sla_timers (tenant_id, resource_type, resource_id, sla, state, status,
+         started_at, due_at, breached_at, queues)
+       select $1, 'ticket', $2, 'fixture.tickets.respond', 'open', 'breached',
+         now() - interval '50 days', now() - interval '45 days' + n * interval '1 second', now(),
+         'someone-else'
+       from generate_series(1, 250) n`,
+      [tenantId, theirs.id],
+    );
+    const mine = await create(staff, 'Staff late', inTenant());
+    await pool.query(
+      `update app.sla_timers set status = 'breached', breached_at = now(),
+         due_at = now() - interval '44 days'
+       where resource_id = $1 and sla = 'fixture.tickets.respond'`,
+      [mine.id],
+    );
+    const list = (
+      await staff.call('GET', '/api/sla?status=breached&open=true&limit=1', undefined, inTenant())
+    ).body as SlaTimer[];
+    expect(list).toEqual([expect.objectContaining({ resourceId: mine.id, status: 'breached' })]);
+    // The owner reads both: theirs come first, earliest due.
+    const owners = (await owner.call('GET', '/api/sla?status=breached&open=true&limit=3'))
+      .body as SlaTimer[];
+    expect(owners.map((x) => x.resourceId)).toEqual([theirs.id, theirs.id, theirs.id]);
+    await pool.query('delete from app.sla_timers where resource_id = $1', [theirs.id]);
+  });
 });
