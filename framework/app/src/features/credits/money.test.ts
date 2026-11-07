@@ -10,8 +10,15 @@ describe('credits as money', () => {
 
   it('formats minor units in major units, and shows bare credits without a currency', () => {
     expect(formatCredits(12345, 'EUR')).toBe('€123.45');
-    expect(formatCredits(500, 'JPY')).toBe('¥500');
+    expect(formatCredits(-12345, 'EUR')).toBe('-€123.45');
+    expect(formatCredits(500, 'JPY')).toBe('JP¥500');
     expect(formatCredits(42, null)).toBe('42');
+    expect(formatCredits(42, 'not a currency')).toBe('not a currency 42');
+  });
+
+  it('formats in the reader’s language', () => {
+    const hindi = new Intl.NumberFormat('hi-IN', { style: 'currency', currency: 'EUR' });
+    expect(formatCredits(12345, 'EUR', 'hi')).toBe(hindi.format(123.45));
   });
 
   it('reads what a person typed as minor units', () => {

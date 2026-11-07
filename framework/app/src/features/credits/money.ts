@@ -1,23 +1,25 @@
 // Credits are whole minor units of the deployment's currency: shown and typed in major units.
+// The currency's exponent and its words come from @hykr/i18n, as for every other amount.
+import { currencyExponent, type Lang, moneyText } from '@hykr/i18n';
 
 /** How many minor units make one major unit of this currency (100 for most, 1 for some). */
 export function minorPerMajor(currency: string): number {
   try {
-    const digits = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions()
-      .maximumFractionDigits;
-    return 10 ** (digits ?? 2);
+    return 10 ** currencyExponent(currency);
   } catch {
     return 1;
   }
 }
 
-/** An amount of credits as money in the reader's language: 12345 XXX minor → "XXX 123.45". */
-export function formatCredits(minor: number, currency: string | null | undefined, locale = 'en') {
+/** An amount of credits as money in the reader's language: 12345 EUR minor → "€123.45". */
+export function formatCredits(
+  minor: number,
+  currency: string | null | undefined,
+  lang: Lang = 'en',
+): string {
   if (!currency) return String(minor);
   try {
-    return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(
-      minor / minorPerMajor(currency),
-    );
+    return moneyText({ minor, currency }, lang);
   } catch {
     return `${currency} ${minor}`;
   }
