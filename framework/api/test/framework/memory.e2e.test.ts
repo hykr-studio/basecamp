@@ -248,7 +248,7 @@ describe('indexing', () => {
 
   it('records written before (or without a write) are found by the backfill', async () => {
     const { rows } = await pool.query(
-      `insert into app.fixture_memos (tenant_id, owner_id, title) values ($1, $2, 'Old memo')
+      `insert into app.fixture_memory_memos (tenant_id, owner_id, title) values ($1, $2, 'Old memo')
        returning id`,
       [anaTenant, ana.id],
     );
@@ -342,7 +342,7 @@ describe('recall in a turn', () => {
 
   it('a record deleted behind the index is not recalled', async () => {
     const m = await memo(ana, { title: 'Orange kettle', body: 'In the kitchen' });
-    await pool.query(`delete from app.fixture_memos where id = $1`, [m.id]);
+    await pool.query(`delete from app.fixture_memory_memos where id = $1`, [m.id]);
     expect(texts(await recall(ana, { q: 'orange kettle kitchen' }))).toEqual([]);
   });
 

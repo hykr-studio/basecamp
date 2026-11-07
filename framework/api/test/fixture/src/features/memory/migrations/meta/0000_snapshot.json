@@ -1,11 +1,11 @@
 {
-  "id": "c4c06f4c-9c40-4fb5-9263-981986ee38fa",
+  "id": "f854732e-57a2-4d39-a49f-f44f744be242",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "app.fixture_memos_asides": {
-      "name": "fixture_memos_asides",
+    "app.fixture_memory_asides": {
+      "name": "fixture_memory_asides",
       "schema": "app",
       "columns": {
         "id": {
@@ -57,9 +57,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "fixture_memos_asides_tenant_id_tenants_id_fk": {
-          "name": "fixture_memos_asides_tenant_id_tenants_id_fk",
-          "tableFrom": "fixture_memos_asides",
+        "fixture_memory_asides_tenant_id_tenants_id_fk": {
+          "name": "fixture_memory_asides_tenant_id_tenants_id_fk",
+          "tableFrom": "fixture_memory_asides",
           "tableTo": "tenants",
           "schemaTo": "app",
           "columnsFrom": [
@@ -71,9 +71,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "fixture_memos_asides_owner_id_user_id_fk": {
-          "name": "fixture_memos_asides_owner_id_user_id_fk",
-          "tableFrom": "fixture_memos_asides",
+        "fixture_memory_asides_owner_id_user_id_fk": {
+          "name": "fixture_memory_asides_owner_id_user_id_fk",
+          "tableFrom": "fixture_memory_asides",
           "tableTo": "user",
           "columnsFrom": [
             "owner_id"
@@ -91,8 +91,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "app.fixture_memos": {
-      "name": "fixture_memos",
+    "app.fixture_memory_memos": {
+      "name": "fixture_memory_memos",
       "schema": "app",
       "columns": {
         "id": {
@@ -163,9 +163,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "fixture_memos_tenant_id_tenants_id_fk": {
-          "name": "fixture_memos_tenant_id_tenants_id_fk",
-          "tableFrom": "fixture_memos",
+        "fixture_memory_memos_tenant_id_tenants_id_fk": {
+          "name": "fixture_memory_memos_tenant_id_tenants_id_fk",
+          "tableFrom": "fixture_memory_memos",
           "tableTo": "tenants",
           "schemaTo": "app",
           "columnsFrom": [
@@ -177,9 +177,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "fixture_memos_owner_id_user_id_fk": {
-          "name": "fixture_memos_owner_id_user_id_fk",
-          "tableFrom": "fixture_memos",
+        "fixture_memory_memos_owner_id_user_id_fk": {
+          "name": "fixture_memory_memos_owner_id_user_id_fk",
+          "tableFrom": "fixture_memory_memos",
           "tableTo": "user",
           "columnsFrom": [
             "owner_id"
