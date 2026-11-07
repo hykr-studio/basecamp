@@ -131,9 +131,18 @@ function raisedSince(asked: DecisionDetails, now: AuthorizeResult): boolean {
   return now.amount.minor > asked.amount.minor;
 }
 
-/** Keys are per caller: the agent acting for Ana never shares a key with Ana herself. */
+/**
+ * Keys are per caller: the agent acting for Ana never shares a key with Ana herself, and one
+ * operator's action (a system job on their behalf) never shares a key with another's.
+ */
 const principalKey = (p: Principal) =>
-  [p.actor.kind, p.actor.id, p.tenantId ?? '', subjectKeyOf(p) ?? ''].join(':');
+  [
+    p.actor.kind,
+    p.actor.id,
+    p.tenantId ?? '',
+    subjectKeyOf(p) ?? '',
+    ...(p.onBehalfOf ? [onBehalfOfKey(p.onBehalfOf)] : []),
+  ].join(':');
 
 const verbs = { created: 'create', updated: 'update', deleted: 'delete' } as const;
 

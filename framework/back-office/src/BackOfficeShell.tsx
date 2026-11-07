@@ -225,7 +225,9 @@ function Gate({ title }: { title: string }) {
   // Working in a business under support access that ended (or never began): back to one's own.
   const lost = me.isError && !!workingInBusiness();
   useEffect(() => {
-    if (lost) stopSupport();
+    if (!lost) return;
+    workIn(null);
+    queryClient.clear();
   }, [lost]);
   if (lost) return null;
   if (session.isPending || (user && (me.isPending || platform.isPending)))
