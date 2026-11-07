@@ -1,8 +1,9 @@
 // Roles, grants and field policy as an application uses them (A4): its own roles and
 // capabilities, an override of a framework role, the roles handed to a creator and a contact,
 // a `projects` module whose `cost` only some capabilities read, rows reached through record grants
-// (a project, and its steps through `via`) and through a capability key, and a command whose output
-// hides the cost too. Only the members test's server (`membersServer`) adds the module.
+// (a project, and its steps through `via`) and through a capability key, a command whose output
+// hides the cost too, a notification whose words name the cost (H1), and requests decided by
+// someone outside the team (H1). Only the members test's server (`membersServer`) adds the module.
 import { defineModule, defineServer } from '@hykr/api';
 import {
   type Contributions,
@@ -21,7 +22,9 @@ import {
   defineEntity,
   entityController,
   entityHandlers,
+  needsApproval,
 } from '@hykr/core';
+import { defineNotification, type Row } from '@hykr/notifications';
 import type { Access } from '@hykr/policy';
 import { Module } from '@nestjs/common';
 import { z } from 'zod';
@@ -65,9 +68,11 @@ export const ProjectSpec = entitySpec({
     search: ['title'],
     pageSize: { default: 50, max: 100 },
   },
-  // The assistant's changes wait for an owner or a crew member.
+  // The assistant's changes wait for an owner or a crew member; its deletes for the default
+  // decider (the person, unless they are outside the team).
   approval: {
     update: { when: (p) => p.actor.kind === 'agent', by: { capability: ApproveProjects.name } },
+    delete: (p) => p.actor.kind === 'agent',
   },
   traits: { fieldPolicy: { cost: { read: 'fixture.cost.read', write: 'fixture.cost.write' } } },
 });
@@ -108,10 +113,21 @@ export const RepriceProjectSpec = commandSpec({
   traits: { fieldPolicy: { cost: 'fixture.cost.read' } },
 });
 
+/** Ask a named person to look a project over: they decide alone (if they may). */
+export const ReviewProjectSpec = commandSpec({
+  name: 'project.review',
+  description: 'Ask a named person to review a project.',
+  input: z.object({ projectId: z.uuid(), reviewerId: z.string().min(1) }),
+  output: z.object({ reviewed: z.literal(true) }),
+  http: { method: 'POST', path: '/api/projects/:projectId/review' },
+  expose: 'all',
+  touches: [],
+});
+
 export const projectsSpec = moduleSpec({
   name: 'projects',
   entities: { projects: ProjectSpec, steps: StepSpec },
-  commands: [RepriceProjectSpec],
+  commands: [RepriceProjectSpec, ReviewProjectSpec],
 });
 
 /**
@@ -125,6 +141,7 @@ const PROJECT_ACCESS: Access = {
     staff: 'own',
     fixture_crew: ['own', { grant: 'granted' }],
     fixture_estimator: 'tenant',
+    fixture_client: 'own',
     'fixture.projects.all': 'tenant',
   },
   write: {
@@ -133,6 +150,7 @@ const PROJECT_ACCESS: Access = {
     staff: 'own',
     fixture_crew: ['own', { grant: 'granted' }],
     fixture_estimator: 'tenant',
+    fixture_client: 'own',
     'fixture.projects.all': 'tenant',
   },
 };
@@ -181,16 +199,59 @@ export const RepriceProject = defineCommand(RepriceProjectSpec, {
   },
 });
 
+export const ReviewProject = defineCommand(ReviewProjectSpec, {
+  resource: { type: 'project', id: (input) => input.projectId },
+  load: (tx, p, input) => ProjectDef.repo.get(tx, p, input.projectId),
+  authorize: (_p, _project, input) =>
+    needsApproval('review', 'The named reviewer decides', {
+      approver: { by: { userId: input.reviewerId } },
+    }),
+  summarize: (_input, project) => `Review "${project.title}"`,
+  run: async () => ({ value: { reviewed: true as const }, touched: [] }),
+});
+
+/** Hears of a new project: its words name the cost, which only some of them may read. */
+export const HearProjects = defineCapability({
+  name: 'fixture.projects.hear',
+  label: label('Hear of new projects'),
+  roles: ['owner', 'fixture_estimator'],
+});
+
+type ProjectRow = Row & { title: string; cost?: number | null; ownerId: string };
+
+/** A new project told to whoever hears of them; the cost only to those who may read it. */
+export const ProjectToldNotification = defineNotification<ProjectRow>({
+  key: 'fixture.project-told',
+  topic: 'service',
+  send: { on: ['project.created'] },
+  when: (p) => p.title.startsWith('Told'),
+  to: () => [{ capability: HearProjects.name }],
+  channels: ['email'],
+  also: ['inapp'],
+  email: {
+    subject: (p) => `New project ${p.title}`,
+    body: (p) => `${p.title}: cost ${p.cost ?? 'not shown'} (owner ${p.ownerId ?? 'not shown'})`,
+  },
+  inapp: {
+    title: (p) => `New project ${p.title}`,
+    body: (p) => `cost ${p.cost ?? 'not shown'}`,
+    record: (p) => ({ type: 'project', id: p.id }),
+  },
+  dedupe: (p) => `fixture.project-told:${p.id}`,
+});
+
 @Module({
   controllers: [
     entityController(ProjectDef),
     entityController(StepDef),
     commandController(RepriceProject),
+    commandController(ReviewProject),
   ],
   providers: [
     ...entityHandlers(ProjectDef),
     ...entityHandlers(StepDef),
     commandHandler(RepriceProject),
+    commandHandler(ReviewProject),
   ],
 })
 class ProjectsModule {}
@@ -198,6 +259,7 @@ class ProjectsModule {}
 export const projectsModule = defineModule({
   ...projectsSpec,
   server: ProjectsModule,
+  notifications: [ProjectToldNotification],
   tables: { projects, projectSteps },
 });
 
@@ -227,6 +289,7 @@ export const membersContributions: Partial<Contributions> = {
     // Not given to any declared role: a business's own role reaches every project through it.
     defineCapability({ name: 'fixture.projects.all', label: label('Every project') }),
     ApproveProjects,
+    HearProjects,
   ],
   roles: [Crew, Estimator, Client],
   // The application relabels the framework's staff and replaces what it may do.

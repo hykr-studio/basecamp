@@ -2,15 +2,22 @@
 // the business's settings (a threshold, an approver per amount band), who decides (by capability,
 // a named person, never the requester), where and how surely, expiry and its sweeper, approved
 // replays bounded by what was approved, and undoing a write within its window. The fixture's
-// features/approval-levels declares the levels; the framework declares none.
+// features/approval-levels declares the levels; the framework declares none. Also (H1): approval
+// requests reach their deciders by push, WhatsApp only where it can decide, email and the inbox;
+// an undoable write's notifications and sends wait for its window, and an undo withdraws them.
+// A stand-in push service (EXPO_BASE_URL) and Mailpit.
+import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { gunzipSync } from 'node:zlib';
 import { capabilitiesOf, type Principal } from '@hykr/contracts';
 import { ApprovalService } from '@hykr/core';
+import { contentHash } from '@hykr/notifications';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as api from '../../dist/index.js';
 import {
   addMember,
   asAssistant,
   boot,
+  eventually,
   me,
   Person,
   pool,
@@ -68,7 +75,72 @@ const audit = async (resourceId: string) =>
 
 const approvals = () => server.app?.get(ApprovalService, { strict: false }) as ApprovalService;
 
+/** What the stand-in push service was asked to send. */
+type Pushed = { to: string; title: string; body: string; data: Record<string, string> };
+const pushed: Pushed[] = [];
+let pushStub: Server;
+const OPS_DEVICE = `ExponentPushToken[ops-levels-${stamp}]`;
+
+async function bodyOf(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(c as Buffer);
+  const raw = Buffer.concat(chunks);
+  return JSON.parse(
+    (req.headers['content-encoding'] === 'gzip' ? gunzipSync(raw) : raw).toString('utf8'),
+  );
+}
+
+/** A person's in-app inbox item for a notification (by its dedupe key), in any business. */
+const inboxItem = async (p: Person, dedupe: string) =>
+  (
+    await pool.query(
+      `select tenant_id, notification, title, body, url from channel.inbox_items
+       where user_id = $1 and dedupe = $2`,
+      [p.id, dedupe],
+    )
+  ).rows[0] as { notification: string; title: string; body: string; url: string } | undefined;
+
+/** The text of an email with this subject sent to this person (holding `needle`), from Mailpit. */
+async function mailText(p: Person, subject: string, needle = ''): Promise<string | undefined> {
+  // By address only: a subject may hold quotes, which the search syntax would take apart.
+  const query = encodeURIComponent(`to:"${p.email}"`);
+  const found = (await (
+    await fetch(`http://localhost:8025/api/v1/search?query=${query}`)
+  ).json()) as {
+    messages: { ID: string; Subject: string }[];
+  };
+  for (const hit of found.messages.filter((m) => m.Subject === subject)) {
+    const one = (await (await fetch(`http://localhost:8025/api/v1/message/${hit.ID}`)).json()) as {
+      Text: string;
+    };
+    if (one.Text.includes(needle)) return one.Text;
+  }
+  return undefined;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 beforeAll(async () => {
+  pushStub = createServer(async (req, res) => {
+    const body = await bodyOf(req);
+    const reply = (value: unknown) =>
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value));
+    if (req.url?.endsWith('/push/send')) {
+      const messages = body as Pushed[];
+      pushed.push(...messages);
+      reply({ data: messages.map((_, i) => ({ status: 'ok', id: `rcpt-${stamp}-${i}` })) });
+      return;
+    }
+    if (req.url?.endsWith('/push/getReceipts')) {
+      const { ids } = body as { ids: string[] };
+      reply({ data: Object.fromEntries(ids.map((id) => [id, { status: 'ok' }])) });
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise<void>((r) => pushStub.listen(0, r));
+  // Read by the push SDK when it first loads (the first registration).
+  process.env.EXPO_BASE_URL = `http://localhost:${(pushStub.address() as { port: number }).port}`;
   await boot(approvalLevelsApp);
   for (const p of [owner, ops, admin, staff, lead, outsider, stranger]) await p.signUp();
   tenantId = (await me(owner)).tenantId;
@@ -77,7 +149,10 @@ beforeAll(async () => {
   await addMember(staff, tenantId, ['staff']);
   await addMember(lead, tenantId, ['staff']);
 });
-afterAll(shutdown);
+afterAll(async () => {
+  pushStub.close();
+  await shutdown();
+});
 
 describe('levels on the payload', () => {
   it('with no threshold set every payment is final: it waits for the business, never the requester', async () => {
@@ -537,5 +612,216 @@ describe('undo within the window', () => {
     expect(res.body).not.toHaveProperty('undo');
     expect((await approve(ops, res.body.approval.id)).body).toMatchObject({ status: 'approved' });
     expect(await windows()).toBe(before);
+  });
+});
+
+describe('approval requests reach their deciders on every channel (H1)', () => {
+  let adminContact = '';
+  const waAsks = async (contactId: string, approvalId: string) =>
+    (
+      await pool.query(
+        `select template from channel.messages
+         where contact_id = $1 and notification = 'approval.request' and meta->'row'->>'id' = $2`,
+        [contactId, approvalId],
+      )
+    ).rows;
+
+  beforeAll(async () => {
+    // WhatsApp could reach the admin: the business has a number, its templates are approved, and
+    // the admin's number is linked. The ops member has the app on a phone. The owner has neither.
+    expect(
+      (await owner.call('POST', '/api/channels/whatsapp/number', { phoneNumberId: `pn-${stamp}` }))
+        .status,
+    ).toBe(201);
+    for (const t of approvalLevelsApp.notifications.templates)
+      await pool.query(
+        `insert into channel.templates (name, language, category, content_hash, status)
+         values ($1, 'en', $2, $3, 'APPROVED')
+         on conflict (name, language) do update set status = 'APPROVED'`,
+        [t.name, t.category, contentHash(t, 'en')],
+      );
+    const c = await seedContact(tenantId, 'Admin Levels', `+9196${stamp % 1e8}`);
+    await pool.query('update channel.contacts set user_id = $1, linked_at = now() where id = $2', [
+      admin.id,
+      c.contactId,
+    ]);
+    adminContact = c.contactId;
+    expect(
+      (
+        await ops.call(
+          'POST',
+          '/api/push/tokens',
+          { token: OPS_DEVICE, platform: 'ios' },
+          inTenant(),
+        )
+      ).status,
+    ).toBe(201);
+  });
+
+  it('an app-only request: push to a phone, else email, always the inbox; never WhatsApp', async () => {
+    await approvalsSettings({});
+    const res = await pay(staff, 10_00, { title: `App only ${stamp}` });
+    expect(res.body.approval).toMatchObject({
+      level: final,
+      decider: { by: 'capability', capability: 'approvals.decide' },
+    });
+    const { id, summary } = res.body.approval;
+    const dedupe = `approval.request:${id}`;
+    const subject = `Waiting for your approval: ${summary}`;
+    // Both holders find it in their inbox, opening the request.
+    for (const who of [owner, ops])
+      expect(await eventually(() => inboxItem(who, dedupe))).toMatchObject({
+        notification: 'approval.request',
+        title: 'Waiting for your approval',
+        body: summary,
+        url: `/approvals/${id}`,
+      });
+    // The one with a phone gets a push that opens it, and no email.
+    const push = await eventually(() =>
+      pushed.find((m) => m.to === OPS_DEVICE && m.data.url === `/approvals/${id}`),
+    );
+    expect(push).toMatchObject({ title: 'Waiting for your approval', body: summary });
+    // The one without a phone or WhatsApp gets an email that links to it.
+    expect(await eventually(() => mailText(owner, subject, `/approvals/${id}`))).toBeDefined();
+    await sleep(1000);
+    expect(await mailText(ops, subject, `/approvals/${id}`)).toBeUndefined();
+    // Neither the requester nor another business hears of it.
+    expect(await inboxItem(staff, dedupe)).toBeUndefined();
+    expect(await inboxItem(stranger, dedupe)).toBeUndefined();
+  });
+
+  it('a decider whose number is linked gets email, not WhatsApp, for a request decided in the app', async () => {
+    await approvalsSettings({
+      bands: { payments: [{ approver: { capability: 'fixture.payments.approve' } }] },
+    });
+    const res = await pay(staff, 10_00, { title: `Band only ${stamp}` });
+    expect(res.body.approval.decider).toEqual({
+      by: 'capability',
+      capability: 'fixture.payments.approve',
+    });
+    const { id, summary } = res.body.approval;
+    expect(await eventually(() => inboxItem(admin, `approval.request:${id}`))).toMatchObject({
+      url: `/approvals/${id}`,
+    });
+    expect(
+      await eventually(() =>
+        mailText(admin, `Waiting for your approval: ${summary}`, `/approvals/${id}`),
+      ),
+    ).toBeDefined();
+    // Approve and Reject on WhatsApp could not decide it (the app only, signed in): not sent.
+    expect(await waAsks(adminContact, id)).toEqual([]);
+  });
+
+  it('a request WhatsApp may decide goes there to the linked decider, by email to one without', async () => {
+    await approvalsSettings({});
+    const { customerId } = await seedContact(tenantId, 'Reader Levels', `+9195${stamp % 1e8}`);
+    const sent = await asAssistant(`user:${staff.id}`, inTenant())('POST', '/api/notify/send', {
+      customerId,
+      template: 'monthly_update_v1',
+      params: { name: 'Asha', news: `News ${stamp}` },
+    });
+    expect(sent.body.approval.decider).toEqual({
+      by: 'capability',
+      capability: 'marketing.approve',
+    });
+    const { id, summary } = sent.body.approval;
+    // The admin, linked and without a phone: Approve and Reject on WhatsApp.
+    expect(await eventually(() => waAsks(adminContact, id).then((r) => r[0]))).toEqual({
+      template: 'approval_request_v1',
+    });
+    // The owner, without WhatsApp: by email, and in the inbox.
+    expect(
+      await eventually(() =>
+        mailText(owner, `Waiting for your approval: ${summary}`, `/approvals/${id}`),
+      ),
+    ).toBeDefined();
+    expect(await eventually(() => inboxItem(owner, `approval.request:${id}`))).toBeDefined();
+    expect(await eventually(() => inboxItem(admin, `approval.request:${id}`))).toBeDefined();
+  });
+});
+
+describe('an undoable write holds what it sends (H1)', () => {
+  // A short window, so the tests see it close.
+  const SHORT = { thresholds: LIMIT, levels: { fixture_internal: { undoMs: 3000 } } };
+  const sends = async (paymentId: string) =>
+    (
+      await pool.query(
+        `select available_at, cancelled_at, relayed_at, undo_id from app.outbox
+         where tenant_id = $1 and key = 'fixture.payment-flagged' and payload->'row'->>'id' = $2
+         order by id`,
+        [tenantId, paymentId],
+      )
+    ).rows as {
+      available_at: Date;
+      cancelled_at: Date | null;
+      relayed_at: Date | null;
+      undo_id: string | null;
+    }[];
+  const flagged = async (title: string) =>
+    (
+      await pool.query(
+        `select body from channel.inbox_items
+         where user_id = $1 and notification = 'fixture.payment-flagged' and title = $2`,
+        [owner.id, `Flagged: ${title}`],
+      )
+    ).rows[0];
+
+  it("a notification on its event waits for the window; an undone write's never arrives", async () => {
+    await approvalsSettings(SHORT);
+    const undone = await pay(owner, 10_00, { title: `Heard undone ${stamp}` });
+    const kept = await pay(owner, 10_00, { title: `Heard kept ${stamp}` });
+    expect(kept.body).toMatchObject({ status: 'done', undo: { id: expect.any(String) } });
+    expect((await undo(owner, undone.body.undo.id)).status).toBe(200);
+    // Held while the window is open.
+    await sleep(1000);
+    expect(await inboxItem(owner, `fixture.payment-made:${kept.body.value.id}`)).toBeUndefined();
+    // Once it closes, the one kept arrives; the one undone never does.
+    expect(
+      await eventually(
+        () => inboxItem(owner, `fixture.payment-made:${kept.body.value.id}`),
+        15_000,
+      ),
+    ).toMatchObject({ title: `Paid: Heard kept ${stamp}` });
+    await sleep(1500);
+    expect(await inboxItem(owner, `fixture.payment-made:${undone.body.value.id}`)).toBeUndefined();
+  });
+
+  it('a send its command writes waits for the window too, and undoing the write withdraws it', async () => {
+    await approvalsSettings(SHORT);
+    const one = (await pay(owner, 10_00, { title: `Flag undone ${stamp}` })).body.value;
+    const two = (await pay(owner, 10_00, { title: `Flag kept ${stamp}` })).body.value;
+    const first = await owner.call('POST', `/api/payments/${one.id}/flag`, { note: 'Check it' });
+    expect(first.body).toMatchObject({ status: 'done', undo: { id: expect.any(String) } });
+    const [held] = await sends(one.id);
+    expect(held).toMatchObject({ undo_id: first.body.undo.id, relayed_at: null });
+    expect(Math.abs(held.available_at.getTime() - Date.parse(first.body.undo.until))).toBeLessThan(
+      1000,
+    );
+    const second = await owner.call('POST', `/api/payments/${two.id}/flag`, { note: 'Fine' });
+    expect(second.body.status).toBe('done');
+
+    expect((await undo(owner, first.body.undo.id)).status).toBe(200);
+    expect((await sends(one.id))[0].cancelled_at).not.toBeNull();
+    expect((await owner.call('GET', `/api/payments/${one.id}`)).body.note).toBeNull();
+    // The one kept goes once its window closes; the one withdrawn never does.
+    expect(await eventually(() => flagged(two.title), 15_000)).toBeDefined();
+    expect((await sends(two.id))[0].relayed_at).not.toBeNull();
+    await sleep(1500);
+    expect((await sends(one.id))[0].relayed_at).toBeNull();
+    expect(await flagged(one.title)).toBeUndefined();
+  });
+
+  it('an undo is refused when a held send was already passed on', async () => {
+    await approvalsSettings(SHORT);
+    const pay1 = (await pay(owner, 10_00, { title: `Flag passed ${stamp}` })).body.value;
+    const flag = await owner.call('POST', `/api/payments/${pay1.id}/flag`, { note: 'Gone out' });
+    await pool.query(`update app.outbox set relayed_at = now() where undo_id = $1`, [
+      flag.body.undo.id,
+    ]);
+    expect(await undo(owner, flag.body.undo.id)).toMatchObject({
+      status: 409,
+      body: { error: 'too_late' },
+    });
+    expect((await owner.call('GET', `/api/payments/${pay1.id}`)).body.note).toBe('Gone out');
   });
 });

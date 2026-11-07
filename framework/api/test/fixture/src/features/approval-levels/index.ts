@@ -2,9 +2,11 @@
 // that reads the input, the row and the business's settings (a threshold, and approvers per
 // amount band), a command that sends to someone outside the business, the framework's template
 // send put at a level, and a field hidden from staff that must stay hidden on approval cards.
+// Two notifications (H1): one on a stored event, one a command writes to the outbox, both held
+// while their write can be undone.
 // Only the approval-levels e2e test's server (`approvalLevelsApp`) loads this file; the levels,
 // rules and capability are its own.
-import { defineModule, defineServer } from '@hykr/api';
+import { defineModule, defineServer, queueNotification } from '@hykr/api';
 import {
   type Contributions,
   CreatedBy,
@@ -29,6 +31,7 @@ import {
   type NamedEvent,
   type ReadProjector,
 } from '@hykr/core';
+import { defineNotification, type Row } from '@hykr/notifications';
 import type { Access } from '@hykr/policy';
 import { Module } from '@nestjs/common';
 import { z } from 'zod';
@@ -158,6 +161,56 @@ export const SendPayment = defineCommand(SendPaymentSpec, {
   }),
 });
 
+type PaymentRow = Row & { title: string; ownerId: string };
+
+/** A payment someone made, told to its maker's inbox from the stored event. */
+export const PaymentMadeNotification = defineNotification<PaymentRow>({
+  key: 'fixture.payment-made',
+  topic: 'service',
+  send: { on: ['payment.created'] },
+  when: (p) => p.title.startsWith('Heard'),
+  to: (p) => [{ userId: p.ownerId }],
+  channels: ['inapp'],
+  inapp: { title: (p) => `Paid: ${p.title}`, body: (p) => p.title },
+  dedupe: (p) => `fixture.payment-made:${p.id}`,
+});
+
+/** A payment flagged: the flag command writes it to the outbox, in its write. */
+export const PaymentFlaggedNotification = defineNotification<PaymentRow>({
+  key: 'fixture.payment-flagged',
+  topic: 'service',
+  to: (p) => [{ userId: p.ownerId }],
+  channels: ['inapp'],
+  inapp: { title: (p) => `Flagged: ${p.title}`, body: (p) => p.title },
+  dedupe: (p) => `fixture.payment-flagged:${p.id}:${String(p.updatedAt)}`,
+});
+
+export const FlagPaymentSpec = commandSpec({
+  name: 'payment.flag',
+  description: 'Put a note on a payment and tell its maker.',
+  input: z.object({ paymentId: z.uuid(), note: z.string().min(1) }),
+  output: z.object({ flagged: z.literal(true) }),
+  http: { method: 'POST', path: '/api/payments/:paymentId/flag' },
+  expose: 'all',
+  touches: ['payment'],
+});
+
+/** An internal change that sends: the send waits with the change until it can no longer be undone. */
+export const FlagPayment = defineCommand(FlagPaymentSpec, {
+  resource: { type: 'payment', id: (input) => input.paymentId },
+  load: (tx, p, input) => PaymentDef.repo.get(tx, p, input.paymentId),
+  authorize: () => allow('may_flag'),
+  summarize: (_input, payment) => `Flag "${payment.title}"`,
+  run: async ({ tx, principal, input, loaded, via }) => {
+    const after = await PaymentDef.repo.update(tx, principal, loaded, { note: input.note }, via);
+    await queueNotification(tx, PaymentFlaggedNotification, after, { type: 'payment' });
+    return {
+      value: { flagged: true as const },
+      touched: [{ type: 'payment', id: after.id, change: 'updated', before: loaded, after }],
+    };
+  },
+});
+
 const amountOf = (input: Record<string, unknown> | null, row: Record<string, unknown> | null) =>
   ({
     minor: Number(input?.amountMinor ?? row?.amountMinor ?? 0),
@@ -176,6 +229,8 @@ export const PaymentLevels = defineLevelRule({
       return atLevel(OutsideLevel.name, 'payment_goes_out', 'It goes to someone outside');
     if (op.name === 'payment.delete')
       return atLevel(InternalLevel.name, 'payment_removed', 'Removing one is internal');
+    if (op.name === 'payment.flag')
+      return atLevel(InternalLevel.name, 'payment_flagged', 'Flagging one is internal');
     const amount = amountOf(input, row);
     return overThreshold(settings, 'payments.limit', amount)
       ? atLevel(FinalLevel.name, 'payment_over_limit', 'Above the business limit', { amount })
@@ -206,8 +261,16 @@ export const notesHidden: ReadProjector = {
 };
 
 @Module({
-  controllers: [entityController(PaymentDef), commandController(SendPayment)],
-  providers: [...entityHandlers(PaymentDef), commandHandler(SendPayment)],
+  controllers: [
+    entityController(PaymentDef),
+    commandController(SendPayment),
+    commandController(FlagPayment),
+  ],
+  providers: [
+    ...entityHandlers(PaymentDef),
+    commandHandler(SendPayment),
+    commandHandler(FlagPayment),
+  ],
 })
 export class PaymentsModule {}
 
@@ -215,9 +278,10 @@ export const paymentsModule = defineModule({
   ...moduleSpec({
     name: 'payments',
     entities: { payments: PaymentSpec },
-    commands: [SendPaymentSpec],
+    commands: [SendPaymentSpec, FlagPaymentSpec],
   }),
   server: PaymentsModule,
+  notifications: [PaymentMadeNotification, PaymentFlaggedNotification],
 });
 
 export const approvalLevelsContributions: Partial<Contributions> = {

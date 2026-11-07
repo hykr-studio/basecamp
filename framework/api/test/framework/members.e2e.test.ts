@@ -1,7 +1,8 @@
 // Roles, members, invitations, per-record grants and field policy (A4). The fixture's
 // src/features/members adds a `projects` module (a cost only some capabilities read, steps that
 // follow their project's grants, a command hiding the cost), its own roles and capabilities, an
-// override of the framework's staff, and the roles a creator and a contact get.
+// override of the framework's staff, and the roles a creator and a contact get. Also (H1): a
+// notification's words read as each recipient may, and requests by someone outside the team.
 import { entitySpec, type Principal } from '@hykr/contracts';
 import {
   CORE_OPTIONS,
@@ -20,12 +21,14 @@ import {
   addMember,
   asAssistant,
   boot,
+  eventually,
   me,
   Person,
   pool,
   seedContact,
   server,
   shutdown,
+  stamp,
 } from '../../dist/testing.js';
 import { membersServer } from '../fixture/dist/features/members/index.js';
 
@@ -38,6 +41,7 @@ const invitee = new Person('Invitee Members');
 const outsider = new Person('Outsider Members');
 const stranger = new Person('Stranger Members');
 const strangerStaff = new Person('Stranger Staff Members');
+const client = new Person('Client Members');
 let tenantId = '';
 let strangerTenant = '';
 
@@ -66,7 +70,18 @@ const newProject = async (body: { title: string; cost?: number }, who = ana) =>
 
 beforeAll(async () => {
   await boot(membersServer);
-  for (const p of [ana, crew, estimator, staffer, lead, invitee, outsider, stranger, strangerStaff])
+  for (const p of [
+    ana,
+    crew,
+    estimator,
+    staffer,
+    lead,
+    invitee,
+    outsider,
+    stranger,
+    strangerStaff,
+    client,
+  ])
     await p.signUp();
   tenantId = (await me(ana)).tenantId;
   strangerTenant = (await me(stranger)).tenantId;
@@ -75,8 +90,36 @@ beforeAll(async () => {
   await addMember(staffer, tenantId, ['staff']);
   await addMember(lead, tenantId, ['staff']);
   await addMember(strangerStaff, strangerTenant, ['staff']);
+  // A client with an account: in Ana's business they hold only the role contacts get.
+  await addMember(client, tenantId, ['fixture_client']);
 });
 afterAll(shutdown);
+
+/** A person's in-app inbox item for a notification, in any business. */
+const inboxItem = async (p: Person, dedupe: string) =>
+  (
+    await pool.query(
+      'select tenant_id, title, body from channel.inbox_items where user_id = $1 and dedupe = $2',
+      [p.id, dedupe],
+    )
+  ).rows[0] as { tenant_id: string; title: string; body: string } | undefined;
+
+/** The text of the email with this subject sent to this person, from Mailpit. */
+async function mailText(p: Person, subject: string): Promise<string | undefined> {
+  // By address only: a subject may hold quotes, which the search syntax would take apart.
+  const query = encodeURIComponent(`to:"${p.email}"`);
+  const found = (await (
+    await fetch(`http://localhost:8025/api/v1/search?query=${query}`)
+  ).json()) as {
+    messages: { ID: string; Subject: string }[];
+  };
+  const hit = found.messages.find((m) => m.Subject === subject);
+  if (!hit) return undefined;
+  const one = (await (await fetch(`http://localhost:8025/api/v1/message/${hit.ID}`)).json()) as {
+    Text: string;
+  };
+  return one.Text;
+}
 
 describe('roles the application declares and overrides', () => {
   it('a creator gets the roles the application names', async () => {
@@ -696,5 +739,79 @@ describe('field policy', () => {
       'gadget: field policy on "name": "nobody.has_this" is not a capability',
       'gadget: field policy on "size": the read schema has no such field',
     ]);
+  });
+});
+
+describe("a notification's words, as each recipient may read the record (H1)", () => {
+  it('a field reaches only recipients holding its capability, in the inbox and by email', async () => {
+    const title = `Told ${stamp}`;
+    const project = await newProject({ title, cost: 4321 });
+    const dedupe = `fixture.project-told:${project.id}`;
+    // Ana holds fixture.cost.read; the estimator hears of projects but may not read their cost.
+    expect((await eventually(() => inboxItem(ana, dedupe))).body).toBe('cost 4321');
+    expect((await eventually(() => inboxItem(estimator, dedupe))).body).toBe('cost not shown');
+    const toAna = await eventually(() => mailText(ana, `New project ${title}`));
+    expect(toAna).toContain('cost 4321');
+    const toEstimator = await eventually(() => mailText(estimator, `New project ${title}`));
+    expect(toEstimator).toContain('cost not shown');
+    expect(toEstimator).not.toContain('4321');
+    // The record's own columns that no read shows stay out of the words, for everyone.
+    expect(toAna).toContain('owner not shown');
+    expect(toAna).not.toContain(ana.id);
+    // Nobody else hears of it: not crew (no capability), not another business's owner.
+    expect(await inboxItem(crew, dedupe)).toBeUndefined();
+    expect(await inboxItem(stranger, dedupe)).toBeUndefined();
+    expect(await mailText(stranger, `New project ${title}`)).toBeUndefined();
+  });
+});
+
+describe('requests by someone outside the team, with the contact role renamed (H1)', () => {
+  it("a signed-in client's assistant's request goes to the business, never to the client", async () => {
+    const mine = await newProject({ title: 'Client project' }, client);
+    const agent = asAssistant(`user:${client.id}`, { 'x-tenant-id': tenantId });
+    const parked = await agent('DELETE', `/api/projects/${mine.id}`);
+    expect(parked.body).toMatchObject({
+      status: 'needs_approval',
+      approval: {
+        canDecide: false,
+        decider: { by: 'capability', capability: 'approvals.decide' },
+      },
+    });
+    const id = parked.body.approval.id;
+    expect(
+      (await audits('project.delete', 'needs_approval')).some((r) => r.after?.approvalId === id),
+    ).toBe(true);
+    // The client may follow it, never decide it.
+    expect((await inAna(client)('GET', `/api/approvals/${id}`)).body).toMatchObject({
+      canDecide: false,
+    });
+    expect(await inAna(client)('POST', `/api/approvals/${id}/approve`)).toMatchObject({
+      status: 403,
+      body: { rule: 'own_request' },
+    });
+    expect((await stranger.call('GET', `/api/approvals/${id}`)).status).toBe(404);
+    // The business decides it.
+    expect((await ana.call('POST', `/api/approvals/${id}/approve`)).body).toMatchObject({
+      status: 'approved',
+    });
+    expect((await inAna(client)('GET', `/api/projects/${mine.id}`)).status).toBe(404);
+  });
+
+  it('a named approver who is only a client gives way to the business; a team member decides alone', async () => {
+    const project = await newProject({ title: 'Reviewed project' });
+    const toClient = await ana.call('POST', `/api/projects/${project.id}/review`, {
+      reviewerId: client.id,
+    });
+    expect(toClient.body).toMatchObject({
+      status: 'needs_approval',
+      approval: { decider: { by: 'capability', capability: 'approvals.decide' } },
+    });
+    const toEstimator = await ana.call('POST', `/api/projects/${project.id}/review`, {
+      reviewerId: estimator.id,
+    });
+    expect(toEstimator.body.approval.decider).toEqual({ by: 'person', userId: estimator.id });
+    expect(
+      (await inAna(estimator)('GET', `/api/approvals/${toEstimator.body.approval.id}`)).body,
+    ).toMatchObject({ canDecide: true });
   });
 });
