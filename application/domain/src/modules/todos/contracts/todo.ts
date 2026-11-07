@@ -122,6 +122,8 @@ export const ClearDoneTodosSpec = commandSpec({
   approvalNote: 'When the assistant calls it, it waits for the user to approve it.',
   verb: { do: 'clear done to-dos', did: 'cleared the done to-dos' },
   touches: ['todo'],
+  // It deletes: an outside AI client is told so (MCP's destructive hint).
+  traits: { destructive: true },
 });
 
 /** The business switches "clear done to-dos" on in its settings; off until it does. */

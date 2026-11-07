@@ -139,6 +139,8 @@ export const ORDER_STATES: StatesTrait = {
       label: label('Cancel', 'रद्द करें', 'రద్దు చేయి'),
       fields: ['cancelReason'],
       approval: agentAsks,
+      // A cancelled order never comes back: an outside AI client is told it cannot be undone.
+      destructive: true,
     },
     // The server's own moves: the expiry SLA, and order.revise freezing the old revision.
     { name: 'expire', from: 'submitted', to: 'expired', expose: 'system' },

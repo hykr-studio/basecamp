@@ -2,7 +2,8 @@
 // a person signs in and consents on the API's pages, the client trades the code (PKCE) for a
 // token, then an MCP client over HTTP lists and calls the consolidated tools. The token acts for
 // its person in their business, limited to the scopes they allowed, on every route; parked
-// writes come back with the link to the request in the app; revoking a connection ends it.
+// writes come back with the link to the request in the app; revoking a connection ends it. The
+// tools say what they do (MCP annotations) and leave out what the business switched off (H3).
 import { createHash, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -16,10 +17,12 @@ import {
   Person,
   pool,
   server,
+  setTenantSettings,
+  settingsChanged,
   shutdown,
   stamp,
 } from '../../dist/testing.js';
-import { mcpServer } from '../fixture/dist/features/mcp/index.js';
+import { ALL_ON, mcpServer } from '../fixture/dist/features/mcp/index.js';
 
 const ana = new Person('Ana Mcp');
 const sam = new Person('Sam Mcp'); // staff in Ana's business
@@ -34,6 +37,8 @@ beforeAll(async () => {
   for (const p of [ana, sam, bo, opal]) await p.signUp();
   await makeOperator(opal, ['platform.credits']);
   tenant = (await me(ana)).tenantId;
+  // Ana's business has every flag on; a test switches some off and back.
+  await setTenantSettings(tenant, { features: ALL_ON });
   await addMember(sam, tenant, ['staff']);
   // Sam's default business is Ana's from now on: a token Sam allows acts there.
   expect((await sam.call('PUT', '/api/me/default', { tenantId: tenant })).status).toBe(200);
@@ -440,6 +445,135 @@ describe('the tools, over MCP', () => {
     });
     const unknown = await full.call('visits_write', { action: 'delete-visit', input: {} });
     expect(unknown.isError).toBe(true);
+  });
+});
+
+describe('what the tools say they do', () => {
+  it('a read tool only reads; a write tool changes, and says when it can delete', async () => {
+    const c = await connectMcp(ana, 'tasks:write visits:write');
+    const notes = await c.annotations();
+    for (const read of ['tasks_read', 'visits_read'])
+      expect(notes[read], read).toMatchObject({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      });
+    // tasks_write lists delete-task: destructive. visits_write creates, changes and moves only.
+    expect(notes.tasks_write).toMatchObject({
+      title: 'Change tasks',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+    expect(notes.visits_write).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    await c.close();
+  });
+});
+
+describe('feature flags', () => {
+  const scope = 'tasks:write visits:write';
+  const listed = async (who: Person, scopes = scope) => {
+    const c = await connectMcp(who, scopes);
+    try {
+      return { names: await c.tools(), notes: await c.annotations() };
+    } finally {
+      await c.close();
+    }
+  };
+  const visit = async () =>
+    (
+      await ana.call('POST', '/api/visits', {
+        title: 'Flagged walk',
+        startsAt: '2031-05-01T10:00:00Z',
+        endsAt: '2031-05-01T11:00:00Z',
+      })
+    ).body.value as { id: string };
+  const reschedule = (c: Awaited<ReturnType<typeof connectMcp>>, id: string, day: string) =>
+    c.call('visits_write', {
+      action: 'reschedule-visit',
+      input: { visitId: id, startsAt: `${day}T10:00:00Z`, endsAt: `${day}T11:00:00Z` },
+    });
+
+  it('a switched-off module or tool leaves the business’s MCP tools', async () => {
+    const task = (await ana.call('POST', '/api/tasks', { title: 'Keep me flagged' })).body.value;
+    try {
+      await setTenantSettings(tenant, {
+        features: { ...ALL_ON, 'fixture.mcp.visits': false, 'fixture.mcp.task-tools': false },
+      });
+      const off = await listed(ana);
+      expect(off.names).toEqual(['tasks_read', 'tasks_write']);
+      // No delete left: tasks_write is no longer destructive, and delete-task is no action.
+      expect(off.notes.tasks_write.destructiveHint).toBe(false);
+      const c = await connectMcp(ana, scope);
+      const del = await c.call('tasks_write', { action: 'delete-task', input: { id: task.id } });
+      expect(del.isError).toBe(true);
+      expect(del.text).not.toContain('Not done yet');
+      expect(await audit('task.delete', task.id)).toEqual([]);
+      expect(await c.call('tasks_read', { entity: 'tasks', summary: {} })).toMatchObject({
+        isError: true,
+      });
+      expect((await c.call('tasks_read', { entity: 'tasks' })).isError).toBe(false);
+      await c.close();
+    } finally {
+      await setTenantSettings(tenant, { features: ALL_ON });
+    }
+    // On again: everything is back.
+    const back = await listed(ana);
+    expect(back.names).toEqual(['tasks_read', 'tasks_write', 'visits_read', 'visits_write']);
+    expect(back.notes.tasks_write.destructiveHint).toBe(true);
+  });
+
+  it('a switched-off command leaves its module’s write tool', async () => {
+    const v = await visit();
+    try {
+      await setTenantSettings(tenant, { features: { ...ALL_ON, 'fixture.mcp.reschedule': false } });
+      const c = await connectMcp(ana, scope);
+      expect(await c.tools()).toEqual(['tasks_read', 'tasks_write', 'visits_read', 'visits_write']);
+      expect((await reschedule(c, v.id, '2031-05-02')).isError).toBe(true);
+      // Its other actions stay.
+      const made = await c.call('visits_write', {
+        action: 'create-visit',
+        input: {
+          title: 'Still here',
+          startsAt: '2031-05-03T10:00:00Z',
+          endsAt: '2031-05-03T11:00:00Z',
+        },
+      });
+      expect(made.isError).toBe(false);
+      await c.close();
+      const kept = (await ana.call('GET', `/api/visits/${v.id}`)).body;
+      expect(kept.startsAt).toBe('2031-05-01T10:00:00.000Z');
+    } finally {
+      await setTenantSettings(tenant, { features: ALL_ON });
+    }
+    const c = await connectMcp(ana, scope);
+    expect((await reschedule(c, v.id, '2031-05-04')).isError).toBe(false);
+    await c.close();
+  });
+
+  it('another business keeps its own flags: off until it switches them on', async () => {
+    const bos = await listed(bo);
+    expect(bos.names).toEqual(['tasks_read', 'tasks_write']);
+    expect(bos.notes.tasks_write.destructiveHint).toBe(false);
+    // Ana's business, meanwhile, has them all.
+    expect((await listed(ana)).names).toHaveLength(4);
+  });
+
+  it('settings that do not parse switch off everything a flag gates', async () => {
+    await pool.query(
+      `update app.tenants set settings = jsonb_set(settings, '{features}', '"nope"') where id = $1`,
+      [tenant],
+    );
+    await settingsChanged(tenant);
+    try {
+      const broken = await listed(ana);
+      expect(broken.names).toEqual(['tasks_read', 'tasks_write']);
+      expect(broken.notes.tasks_write.destructiveHint).toBe(false);
+    } finally {
+      await setTenantSettings(tenant, { features: ALL_ON });
+    }
   });
 });
 
