@@ -187,7 +187,7 @@ describe('who decides, and who sees the cost', () => {
     const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
     const parked = await asks('POST', '/api/orders/save', { title: 'Asked', items: rooms });
     expect(parked.body.status).toBe('needs_approval');
-    expect(parked.body.approval).toMatchObject({ tier: 2, amount: 497_051 });
+    expect(parked.body.approval).toMatchObject({ amount: inr(497_051) });
     expect(parked.body.approval.summary).toContain('5 items');
     const approved = await owner.call('POST', `/api/approvals/${parked.body.approval.id}/approve`);
     expect(approved.body.status).toBe('approved');
@@ -202,15 +202,20 @@ describe('who decides, and who sees the cost', () => {
     const big = [{ ref: 'a', title: 'Marble', quantity: 100, unitPrice: '500' }];
     const parked = await save(staff, { title: 'Big', items: big }, inTenant());
     expect(parked.body.status).toBe('needs_approval');
-    expect(parked.body.approval).toMatchObject({ tier: 3, rule: 'order_over_limit' });
-    // Staff cannot decide it; the owner can.
+    expect(parked.body.approval).toMatchObject({
+      level: { name: 'irreversible' },
+      amount: inr(5_000_000),
+      rule: 'order_over_limit',
+    });
+    // Staff cannot decide their own request (they may only look at it); the owner can.
     const byStaff = await staff.call(
       'POST',
       `/api/approvals/${parked.body.approval.id}/approve`,
       undefined,
       inTenant(),
     );
-    expect(byStaff.status).toBe(404);
+    expect(byStaff.status).toBe(403);
+    expect(byStaff.body.rule).toBe('own_request');
     const byOwner = await owner.call('POST', `/api/approvals/${parked.body.approval.id}/approve`);
     expect(byOwner.body.status).toBe('approved');
     // The owner holds orders.approve: the same order saves at once.

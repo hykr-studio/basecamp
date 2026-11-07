@@ -410,8 +410,9 @@ export class InboundProcessor extends WorkerHost {
       return;
     }
     const rendered = toRenderTurn(turn);
-    // What this turn parked, and who decides each: this person here, with buttons; or the
-    // business (a customer's request), which they are told has been asked.
+    // What this turn parked, and who decides each: this person here, with buttons; or someone
+    // else (the business, for a customer's request, or whoever the approval level names), who
+    // is asked on their own: the person here is told so, and gets no buttons.
     const parked = rendered.approvals.length
       ? await this.db
           .select()
@@ -425,7 +426,10 @@ export class InboundProcessor extends WorkerHost {
       : [];
     const byId = new Map(parked.map((a) => [a.id, a]));
     const self = p.subject?.kind === 'user' ? p.subject.userId : undefined;
-    const forTeam = rendered.approvals.filter((a) => !byId.get(a.id)?.approverUserId);
+    const forTeam = rendered.approvals.filter((a) => {
+      const row = byId.get(a.id);
+      return !row || !self || row.approverUserId !== self;
+    });
     if (forTeam.length) {
       rendered.approvals = rendered.approvals.filter((a) => !forTeam.includes(a));
       rendered.reply = [rendered.reply, t(lang, 'approval.askedTeam')].filter(Boolean).join('\n\n');
@@ -465,21 +469,24 @@ export class InboundProcessor extends WorkerHost {
         ? t(lang, 'approval.notYours')
         : t(lang, 'approval.expired', { url: `${config.appUrl}/approvals` });
     const { approvalId, approve } = verified.decision;
+    // The request itself, in the app: the deep link every answer below points to.
+    const url = `${config.appUrl}/approvals/${approvalId}`;
     try {
       const p = await this.principalOf(contact);
       const a = await this.approvals.decide(p, approvalId, approve, `wa:${messageId}`);
       const summary = a.summary ?? '';
       if (a.status === 'approved') return t(lang, 'approval.done', { summary });
       if (a.status === 'rejected') return t(lang, 'approval.rejectedDone', { summary });
-      if (a.status === 'expired')
-        return t(lang, 'approval.expired', { url: `${config.appUrl}/approvals` });
+      if (a.status === 'expired') return t(lang, 'approval.expired', { url });
       return a.failureReason ?? t(lang, 'said.failed');
     } catch (e) {
       if (!(e instanceof HttpException)) throw e;
       const status = e.getStatus();
       if (status === 409) return t(lang, 'approval.alreadyDecided');
-      if (status === 403)
-        return t(lang, 'approval.decideInApp', { url: `${config.appUrl}/approvals` });
+      // Their own request, which someone else decides (nobody approves their own).
+      if (status === 403 && (e.getResponse() as { rule?: string }).rule === 'own_request')
+        return t(lang, 'approval.someoneElse', { url });
+      if (status === 403) return t(lang, 'approval.decideInApp', { url });
       return t(lang, 'approval.notYours');
     }
   }

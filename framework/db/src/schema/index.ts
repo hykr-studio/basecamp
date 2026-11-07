@@ -5,6 +5,8 @@ export * from './channel.js';
 export * from './documents.js';
 export * from './events.js';
 export * from './files.js';
+export * from './integrations.js';
 export * from './numbering.js';
 export * from './push.js';
 export * from './tenancy.js';
+export * from './undo.js';

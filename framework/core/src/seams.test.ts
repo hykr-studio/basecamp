@@ -11,7 +11,7 @@ import {
 import { integer, pgSchema, text } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { allow, deny, needsApproval } from './authorize.js';
+import { allow, atLevel, deny, needsApproval } from './authorize.js';
 import { defineEntity } from './entity/define-entity.js';
 
 const ana: Principal = {
@@ -37,7 +37,7 @@ describe('approval rules see the action, the input and the row', () => {
   it("the object form's when, and a check on the requester alone still works", () => {
     const seen: unknown[] = [];
     const rule: ApprovalRule = {
-      by: ['owner'],
+      by: { capability: 'approvals.decide' },
       when: (_p, ctx) => {
         seen.push(ctx);
         return ctx.action === 'update' && ctx.row?.locked === true;
@@ -81,42 +81,51 @@ describe('approval rules see the action, the input and the row', () => {
 });
 
 describe('decisions carry what is at stake', () => {
-  it('the helpers keep the tier, approver, amount and undo window', () => {
+  it('the helpers keep the level, approver, amount and undo window', () => {
     const parked = needsApproval('marked_review', 'Marked for review', {
-      tier: 3,
-      approver: { userId: 'ana', channels: ['app'], minAssurance: 'session' },
-      amount: 250_000,
+      level: 'reviewed',
+      approver: { by: { userId: 'ana' }, channels: ['app'], minAssurance: 'session' },
+      amount: { minor: 250_000, currency: 'EUR' },
       undoMs: 0,
     });
     expect(AuthorizeResult.parse(parked)).toEqual({
       decision: 'needs_approval',
       rule: 'marked_review',
       reason: 'Marked for review',
-      tier: 3,
-      approver: { userId: 'ana', channels: ['app'], minAssurance: 'session' },
-      amount: 250_000,
+      level: 'reviewed',
+      approver: { by: { userId: 'ana' }, channels: ['app'], minAssurance: 'session' },
+      amount: { minor: 250_000, currency: 'EUR' },
       undoMs: 0,
     });
-    expect(allow('note_edit', undefined, { tier: 1, undoMs: 30_000 })).toMatchObject({
+    expect(allow('note_edit', undefined, { level: 'kept', undoMs: 30_000 })).toMatchObject({
       reason: 'note_edit',
-      tier: 1,
+      level: 'kept',
       undoMs: 30_000,
+    });
+    // atLevel: an allow that names a level, for the level's policy to decide.
+    expect(atLevel('kept', 'note_edit', 'Notes can be undone', { undoMs: 5_000 })).toEqual({
+      decision: 'allow',
+      rule: 'note_edit',
+      reason: 'Notes can be undone',
+      level: 'kept',
+      undoMs: 5_000,
     });
     // Without details, a decision is what it was.
     expect(deny('no', 'No')).toEqual({ decision: 'deny', rule: 'no', reason: 'No' });
   });
 
   it('details never change the decision, rule or reason (fails closed)', () => {
-    // An earlier decision passed as details, to keep its tier, is a valid DecisionDetails.
-    const earlier: AuthorizeResult = allow('ok', 'ok', { tier: 2, amount: 900 });
+    // An earlier decision passed as details, to keep its level, is a valid DecisionDetails.
+    const amount = { minor: 900, currency: 'EUR' };
+    const earlier: AuthorizeResult = allow('ok', 'ok', { level: 'reviewed', amount });
     const refused = deny('credits_cap', 'Cap reached', earlier);
     expect(refused.decision).toBe('deny');
     expect(refused).toEqual({
       decision: 'deny',
       rule: 'credits_cap',
       reason: 'Cap reached',
-      tier: 2,
-      amount: 900,
+      level: 'reviewed',
+      amount,
     });
     expect(deny('r', 'x', allow('ok')).decision).toBe('deny');
     expect(deny('r', 'x', allow('ok'))).toEqual({ decision: 'deny', rule: 'r', reason: 'x' });
@@ -127,19 +136,33 @@ describe('decisions carry what is at stake', () => {
     });
     expect(allow('note_edit', undefined, deny('blocked', 'No')).decision).toBe('allow');
     // Keys other than the four details are not copied, whatever the object carries at runtime.
-    const loose = { tier: 1, undoMs: 5_000, decision: 'allow', extra: true } as DecisionDetails;
+    const loose = {
+      level: 'kept',
+      undoMs: 5_000,
+      decision: 'allow',
+      extra: true,
+    } as DecisionDetails;
     expect(deny('r', 'x', loose)).toEqual({
       decision: 'deny',
       rule: 'r',
       reason: 'x',
-      tier: 1,
+      level: 'kept',
       undoMs: 5_000,
     });
   });
 
-  it('a tier is 0 to 3, and an amount is whole minor units', () => {
+  it('a level is a name, and an amount is whole minor units with a currency', () => {
     const base = { decision: 'allow', rule: 'r', reason: 'r' };
-    expect(AuthorizeResult.safeParse({ ...base, tier: 4 }).success).toBe(false);
-    expect(AuthorizeResult.safeParse({ ...base, amount: 10.5 }).success).toBe(false);
+    expect(AuthorizeResult.safeParse({ ...base, level: 2 }).success).toBe(false);
+    expect(AuthorizeResult.safeParse({ ...base, amount: 10 }).success).toBe(false);
+    expect(
+      AuthorizeResult.safeParse({ ...base, amount: { minor: 10.5, currency: 'EUR' } }).success,
+    ).toBe(false);
+    expect(
+      AuthorizeResult.safeParse({ ...base, amount: { minor: 10, currency: 'eur' } }).success,
+    ).toBe(false);
+    expect(
+      AuthorizeResult.safeParse({ ...base, approver: { by: { roles: ['owner'] } } }).success,
+    ).toBe(false);
   });
 });
