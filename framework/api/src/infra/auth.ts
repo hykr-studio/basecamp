@@ -64,6 +64,8 @@ function createAuth() {
         session: schema.session,
         account: schema.account,
         verification: schema.verification,
+        // Each auth plugin's own tables (the OAuth provider's).
+        ...Object.assign({}, ...authPlugins.all().map((p) => p.schema ?? {})),
       },
     }),
     emailAndPassword: { enabled: true, minPasswordLength: 8 },

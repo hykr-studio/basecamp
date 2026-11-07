@@ -167,7 +167,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/api/src/runtime.ts`, `start.ts` | `defineServer`, `startApi`, `startWorker`, `migrate`, `runTemplates`, `runEval`, `startStudio`. `testing.ts` is `@hykr/api/testing`. `hooks.ts` holds the server's extension points (section 5.9), `module.ts` `defineModule`, and `module-checks.ts` the boot checks across modules (section 5.11). |
 | `framework/api/src/channels/` | WhatsApp webhook, queues, sending, notifications dispatch, template sync, handoff, back office API, erasure |
 | `framework/api/src/modules/` | Chat, threads, history, me, voice, pages |
-| `framework/api/src/features/` | Framework features, one folder each (`defineFeature`), among them `events` (the outbox relay), `files`, `money`, `push`, `approvals` and `integrations` (webhooks out and in, section 5.14) |
+| `framework/api/src/features/` | Framework features, one folder each (`defineFeature`), among them `events` (the outbox relay), `files`, `money`, `push`, `approvals`, `integrations` (webhooks out and in, section 5.14) and `mcp` (outside AI clients, section 7.8) |
 | `framework/app/src/` | `AppShell`, `defineAppModule` and the plugin types (`framework/app-domain.ts`), their merge (`framework/compose-app.ts`) and plugin slots (`framework/plugins.ts`), data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; framework features as plugins in `features/<x>/` (live, push, WebMCP); primitives in `@hykr/app/ui` |
 | `framework/cli/` | The `basecamp` command (`module-add.ts` scaffolds a module, `db-rebase.ts` regenerates migrations after a rebase), plus the `compose.yaml` and `infra/` it starts |
 
@@ -2305,6 +2305,66 @@ write it to cope (`n.body?.trim()`). A trait that throws drops that record from 
 takes its vector with it); for a person with an account, the business memories they wrote go too,
 and their export lists them.
 
+### 7.8 Outside AI clients: MCP and OAuth
+
+A person connects Claude, ChatGPT or an IDE to the application over the Model Context Protocol
+(`framework/api/src/features/mcp`, `docs/decisions/A1.md`). Nothing to declare: the modules give
+the scopes and the tools. `MCP=off` turns it off for a deployment.
+
+- **Addresses are configuration.** `MCP_URL` is the endpoint's public URL and the tokens' audience
+  (default `<BETTER_AUTH_URL>/mcp`; a domain of its own can proxy to the API's `/mcp`). The
+  authorization server is Better Auth under `<BETTER_AUTH_URL>/api/auth`; approval links use
+  `APP_URL`.
+- **Discovery.** `/mcp` without a valid token answers 401 with `WWW-Authenticate: Bearer
+  resource_metadata="…/.well-known/oauth-protected-resource/mcp"`. That document names the
+  authorization server and the scopes; `/.well-known/oauth-authorization-server/api/auth` (and at
+  the root) is Better Auth's metadata.
+- **OAuth 2.1** (`@better-auth/oauth-provider`): a client registers itself (`POST
+  /api/auth/oauth2/register`; one whose redirects are all loopback or app schemes is registered
+  as a native app), sends the person to `/api/auth/oauth2/authorize` with PKCE (`S256`), and trades
+  the code at `/api/auth/oauth2/token`. The API serves the sign-in page (`/oauth/sign-in`) and the
+  consent screen (`/oauth/consent`) in the person's language: the client as it named itself, the
+  business, and each module asked for, read or change, which the person may narrow. Consent is
+  remembered per client, person and business. Tokens are opaque (`mcp_at_…`, refresh `mcp_rt_…`),
+  stored hashed: one hour, thirty days.
+- **Who it is.** The `mcp` identity provider makes a token an agent (`mcp:<client id>`) acting for
+  its person, in the business they consented in (their default one, else the one they last became
+  a participant in; a person in none gets their own unless `signUp.createBusiness` is `false`, and
+  then cannot connect), on the `mcp` channel, with
+  the token's scopes cut down to what the person's consent allows now. A token works only while
+  that consent exists, so a token the provider mints during or after a disconnect is dead.
+  Everything else is the API's: access, field hiding, approvals, audit. A person who left the
+  business gets 403. The throttle counts each client for its person and business (any
+  contributed identity provider's credential gets its own bucket, as the agent key does), not
+  the address: every tool call reaches the API from the API's own process.
+- **Scopes** are `<module>:read` and `<module>:write` for each application module (`write` covers
+  `read`), plus `offline_access`. `PrincipalGuard` enforces them for any scoped credential (any
+  identity provider that returns `scopes`): it reaches only routes that declare a scope
+  (`RequireScope`; the generated entity routes declare their module's read or write scope, a
+  command route its module's write, `/api/transitions/:plural` the write scope of the records'
+  module, read from the request), and only with that scope. Every other route is 403
+  `out_of_scope`. Sessions and the agent key are not scoped.
+- **Tools** are two per module: `<module>_read` (`{ entity, id }`, `{ entity, query }` with the
+  list grammar, or `{ entity, summary }` for counts and totals) and `<module>_write` (`{ action,
+  input }`, the action being one of the module's agent tool ids: `create-<name>`,
+  `update-<name>`, `delete-<name>`, a command's `tool`, or `transition-<plural>` for an entity
+  with states (`{ id, transition, ...its fields }`, the moves with `expose: 'all'`)). Only what is
+  exposed to agents. A token lists only the modules its scopes reach. Each call goes to the HTTP
+  API with the token, and answers text (a sentence, then the API's JSON); a refusal is an error
+  result. The framework features' own tools (files, documents, jobs, memory, comments) are not
+  offered over MCP yet (section 14).
+- **Approvals.** A write that parks answers with who decides it, its level, and the link
+  `<APP_URL>/approvals/<id>`, where a person decides it in the app. An MCP client never decides.
+  Which writes wait (the PRD's tier 3) is the application's approval levels.
+- **Credits.** Each tool call is a `tool_calls` use (variant `mcp`); a paused business refuses it.
+- **Connections.** `GET /api/mcp/connections` (people only) lists the clients the person connected
+  in this business; `DELETE /api/mcp/connections/:clientId` disconnects one (consent deleted, which
+  ends every token of it at once, tokens revoked too, audited as `mcp.connection.revoke`). In the app, list
+  `connectionsPlugin` in `<AppShell plugins>`: a `/connections` screen with both (the sample does).
+- **In tests.** `framework/api/test/framework/mcp.e2e.test.ts` runs the whole flow with
+  `MCPClient` from `@mastra/mcp`, `mcp-states.e2e.test.ts` the transitions;
+  `application/api/test/domain/mcp.e2e.test.ts` runs the sample modules' tools.
+
 ---
 
 ## 8. Channels, notifications and voice
@@ -2611,7 +2671,7 @@ These are not built. Each has a workaround for now.
 | Importing with no worker | `basecamp import` starts the job and follows it; the worker runs it. With no worker running it waits (and says so). Large JSON files through the local storage drivers (memory, fs) also pass the API's JSON body limit (`JSON_BODY_LIMIT`) on upload; S3 has no such limit. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.7) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.7) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. An inbound webhook's handler that creates a row fails with `no_access` until then. |
 | Integration screens | Endpoints, connections and the delivery log have an HTTP API only (`/api/integrations/*`): no app or back-office screen, and no typed `@hykr/api-client` methods. |
@@ -2621,7 +2681,11 @@ These are not built. Each has a workaround for now.
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
 | OAuth connectors | Credentials are stored as given; no OAuth flow or token refresh yet (B17 adds the first). |
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
-| Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
+| Identity provider scopes | Enforced (section 7.8): a scoped credential reaches only routes that declare a scope. Only the generated entity and command routes declare one, so a feature's own routes are out of reach for scoped credentials until they say which scope they need. |
+| MCP: several businesses | A token acts in the business the person is in by default when they consent (their default membership, else their latest participation); the consent screen cannot choose another. Hiding the tools of a module a business's feature flag switches off is not done (the API answers 404 for its calls). |
+| MCP: older clients, other client registration | `@mastra/mcp` 2.x serves MCP revision 2026-07-28 only. Client ID metadata documents, the device grant, JWT access tokens and DPoP are not enabled. A client registered before a module existed registers again to ask for its scopes. Browser-based MCP clients from other origins are refused by CORS. |
+| MCP: screens | The app's `connectionsPlugin` lists and disconnects a person's clients; the back office has no view of every client in a business. The consent screen shows the application's name, not a business's branding. MCP Apps cards, resources and prompts are not served. |
+| MCP: framework features' tools | The MCP tools cover each module's entities, commands and state transitions. The framework features' own assistant tools (files, documents, jobs, memory recall, comments, handoff) are not offered, and their routes declare no scope, so a token gets 403 `out_of_scope` there. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. A contact without an account cannot accept a document in the app until share links (B9) give them a principal; the acceptance routes take only signed-in people (`HumanOnlyGuard`). |
 | An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
 | Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders allow cancelling an approved order, accepted or not). |
