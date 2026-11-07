@@ -850,7 +850,7 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
     const me = p.subject?.kind === 'user' ? p.subject.userId : '';
     const cursor = q.cursor ? decodeCursor(q.cursor) : undefined;
     const rows = await this.db
-      .select({ run: agentRuns })
+      .select({ run: agentRuns, ownerId: agents.ownerId })
       .from(agentRuns)
       .innerJoin(agents, eq(agents.id, agentRuns.agentId))
       .where(
@@ -869,15 +869,21 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
       )
       .orderBy(desc(agentRuns.createdAt), desc(agentRuns.id))
       .limit(limit + 1);
-    const items = rows.slice(0, limit).map((r) => toRun(r.run));
+    const items = rows
+      .slice(0, limit)
+      .map((r) => (r.ownerId === me ? toRun(r.run) : outline(toRun(r.run))));
     const last = rows.length > limit ? rows[limit - 1].run : undefined;
     return { items, nextCursor: last ? encodeCursor(last) : null };
   }
 
-  /** One run, with its messages, if p may read it; otherwise 404. */
+  /**
+   * One run, with its messages, if p may read it; otherwise 404. A manager who is not the owner
+   * gets its outline only: what the run said and read is as its owner sees the records.
+   */
   async run(p: Principal, id: string): Promise<AgentRunDetail> {
     const row = await this.runFor(p, id);
     if (!row) throw new NotFoundException({ error: 'not_found', message: 'No such run' });
+    if (!this.owns(p, row)) return { ...outline(toRun(row)), messages: [] };
     const messages = await this.db
       .select()
       .from(threadMessages)
@@ -886,8 +892,13 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
     return { ...toRun(row), messages: messages.map(toMessage) };
   }
 
-  /** The run, if p may read it. */
-  async runFor(p: Principal, id: string): Promise<RunRow | undefined> {
+  /** Is p the owner of this run's agent? */
+  private owns(p: Principal, run: RunRow & { ownerId?: string }) {
+    return p.subject?.kind === 'user' && p.subject.userId === run.ownerId;
+  }
+
+  /** The run (with its agent's owner), if p may read it. */
+  async runFor(p: Principal, id: string): Promise<(RunRow & { ownerId: string }) | undefined> {
     if (!p.tenantId || !UUID.test(id)) return undefined;
     const [row] = await this.db
       .select({ run: agentRuns, ownerId: agents.ownerId })
@@ -896,7 +907,7 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
       .where(and(eq(agentRuns.id, id), eq(agentRuns.tenantId, p.tenantId)));
     if (!row || !this.mayRead(p, { ownerId: row.ownerId, tenantId: row.run.tenantId }))
       return undefined;
-    return row.run;
+    return { ...row.run, ownerId: row.ownerId };
   }
 
   /** The application's templates, in the reader's language, and whether each can be made here. */
@@ -939,6 +950,19 @@ function decodeCursor(c: string): { at: Date; id: string } | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * A run as a manager who is not its owner sees it: what started it, how it went, why it was refused
+ * or failed, and what it used, but not its reply, its messages or what its tool calls showed. Those
+ * carry the records as the owner reads them, and a manager may not read the same.
+ */
+function outline(r: AgentRun): AgentRun {
+  return {
+    ...r,
+    reply: null,
+    toolCalls: r.toolCalls.map(({ tool, ok, outcome }) => ({ tool, ok, outcome })),
+  };
 }
 
 /** A saved message as the app reads one (the threads service's shape). */

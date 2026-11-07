@@ -1,8 +1,8 @@
 // The meetings module's ready-made agents (A6): a Monday summary of open to-dos, and a follow-up
 // note when a meeting closes, made from the templates and run by the framework.
 
-import { AgentsService } from '@hykr/api';
 import { boot, eventually, Person, pool, server, shutdown } from '@hykr/api/testing';
+import { AgentsService } from '@hykr/api/testing/internals';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 // Compiled, like the app runs: Nest's DI needs the decorator metadata tsc emits.
 import { server as application } from '../../dist/server.js';

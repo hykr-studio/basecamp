@@ -10,7 +10,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 process.env.SECRETS_KEY ||= 'test-secrets-key-0123456789abcdef0123456789';
 
 import {
-  AgentsService,
   agentRunToken,
   eraseWithContributors,
   exportPersonalData,
@@ -36,7 +35,11 @@ const bob = new Person('Bob Agents'); // another business
 let tenantId = '';
 
 const inA = () => ({ 'x-tenant-id': tenantId });
-const svc = () => server.app?.get(AgentsService, { strict: false }) as AgentsService;
+type Clock = {
+  tick(now?: Date): Promise<unknown>;
+  onInbound(msg: unknown): Promise<number>;
+};
+let svc: () => Clock;
 
 type Run = {
   id: string;
@@ -141,6 +144,9 @@ async function live(who: Person) {
 
 beforeAll(async () => {
   await boot(agentsApp);
+  // Loaded after boot: it reads the server's configuration.
+  const { AgentsService } = await import('../../dist/testing-internals.js');
+  svc = () => server.app?.get(AgentsService, { strict: false }) as unknown as Clock;
   for (const p of [ana, sam, rex, bob]) await p.signUp();
   tenantId = (await me(ana)).tenantId;
   await addMember(sam, tenantId, ['staff']);
@@ -508,7 +514,8 @@ describe('triggers', () => {
       const seen = await task(ana, 'Ana sees');
       const followed = await eventually(async () => {
         const { rows } = await pool.query(
-          "select id from app.fixture_tasks where title = 'Follow up Ana sees'",
+          "select id from app.fixture_tasks where tenant_id = $1 and title = 'Follow up Ana sees'",
+          [tenantId],
         );
         return rows[0]?.id as string | undefined;
       }, 20_000);
@@ -728,7 +735,14 @@ describe('the run log', () => {
       const id = await runNow(rex, counter.id);
       await settled(rex, id);
       await eventually(() => rexLive.events().find((e) => e.type === 'agent_run' && e.id === id));
-      expect((await settled(ana, id)).id).toBe(id);
+      // A manager sees how it went, not what it said: that is the records as Rex reads them.
+      expect(await settled(ana, id)).toMatchObject({
+        id,
+        status: 'done',
+        reply: null,
+        messages: [],
+      });
+      expect((await settled(rex, id)).reply).toMatch(/open task/);
       expect((await sam.call('GET', `/api/agent-runs/${id}`, undefined, inA())).status).toBe(404);
       expect((await bob.call('GET', `/api/agent-runs/${id}`)).status).toBe(404);
       expect((await bob.call('GET', `/api/agent-runs?agentId=${counter.id}`)).status).toBe(404);

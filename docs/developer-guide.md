@@ -871,8 +871,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources`,
   `fileHolders` (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
-  `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17) and `mentionKinds` (section 5.21)
-  in `@hykr/api`.
+  `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21)
+  and `agentTemplates` (section 5.22) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -930,8 +930,8 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   runs on the shared `events` queue; `queue` adds the envelope to your own queue. The envelope has
   the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
   (F3) before it leaves the server. The in-process `EventBus` is not relayed.
-- **Turn hooks.** Every chat turn, back-office draft and resumed run (`kind: 'resume'`, section
-  5.8.3) passes `turnHooks` (`gateTurn`): first a check that the deployment has a model (503
+- **Turn hooks.** Every chat turn, back-office draft, resumed run (`kind: 'resume'`, section
+  5.8.3) and agent run (`kind: 'agent'`, section 5.22) passes `turnHooks` (`gateTurn`): first a check that the deployment has a model (503
   `model_not_configured`), then the hooks, then the business's model policy chooses the turn's model
   (section 7.5). `before` returns `{ refuse: { rule, reason, status?, say? } }` or
   `{ context?, model?, withoutTools? }`; a refusal is `TurnRefused` (403 unless given, nothing saved;
@@ -1597,6 +1597,56 @@ needs the entity's `get` exposed) reads its comments, and anyone else gets 404.
 - **The app.** `<Comments entity="order" id={id} />` (`@hykr/app`) is the discussion: oldest first,
   edit and remove where allowed, a composer whose `@` offers the people to name, and a "Team only"
   switch for those who may. `inboxPlugin()` adds `/inbox`; `<InboxBell />` shows the unread count.
+
+### 5.22 Agents a business makes
+
+People make their own agents (`docs/decisions/A6.md`): a job in plain words that runs on its own
+when a trigger fires, acting for the person who made it. The framework's `agents` feature
+(`framework/api/src/features/agents/`) runs them; which agents a business is offered ready-made is
+the application's.
+
+- **The definition** is the platform entity `agent` (`/api/agents`, `AgentSpec` in
+  `@hykr/contracts`): `name`, `instructions`, `triggers`, `scope: { tools }` (the assistant's tool
+  ids it may use), `budget` and `status` (`active`, `paused`). Its owner is whoever made it and never
+  changes. Making one needs `agents.create`; `agents.manage` (owner and admin by default) sees every
+  agent and run log and pauses, runs or deletes them, but only the owner changes what an agent does.
+  Each write is checked against the server (unknown tools, cron patterns, entities, connections):
+  400 `invalid_agent` lists every problem. The assistant drafts one from a line ("create an agent to
+  …"), and the person approves the card.
+- **Triggers**, at most ten: `once { at }`, `recurring { cron, timeZone? }` (five fields, the
+  business's zone by default, at most every 5 minutes), `event { on, where? }` (stored events of
+  records the owner may read, `where` on the record as they see it), `condition { entity, where,
+  everyMinutes }` (the entity's list filters, `$now` and `$today` move; each record that newly
+  matches runs once), `message { contains? }` (WhatsApp messages to the business, for owners who
+  work in the back office; the assistant still answers), `mention {}` (`@[Name](agent:<id>)` in a
+  comment) and `webhook { connectionId, on }` (an `agent-webhooks` connection, section 5.14). The
+  `agents.tick` schedule fires time triggers and conditions; subscribers and an inbound hook the rest.
+- **A run** (`agents.run` queue, in the worker) passes the turn hooks (credits, the model policy),
+  then runs the assistant once on one message: the instructions, then what started it as data. Its
+  model gets only the scope's tools. Its tools call the API with a run token (`x-agent-run`, an HMAC
+  of the run id with `AGENT_API_KEY`): the API sees `agent:<id>` acting for the owner, with the
+  owner's roles as they are now, on the `background` channel. A write outside the scope is 403
+  `agent_scope` (audited), and so is a read of an entity outside it; an agent run never reaches the
+  agents' own routes. Every audit row carries the run id and `agent:<id>@<model>#<hash>`.
+- **Waiting.** A write that waits for approval suspends the run (section 5.8.3); the owner decides
+  it, and the run goes on in the agent's thread (`threads.kind: 'agent'`, never the person's
+  conversation).
+- **Budgets and guards.** `budget: { period, runs?, tokens?, credits?, maxSteps }`: at 100% a run is
+  refused (`agent_budget_exhausted`). An agent's own events never start it again, a chain of agents
+  stops at depth 3, and an agent has at most 10 runs open.
+- **The run log**: `GET /api/agent-runs?agentId=&status=` and `GET /api/agent-runs/:id` (with its
+  messages), for the owner and managers; anyone else gets 404. `agent.run.finished` and
+  `agent.run.waiting` are stored events (live type `agent_run`). Run now: `POST
+  /api/agents/:agentId/run` (`run-agent`).
+- **Templates** are the application's: `defineAgentTemplate({ key, name, description,
+  instructions, triggers, scope, budget })`, contributed as `agentTemplates`, listed at `GET
+  /api/agent-templates` (with the tools an agent may use here). The sample's meetings module offers
+  a Monday summary of open to-dos and a follow-up note when a meeting closes, with the scripted
+  model's scripts for their runs (`runData(text)` from `@hykr/agents/script` reads what started a
+  run).
+- **Your own connector** can start agents too: contribute `agentWebhookHandler('<connector>')`.
+- **The app.** `agentsPlugin()` (`@hykr/app`) adds `/agents`: the list, ready-made ones, the editor
+  and the run log. The back office has an Agents screen. `api.agents` in `@hykr/api-client`.
 
 ---
 
@@ -2368,7 +2418,7 @@ These are not built. Each has a workaround for now.
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
 | OAuth connectors | Credentials are stored as given; no OAuth flow or token refresh yet (B17 adds the first). |
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
-| Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
+| Identity provider scopes | `scopes` from an identity provider are copied into the principal. Only an agent run's (section 5.22) are enforced; another provider's are not. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
@@ -2387,7 +2437,7 @@ These are not built. Each has a workaround for now.
 | Memory of the record on screen | A turn's recall does not prefer memory of the record the person is looking at. Ask with `recall-memory` and `about`. |
 | Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it, or the `memory` settings, yet. |
 | Memory timings | The indexer gives the embedding provider 30 s per batch and takes over a claim after 120 s; recall gives it 4 s per turn (1.5 s on voice). All are constants in `features/memory/` (`indexer.ts`, `recall.service.ts`), not deployment settings. |
-| Durable runs | A run waits only for approvals (no questions, timers or webhooks). A run outside a chat thread (none yet) is not resumed. A decision after WhatsApp's 24-hour window sends nothing there (the app shows it), and a request a continuation parks again is approved in the app, not with buttons. A resume a turn hook refuses (credits) runs no model and is not tried again. If the person keeps chatting meanwhile, the resumed run does not see those messages. A run parked before a deploy goes on under the new instructions and tools. A run whose resume never comes keeps the parked step's tokens unmetered. |
+| Durable runs | A run waits only for approvals (no questions, timers or webhooks). An agent's run (section 5.22) is resumed in its agent's thread. A decision after WhatsApp's 24-hour window sends nothing there (the app shows it), and a request a continuation parks again is approved in the app, not with buttons. A resume a turn hook refuses (credits) runs no model and is not tried again. If the person keeps chatting meanwhile, the resumed run does not see those messages. A run parked before a deploy goes on under the new instructions and tools. A run whose resume never comes keeps the parked step's tokens unmetered. |
 | Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
 | Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates of an undoable write wait with its events until the window closes. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
@@ -2408,11 +2458,12 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in and nav filter slots; `inboxPlugin()` (section 5.21) uses routes and nav. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in and nav filter slots; `inboxPlugin()` (section 5.21) uses routes and nav; `agentsPlugin()` (section 5.22) routes, nav and the nav filter. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
 | Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
 | Live deletions for everyone | A deleted record reaches only streams already told about it and the person who deleted it; others see it go at their next refetch (focus, reconnect, their own write). |
+| Agents beyond the basics | No 80% alert per agent (the business's credit alerts exist), no taking over another person's agent, no agents shared across businesses, no agent that answers a customer itself on WhatsApp. Agents take webhooks only from `agent-webhooks` connections unless the application contributes `agentWebhookHandler` for its connector. Deleting an agent deletes its run log (the audit trail keeps its writes). Conditions are polled (5 minutes at least). The back office edits triggers and the budget as JSON. |
 | Comment attachments, reactions, threads | Not built. Put files on the record itself; reply with a new comment that mentions the person. |
 | Comments from WhatsApp | A contact without an account cannot comment, and a mention is not answerable from WhatsApp. Comment in the app. |
 | Filtering comments by anchor | `GET /api/comments` returns every comment of the record; filter by `anchor` in the client. |
