@@ -871,8 +871,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources`,
   `fileHolders` (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
-  `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21) and
-  `dataExportSources` (section 5.22) in `@hykr/api`.
+  `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21),
+  `dataExportSources` (section 5.22) and `telephonyProviders` (section 5.23) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -1678,15 +1678,26 @@ move in a calendar means are the application's. The sample's `meetings` module u
   tenantId })` (both from `@hykr/api`).
 - **Free time.** `GET /api/calendar/busy?from&to[&userId]` (busy intervals, no titles) and
   `GET /api/calendar/free?from&to&minutes[&step&hoursFrom&hoursTo&userId]` (slots, in the
-  business's time zone; `freeSlots` in `@hykr/contracts` is the pure version). Another member's
-  needs `calendar.availability.read`. The assistant's tool is `find-free-time`. Not connected:
-  `{ connected: false }`.
+  business's time zone; `freeSlots` in `@hykr/contracts` is the pure version). With
+  `hoursFrom`/`hoursTo`, slots keep inside those local hours. Without them, slots keep to the
+  business's `businessHours` week and holidays (section 5.20; a slot may run past midnight where
+  it stays open), and to every hour when it has none: the framework has no working day of its
+  own. Another member's needs `calendar.availability.read`. The assistant's tool is
+  `find-free-time`. Not connected: `{ connected: false }`.
 - **Invites.** `POST /api/calendar/invites { entity, id, to: [{ email, name? } | { userId }],
   lang? }` (`calendar.invite`, tool `send-calendar-invite`) emails an `.ics` (METHOD:REQUEST,
   also as the mail's calendar part). To yourself: allowed; to others: `customers.message`, and
   the assistant's invite waits for approval. The record is read as the person who invites.
   Later changes send an update (SEQUENCE + 1), a deleted or hidden record a CANCEL, from the
-  worker. `GET /api/calendar/invites?entity&id` lists a record's.
+  worker, one send of an invite at a time. Each outcome is audited and stored as
+  `calendar.invite_sent`, `calendar.invite_cancelled` or `calendar.invite_failed` (resource type
+  `calendarInvite`, row `CalendarInviteOutcome`, as the system principal `calendar.invites`): a
+  module subscribes to act on one. `GET /api/calendar/invites?entity&id` lists a record's.
+- **One job at a time.** Every job that sends a record's events holds an advisory lock on the
+  record, and every send of an invite one on the invite, so the last change wins. The locks have
+  their own small pool (4 connections per process; a job waits 60 s for one, then 60 s for the
+  lock, then fails and retries), so holders never starve the main pool. The main pool fails a
+  query that waits 30 s for a connection.
 - **Feeds.** `POST /api/calendar/feeds { label? }` returns a private URL once
   (`/api/calendar/feed/<token>.ics`; only the token's hash is stored); `DELETE
   /api/calendar/feeds/:id` revokes it. A feed lists the person's own records (the trait's
@@ -1696,8 +1707,10 @@ move in a calendar means are the application's. The sample's `meetings` module u
   `GET /api/calls?entity&id` lists a record's (whoever reads the record reads its calls; a call
   about no record: who logged it, the member on it and `calls.read_all`). `POST /api/calls/dial
   { to, entity?, id? }` (`call.dial`, tool `dial-call`; the assistant's dial waits for approval)
-  asks the business's telephony provider, from the worker, to connect it;
-  `GET /api/calls/provider` says whether the business has one it may use.
+  asks the business's telephony provider, from the worker, to connect it. Each step of the dial
+  (`started`, once; `placed`; `failed`) is the system op `call.dial_outcome` through `runWrite`:
+  audited on the call, with `call.updated` stored. `GET /api/calls/provider` says whether the
+  business has one it may use.
 - **A telephony provider** is the application's: `defineTelephonyProvider({ name, label,
   connector?, dial(request, { credentials }) })` (`@hykr/connectors`), contributed as
   `telephonyProviders`. With `connector`, it gets the business's active B10 connection's
@@ -2560,6 +2573,7 @@ These are not built. Each has a workaround for now.
 | Changes made in Google written back | Sync is one way; a move or deletion in Google is stored as `calendar.event_moved` / `calendar.event_removed` for a module's subscriber to act on (the sample's meetings do). |
 | Invite replies | Attendees' accept or decline is not read (no inbound mail); invites go out with `RSVP=FALSE`. |
 | Confirming invite updates | A change to an invited record emails every recipient an update at once; nobody confirms it first. |
+| Telling someone an invite failed | `calendar.invite_failed` is stored and audited; no notification is declared on it. |
 | A team feed | A feed lists one person's own records. |
 | A telephony provider, call recordings | None ships: contribute a `telephonyProviders` entry. Recordings and transcripts are not stored (no consent flow). |
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |

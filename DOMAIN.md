@@ -270,9 +270,16 @@ A module puts its records with a time in people's calendars with one trait (deve
   connected Google calendar, their ICS feed and the record's invites then follow it, read as
   each person may see it.
 - **What a move in a calendar means** is the module's: the framework stores
-  `calendar.event_moved` and `calendar.event_removed` and writes nothing back. The sample's
-  `meetings` module subscribes and reschedules the meeting as the person who moved it
-  (`server/calendar-moved.subscriber.ts`, with `memberPrincipal` and `writeAs`).
+  `calendar.event_moved` and `calendar.event_removed` (`CalendarEventChange`) and writes nothing
+  back. The sample's `meetings` module subscribes and reschedules the meeting as the person who
+  moved it (`server/calendar-moved.subscriber.ts`, with `memberPrincipal` and `writeAs`).
+- **What an invite's outcome means** is the module's too: each send is stored as
+  `calendar.invite_sent`, `calendar.invite_cancelled` or `calendar.invite_failed`
+  (`CalendarInviteOutcome`), for a subscriber or a notification. A dial's steps update the call
+  (`call.updated`).
+- **Free time** keeps to the business's `businessHours` (its open week and holidays) unless the
+  caller asks for hours, and to every hour when the business has none. Set `businessHours` for a
+  business that should only be booked when it is open.
 - **A telephony provider** (`defineTelephonyProvider`, contributed as `telephonyProviders`) is
   the application's; none ships, so the call log works and click-to-call is refused until one is
   added.
