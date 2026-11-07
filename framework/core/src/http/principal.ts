@@ -54,12 +54,13 @@ const ROUTE_SCOPE = 'core:route-scope';
 
 /**
  * What a route needs from a scoped credential (an MCP client's token): the module it belongs to
- * and whether it reads or writes. The module may be read lazily (a spec stamped with its module
- * after its controller was made).
+ * and whether it reads or writes. The module may be read when the request comes: lazily (a spec
+ * stamped with its module after its controller was made), or from the request itself (one route
+ * for every entity, like `/api/transitions/:plural`). Undefined: no module, so refused.
  */
 export interface RouteScope {
   access: ScopeAccess;
-  module: string | (() => string | undefined);
+  module: string | ((req: ApiRequest) => string | undefined);
 }
 
 /**
@@ -113,7 +114,7 @@ export class PrincipalGuard implements CanActivate {
       ]);
       if (identity.relay && !allowed) throw new ForbiddenException('A relay can only start turns');
       // A credential limited to scopes reaches only what a scope opens, never more than its person.
-      if (identity.scopes) this.checkScope(context, identity.scopes);
+      if (identity.scopes) this.checkScope(context, req, identity.scopes);
     } else {
       req.principal = await this.userPrincipal(req);
     }
@@ -130,12 +131,12 @@ export class PrincipalGuard implements CanActivate {
   }
 
   /** A scoped credential on a route: refused unless the route declares a scope it holds. */
-  private checkScope(context: ExecutionContext, scopes: readonly string[]) {
+  private checkScope(context: ExecutionContext, req: ApiRequest, scopes: readonly string[]) {
     const need = this.reflector.getAllAndOverride<RouteScope | undefined>(ROUTE_SCOPE, [
       context.getHandler(),
       context.getClass(),
     ]);
-    const module = typeof need?.module === 'function' ? need.module() : need?.module;
+    const module = typeof need?.module === 'function' ? need.module(req) : need?.module;
     if (need && module && scopeCovers(scopes, module, need.access)) return;
     throw new ForbiddenException({
       error: 'forbidden',

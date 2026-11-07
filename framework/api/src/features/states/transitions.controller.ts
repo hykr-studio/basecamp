@@ -6,6 +6,7 @@ import {
   PrincipalGuard,
   RequestMeta,
   type RequestMetaValue,
+  RequireScope,
   runWrite,
   statesEntity,
   transitionOp,
@@ -28,7 +29,8 @@ import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 /**
  * POST /api/transitions/:plural/:id/:transition: move a record along its state machine. The
  * body carries the transition's own fields (a reason). Answers like any write: done with the
- * record, or needs_approval with the approval it parked.
+ * record, or needs_approval with the approval it parked. A scoped credential (an MCP client's
+ * token) needs the write scope of the module the records belong to.
  */
 @Controller('api/transitions')
 @OptionalAuth()
@@ -41,6 +43,10 @@ export class TransitionsController {
 
   @Post(':plural/:id/:transition')
   @HttpCode(200)
+  @RequireScope({
+    access: 'write',
+    module: (req) => statesEntity(String(req.params.plural ?? ''))?.spec.module,
+  })
   async run(
     @CurrentPrincipal() p: Principal,
     @Param('plural') plural: string,

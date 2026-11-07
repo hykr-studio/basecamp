@@ -1,9 +1,9 @@
 // The tools an MCP client gets: two per application module, built from the same specs the API
 // serves. `<module>_read` reads any of the module's entities (one by id, a list with the list
 // grammar, or counts and totals); `<module>_write` runs any of its writes (create, update, delete,
-// a command) by action. Each call goes to the HTTP API with the client's own token, so the
-// person's business, access, field hiding, approvals and audit are the API's, never the tool's.
-// Results are text: an outside client renders no views or cards.
+// a command, a state transition) by action. Each call goes to the HTTP API with the client's own
+// token, so the person's business, access, field hiding, approvals and audit are the API's, never
+// the tool's. Results are text: an outside client renders no views or cards.
 import { randomUUID } from 'node:crypto';
 import { ApiError, createApiClient } from '@hykr/api-client';
 import {
@@ -15,7 +15,9 @@ import {
   entityReadTools,
   modulesCovered,
   type ReadToolDef,
+  statesOf,
   summaryInputObject,
+  type TransitionDecl,
   type WriteResult,
 } from '@hykr/contracts';
 import { createTool } from '@mastra/core/tools';
@@ -141,17 +143,72 @@ interface WriteAction {
   run: (api: ReturnType<typeof createApiClient>, input: Json) => Promise<string>;
 }
 
+/** The id an action's input names, or a refusal the model can act on. */
+const idOf = (input: Json) => {
+  const id = input.id;
+  if (typeof id !== 'string' || !id) throw new BadInput('input.id is required');
+  return id;
+};
+
+/** The fields a transition takes with it, typed from the entity's update schema. */
+function transitionFields(spec: EntitySpec, t: TransitionDecl): z.ZodObject {
+  const shape = spec.schemas.update.shape as Record<string, z.ZodType>;
+  return z.object(
+    Object.fromEntries((t.fields ?? []).filter((f) => shape[f]).map((f) => [f, shape[f]])),
+  );
+}
+
+/** One move, for the model: `cancel (draft or submitted → cancelled; may wait for approval; …)`. */
+function moveOf(spec: EntitySpec, t: TransitionDecl): string {
+  const from = typeof t.from === 'string' ? t.from : t.from.join(' or ');
+  const notes = [
+    (t.approval !== undefined && t.approval !== 'never') || t.level !== undefined
+      ? 'may wait for approval'
+      : '',
+    t.requires?.length ? `needs ${t.requires.join(', ')}` : '',
+    t.fields?.length ? `fields: ${fieldsOf(transitionFields(spec, t))}` : '',
+  ].filter(Boolean);
+  return `${t.name} (${from} → ${t.to}${notes.length ? `; ${notes.join('; ')}` : ''})`;
+}
+
+/**
+ * `transition-<plural>`, for an entity with states: move one record by a transition an agent may
+ * ask for (`expose: 'all'`, as for the assistant), with that transition's own fields only.
+ */
+function transitionAction(spec: EntitySpec, appUrl: string): WriteAction | undefined {
+  const trait = statesOf(spec);
+  const open = trait?.transitions.filter((t) => (t.expose ?? 'all') === 'all') ?? [];
+  if (!trait || !open.length) return undefined;
+  const id = `transition-${spec.plural}`;
+  return {
+    id,
+    describe: `${id}: move a ${spec.label} to another ${trait.field}. input: id (string), transition (one of ${open.map((t) => t.name).join('|')}) and that transition's fields. Moves: ${open.map((t) => moveOf(spec, t)).join(', ')}`,
+    run: async (api, input) => {
+      const { id: _id, transition: name, ...rest } = input;
+      const t = open.find((x) => x.name === name);
+      if (!t)
+        throw new BadInput(`input.transition must be one of ${open.map((x) => x.name).join(', ')}`);
+      const own = new Set(t.fields ?? []);
+      const extra = Object.keys(rest).filter((k) => !own.has(k));
+      if (extra.length)
+        throw new BadInput(
+          `"${t.name}" takes ${own.size ? `only ${[...own].join(', ')}` : 'no fields'}, not ${extra.join(', ')}`,
+        );
+      return writeText(
+        await api.transition(spec, idOf(input), t.name, rest as never),
+        `Moved the ${spec.label}: ${t.name}, now ${t.to}.`,
+        appUrl,
+      );
+    },
+  };
+}
+
 function writeActions(
   entities: readonly EntitySpec[],
   commands: readonly CommandSpec[],
   appUrl: string,
 ): WriteAction[] {
   const actions: WriteAction[] = [];
-  const idOf = (input: Json) => {
-    const id = input.id;
-    if (typeof id !== 'string' || !id) throw new MissingId();
-    return id;
-  };
   for (const spec of entities) {
     const label = spec.label;
     if (exposed(spec, 'create'))
@@ -181,6 +238,8 @@ function writeActions(
         run: async (api, input) =>
           writeText(await api.entity(spec).remove(idOf(input)), `Deleted the ${label}.`, appUrl),
       });
+    const move = transitionAction(spec, appUrl);
+    if (move) actions.push(move);
   }
   for (const spec of commands) {
     const id = commandToolId(spec);
@@ -195,7 +254,8 @@ function writeActions(
   return actions;
 }
 
-class MissingId extends Error {}
+/** An action's input the tool refuses before any call: the message says what to send. */
+class BadInput extends Error {}
 
 /**
  * The tools a token with these scopes gets, keyed by id: `<module>_read` for each module it may
@@ -244,7 +304,7 @@ async function asCaller(
   try {
     return await fn(api);
   } catch (e) {
-    if (e instanceof MissingId) return failed(`${tool}: input.id is required`);
+    if (e instanceof BadInput) return failed(`${tool}: ${e.message}`);
     return refusal(e);
   } finally {
     await meter?.record({

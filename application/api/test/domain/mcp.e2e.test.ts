@@ -2,9 +2,19 @@
 // an IDE does (registration, consent, PKCE), and works with every module through two tools per
 // module. A to-do is added at once (the to-dos' internal level, undoable in the app); an order
 // above the business's limit waits at the application's irreversible level, and the answer links
-// to the request in the app; an item's cost stays hidden from staff.
+// to the request in the app; an order moves through its states (submit, then approve, which waits
+// for the person in the app); an item's cost stays hidden from staff.
 
-import { addMember, boot, connectMcp, me, Person, pool, shutdown } from '@hykr/api/testing';
+import {
+  addMember,
+  boot,
+  connectMcp,
+  me,
+  Person,
+  pool,
+  setTenantSettings,
+  shutdown,
+} from '@hykr/api/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { server as application } from '../../dist/server.js';
 
@@ -26,12 +36,9 @@ beforeAll(async () => {
     staff.id,
   ]);
   // The business counts in INR and approves orders above 10,000.00 itself.
-  await pool.query(`update app.tenants set settings = settings || $2::jsonb where id = $1`, [
-    tenantId,
-    JSON.stringify({
-      money: { currency: 'INR', fyStartMonth: 4, amounts: { 'orders.approval': inr(1_000_000) } },
-    }),
-  ]);
+  await setTenantSettings(tenantId, {
+    money: { currency: 'INR', fyStartMonth: 4, amounts: { 'orders.approval': inr(1_000_000) } },
+  });
 });
 afterAll(shutdown);
 
@@ -107,6 +114,63 @@ describe('the sample application over MCP', () => {
     );
     expect(rows[0].n).toBe(0);
     await c.close();
+  });
+
+  it('moves an order through its states; its approve waits for the person in the app', async () => {
+    const c = await connectMcp(owner, 'orders:write');
+    try {
+      const saved = await owner.call('POST', '/api/orders/save', {
+        title: 'Small bath',
+        items: [{ ref: 'b', title: 'Tiles', quantity: 2, unitPrice: '100' }],
+      });
+      const orderId = saved.body.value.order.id;
+      // The client's submit waits for the person (the orders' own rule for an agent's moves).
+      const submit = await c.call('orders_write', {
+        action: 'transition-orders',
+        input: { id: orderId, transition: 'submit' },
+      });
+      expect(submit.isError).toBe(false);
+      expect(submit.text).toContain('Not done yet');
+      const submitId = /\/approvals\/([0-9a-f-]{36})/.exec(submit.text)?.[1] ?? '';
+      expect((await owner.call('POST', `/api/approvals/${submitId}/approve`)).body.status).toBe(
+        'approved',
+      );
+      expect((await owner.call('GET', `/api/orders/${orderId}`)).body.status).toBe('submitted');
+      // Its approve is the application's irreversible level: a named person (the one the client
+      // acts for), in the app, signed in. The answer links there.
+      const approve = await c.call('orders_write', {
+        action: 'transition-orders',
+        input: { id: orderId, transition: 'approve' },
+      });
+      expect(approve.isError).toBe(false);
+      expect(approve.text).toContain('Level: Money or irreversible.');
+      expect(approve.text).toContain('The person you act for decides it.');
+      const approveId = /\/approvals\/([0-9a-f-]{36})/.exec(approve.text)?.[1] ?? '';
+      expect(approve.text).toContain(
+        `${process.env.APP_URL ?? 'http://localhost:8081'}/approvals/${approveId}`,
+      );
+      const { rows } = await pool.query(
+        'select status, approver_user_id, approver_channels, min_assurance, run_id from app.approvals where id = $1',
+        [approveId],
+      );
+      expect(rows[0]).toMatchObject({
+        status: 'pending',
+        approver_user_id: owner.id,
+        approver_channels: ['app'],
+        min_assurance: 'session',
+      });
+      expect(rows[0].run_id).toMatch(/^mcp-/);
+      expect((await owner.call('GET', `/api/orders/${orderId}`)).body.status).toBe('submitted');
+      // A person's own move (fulfil) is not the client's to make.
+      const fulfil = await c.call('orders_write', {
+        action: 'transition-orders',
+        input: { id: orderId, transition: 'fulfil' },
+      });
+      expect(fulfil.isError).toBe(true);
+      expect(fulfil.text).toContain('input.transition must be one of submit, approve, cancel');
+    } finally {
+      await c.close();
+    }
   });
 
   it("keeps an item's cost hidden from staff", async () => {

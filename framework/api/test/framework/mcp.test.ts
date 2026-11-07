@@ -2,7 +2,9 @@
 // each one says, and how a parked write reads. The e2e test runs them for real.
 import {
   createCatalog,
+  entitySpec,
   moduleScopes,
+  moduleSpec,
   modulesCovered,
   parseScope,
   scopeCovers,
@@ -14,6 +16,59 @@ import { fieldsOf, mcpTools, parkedText } from '../../dist/features/mcp/index.js
 import { tasksSpec, visitsSpec } from '../fixture/dist/contracts.js';
 
 const catalog = createCatalog(tasksSpec, visitsSpec);
+
+const label = (en: string) => ({ en, hi: en, te: en });
+/** A module whose one entity has states: its moves are write actions like any other. */
+const choresSpec = moduleSpec({
+  name: 'chores',
+  entities: {
+    chores: entitySpec({
+      name: 'chore',
+      label: 'chore',
+      description: 'Chores: a title and a state.',
+      schemas: {
+        read: z.object({ id: z.string(), title: z.string(), status: z.string() }),
+        create: z.object({ title: z.string() }),
+        update: z.object({
+          title: z.string().optional(),
+          status: z.string().optional(),
+          reason: z.string().max(200).optional(),
+        }),
+      },
+      list: {
+        filterable: { status: 'text' },
+        sortable: ['title'],
+        defaultSort: [['title', 'asc']],
+        pageSize: { default: 20, max: 50 },
+      },
+      traits: {
+        states: {
+          field: 'status',
+          initial: 'open',
+          states: {
+            open: { label: label('Open') },
+            done: { label: label('Done') },
+            dropped: { label: label('Dropped') },
+          },
+          transitions: [
+            { name: 'finish', from: 'open', to: 'done' },
+            {
+              name: 'drop',
+              from: ['open', 'done'],
+              to: 'dropped',
+              fields: ['reason'],
+              requires: ['reason'],
+              approval: (p) => p.actor.kind === 'agent',
+            },
+            { name: 'reopen', from: 'done', to: 'open', expose: 'human' },
+            { name: 'expire', from: 'open', to: 'dropped', expose: 'system' },
+          ],
+        },
+      },
+    }),
+  },
+  commands: [],
+});
 const kit = {
   apiUrl: () => 'http://api.invalid',
   appUrl: 'https://app.example',
@@ -80,6 +135,26 @@ describe('the tools a token gets', () => {
     expect(visitsWrite).not.toContain('delete-visit');
     expect(visitsWrite).toContain('- reschedule-visit: Move a visit');
     expect(visitsWrite).toContain('visitId (string, uuid)');
+  });
+});
+
+describe('state transitions', () => {
+  it("are a write action of the entity's module: the moves an agent may ask for, with their fields", () => {
+    const tools = mcpTools(createCatalog(tasksSpec, choresSpec), ['chores:write'], kit);
+    const write = tools.chores_write.description ?? '';
+    expect(write).toContain(
+      '- transition-chores: move a chore to another status. input: id (string), transition (one of finish|drop)',
+    );
+    expect(write).toContain('finish (open → done)');
+    expect(write).toContain(
+      'drop (open or done → dropped; may wait for approval; needs reason; fields: reason? (string))',
+    );
+    // People-only and the server's own moves are not offered.
+    expect(write).not.toContain('reopen');
+    expect(write).not.toContain('expire');
+    // A module without states has no transition action.
+    const tasks = mcpTools(catalog, ['tasks:write'], kit).tasks_write.description ?? '';
+    expect(tasks).not.toContain('transition-');
   });
 });
 
