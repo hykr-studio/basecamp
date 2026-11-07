@@ -262,7 +262,9 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
       channel: 'background',
       runId,
       ...(row.run.agentVersion ? { agentVersion: row.run.agentVersion } : {}),
-      scopes: scopesFor(scope.success ? scope.data.tools : [], runtime().catalog),
+      // The run's own narrowing, which this feature enforces (scope.ts), not route scopes: a
+      // run's tools reach only what its scope holds, as its owner.
+      narrowing: scopesFor(scope.success ? scope.data.tools : [], runtime().catalog),
     };
   }
 

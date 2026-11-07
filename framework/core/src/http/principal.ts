@@ -140,7 +140,8 @@ export class PrincipalGuard implements CanActivate {
       ...standing,
       runId: identity.runId,
       agentVersion: identity.agentVersion,
-      scopes: [...(identity.scopes ?? [])],
+      // A feature's own narrowing (an agent run's) rides with the credential's scopes.
+      scopes: [...(identity.scopes ?? []), ...(identity.narrowing ?? [])],
       ...(channel ? { channel } : {}),
     };
   }
