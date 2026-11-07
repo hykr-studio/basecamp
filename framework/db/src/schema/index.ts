@@ -6,6 +6,7 @@ export * from './comments.js';
 export * from './documents.js';
 export * from './events.js';
 export * from './files.js';
+export * from './imports.js';
 export * from './inbox.js';
 export * from './integrations.js';
 export * from './jobs.js';

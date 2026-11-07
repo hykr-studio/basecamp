@@ -8,6 +8,7 @@ export { documentsFeature } from './documents/index.js';
 export { eventsFeature } from './events/index.js';
 export { exportFeature } from './export/index.js';
 export { filesFeature } from './files/index.js';
+export { importsFeature } from './imports/index.js';
 export { inboxFeature } from './inbox/index.js';
 export { integrationsFeature } from './integrations/index.js';
 export { jobsFeature } from './jobs/index.js';
