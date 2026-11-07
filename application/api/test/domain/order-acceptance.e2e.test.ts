@@ -1,10 +1,11 @@
-// The orders module's acceptance (OrderAcceptance, B8): an order its customer asked for is
+// The orders module's acceptance (OrderAcceptance, B8 and H5): an order its customer asked for is
 // submitted and approved, its PDF made, and the customer accepts exactly that PDF with a one-time
-// code to their email. The order stays `approved`, which is frozen (no save, no revise); its
-// evidence holds the PDF's hash and the order's version, and the PDF is accepted once. A submitted
-// order cannot be accepted. Nobody outside the business reaches it.
+// code to their email. The order moves to `accepted` in the same write, frozen (no save, no
+// revise); its evidence holds the PDF's hash and the order's version then. The PDF is accepted once, and no later PDF of it either. A submitted order
+// cannot be accepted. Nobody outside the business reaches it.
 import {
   addMember,
+  asAssistant,
   boot,
   eventually,
   type Json,
@@ -96,6 +97,10 @@ describe("an order's acceptance by its customer", () => {
     );
     expect(notYet.body.can).toMatchObject({ ok: false, rule: 'order_not_approved' });
     expect((await move(owner, order.id, 'approve')).status).toBe(200);
+    // Nobody asks for the move to accepted: only the customer's acceptance makes it.
+    const accept = await move(owner, order.id, 'accept');
+    expect(accept.status).toBe(403);
+    expect(accept.body.rule).toBe('system_only');
     doc = await pdf(order.id);
     const status = await customer.call(
       'GET',
@@ -137,7 +142,7 @@ describe("an order's acceptance by its customer", () => {
     expect(unreached.status).toBe(404);
   });
 
-  it('the customer accepts with the code emailed to them; the order stays approved and frozen', async () => {
+  it('the customer accepts with the code emailed to them; the order moves to accepted, frozen', async () => {
     const before = new Set(await mails(customer.email));
     const asked = await customer.call(
       'POST',
@@ -171,20 +176,43 @@ describe("an order's acceptance by its customer", () => {
       document: { id: doc.id, sha256: doc.sha256 },
       signer: { userId: customer.id },
     });
-    // No transition: the order is the approved one that was accepted, at the same version.
+    // The acceptance's transition: the approved order the customer accepted is now accepted,
+    // one write on from the PDF's version (the evidence keeps the version that was accepted).
     const now = (await owner.call('GET', `/api/orders/${order.id}`)).body;
-    expect(now.status).toBe('approved');
-    expect(now.version).toBe(doc.recordVersion);
+    expect(now.status).toBe('accepted');
+    expect(now.version).toBe(doc.recordVersion + 1);
     // The contract: no save, no revision.
     const save = await owner.call('POST', '/api/orders/save', {
       orderId: order.id,
       title: 'Changed',
       items,
     });
-    expect(save.status).toBeGreaterThanOrEqual(400);
+    expect(save.status).toBe(403);
+    expect(save.body.rule).toBe('record_frozen');
     const revise = await owner.call('POST', `/api/orders/${order.id}/revise`, {});
     expect(revise.status).toBe(403);
     expect(revise.body.rule).toBe('order_revise_submitted');
+    // The write stored the move's event with the acceptance.
+    const { rows: stored } = await pool.query(
+      `select name, actor_kind, actor_id from app.domain_events
+        where resource_id = $1 and name = 'order.accept'`,
+      [order.id],
+    );
+    expect(stored).toEqual([{ name: 'order.accept', actor_kind: 'user', actor_id: customer.id }]);
+    // The history shows the order's move, by the customer who accepted it.
+    const { rows: audited } = await pool.query(
+      `select action, outcome, actor_id, before->>'status' as before, after->>'status' as after
+         from audit.events where resource_id = $1 and action = 'order.update' order by at desc
+         limit 1`,
+      [order.id],
+    );
+    expect(audited[0]).toEqual({
+      action: 'order.update',
+      outcome: 'committed',
+      actor_id: customer.id,
+      before: 'approved',
+      after: 'accepted',
+    });
     // Once: the customer has accepted this PDF.
     const again = await customer.call(
       'GET',
@@ -201,6 +229,24 @@ describe("an order's acceptance by its customer", () => {
     );
     expect(asksAgain.status).toBe(403);
     expect(asksAgain.body.rule).toBe('already_accepted');
+    // Nor any later PDF of it: an accepted order is accepted once.
+    const later = await pdf(order.id);
+    expect(later.recordVersion).toBe(doc.recordVersion + 1);
+    const status = await customer.call(
+      'GET',
+      `/api/acceptances/documents/${later.id}`,
+      undefined,
+      inTenant(),
+    );
+    expect(status.body.can).toMatchObject({ ok: false, rule: 'order_accepted' });
+    const asksLater = await customer.call(
+      'POST',
+      '/api/acceptances/challenges',
+      { documentId: later.id },
+      inTenant(),
+    );
+    expect(asksLater.status).toBe(403);
+    expect(asksLater.body.rule).toBe('order_accepted');
   });
 
   it('the business keeps the evidence; another business reaches none of it', async () => {
@@ -213,5 +259,21 @@ describe("an order's acceptance by its customer", () => {
     });
     expect((await stranger.call('GET', `/api/acceptances/${accepted.id}`)).status).toBe(404);
     expect((await stranger.call('GET', `/api/acceptances/documents/${doc.id}`)).status).toBe(404);
+    expect((await stranger.call('GET', `/api/orders/${order.id}`)).status).toBe(404);
+  });
+
+  it('the business may still cancel an accepted order; the assistant may not fulfil one', async () => {
+    const fulfil = await asAssistant(`user:${owner.id}`)(
+      'POST',
+      `/api/transitions/orders/${order.id}/fulfil`,
+      {},
+    );
+    expect(fulfil.status).toBe(403);
+    expect(fulfil.body.rule).toBe('humans_only');
+    const cancelled = await owner.call('POST', `/api/transitions/orders/${order.id}/cancel`, {
+      cancelReason: 'The customer moved',
+    });
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.body.value).toMatchObject({ status: 'cancelled' });
   });
 });
