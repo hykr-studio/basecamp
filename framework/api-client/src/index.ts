@@ -13,6 +13,10 @@ import {
   type CreditPurchase,
   type CreditsStatus,
   type DefineRoleInput,
+  type DocumentChannel,
+  type DocumentInfo,
+  type DocumentKindInfo,
+  type DocumentRecipient,
   type EditRoleInput,
   type EntitySpec,
   type FeatureState,
@@ -37,7 +41,10 @@ import {
   pathParams,
   type RecordGrant,
   type RegisterPushToken,
+  type RenderDocumentInput,
+  RenderDocumentSpec,
   type RoleView,
+  SendDocumentSpec,
   type Summary,
   type SummaryInput,
   type TemplateStatus,
@@ -304,6 +311,36 @@ export function createApiClient(opts: ApiClientOptions) {
     cancel: (id: string) => call<JobInfo>('POST', jobUrl(id, '/cancel')),
   };
 
+  const documentUrl = (id: string) => `/api/documents/${encodeURIComponent(id)}`;
+  const withDocumentUrl = (d: DocumentInfo): DocumentInfo =>
+    d.url ? { ...d, url: absolute(d.url) } : d;
+
+  const documents = {
+    /** Make a new version of a record's document; it starts `pending` (made in the background). */
+    render: (input: RenderDocumentInput, key = newKey()) => command(RenderDocumentSpec, input, key),
+    /** Send a document by WhatsApp or email (the assistant's send to others waits for approval). */
+    send: (documentId: string, to: DocumentRecipient, channel?: DocumentChannel, key = newKey()) =>
+      command(SendDocumentSpec, { documentId, to, ...(channel ? { channel } : {}) }, key),
+    /** One document, with its sends and, for people once it is made, a short-lived URL. */
+    get: async (id: string) => withDocumentUrl(await call<DocumentInfo>('GET', documentUrl(id))),
+    /** A record's documents the caller reaches, newest first. */
+    list: async (entity: string, id: string) =>
+      (
+        await call<{ items: DocumentInfo[] }>(
+          'GET',
+          `/api/documents?entity=${encodeURIComponent(entity)}&id=${encodeURIComponent(id)}`,
+        )
+      ).items,
+    /** The kinds of document an entity has (every kind without one). */
+    kinds: async (entity?: string) =>
+      (
+        await call<{ items: DocumentKindInfo[] }>(
+          'GET',
+          `/api/documents/kinds${entity ? `?entity=${encodeURIComponent(entity)}` : ''}`,
+        )
+      ).items,
+  };
+
   return {
     entity,
     summary,
@@ -312,6 +349,8 @@ export function createApiClient(opts: ApiClientOptions) {
     files,
     /** Long-running jobs: a record's, or the caller's own. */
     jobs,
+    /** Documents (PDFs) of records: make, read, send. */
+    documents,
     /** Who is signed in, in which business, with which roles. */
     me: () => call<Me>('GET', '/api/me'),
     /** The back office: conversations staff have taken from the assistant (staff only). */

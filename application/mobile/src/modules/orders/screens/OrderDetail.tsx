@@ -6,6 +6,7 @@ import {
   errorMessage,
   History,
   Loading,
+  RecordDocuments,
   SectionHeading,
   space,
   styles,
@@ -42,8 +43,9 @@ function Node({ node, depth }: { node: TreeNode<OrderItemView>; depth: number })
 }
 
 /**
- * One order: its groups and lines as a tree, its tax lines and totals, and its history. The
- * orders/[id] route shows it, and so does the canvas (order.detail).
+ * One order: its groups and lines as a tree, its tax lines and totals, its PDFs (make, open,
+ * send to me) and its history. The orders/[id] route shows it, and so does the canvas
+ * (order.detail).
  */
 export function OrderDetail({ id, embedded = false }: { id: string; embedded?: boolean }) {
   useScreenContext(embedded ? undefined : { screen: 'order', record: { type: 'order', id } });
@@ -98,6 +100,7 @@ export function OrderDetail({ id, embedded = false }: { id: string; embedded?: b
         />
       )}
       {cancel.error && <Text style={styles.error}>{errorMessage(cancel.error)}</Text>}
+      <RecordDocuments entity="order" id={o.id} />
       <History type="order" id={o.id} />
     </DecisionScrollView>
   );

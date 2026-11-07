@@ -29,6 +29,11 @@ export type TemplateDef<P extends z.ZodObject = z.ZodObject> = {
   example: z.infer<P>;
   /** Which URL button parameter fills the link's {{1}}, from the params. */
   urlParam?: keyof z.infer<P> & string;
+  /**
+   * A header above the body. `document`: the message carries a file (a PDF), given when it is
+   * sent (the documents feature fills it); a template without one cannot carry a file.
+   */
+  header?: { type: 'document' };
 };
 
 const NAME = /^[a-z][a-z0-9_]*_v\d+$/;
@@ -57,6 +62,9 @@ function check(def: TemplateDef) {
   for (const k of keys)
     if (!String((def.example as Record<string, unknown>)[k] ?? '').trim())
       fail(`no example for ${k}`);
+  if (def.header && def.header.type !== 'document') fail('a header is { type: "document" }');
+  if (def.header && def.category === 'authentication')
+    fail('an authentication template cannot carry a document');
 }
 
 export function defineTemplate<P extends z.ZodObject>(def: TemplateDef<P>): TemplateDef<P> {
@@ -73,6 +81,7 @@ export function toTemplateSpec(def: TemplateDef, lang: Lang, appUrl: string): Te
     category: def.category.toUpperCase() as TemplateSpec['category'],
     body: def.body[lang],
     examples: Object.fromEntries(Object.keys(def.params.shape).map((k) => [k, String(example[k])])),
+    ...(def.header ? { header: { format: 'DOCUMENT' as const } } : {}),
     ...(def.footer ? { footer: def.footer[lang] } : {}),
     ...(def.buttons?.length
       ? {
@@ -103,6 +112,8 @@ export function contentHash(def: TemplateDef, lang: Lang): string {
     buttons: (def.buttons ?? []).map((b) =>
       b.type === 'quick_reply' ? ['quick_reply', b.text[lang]] : ['url', b.text[lang], b.path],
     ),
+    // Only when present: every template without a header keeps the hash it was synced with.
+    ...(def.header ? { header: def.header.type } : {}),
   };
   return createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16);
 }

@@ -27,6 +27,38 @@ export {
   SET_CREDITS_PLAN,
   SETTLE_PURCHASE,
 } from './features/credits/index.js';
+export {
+  type CheckedLayout,
+  channelsOf,
+  createFakeEngine,
+  createPdfEngine,
+  DOCUMENT_ENGINE,
+  DocumentBlock,
+  type DocumentBusiness,
+  type DocumentDef,
+  type DocumentEngine,
+  DocumentLayout,
+  type DocumentLoadContext,
+  type DocumentRenderContext,
+  type DocumentRow,
+  type DocumentSendRequest,
+  type DocumentsConfig,
+  DocumentsService,
+  defineDocument,
+  documents,
+  documentsConfig,
+  fontFile,
+  harfbuzz,
+  layoutLines,
+  layoutOf,
+  loadFonts,
+  pageText,
+  type Rendered,
+  type RenderMeta,
+  reachableDocument,
+  scriptRuns,
+  shaperFor,
+} from './features/documents/public.js';
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
 export {
