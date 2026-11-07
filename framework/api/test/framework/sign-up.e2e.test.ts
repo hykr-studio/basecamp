@@ -15,7 +15,7 @@ beforeAll(async () => {
   for (const p of [owner, guest, joiner]) await p.signUp();
   // Someone has to run a business: made here as an operator would (sign-up made none).
   const { rows } = await pool.query(
-    "insert into app.tenants (name, default_owner_id) values ('Nobiz Studio', $1) returning id",
+    "insert into app.tenants (name, default_owner_id) values ('Nobiz Business', $1) returning id",
     [owner.id],
   );
   tenantId = rows[0].id;
@@ -80,7 +80,7 @@ describe('a sign-up with no business', () => {
     expect(mine.businesses).toEqual([
       expect.objectContaining({
         tenantId,
-        name: 'Nobiz Studio',
+        name: 'Nobiz Business',
         as: 'participant',
         participantRoles: ['fixture_client'],
         isDefault: false,
