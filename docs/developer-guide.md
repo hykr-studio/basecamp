@@ -1711,11 +1711,19 @@ move in a calendar means are the application's. The sample's `meetings` module u
   `hiddenWhen: { field, in }` the values that take a record off every calendar. The server
   checks it at start: a field or column that does not exist stops it.
 - **Google Calendar** (`@hykr/connectors/google-calendar`, transport only). Each person
-  connects their own account: `POST /api/calendar/connections { provider: 'google' }` returns the
-  authorization URL (PKCE, offline access, scopes `calendar.events` and `calendar.freebusy`);
-  Google returns to `GET /api/calendar/google/callback`, whose `state` is sealed with
-  `SECRETS_KEY`. Tokens are stored sealed; a refused refresh marks the connection
-  `needs_reauth`. People only (the assistant cannot connect). `GET /api/calendar/connections`
+  connects their own account: `POST /api/calendar/connections { provider: 'google', returnTo? }`
+  returns the authorization URL (PKCE, offline access, scopes `calendar.events` and
+  `calendar.freebusy`). The `state` is a random token; the server keeps who started the sign-in,
+  in which business, and the PKCE verifier (sealed), for ten minutes. Google returns to
+  `GET /api/calendar/google/callback`, which exchanges nothing: it sends the browser on to the
+  app (`CALENDAR_RETURN_URL`, or `CALENDAR_APP_RETURN_URL` for `returnTo: 'app'`) with `code`
+  and `state`, and the app calls `POST /api/calendar/google/complete { code, state }` under its
+  session. Only the person who started it, in that business, finishes it; anyone else's try is
+  403 (`calendar_sign_in_not_yours`, `calendar_sign_in_other_business`) and uses the sign-in up,
+  so a consent link sent to someone else connects nothing. Tokens are stored sealed; a refused
+  refresh marks the connection `needs_reauth`. People only (the assistant cannot connect).
+  `connectGoogleCalendar(person)` (`@hykr/api/testing`) does the round trip on the fake.
+  `GET /api/calendar/connections`
   lists yours; `DELETE /api/calendar/connections/:id` takes our events out of Google and revokes
   the grant.
 - **Sync** is one way, records to Google. The subscriber `calendar.records` queues
@@ -1775,12 +1783,14 @@ move in a calendar means are the application's. The sample's `meetings` module u
 - **In the app** `calendarPlugin()` adds `/calendar` (connect or disconnect Google; make, copy
   and revoke feeds), `<RecordInvites entity id />` a record's invites and `<RecordCalls entity
   id />` its calls (log one; "Call" when the business has a provider). The hooks are
-  `useCalendarConnections`, `useConnectCalendar`, `useDisconnectCalendar`, `useCalendarFeeds`,
+  `useCalendarConnections`, `useConnectCalendar`, `useCompleteCalendar` (the `/calendar` screen
+  finishes a sign-in it is handed), `useDisconnectCalendar`, `useCalendarFeeds`,
   `useCreateFeed`, `useRevokeFeed`, `useInvites`, `useSendInvite`, `useCalls`,
   `useCallProvider`, `useLogCall` and `useDialCall`.
 - **Configuration**: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (unset: Google is not
   offered), `GOOGLE_CALENDAR_TRANSPORT=fake` (the in-memory Google, `fakeGoogle()` in
-  `@hykr/api/testing`; production refuses it), `CALENDAR_PUBLIC_URL`, `CALENDAR_RETURN_URL` and
+  `@hykr/api/testing`; production refuses it), `CALENDAR_PUBLIC_URL`, `CALENDAR_RETURN_URL`,
+  `CALENDAR_APP_RETURN_URL` (a native app's link, such as `agenticstack://calendar`) and
   `CALENDAR_SYNC_DAYS` (`application/.env.example`).
 
 ---
@@ -2696,6 +2706,7 @@ These are not built. Each has a workaround for now.
 | Invite replies | Attendees' accept or decline is not read (no inbound mail); invites go out with `RSVP=FALSE`. |
 | Confirming invite updates | A change to an invited record emails every recipient an update at once; nobody confirms it first. |
 | Telling someone an invite failed | `calendar.invite_failed` is stored and audited; no notification is declared on it. |
+| A calendar sign-in across the app's own sign-in | Google's code is finished only in an app already signed in as the person who started, in that business. The app's sign-in screen does not keep it: someone signed out there (a phone's browser, say) starts again. One web and one native return address per deployment. |
 | A team feed | A feed lists one person's own records. |
 | A telephony provider, call recordings | None ships: contribute a `telephonyProviders` entry. Recordings and transcripts are not stored (no consent flow). |
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
