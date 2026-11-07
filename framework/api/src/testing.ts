@@ -221,5 +221,165 @@ export async function eventually<T>(
   throw new Error(`timed out waiting (last: ${JSON.stringify(last)})`);
 }
 
+/** The in-memory Google a test server talks to with GOOGLE_CALENDAR_TRANSPORT=fake. */
+export { type FakeGoogle, fakeGoogle } from '@hykr/connectors/google-calendar';
+
+/**
+ * Connect a person's Google calendar on the fake Google (GOOGLE_CALENDAR_TRANSPORT=fake), as the
+ * app does: the API's consent URL (the fake agrees at once), Google's redirect through the API's
+ * callback to the app, and the app finishing it under the person's session. `headers` go with
+ * both of the person's calls (`x-tenant-id`). Returns the finish's answer and where the browser
+ * landed.
+ */
+export async function connectGoogleCalendar(person: Person, headers: Record<string, string> = {}) {
+  const start = await person.call<{ url: string }>(
+    'POST',
+    '/api/calendar/connections',
+    { provider: 'google' },
+    headers,
+  );
+  if (start.status !== 201) throw new Error(`connecting: ${JSON.stringify(start.body)}`);
+  const back = await fetch(start.body.url, { redirect: 'manual' });
+  const landing = new URL(back.headers.get('location') ?? '');
+  const code = landing.searchParams.get('code') ?? '';
+  const state = landing.searchParams.get('state') ?? '';
+  const done = await person.call('POST', '/api/calendar/google/complete', { code, state }, headers);
+  return { ...done, landing };
+}
 /** The application the test booted (its catalog, registry, notifications and assistant). */
 export { runtime } from './runtime.js';
+
+/** What one MCP tool call answered: its text, and whether it is an error result. */
+export type McpToolOut = { text: string; isError: boolean };
+
+/** An outside AI client a person connected over MCP (A1), with its tokens. */
+export interface McpConnection {
+  clientId: string;
+  accessToken: string;
+  refreshToken?: string;
+  /** The scopes the token holds. */
+  scope: string;
+  /** The tool names the MCP endpoint lists for this token, sorted. */
+  tools(): Promise<string[]>;
+  /** Call one tool by its name (`todos_read`) over MCP. */
+  call(tool: string, args: object): Promise<McpToolOut>;
+  close(): Promise<void>;
+}
+
+/** A loopback redirect: a client on the person's computer. */
+export const MCP_TEST_REDIRECT = 'http://127.0.0.1:43123/callback';
+
+let mcpClients = 0;
+
+/**
+ * Connect an MCP client for a signed-in person, as a real one does: it registers itself, sends
+ * the person to authorize (they are signed in, so straight to consent), the person allows
+ * `accept` of the `scope` asked for, and it trades the code with its PKCE verifier. Then an MCP
+ * client over HTTP (protocol 2026-07-28) with the token.
+ */
+export async function connectMcp(
+  person: Person,
+  scope: string,
+  accept: string = scope,
+  name = `Client of ${person.name}`,
+): Promise<McpConnection> {
+  const { createHash, randomBytes } = await import('node:crypto');
+  const json = async (res: Response) => {
+    const text = await res.text();
+    if (!res.ok) throw new Error(`MCP connect: ${res.status} ${text}`);
+    return JSON.parse(text) as Json;
+  };
+  const resource = (
+    await json(await fetch(`${server.base}/.well-known/oauth-protected-resource/mcp`))
+  ).resource as string;
+  const client = await json(
+    await fetch(`${server.base}/api/auth/oauth2/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        client_name: name,
+        redirect_uris: [MCP_TEST_REDIRECT],
+        token_endpoint_auth_method: 'none',
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+      }),
+    }),
+  );
+  const verifier = randomBytes(32).toString('base64url');
+  const query = new URLSearchParams({
+    response_type: 'code',
+    client_id: client.client_id,
+    redirect_uri: MCP_TEST_REDIRECT,
+    code_challenge: createHash('sha256').update(verifier).digest('base64url'),
+    code_challenge_method: 'S256',
+    scope,
+    state: 'test',
+    resource,
+  });
+  const asked = await person.call('GET', `/api/auth/oauth2/authorize?${query}`, undefined, {
+    accept: 'application/json',
+  });
+  const consented = await person.call('POST', '/api/auth/oauth2/consent', {
+    accept: true,
+    scope: accept,
+    oauth_query: new URL(asked.body.url).search.slice(1),
+  });
+  if (consented.status !== 200) throw new Error(`MCP consent: ${JSON.stringify(consented.body)}`);
+  const code = new URL(consented.body.url).searchParams.get('code') ?? '';
+  const tokens = await json(
+    await fetch(`${server.base}/api/auth/oauth2/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: MCP_TEST_REDIRECT,
+        client_id: client.client_id,
+        code_verifier: verifier,
+        resource,
+      }).toString(),
+    }),
+  );
+  const { MCPClient } = await import('@mastra/mcp');
+  mcpClients += 1;
+  const mcp = new MCPClient({
+    id: `mcp-test-${stamp}-${mcpClients}`,
+    servers: {
+      app: {
+        url: new URL(`${server.base}/mcp`),
+        requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } },
+        protocolVersion: '2026-07-28',
+      },
+    },
+  });
+  const tools = () => mcp.listTools();
+  return {
+    clientId: client.client_id,
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token,
+    scope: tokens.scope,
+    tools: async () =>
+      Object.keys(await tools())
+        .map((n) => n.replace(/^app_/, ''))
+        .sort(),
+    async call(tool, args) {
+      const found = (await tools())[`app_${tool}`];
+      if (!found?.execute) throw new Error(`No MCP tool ${tool}`);
+      try {
+        const out = (await found.execute(args as never, {} as never)) as {
+          content?: { type: string; text?: string }[];
+          isError?: boolean;
+          error?: boolean;
+          message?: string;
+        };
+        // The client checks the input against the tool's schema before sending anything.
+        if (out?.error === true) return { text: out.message ?? '', isError: true };
+        const text = (out?.content ?? []).map((c) => c.text ?? '').join('\n');
+        return { text, isError: !!out?.isError };
+      } catch (e) {
+        return { text: String((e as Error).message ?? e), isError: true };
+      }
+    },
+    close: () => mcp.disconnect(),
+  };
+}

@@ -17,6 +17,7 @@ export * from './present.js';
 export * from './privacy.js';
 export * from './read-tools.js';
 export * from './registry.js';
+export * from './schedulable.js';
 export * from './shared.js';
 export * from './spec.js';
 export * from './states.js';

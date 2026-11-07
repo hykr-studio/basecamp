@@ -121,7 +121,8 @@ export class InboundService implements OnApplicationBootstrap {
   /** POST: verify, store each event once, queue it. Answers fast: senders retry slow ones. */
   async receive(connectorName: string, connectionId: string, req: InboundRequest) {
     const { inbound, connection, credentials } = await this.open(connectorName, connectionId);
-    if (!req.rawBody?.length || !inbound.verify(req, credentials))
+    // A sender that posts headers only (a push channel) says so; any other needs a body to sign.
+    if ((!req.rawBody?.length && !inbound.bodyless) || !inbound.verify(req, credentials))
       throw new UnauthorizedException('bad signature');
     let events: InboundEvent[];
     try {

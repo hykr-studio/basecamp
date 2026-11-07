@@ -8,6 +8,12 @@ import {
   type AddPartyMemberInput,
   type Approval,
   type BusinessRoles,
+  type BusyTimes,
+  type CalendarConnectionInfo,
+  type CalendarFeedInfo,
+  type CalendarProviderInfo,
+  type CallInfo,
+  type CallProviderInfo,
   type ChatRequest,
   type ChatResponse,
   type ChatStreamRequest,
@@ -21,6 +27,8 @@ import {
   type CreditPurchase,
   type CreditsStatus,
   type DefineRoleInput,
+  type DialCallInput,
+  DialCallSpec,
   type DocumentChannel,
   type DocumentInfo,
   type DocumentKindInfo,
@@ -35,6 +43,8 @@ import {
   FilePrivacyRequestSpec,
   type FileTarget,
   type FileTranscript,
+  type FreeTimeQuery,
+  type FreeTimes,
   type HandoffThread,
   type HistoryEntry,
   IMPORT_UPLOAD,
@@ -42,11 +52,15 @@ import {
   type Inbox,
   type InboxPage,
   type Invite,
+  type InviteInfo,
   type JobInfo,
   type LedgerEntry,
   type ListInput,
   type ListJobsQuery,
   type ListPrivacyRequestsQuery,
+  type LogCallInput,
+  LogCallSpec,
+  type McpConnection,
   type Me,
   type Member,
   type MentionablePage,
@@ -75,6 +89,8 @@ import {
   RenderDocumentSpec,
   type RoleView,
   SendDocumentSpec,
+  type SendInviteInput,
+  SendInviteSpec,
   type SlaListInput,
   type SlaTimer,
   StartImportSpec,
@@ -86,6 +102,7 @@ import {
   type ThreadMessage,
   toQueryString,
   type UndoResult,
+  UpdateCallSpec,
   type VoiceSessionEnd,
   type VoiceSessionRequest,
   type VoiceSessionResponse,
@@ -788,6 +805,112 @@ export function createApiClient(opts: ApiClientOptions) {
       /** The business's own alert threshold, in per cent. */
       setAlertAt: (alertAt: number, key = newKey()) =>
         call<WriteResult<{ alertAt: number }>>('PUT', '/api/credits/alerts', { alertAt }, key),
+    },
+    /**
+     * Calendars: the person's connections (people only), busy and free time, invites to a
+     * record, and private feeds (people only).
+     */
+    calendar: {
+      providers: () => call<CalendarProviderInfo[]>('GET', '/api/calendar/providers'),
+      /**
+       * The consent screen's URL: open it. Google sends the browser back to the API, which sends
+       * it on to the app (`returnTo`: the web app, or the native app's link) with a code and a
+       * state for `complete`.
+       */
+      connect: (provider: 'google' = 'google', returnTo?: 'web' | 'app') =>
+        call<{ url: string }>('POST', '/api/calendar/connections', {
+          provider,
+          ...(returnTo ? { returnTo } : {}),
+        }),
+      /** Finish connecting, as the person who started it, in the business they started it in. */
+      complete: (input: { code: string; state: string }, key = newKey()) =>
+        call<WriteResult<CalendarConnectionInfo>>(
+          'POST',
+          '/api/calendar/google/complete',
+          input,
+          key,
+        ),
+      connections: () => call<CalendarConnectionInfo[]>('GET', '/api/calendar/connections'),
+      disconnect: (id: string, key = newKey()) =>
+        call<WriteResult<null>>(
+          'DELETE',
+          `/api/calendar/connections/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+      busy: (from: string, to: string, userId?: string) =>
+        call<BusyTimes>(
+          'GET',
+          `/api/calendar/busy?${new URLSearchParams({ from, to, ...(userId ? { userId } : {}) })}`,
+        ),
+      free: (query: FreeTimeQuery) => {
+        const params = new URLSearchParams();
+        for (const [k, v] of Object.entries(query)) if (v !== undefined) params.set(k, String(v));
+        return call<FreeTimes>('GET', `/api/calendar/free?${params}`);
+      },
+      /** Email invites to a record (the assistant's to others wait for approval). */
+      invite: (input: SendInviteInput, key = newKey()) => command(SendInviteSpec, input, key),
+      invites: async (entity: string, id: string) =>
+        (
+          await call<{ items: InviteInfo[] }>(
+            'GET',
+            `/api/calendar/invites?entity=${encodeURIComponent(entity)}&id=${encodeURIComponent(id)}`,
+          )
+        ).items,
+      feeds: () => call<CalendarFeedInfo[]>('GET', '/api/calendar/feeds'),
+      /** A new feed: its URL is in the answer this once. */
+      createFeed: (label?: string, key = newKey()) =>
+        call<WriteResult<CalendarFeedInfo> & { url?: string }>(
+          'POST',
+          '/api/calendar/feeds',
+          label ? { label } : {},
+          key,
+        ),
+      revokeFeed: (id: string, key = newKey()) =>
+        call<WriteResult<null>>(
+          'DELETE',
+          `/api/calendar/feeds/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+    },
+    /** Outside AI clients the person connected over MCP, in this business (people only). */
+    mcp: {
+      connections: () => call<{ items: McpConnection[] }>('GET', '/api/mcp/connections'),
+      /** Disconnect one: its tokens stop working at once. */
+      disconnect: (clientId: string, key = newKey()) =>
+        call<WriteResult<{ revoked: true }>>(
+          'DELETE',
+          `/api/mcp/connections/${encodeURIComponent(clientId)}`,
+          undefined,
+          key,
+        ),
+    },
+    /** Phone calls: a record's log, logging one, click-to-call through the business's provider. */
+    calls: {
+      log: (input: LogCallInput, key = newKey()) => command(LogCallSpec, input, key),
+      dial: (input: DialCallInput, key = newKey()) => command(DialCallSpec, input, key),
+      update: (
+        callId: string,
+        patch: {
+          status?: CallInfo['status'];
+          endedAt?: string;
+          durationS?: number;
+          notes?: string | null;
+        },
+        key = newKey(),
+      ) => command(UpdateCallSpec, { callId, ...patch }, key),
+      /** Whether the business can place calls (a telephony provider it may use). */
+      provider: () => call<CallProviderInfo>('GET', '/api/calls/provider'),
+      get: (id: string) => call<CallInfo>('GET', `/api/calls/${encodeURIComponent(id)}`),
+      /** A record's calls (`entity` and `id`), or else the ones the person may see. */
+      list: async (about?: { entity: string; id: string }) =>
+        (
+          await call<{ items: CallInfo[] }>(
+            'GET',
+            `/api/calls${about ? `?entity=${encodeURIComponent(about.entity)}&id=${encodeURIComponent(about.id)}` : ''}`,
+          )
+        ).items,
     },
     /** What is remembered, by meaning: memories the caller may read now, best first. */
     memory: {

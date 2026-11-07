@@ -1,5 +1,5 @@
 // What this application says about personal data, beside each module's privacy trait (the
-// framework's privacy feature, developer guide 5.24): the services that process it for every
+// framework's privacy feature, developer guide 5.25): the services that process it for every
 // business, how soon a request is answered, how long the framework's own records of it are kept,
 // and that erasing someone for a request the team handles waits for a second person.
 import { definePrivacyPolicy, defineProcessor, type RetentionPeriod } from '@hykr/api';

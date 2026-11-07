@@ -252,7 +252,7 @@ refused with `minAssurance: 'session'`. Background work writes as `systemPrincip
   `traits.privacy` (subject columns, fields, erase, retention), and a feature table that holds
   personal data contributes `erasureContributors` and `exportContributors` (and a
   `retentionTargets` entry). Periods, processors and the request deadline are the application's
-  and each business's (`privacy` settings); developer guide 5.24.
+  and each business's (`privacy` settings); developer guide 5.25.
 - Files are reached only through the record that holds them (`/api/files`, `docs/decisions/B1.md`). Put a
   file on a record by writing its id into the record's file field (`FileRef`, `fileRefs()`, the `files`
   trait); never write `app.files` yourself. `STORAGE_DRIVER=s3` with MinIO in development (`.env.example`);

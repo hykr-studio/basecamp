@@ -1,6 +1,8 @@
 export * from './app.js';
 export * from './audit.js';
 export * from './auth.js';
+export * from './calendar.js';
+export * from './calls.js';
 export * from './channel.js';
 export * from './comments.js';
 export * from './documents.js';
@@ -12,6 +14,7 @@ export * from './integrations.js';
 export * from './jobs.js';
 export * from './memory.js';
 export * from './numbering.js';
+export * from './oauth.js';
 export * from './parties.js';
 export * from './privacy.js';
 export * from './push.js';

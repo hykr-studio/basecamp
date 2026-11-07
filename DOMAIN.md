@@ -52,7 +52,7 @@ Around the modules, the application keeps:
 | Aggregates for the apps | `application/domain/src/contracts/index.ts`, `src/views/index.ts` | Every module's specs and views (`moduleSpecs`, `moduleViews`), one line per module. The apps import `@application/domain/contracts` and `/views`, or one module's `@application/domain/modules/<name>/contracts` and `/views` |
 | Migrations | `application/domain/drizzle/`, `src/db/index.ts` | One journal for every module, generated from `src/modules/*/db/schema.ts`; `migrations` |
 | Shared server code | `application/domain/src/server/` | What several modules use, such as `BUSINESS_ACCESS` |
-| Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`: what the product is called, who the assistant is, and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools, delivery channels, connectors and connector handlers (developer guide, sections 5.9, 5.10 and 5.14), the application's approval levels and level rules (section 5.8.1; the sample's are in `application/domain/src/server/approval-levels.ts`, passed through `@application/domain/server`), and what it says about personal data: its processors, its request policy and its retention periods (section 5.24; the sample's are in `application/domain/src/server/privacy.ts`) |
+| Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`: what the product is called, who the assistant is, and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools, delivery channels, connectors and connector handlers (developer guide, sections 5.9, 5.10 and 5.14), the application's approval levels and level rules (section 5.8.1; the sample's are in `application/domain/src/server/approval-levels.ts`, passed through `@application/domain/server`), and what it says about personal data: its processors, its request policy and its retention periods (section 5.25; the sample's are in `application/domain/src/server/privacy.ts`) |
 | App modules | `application/mobile/src/modules/<name>/` and the barrel `src/modules/index.ts` (one line per module) | The app half of each module: `defineAppModule({ name, nav, suggestions, bind, hrefFor, webmcp })` from `@hykr/app`, in `index.tsx`: destinations under `/<name>`; `bind` calls `bindView` / `bindScreen` for the module's views and screens; `hrefFor` says where each of its records opens. Other modules import only that `index.tsx` |
 | App | `application/mobile/src/catalog.ts`, `settings.ts`, `home/` | `catalog = createCatalog(...moduleSpecs)` and `registry = createUiRegistry(...moduleViews)` with the `Register` declaration; `settings: AppSettings` (`title`, `tagline`, `home`, and the nav and suggestions of the screens that combine modules, such as the home screen) |
 | App routes | `application/mobile/src/app/<name>/` and `src/app/index.tsx` | One-line re-exports of each module's route components (Expo Router only knows files); `index.tsx` is the home screen |
@@ -185,7 +185,7 @@ setup, changed by people with `settings.manage` (owners and admins) through the 
 
 - **Personal data.** How soon it answers requests about personal data, which requests a person
   on its team reviews first, its own retention periods and its own processors (`privacy`
-  settings, developer guide 5.24).
+  settings, developer guide 5.25).
 
 The sample's to-dos take custom fields (a business adds its `priority`; the to-dos screen sets it
 in its add form and each row's editor with `<CustomFieldInputs>`), and "clear done to-dos"
@@ -262,6 +262,31 @@ sample's `orders` module does, developer guide 5.20):
 
 A state column can also get a CHECK in the module's `sql/post` hook (the sample's
 `orders-states.sql`); keep it in step with the states.
+
+## Calendars and calls
+
+A module puts its records with a time in people's calendars with one trait (developer guide,
+5.24):
+
+- **`traits.schedulable`** names the read-schema fields of the title, start and end (and the
+  place and description), the table's columns of the people whose calendars it goes on (default
+  the owner) and `hiddenWhen` (the values, such as cancelled, that take it off). Each person's
+  connected Google calendar, their ICS feed and the record's invites then follow it, read as
+  each person may see it.
+- **What a move in a calendar means** is the module's: the framework stores
+  `calendar.event_moved` and `calendar.event_removed` (`CalendarEventChange`) and writes nothing
+  back. The sample's `meetings` module subscribes and reschedules the meeting as the person who
+  moved it (`server/calendar-moved.subscriber.ts`, with `memberPrincipal` and `writeAs`).
+- **What an invite's outcome means** is the module's too: each send is stored as
+  `calendar.invite_sent`, `calendar.invite_cancelled` or `calendar.invite_failed`
+  (`CalendarInviteOutcome`), for a subscriber or a notification. A dial's steps update the call
+  (`call.updated`).
+- **Free time** keeps to the business's `businessHours` (its open week and holidays) unless the
+  caller asks for hours, and to every hour when the business has none. Set `businessHours` for a
+  business that should only be booked when it is open.
+- **A telephony provider** (`defineTelephonyProvider`, contributed as `telephonyProviders`) is
+  the application's; none ships, so the call log works and click-to-call is refused until one is
+  added.
 
 ## What a module adds for WhatsApp: templates and notifications
 
@@ -348,6 +373,12 @@ From the contracts declaration alone:
   Telugu), stored as files the document holds, reached through their record, and sent by
   WhatsApp or email (`document.render`, `document.send`, the tools `render-document`,
   `send-document`, `get-document`, `list-documents`, and `<RecordDocuments>` in the app).
+- Calendars and calls (`/api/calendar`, `/api/calls`): per-person Google Calendar connections
+  (OAuth, sealed tokens, push notices through the integration bus), schedulable records synced
+  into them, busy and free time (`find-free-time`), invites by email with an `.ics` that follow
+  the record (`send-calendar-invite`), private ICS feeds, and a call log on records with
+  click-to-call through the application's telephony provider (`log-call`, `dial-call`,
+  `list-calls`). `calendarPlugin()`, `<RecordInvites>` and `<RecordCalls>` in the app.
 - Comments on any record a person can read (`/api/comments`, `app.comments`), with @-mentions
   checked against who may read the record, team-only comments, the `comment.mentioned` event,
   and the in-app inbox (`/api/inbox`, the `inapp` delivery channel) where mentions land;
@@ -389,12 +420,18 @@ From the contracts declaration alone:
   (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
   (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
   sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+- Outside AI clients over MCP (developer guide, section 7.8): an OAuth 2.1 server (Better Auth's
+  oauth-provider, with its sign-in and consent pages), the `/mcp` endpoint with two tools per
+  module (`<module>_read`, `<module>_write`), scopes per module that the API enforces on every
+  route, a parked write answered with its `/approvals/<id>` link in the app, and the person's
+  connections (`/api/mcp/connections`, the app's `connectionsPlugin`). The modules give the scopes
+  and the tools; the deployment gives the addresses (`MCP_URL`, `APP_URL`).
 - Exporting a business's data (`POST /api/exports`, `data.export`, owners by default): a job that
   reads every entity as the person who asked (their access and hidden fields) and keeps one zip of
   JSON and CSV files on the job; a module adds data no entity serves as a `dataExportSources`
   entry. `exportPlugin` in the app, a section of the back office's Settings (developer guide,
   section 5.22).
-- Personal data (`/api/privacy`, `app.privacy_requests`, developer guide section 5.24): a person
+- Personal data (`/api/privacy`, `app.privacy_requests`, developer guide section 5.25): a person
   asks a business for a copy of what it keeps about them, or to be forgotten (in the app, on
   WhatsApp, or through the team, `privacy.manage`), answered by a deadline; the copy is one zip of
   their data from every part; erasure deletes, blanks or keeps each declared record as its module

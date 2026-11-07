@@ -10,6 +10,8 @@ import { SendTemplateSpec } from './notify.js';
 import { SavedPageSpec } from './page.js';
 
 export * from './backoffice.js';
+export * from './calendar.js';
+export * from './calls.js';
 export * from './comment.js';
 export * from './document.js';
 export * from './export.js';

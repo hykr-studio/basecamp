@@ -3,6 +3,24 @@
 // environment when it loads.
 
 export {
+  contentOf,
+  type EventContent,
+  googleSettings,
+  memberPrincipal,
+  schedulable,
+  schedulables,
+  uidOf,
+  writeAs,
+} from './features/calendar/public.js';
+export {
+  type CallRow,
+  callInfoOf,
+  callProviderUpdate,
+  type ProviderUpdate,
+  reachableCall,
+  telephonyProviders,
+} from './features/calls/public.js';
+export {
   type MentionContext,
   type MentionKind,
   mentionKinds,
