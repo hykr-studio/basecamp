@@ -268,6 +268,11 @@ From the contracts declaration alone:
   (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
   (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
   sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+- Outside AI clients over MCP (developer guide, section 7.7): an OAuth 2.1 server (Better Auth's
+  oauth-provider, with its sign-in and consent pages), the `/mcp` endpoint with two tools per
+  module (`<module>_read`, `<module>_write`), scopes per module that the API enforces on every
+  route, and a parked write answered with its `/approvals/<id>` link in the app. The modules give
+  the scopes and the tools; the deployment gives the addresses (`MCP_URL`, `APP_URL`).
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

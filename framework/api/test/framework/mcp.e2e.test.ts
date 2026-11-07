@@ -4,12 +4,13 @@
 // its person in their business, limited to the scopes they allowed, on every route; parked
 // writes come back with the link to the request in the app; revoking a connection ends it.
 import { createHash, randomBytes } from 'node:crypto';
-import { MCPClient } from '@mastra/mcp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addMember,
   boot,
+  connectMcp,
   type Json,
+  MCP_TEST_REDIRECT,
   me,
   origin,
   Person,
@@ -28,7 +29,7 @@ const sam = new Person('Sam Mcp'); // staff in Ana's business
 const bo = new Person('Bo Mcp'); // another business
 let tenant = '';
 let resource = '';
-const REDIRECT = 'http://127.0.0.1:43123/callback';
+const REDIRECT = MCP_TEST_REDIRECT;
 
 beforeAll(async () => {
   process.env.OPERATOR_API_KEY = OPERATOR_KEY;
@@ -108,39 +109,6 @@ const authorizeQuery = (clientId: string, challenge: string, scope: string) =>
     resource,
   }).toString();
 
-/** Signed in already: authorize, consent to `accept`, and trade the code for tokens. */
-async function connect(person: Person, scope: string, accept = scope) {
-  const client = (await register(`Client of ${person.name}`)).body;
-  const { verifier, challenge } = pkce();
-  const asked = await person.call(
-    'GET',
-    `/api/auth/oauth2/authorize?${authorizeQuery(client.client_id, challenge, scope)}`,
-    undefined,
-    { accept: 'application/json' },
-  );
-  const consentQuery = new URL(asked.body.url).search.slice(1);
-  const consented = await person.call('POST', '/api/auth/oauth2/consent', {
-    accept: true,
-    scope: accept,
-    oauth_query: consentQuery,
-  });
-  const code = new URL(consented.body.url).searchParams.get('code') ?? '';
-  const tokens = await form('/api/auth/oauth2/token', {
-    grant_type: 'authorization_code',
-    code,
-    redirect_uri: REDIRECT,
-    client_id: client.client_id,
-    code_verifier: verifier,
-    resource,
-  });
-  return { clientId: client.client_id as string, ...tokens.body } as {
-    clientId: string;
-    access_token: string;
-    refresh_token?: string;
-    scope: string;
-  };
-}
-
 /** The REST API with a bearer token, as a client might call it directly. */
 const withToken =
   (token: string) =>
@@ -156,45 +124,6 @@ const withToken =
     const text = await res.text();
     return { status: res.status, body: text ? JSON.parse(text) : null };
   };
-
-let clients = 0;
-/** An MCP client over HTTP (protocol 2026-07-28) holding this token. */
-function mcpClient(token: string) {
-  clients += 1;
-  return new MCPClient({
-    id: `mcp-test-${stamp}-${clients}`,
-    servers: {
-      app: {
-        url: new URL(`${server.base}/mcp`),
-        requestInit: { headers: { authorization: `Bearer ${token}` } },
-        protocolVersion: '2026-07-28',
-      },
-    },
-  });
-}
-
-type ToolOut = { text: string; isError: boolean };
-
-/** Call one tool by its server name; the text it answered and whether it is an error. */
-async function call(client: MCPClient, tool: string, args: object): Promise<ToolOut> {
-  const tools = await client.listTools();
-  const found = tools[`app_${tool}`];
-  if (!found?.execute) throw new Error(`no tool ${tool}: ${Object.keys(tools).join(', ')}`);
-  try {
-    const out = (await found.execute(args as never, {} as never)) as {
-      content?: { type: string; text?: string }[];
-      isError?: boolean;
-      error?: boolean;
-      message?: string;
-    };
-    // The client checks the input against the tool's schema before sending anything.
-    if (out.error === true) return { text: out.message ?? '', isError: true };
-    const text = (out.content ?? []).map((c) => c.text ?? '').join('\n');
-    return { text, isError: !!out.isError };
-  } catch (e) {
-    return { text: String((e as Error).message ?? e), isError: true };
-  }
-}
 
 /** The JSON at the end of a tool's text. */
 const jsonOf = (text: string) => JSON.parse(text.slice(text.indexOf('\n') + 1));
@@ -370,28 +299,28 @@ describe('connecting a client (OAuth 2.1, PKCE)', () => {
   });
 
   it('refreshes a token with the refresh token', async () => {
-    const first = await connect(ana, 'tasks:read offline_access');
+    const first = await connectMcp(ana, 'tasks:read offline_access');
     const refreshed = await form('/api/auth/oauth2/token', {
       grant_type: 'refresh_token',
-      refresh_token: first.refresh_token ?? '',
+      refresh_token: first.refreshToken ?? '',
       client_id: first.clientId,
       resource,
     });
     expect(refreshed.status).toBe(200);
     expect(refreshed.body.access_token).toMatch(/^mcp_at_/);
-    expect(refreshed.body.access_token).not.toBe(first.access_token);
+    expect(refreshed.body.access_token).not.toBe(first.accessToken);
     expect((await withToken(refreshed.body.access_token)('GET', '/api/tasks')).status).toBe(200);
   });
 });
 
 describe('the tools, over MCP', () => {
-  let full: Awaited<ReturnType<typeof connect>>;
+  let full: Awaited<ReturnType<typeof connectMcp>>;
   let anaTask = '';
   let samTask = '';
   let boTask = '';
 
   beforeAll(async () => {
-    full = await connect(ana, 'tasks:write visits:write');
+    full = await connectMcp(ana, 'tasks:write visits:write');
     anaTask = (await ana.call('POST', '/api/tasks', { title: 'Order tiles', dueOn: '2031-01-02' }))
       .body.value.id;
     samTask = (
@@ -406,62 +335,49 @@ describe('the tools, over MCP', () => {
   });
 
   it('lists two tools per module the token reaches, and only those', async () => {
-    const client = mcpClient(full.access_token);
-    const names = Object.keys(await client.listTools()).sort();
-    expect(names).toEqual([
-      'app_tasks_read',
-      'app_tasks_write',
-      'app_visits_read',
-      'app_visits_write',
-    ]);
-    await client.disconnect();
-    const readOnly = await connect(ana, 'tasks:read');
-    const narrow = mcpClient(readOnly.access_token);
-    expect(Object.keys(await narrow.listTools())).toEqual(['app_tasks_read']);
-    await narrow.disconnect();
+    const names = await full.tools();
+    expect(names).toEqual(['tasks_read', 'tasks_write', 'visits_read', 'visits_write']);
+    const readOnly = await connectMcp(ana, 'tasks:read');
+    expect(await readOnly.tools()).toEqual(['tasks_read']);
+    await readOnly.close();
   });
 
   it('reads the person’s records, and never another business’s', async () => {
-    const client = mcpClient(full.access_token);
-    const listed = await call(client, 'tasks_read', { entity: 'tasks' });
+    const listed = await full.call('tasks_read', { entity: 'tasks' });
     expect(listed.isError).toBe(false);
     const ids = jsonOf(listed.text).items.map((t: { id: string }) => t.id);
     expect(ids).toContain(anaTask);
     expect(ids).not.toContain(boTask);
-    const one = await call(client, 'tasks_read', { entity: 'tasks', id: anaTask });
+    const one = await full.call('tasks_read', { entity: 'tasks', id: anaTask });
     expect(jsonOf(one.text)).toMatchObject({ id: anaTask, dueOn: '2031-01-02' });
-    const theirs = await call(client, 'tasks_read', { entity: 'tasks', id: boTask });
+    const theirs = await full.call('tasks_read', { entity: 'tasks', id: boTask });
     expect(theirs.isError).toBe(true);
     expect(theirs.text).toContain('404');
     expect(theirs.text).not.toContain('secret');
-    const filtered = await call(client, 'tasks_read', {
+    const filtered = await full.call('tasks_read', {
       entity: 'tasks',
       query: { title: { contains: 'tiles' } },
     });
     expect(jsonOf(filtered.text).items.map((t: { id: string }) => t.id)).toEqual([anaTask]);
-    const refused = await call(client, 'tasks_read', { entity: 'tasks', query: { owner: 'me' } });
+    const refused = await full.call('tasks_read', { entity: 'tasks', query: { owner: 'me' } });
     expect(refused.isError).toBe(true);
-    const counted = await call(client, 'tasks_read', { entity: 'tasks', summary: {} });
+    const counted = await full.call('tasks_read', { entity: 'tasks', summary: {} });
     expect(counted.isError).toBe(false);
     expect(jsonOf(counted.text).totals[0].count).toBeGreaterThanOrEqual(1);
-    await client.disconnect();
   });
 
   it('keeps a field hidden from staff hidden', async () => {
-    const samToken = await connect(sam, 'tasks:read');
-    const client = mcpClient(samToken.access_token);
-    const listed = jsonOf((await call(client, 'tasks_read', { entity: 'tasks' })).text).items;
+    const client = await connectMcp(sam, 'tasks:read');
+    const listed = jsonOf((await client.call('tasks_read', { entity: 'tasks' })).text).items;
     expect(listed.map((t: { id: string }) => t.id)).toEqual([samTask]);
     expect(listed[0]).not.toHaveProperty('dueOn');
-    const one = jsonOf((await call(client, 'tasks_read', { entity: 'tasks', id: samTask })).text);
+    const one = jsonOf((await client.call('tasks_read', { entity: 'tasks', id: samTask })).text);
     expect(one).toMatchObject({ id: samTask, title: 'Measure the hall' });
     expect(one).not.toHaveProperty('dueOn');
-    await client.disconnect();
   });
 
   it('writes as an agent acting for the person, audited with the client, channel and run', async () => {
-    const client = mcpClient(full.access_token);
-    const made = await call(client, 'tasks_write', {
+    const made = await full.call('tasks_write', {
       action: 'create-task',
       input: { title: 'From Claude' },
     });
@@ -477,20 +393,18 @@ describe('the tools, over MCP', () => {
       acting_for: ana.id,
     });
     expect(rows[0].run_id).toMatch(/^mcp-/);
-    const changed = await call(client, 'tasks_write', {
+    const changed = await full.call('tasks_write', {
       action: 'update-task',
       input: { id: task.id, done: true },
     });
     expect(jsonOf(changed.text)).toMatchObject({ id: task.id, done: true });
-    const noId = await call(client, 'tasks_write', { action: 'update-task', input: {} });
+    const noId = await full.call('tasks_write', { action: 'update-task', input: {} });
     expect(noId).toMatchObject({ isError: true });
     expect(noId.text).toContain('input.id is required');
-    await client.disconnect();
   });
 
   it('answers a parked write with the link where a person decides it, and audits the park', async () => {
-    const client = mcpClient(full.access_token);
-    const asked = await call(client, 'tasks_write', {
+    const asked = await full.call('tasks_write', {
       action: 'delete-task',
       input: { id: anaTask },
     });
@@ -508,7 +422,6 @@ describe('the tools, over MCP', () => {
     expect((await ana.call('GET', `/api/tasks/${anaTask}`)).status).toBe(200);
     const approval = (await ana.call('GET', `/api/approvals/${link?.[2]}`)).body;
     expect(approval).toMatchObject({ id: link?.[2], status: 'pending', requestedBy: 'agent' });
-    await client.disconnect();
   });
 
   it('runs a command of the module', async () => {
@@ -519,8 +432,7 @@ describe('the tools, over MCP', () => {
         endsAt: '2031-03-01T11:00:00Z',
       })
     ).body.value;
-    const client = mcpClient(full.access_token);
-    const moved = await call(client, 'visits_write', {
+    const moved = await full.call('visits_write', {
       action: 'reschedule-visit',
       input: {
         visitId: visit.id,
@@ -533,15 +445,14 @@ describe('the tools, over MCP', () => {
       id: visit.id,
       startsAt: '2031-03-02T10:00:00.000Z',
     });
-    const unknown = await call(client, 'visits_write', { action: 'delete-visit', input: {} });
+    const unknown = await full.call('visits_write', { action: 'delete-visit', input: {} });
     expect(unknown.isError).toBe(true);
-    await client.disconnect();
   });
 });
 
 describe('scopes on the API', () => {
   it('refuses a route outside the token’s scopes: 403 out_of_scope', async () => {
-    const readOnly = withToken((await connect(ana, 'tasks:read')).access_token);
+    const readOnly = withToken((await connectMcp(ana, 'tasks:read')).accessToken);
     expect((await readOnly('GET', '/api/tasks')).status).toBe(200);
     const write = await readOnly('POST', '/api/tasks', { title: 'Not allowed' });
     expect(write.status).toBe(403);
@@ -551,7 +462,7 @@ describe('scopes on the API', () => {
   });
 
   it('refuses every route that is not a module’s: me, history, approvals, connections', async () => {
-    const full = withToken((await connect(ana, 'tasks:write visits:write')).access_token);
+    const full = withToken((await connectMcp(ana, 'tasks:write visits:write')).accessToken);
     for (const path of ['/api/me', '/api/history', '/api/approvals', '/api/mcp/connections']) {
       const res = await full('GET', path);
       expect(res.status, path).toBe(403);
@@ -560,7 +471,7 @@ describe('scopes on the API', () => {
   });
 
   it('keeps people-only actions refused', async () => {
-    const full = withToken((await connect(ana, 'visits:write')).access_token);
+    const full = withToken((await connectMcp(ana, 'visits:write')).accessToken);
     const visit = (
       await ana.call('POST', '/api/visits', {
         title: 'Keep me',
@@ -575,7 +486,7 @@ describe('scopes on the API', () => {
 
 describe('connections', () => {
   it('lists the person’s clients, and only the person may take one back', async () => {
-    const c = await connect(ana, 'tasks:read offline_access');
+    const c = await connectMcp(ana, 'tasks:read offline_access');
     const listed = (await ana.call('GET', '/api/mcp/connections')).body.items;
     expect(listed.find((x: { clientId: string }) => x.clientId === c.clientId)).toMatchObject({
       name: 'Client of Ana Mcp',
@@ -588,19 +499,19 @@ describe('connections', () => {
       ),
     ).not.toContain(c.clientId);
     expect((await bo.call('DELETE', `/api/mcp/connections/${c.clientId}`)).status).toBe(404);
-    expect((await withToken(c.access_token)('GET', '/api/tasks')).status).toBe(200);
+    expect((await withToken(c.accessToken)('GET', '/api/tasks')).status).toBe(200);
     // Ana disconnects it: its tokens stop at once, on the API and on MCP.
     const gone = await ana.call('DELETE', `/api/mcp/connections/${c.clientId}`);
     expect(gone).toMatchObject({ status: 200, body: { status: 'done', value: { revoked: true } } });
-    expect((await withToken(c.access_token)('GET', '/api/tasks')).status).toBe(401);
+    expect((await withToken(c.accessToken)('GET', '/api/tasks')).status).toBe(401);
     const mcp = await fetch(`${server.base}/mcp`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${c.access_token}` },
+      headers: { authorization: `Bearer ${c.accessToken}` },
     });
     expect(mcp.status).toBe(401);
     const refreshed = await form('/api/auth/oauth2/token', {
       grant_type: 'refresh_token',
-      refresh_token: c.refresh_token ?? '',
+      refresh_token: c.refreshToken ?? '',
       client_id: c.clientId,
       resource,
     });
@@ -616,16 +527,16 @@ describe('connections', () => {
   });
 
   it('ends a token whose person left the business', async () => {
-    const c = await connect(sam, 'tasks:read');
-    expect((await withToken(c.access_token)('GET', '/api/tasks')).status).toBe(200);
+    const c = await connectMcp(sam, 'tasks:read');
+    expect((await withToken(c.accessToken)('GET', '/api/tasks')).status).toBe(200);
     await pool.query('delete from app.memberships where tenant_id = $1 and user_id = $2', [
       tenant,
       sam.id,
     ]);
-    expect((await withToken(c.access_token)('GET', '/api/tasks')).status).toBe(403);
+    expect((await withToken(c.accessToken)('GET', '/api/tasks')).status).toBe(403);
     const mcp = await fetch(`${server.base}/mcp`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${c.access_token}` },
+      headers: { authorization: `Bearer ${c.accessToken}` },
     });
     expect(mcp.status).toBe(403);
     await addMember(sam, tenant, ['staff']);
@@ -634,15 +545,14 @@ describe('connections', () => {
 
 describe('credits', () => {
   it('refuses tool calls while the business is paused', async () => {
-    const c = await connect(ana, 'tasks:read');
+    const c = await connectMcp(ana, 'tasks:read');
     const paused = await fetch(`${server.base}/api/credits/operator/${tenant}/override`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json', 'x-operator-key': OPERATOR_KEY, origin },
       body: JSON.stringify({ override: { mode: 'pause', reason: 'test' } }),
     });
     expect(paused.status).toBeLessThan(300);
-    const client = mcpClient(c.access_token);
-    const refused = await call(client, 'tasks_read', { entity: 'tasks' });
+    const refused = await c.call('tasks_read', { entity: 'tasks' });
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain('402');
     await fetch(`${server.base}/api/credits/operator/${tenant}/override`, {
@@ -650,6 +560,5 @@ describe('credits', () => {
       headers: { 'content-type': 'application/json', 'x-operator-key': OPERATOR_KEY, origin },
       body: JSON.stringify({ override: null }),
     });
-    await client.disconnect();
   });
 });
