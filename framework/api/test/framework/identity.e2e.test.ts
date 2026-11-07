@@ -97,6 +97,9 @@ describe('roles and capabilities', () => {
         'marketing.approve',
         'members.manage',
         'members.read',
+        'memory.manage',
+        'memory.read',
+        'memory.write',
         'models.manage',
         'parties.manage',
         'parties.read',
@@ -112,6 +115,8 @@ describe('roles and capabilities', () => {
       'customers.message',
       'history.all',
       'members.read',
+      'memory.read',
+      'memory.write',
       'parties.manage',
       'parties.read',
       'records.grant',
@@ -121,6 +126,8 @@ describe('roles and capabilities', () => {
       'credits.view',
       'customers.message',
       'members.read',
+      'memory.read',
+      'memory.write',
       'parties.read',
     ]);
     // A role the application added, with the capability it names.

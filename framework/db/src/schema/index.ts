@@ -7,6 +7,7 @@ export * from './events.js';
 export * from './files.js';
 export * from './integrations.js';
 export * from './jobs.js';
+export * from './memory.js';
 export * from './numbering.js';
 export * from './parties.js';
 export * from './push.js';

@@ -10,6 +10,7 @@ export { integrationsFeature } from './integrations/index.js';
 export { jobsFeature } from './jobs/index.js';
 export { liveFeature } from './live/index.js';
 export { membersFeature } from './members/index.js';
+export { memoryFeature } from './memory/index.js';
 export { modelsFeature } from './models/index.js';
 export { moneyFeature } from './money/index.js';
 export { partiesFeature } from './parties/index.js';
