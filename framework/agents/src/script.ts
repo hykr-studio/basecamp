@@ -11,6 +11,7 @@ export {
   type CanvasPage,
   call,
   dayWords,
+  decided,
   defineScript,
   items,
   type Outcome,

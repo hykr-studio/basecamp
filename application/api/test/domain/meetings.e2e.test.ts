@@ -1,7 +1,7 @@
 // Step 13: meetings, notes and to-dos on the framework, the two commands, and the
 // agent's scripted flows, against the real compiled API.
 
-import { boot, Person, pool, shutdown } from '@hykr/api/testing';
+import { boot, eventually, Person, pool, shutdown } from '@hykr/api/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 // Compiled, like the app runs: Nest's DI needs the decorator metadata tsc emits.
 import { server as application } from '../../dist/server.js';
@@ -30,6 +30,22 @@ async function newMeeting(who: Person, title: string, offsetDays = 1) {
   });
   expect(res.status).toBe(201);
   return res.body.value as { id: string; title: string; status: string; startsAt: string };
+}
+
+/** What a run said after the turn that parked: its next message in Ana's thread. */
+async function continuationOf(threadId: string, runId: string) {
+  type Message = {
+    parts: { type: string; text?: string }[];
+    metadata: { runId: string | null };
+  };
+  const next = await eventually(async () => {
+    const res = await ana.call('GET', `/api/threads/${threadId}/messages`);
+    return (res.body as Message[]).filter((m) => m.metadata.runId === runId)[1];
+  }, 20_000);
+  return {
+    text: next.parts.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('\n'),
+    tools: next.parts.filter((p) => p.type.startsWith('tool-')).map((p) => p.type),
+  };
 }
 
 const pendingFor = async (who: Person) =>
@@ -145,6 +161,29 @@ describe('meetings, end to end', () => {
     expect(new Set(rows.map((r) => `${r.actor_kind}/${r.approved_by}/${r.outcome}`))).toEqual(
       new Set([`agent/${ana.id}/committed`]),
     );
+
+    // The assistant's run waited for the approval, then went on: in Ana's thread, under the same
+    // run, it looked up what is left to follow up (durable runs, A7).
+    const next = await continuationOf(chat.body.threadId, chat.body.runId);
+    expect(next.text).toBe('Closed Site review. 3 to-dos to follow up.');
+    expect(next.tools).toEqual(['tool-close-meeting', 'tool-list-todos']);
+  });
+
+  it('a rejected close: the run says nothing changed, and stops', async () => {
+    const retro = await newMeeting(ana, 'Retro');
+    const chat = await ana.chat('close Retro\nNothing new.\n- Fix the door');
+    const parked = chat.body.toolCalls.find((c: { tool: string }) => c.tool === 'close-meeting');
+    expect(parked.outcome).toBe('parked');
+    const no = await ana.call('POST', `/api/approvals/${parked.approvalId}/reject`);
+    expect(no.body.status).toBe('rejected');
+    const next = await continuationOf(chat.body.threadId, chat.body.runId);
+    expect(next.text).toBe(
+      'That was rejected, so nothing changed: Close Retro with 1 note and 1 to-do.',
+    );
+    expect(next.tools).toEqual(['tool-close-meeting']);
+    expect((await ana.call('GET', `/api/meetings/${retro.id}`)).body.status).toBe('scheduled');
+    // Not Bob's to read.
+    expect((await bob.call('GET', `/api/threads/${chat.body.threadId}/messages`)).status).toBe(404);
   });
 
   it("the meeting's history shows who asked, who approved, and the approval's outcome", async () => {

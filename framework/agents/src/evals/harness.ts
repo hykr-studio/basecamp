@@ -5,7 +5,7 @@ import type { Surface } from '@hykr/contracts';
 import { type MastraScorer, runEvals } from '@mastra/core/evals';
 import { RequestContext } from '@mastra/core/request-context';
 import type { EvalCase, EvalSetup } from '../agent-domain.js';
-import { AGENT_KEYS, type Agents, profileFor } from '../agents.js';
+import { type Agents, profileFor } from '../agents.js';
 import { modelRegistry } from '../models/registry.js';
 
 const api = process.env.API_INTERNAL_URL ?? 'http://localhost:3000';
@@ -77,10 +77,10 @@ export async function runCases<C extends EvalCase>(
     else runs.push([c]);
   }
   for (const group of runs) {
-    const profile = profileFor(group[0].surfaces ?? APP);
     let next = 0; // concurrency 1: results arrive in the order of the data
     await runEvals({
-      target: agents.mastra.getAgent(AGENT_KEYS[profile]),
+      // As a chat turn runs it: a write that waits for approval reads as a parked call.
+      target: agents.agentFor(group[0].surfaces ?? APP),
       concurrency: 1,
       scorers,
       targetOptions: { maxSteps: 8 },

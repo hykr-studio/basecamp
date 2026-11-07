@@ -17,6 +17,7 @@ import { ActivityIndicator, View } from 'react-native';
 import { api, authHeaders, credentials } from '../api';
 import { currentPage, useCanvas } from '../canvas/store';
 import { appConfig } from '../config';
+import { onLiveEvent } from '../features/live/listeners';
 import { useAssistant } from '../framework/assistant-context';
 import { timeZone } from '../framework/dates';
 import { colors } from '../theme';
@@ -153,6 +154,40 @@ function Runtime({ loaded, children }: { loaded: Loaded; children: ReactNode }) 
       refreshTouched(queryClient, message.parts);
     },
   });
+
+  // A run that waited for an approval went on in this thread (it was decided elsewhere, or later):
+  // load the thread again once no turn is streaming, so its reply shows without a reload.
+  useEffect(() => {
+    let pending = false;
+    const reload = async () => {
+      const id = threadRef.current;
+      if (!id) return;
+      if (runtime.thread.getState().isRunning) {
+        if (pending) return;
+        pending = true;
+        const off = runtime.thread.subscribe(() => {
+          if (runtime.thread.getState().isRunning) return;
+          off();
+          pending = false;
+          void reload();
+        });
+        return;
+      }
+      const messages = (await api.threads.messages(id).catch(() => null)) as UIMessage[] | null;
+      if (!messages || threadRef.current !== id) return;
+      markApplied(messages);
+      runtime.thread.importExternalState({
+        messages: messages.map((message, i) => ({
+          parentId: i ? messages[i - 1].id : null,
+          message,
+        })),
+        headId: messages.at(-1)?.id ?? null,
+      });
+    };
+    return onLiveEvent((event) => {
+      if (event.type === 'thread' && event.id === threadRef.current) void reload();
+    });
+  }, [runtime]);
 
   // The new thread first: if it cannot be made, the conversation stays as it was.
   const clear = useCallback(async () => {

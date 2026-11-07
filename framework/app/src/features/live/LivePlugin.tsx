@@ -7,6 +7,7 @@ import { api } from '../../api';
 import type { AppPlugin } from '../../framework/app-domain';
 import { getCatalog } from '../../runtime';
 import { createInvalidator, liveKeysFor, reconnectDelay } from './keys';
+import { emitLiveEvent } from './listeners';
 
 export type LiveOptions = {
   /** Each event, after the framework's own invalidation: refresh what else depends on it. */
@@ -84,6 +85,7 @@ function runLive(client: QueryClient, options: LiveOptions): () => void {
           }
           batch.add(liveKeysFor(m.event, getCatalog()));
           options.onEvent?.(m.event, client);
+          emitLiveEvent(m.event);
         }, controller.signal);
       } catch (e) {
         if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 429) break;

@@ -3,6 +3,7 @@
 export * from './comments';
 export * from './inbox';
 export { type LiveOptions, livePlugin } from './live/LivePlugin';
+export { onLiveEvent } from './live/listeners';
 export { type PushOptions, pushPlugin } from './push/PushPlugin';
 export { settingsPlugin } from './settings';
 export * from './states';

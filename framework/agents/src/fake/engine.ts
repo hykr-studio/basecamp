@@ -6,6 +6,7 @@ import type {
   LanguageModelV2StreamPart,
 } from '@ai-sdk/provider';
 import { LANG_ENGLISH_NAMES, LANGS, type Labels, type Lang, pick, scriptOf, t } from '@hykr/i18n';
+import { parkedLine } from '../parked-line.js';
 
 /**
  * A scripted model for tests and CI: the real agent loop, no network, no cost. The engine
@@ -97,28 +98,42 @@ export function startOfDay(day: string, zone: string): Date {
   return new Date(utc.getTime() - (wall(utc, zone) - wall(utc, 'UTC')));
 }
 
+/** How a resumed call's approval was decided (durable runs), or undefined for any other result. */
+export function decided(
+  o: Outcome | undefined,
+): 'approved' | 'rejected' | 'expired' | 'failed' | undefined {
+  const status = (o?.result as { status?: unknown } | undefined)?.status;
+  return status === 'approved' ||
+    status === 'rejected' ||
+    status === 'expired' ||
+    status === 'failed'
+    ? status
+    : undefined;
+}
+
 /**
- * What a finished write says: done, or what is waiting for approval. Spoken, or in another
- * language, the waiting line is the framework's short one: the card on screen has the detail.
+ * What a finished write says: done, what is waiting for approval, or, when a run continues after
+ * the approval, how it was decided. Spoken, or in another language, the waiting line is the
+ * framework's short one: the card on screen has the detail. An approved call's replay keeps no
+ * value, so it says the framework's line unless the result has one.
  */
 export function written(
   o: Outcome,
   done: (value: Row) => string,
   turn?: Pick<Turn, 'lang' | 'spoken' | 'surfaces'>,
 ): string {
-  const r = o.result as { status: string; value?: Row; approval?: { summary: string | null } };
-  if (r.status === 'needs_approval') {
-    if (turn && (turn.spoken || turn.lang !== 'en')) {
-      // "It's on screen" only where there is one; otherwise where to approve it.
-      const screen = turn.surfaces.some((s) => s === 'inline' || s === 'canvas');
-      return screen
-        ? t(turn.lang, 'said.needsApproval')
-        : t(turn.lang, 'said.waitingApproval', {
-            summary: r.approval?.summary ?? t(turn.lang, 'said.aChange'),
-          });
-    }
-    return `I've asked for your approval: ${r.approval?.summary ?? 'see Approvals'}. Nothing changes until you approve it.`;
-  }
+  const r = o.result as {
+    status: string;
+    value?: Row;
+    approval?: { summary: string | null };
+  };
+  const lang = turn?.lang ?? 'en';
+  const summary = r.approval?.summary ?? t(lang, 'said.aChange');
+  if (r.status === 'needs_approval') return parkedLine(r.approval?.summary, turn);
+  if (r.status === 'approved')
+    return r.value ? done(r.value) : t(lang, 'run.approved', { summary });
+  if (r.status === 'rejected') return t(lang, 'run.rejected', { summary });
+  if (r.status === 'expired') return t(lang, 'run.expired', { summary });
   return done(r.value as Row);
 }
 

@@ -142,6 +142,12 @@ it can be undone) is the application's: the sample declares `read`, `internal`, 
 writes to `internal` with a level rule. Thresholds and approvers per amount band are each
 business's settings (`approvals`).
 
+When the assistant's write waits for approval, its run waits too, and goes on once the request is
+decided: the tool's result then says `approved`, `rejected` or `expired` (`failed` reads as a
+refusal). A module's scripts for the scripted model handle that with `decided(outcome)` and
+`written(...)` from `@hykr/agents/script`; the sample's meetings close, once approved, lists what is
+left to follow up (developer guide, section 5.8.3).
+
 ## What a business sets up for itself
 
 The framework's `settings` feature (developer guide, section 5.18) gives every business its own
@@ -347,6 +353,9 @@ From the contracts declaration alone:
 - The framework's templates and notifications: login codes, approval requests and outcomes,
   staff replies after the 24-hour window, and a mention in a comment (in the in-app inbox). The agent tools `send-template` (a template to a
   customer; marketing waits for approval) and `request-human`.
+- Durable runs: an assistant run whose write waits for approval is suspended and stored (Mastra,
+  in the `mastra` schema), and resumed in the worker when the request is decided, in the same
+  thread and under the same run id (the `resume` feature, developer guide section 5.8.3).
 - The streaming chat, and the scripted model's platform scripts (`save this as …`,
   `open my … page`, `talk to the manager`, the back office's draft reply).
 - The models the assistant runs on: the deployment's OpenAI-compatible gateways (`MODEL_PROVIDERS`,
