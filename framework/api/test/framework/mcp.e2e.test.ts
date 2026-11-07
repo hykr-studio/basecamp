@@ -38,10 +38,7 @@ beforeAll(async () => {
   tenant = (await me(ana)).tenantId;
   await addMember(sam, tenant, ['staff']);
   // Sam's default business is Ana's from now on: a token Sam allows acts there.
-  await pool.query('update app.memberships set is_default = (tenant_id = $1) where user_id = $2', [
-    tenant,
-    sam.id,
-  ]);
+  expect((await sam.call('PUT', '/api/me/default', { tenantId: tenant })).status).toBe(200);
   resource = (await get('/.well-known/oauth-protected-resource/mcp')).body.resource;
 });
 

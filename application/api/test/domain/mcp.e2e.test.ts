@@ -31,10 +31,7 @@ beforeAll(async () => {
   for (const p of [owner, staff]) await p.signUp();
   tenantId = (await me(owner)).tenantId;
   await addMember(staff, tenantId, ['staff']);
-  await pool.query('update app.memberships set is_default = (tenant_id = $1) where user_id = $2', [
-    tenantId,
-    staff.id,
-  ]);
+  expect((await staff.call('PUT', '/api/me/default', { tenantId })).status).toBe(200);
   // The business counts in INR and approves orders above 10,000.00 itself.
   await setTenantSettings(tenantId, {
     money: { currency: 'INR', fyStartMonth: 4, amounts: { 'orders.approval': inr(1_000_000) } },

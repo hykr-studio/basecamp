@@ -69,10 +69,7 @@ beforeAll(async () => {
   for (const p of [owner, staff, other]) await p.signUp();
   tenantId = (await me(owner)).tenantId;
   await addMember(staff, tenantId, ['staff']);
-  await pool.query('update app.memberships set is_default = (tenant_id = $1) where user_id = $2', [
-    tenantId,
-    staff.id,
-  ]);
+  expect((await staff.call('PUT', '/api/me/default', { tenantId })).status).toBe(200);
   client = await connectMcp(owner, 'tickets:write');
 });
 afterAll(async () => {
