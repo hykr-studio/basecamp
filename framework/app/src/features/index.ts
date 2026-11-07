@@ -7,6 +7,7 @@ export * from './imports';
 export * from './inbox';
 export { type LiveOptions, livePlugin } from './live/LivePlugin';
 export { onLiveEvent } from './live/listeners';
+export * from './privacy';
 export { type PushOptions, pushPlugin } from './push/PushPlugin';
 export { settingsPlugin } from './settings';
 export * from './states';

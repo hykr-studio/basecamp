@@ -31,6 +31,8 @@ import {
   type EntitySpec,
   type FeatureState,
   type FileInfo,
+  type FilePrivacyRequestInput,
+  FilePrivacyRequestSpec,
   type FileTarget,
   type FileTranscript,
   type HandoffThread,
@@ -44,6 +46,7 @@ import {
   type LedgerEntry,
   type ListInput,
   type ListJobsQuery,
+  type ListPrivacyRequestsQuery,
   type Me,
   type Member,
   type MentionablePage,
@@ -55,6 +58,9 @@ import {
   type PartyMember,
   type PresignFileInput,
   type PresignFileResult,
+  type PrivacyRegister,
+  type PrivacyRequest,
+  ProcessPrivacyRequestSpec,
   type PublicBranding,
   type PushDevice,
   pathParams,
@@ -62,6 +68,7 @@ import {
   type RecallResult,
   type RecordGrant,
   type RecordVersion,
+  RefusePrivacyRequestSpec,
   type RegisterPushToken,
   RemoveCommentSpec,
   type RenderDocumentInput,
@@ -384,6 +391,39 @@ export function createApiClient(opts: ApiClientOptions) {
     start: (options: ImportOptionsInput, key = newKey()) => command(StartImportSpec, options, key),
   };
 
+  const privacyUrl = (id: string, rest = '') =>
+    `/api/privacy/requests/${encodeURIComponent(id)}${rest}`;
+  const privacy = {
+    /**
+     * Ask for a copy of your own personal data (`export`) or to be forgotten (`erase`); someone
+     * with `privacy.manage` files one `for` someone the business knows. It may wait for review.
+     */
+    request: (input: FilePrivacyRequestInput, key = newKey()) =>
+      command(FilePrivacyRequestSpec, input, key),
+    /** Carry out a request that waits, or failed (`privacy.manage`). It may wait for approval. */
+    process: (requestId: string, key = newKey()) =>
+      command(ProcessPrivacyRequestSpec, { requestId }, key),
+    /** Refuse a request that waits, saying why (`privacy.manage`). */
+    refuse: (requestId: string, reason: string, key = newKey()) =>
+      command(RefusePrivacyRequestSpec, { requestId, reason }, key),
+    /** Your own requests, or (`privacy.manage`) the business's; newest first. */
+    list: async (q: ListPrivacyRequestsQuery = {}) => {
+      const params = new URLSearchParams();
+      for (const [k, v] of Object.entries(q)) if (v !== undefined) params.set(k, String(v));
+      const qs = params.toString();
+      return (
+        await call<{ items: PrivacyRequest[] }>('GET', `/api/privacy/requests${qs ? `?${qs}` : ''}`)
+      ).items;
+    },
+    get: (id: string) => call<PrivacyRequest>('GET', privacyUrl(id)),
+    /** Who holds personal data in the business, what, and for how long. */
+    register: (lang?: string) =>
+      call<PrivacyRegister>(
+        'GET',
+        `/api/privacy/register${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`,
+      ),
+  };
+
   const documentUrl = (id: string) => `/api/documents/${encodeURIComponent(id)}`;
   const withDocumentUrl = (d: DocumentInfo): DocumentInfo =>
     d.url ? { ...d, url: absolute(d.url) } : d;
@@ -426,6 +466,8 @@ export function createApiClient(opts: ApiClientOptions) {
     imports,
     /** Documents (PDFs) of records: make, read, send. */
     documents,
+    /** Requests about personal data: a copy, erasure, and the register. */
+    privacy,
     /** Comments and @-mentions on records. */
     comments,
     /** The signed-in person's in-app inbox. */

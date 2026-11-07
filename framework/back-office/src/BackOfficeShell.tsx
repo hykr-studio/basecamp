@@ -4,7 +4,7 @@ import {
   useFonts,
 } from '@expo-google-fonts/schibsted-grotesk';
 import { type ApiClient, ApiError } from '@hykr/api-client';
-import { FrameworkCapabilities } from '@hykr/contracts';
+import { FrameworkCapabilities, PrivacyManageCapability } from '@hykr/contracts';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Link, Slot, usePathname } from 'expo-router';
 import { useState } from 'react';
@@ -27,6 +27,8 @@ const queryClient = new QueryClient({
 const BACK_OFFICE = FrameworkCapabilities.backOffice.name;
 /** And the Members screen this one. */
 const READ_MEMBERS = FrameworkCapabilities.readMembers.name;
+/** And the Privacy screen this one. */
+const MANAGE_PRIVACY = PrivacyManageCapability.name;
 type Me = Awaited<ReturnType<ApiClient['me']>>;
 
 function SignIn({ title, onSignedIn }: { title: string; onSignedIn: (u: SessionUser) => void }) {
@@ -87,7 +89,7 @@ function NavLink({
   href,
   label,
 }: {
-  href: '/' | '/templates' | '/members' | '/settings';
+  href: '/' | '/templates' | '/members' | '/settings' | '/privacy';
   label: string;
 }) {
   const path = usePathname();
@@ -127,6 +129,9 @@ function Shell({
         <NavLink href="/templates" label="Templates" />
         {me.capabilities.includes(READ_MEMBERS) ? (
           <NavLink href="/members" label="Members" />
+        ) : null}
+        {me.capabilities.includes(MANAGE_PRIVACY) ? (
+          <NavLink href="/privacy" label="Privacy" />
         ) : null}
         <NavLink href="/settings" label="Settings" />
         <View className="flex-1" />

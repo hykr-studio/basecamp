@@ -6,6 +6,7 @@ import {
   exportPlugin,
   inboxPlugin,
   livePlugin,
+  privacyPlugin,
   pushPlugin,
   settingsPlugin,
   webMcpPlugin,
@@ -30,8 +31,9 @@ const config = {
  * to-do reminder goes to the phone first), WebMCP (each screen's read tools, the modules'
  * `webmcp`, offered to the browser's agent where the browser supports it), the business's
  * credits (usage, the pause, buying more: `/credits`), the in-app inbox (mentions in
- * comments) and exporting the business's data (`/export`, for people who may: owners, unless
- * the business grants it to another role). The switcher goes first: switching starts everything
+ * comments), exporting the business's data (`/export`, for people who may: owners, unless
+ * the business grants it to another role) and "Your data" (`/privacy`: a copy of what the
+ * business keeps about you, or erasure). The switcher goes first: switching starts everything
  * after it again in the other business.
  */
 const plugins = [
@@ -43,6 +45,7 @@ const plugins = [
   creditsPlugin,
   inboxPlugin(),
   exportPlugin,
+  privacyPlugin,
 ];
 
 export default function RootLayout() {
