@@ -555,6 +555,13 @@ describe('importFile: the command line’s path', () => {
     await expect(
       api.importFile(server.app as never, { entity: 'shelf', path, as: 'nobody@test.local' }),
     ).rejects.toThrow(/Nobody is signed up/);
+    // Staff may not import: the command line says why.
+    const refused = await api
+      .importFile(server.app as never, { entity: 'shelf', path, as: staff.email, tenant: tenantId })
+      .catch((e: unknown) => e);
+    expect(api.failureText(refused)).toBe(
+      'Only someone who may import records can do this (needs_imports_run)',
+    );
     await expect(
       api.importFile(server.app as never, {
         entity: 'shelf',

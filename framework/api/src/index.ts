@@ -78,6 +78,7 @@ export {
   uploadTargets,
 } from './features/files/public.js';
 export {
+  failureText,
   type ImportFileOptions,
   ImportJob,
   type ImportOutcome,

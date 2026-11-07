@@ -155,7 +155,7 @@ export async function runImport(app: Basecamp, options: ImportFileOptions): Prom
   }
   const { NestFactory } = await import('@nestjs/core');
   const { CliModule } = await import('./cli.module.js');
-  const { importFile, importSummary } = await import('./features/imports/cli.js');
+  const { failureText, importFile, importSummary } = await import('./features/imports/cli.js');
   const { sharedDb } = await import('./infra/db.js');
   const context = await NestFactory.createApplicationContext(CliModule, {
     logger: ['warn', 'error'],
@@ -171,7 +171,7 @@ export async function runImport(app: Basecamp, options: ImportFileOptions): Prom
       ? 0
       : 1;
   } catch (e) {
-    console.error(`basecamp import: ${e instanceof Error ? e.message : e}`);
+    console.error(`basecamp import: ${failureText(e)}`);
     return 1;
   } finally {
     await context.close();

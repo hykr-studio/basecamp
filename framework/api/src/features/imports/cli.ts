@@ -14,7 +14,7 @@ import {
 } from '@hykr/contracts';
 import { CORE_OPTIONS, type CoreOptions, PrincipalResolver, runWrite } from '@hykr/core';
 import { membershipOf, user } from '@hykr/db';
-import type { INestApplicationContext } from '@nestjs/common';
+import { HttpException, type INestApplicationContext } from '@nestjs/common';
 import { EventBus } from '@nestjs/cqrs';
 import { eq, sql } from 'drizzle-orm';
 import { FilesService } from '../files/files.service.js';
@@ -187,4 +187,15 @@ export function importSummary(out: ImportOutcome): string[] {
       `Error report: ${out.reportPath}${r.reportTruncated ? ` (the first ${r.reportRows} rows)` : ''}`,
     );
   return lines;
+}
+
+/** What a failure says on the command line: a refusal's reason (and rule), else its message. */
+export function failureText(e: unknown): string {
+  if (e instanceof HttpException) {
+    const body = e.getResponse() as { reason?: string; message?: unknown; rule?: string } | string;
+    if (typeof body === 'string') return body;
+    const said = body.reason ?? (typeof body.message === 'string' ? body.message : undefined);
+    if (said) return body.rule ? `${said} (${body.rule})` : said;
+  }
+  return e instanceof Error ? e.message : String(e);
 }

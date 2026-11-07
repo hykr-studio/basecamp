@@ -1,7 +1,13 @@
 // What applications, the CLI and tests use of imports on the server.
 import './routes.js';
 
-export { type ImportFileOptions, type ImportOutcome, importFile, importSummary } from './cli.js';
+export {
+  failureText,
+  type ImportFileOptions,
+  type ImportOutcome,
+  importFile,
+  importSummary,
+} from './cli.js';
 export { type ImportsConfig, importsConfig } from './config.js';
 export { Importer } from './importer.service.js';
 export {
