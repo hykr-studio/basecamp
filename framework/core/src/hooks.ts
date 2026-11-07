@@ -65,9 +65,11 @@ export interface EntityPlugin {
   /** More conditions on the rows this principal reaches, for reading or for writing. */
   scope?(p: Principal, op: 'read' | 'write', target: EntityPluginTarget): SQL | undefined;
   /**
-   * The column values an insert or update writes: add or change some (a version bump). Keys
-   * that are not columns are dropped, and the business, owner, customer and `createdBy` are
-   * always the framework's.
+   * The column values an insert or update writes: add or change some (a version bump). A value
+   * may be SQL computed from the row as it is when the update runs (a jsonb merge): `row` was
+   * read without a lock, so a value built from it would undo a concurrent write. Keys that are
+   * not columns are dropped, and the business, owner, customer and `createdBy` are always the
+   * framework's.
    */
   toValues?(
     values: Values,
@@ -89,7 +91,25 @@ export interface EntityPlugin {
    * `repo.list`, which is server code.
    */
   query?(q: ListQuery, p: Principal, target: EntityPluginTarget): void;
+  /**
+   * What a write that parks must find unchanged when it is approved (a version), from the row
+   * it loaded. Kept with the parked operation; undefined: nothing to pin.
+   */
+  onPark?(row: Values, target: EntityPluginTarget): Values | undefined;
+  /**
+   * On the approved replay, the row as it is now against what `onPark` kept: a refusal (409)
+   * when the record moved on since the request was made, or null.
+   */
+  onReplay?(row: Values, pinned: Values, target: EntityPluginTarget): StaleRefusal | null;
+  /**
+   * A write to the children of this record (a tree written through it: `children.insert` and
+   * `children.replace`): refuse it (a frozen record's lines), or null.
+   */
+  childWrite?(parent: Values, target: EntityPluginTarget): AuthorizeResult | null;
 }
+
+/** Why a parked write no longer applies: answered as 409 with this body. */
+export type StaleRefusal = { error: string; message: string };
 
 /** Entity plugins, in the order they run. */
 export const entityPlugins = createHookRegistry<EntityPlugin>('entity plugin', (x) => x.name, {

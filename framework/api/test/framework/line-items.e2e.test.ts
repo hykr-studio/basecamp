@@ -13,6 +13,7 @@ import {
   Person,
   pool,
   server,
+  setTenantSettings,
   shutdown,
 } from '../../dist/testing.js';
 import { BasketDef, BasketItemDef, lineItems } from '../fixture/dist/features/line-items/index.js';
@@ -198,11 +199,7 @@ describe('a whole tree in one write', () => {
     expect(res.status).toBe(404);
     expect(await items(owner, basketId)).toEqual(before);
     // Another business's item id: the same 404.
-    await stranger.call('GET', '/api/me');
-    await pool.query(
-      'update app.tenants set settings = settings || \'{"money":{"currency":"EUR"}}\' where id = (select tenant_id from app.memberships where user_id = $1 limit 1)',
-      [stranger.id],
-    );
+    await setTenantSettings((await me(stranger)).tenantId, { money: { currency: 'EUR' } });
     const theirs = await save(stranger, { title: 'Theirs', items: flat(1, 1) });
     const theirItem = theirs.body.value.items[0] as Item;
     const smuggled = await save(owner, {

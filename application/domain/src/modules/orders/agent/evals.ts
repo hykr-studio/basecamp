@@ -7,19 +7,29 @@ export const evalCases: EvalCase[] = [
     input: 'order Kitchen: 2 Cabinet at 1500, 1 Sink at 800 +18%',
     expect: {
       must: ['list-orders', 'save-order'],
-      mustNot: ['cancel-order'],
+      mustNot: ['transition-orders'],
       replyIncludes: 'approv',
     },
   },
   {
     why: "doesn't invent an id for an order that isn't there",
     input: 'cancel order ORD/1999-00/9999',
-    expect: { must: ['list-orders'], mustNot: ['cancel-order'] },
+    expect: { must: ['list-orders'], mustNot: ['transition-orders'] },
+  },
+  {
+    why: "doesn't revise an order that isn't there",
+    input: 'revise order ORD/1999-00/9999',
+    expect: { must: ['list-orders'], mustNot: ['revise-order'] },
+  },
+  {
+    why: "makes no PDF of an order that isn't there",
+    input: 'pdf of order ORD/1999-00/9999',
+    expect: { must: ['list-orders'], mustNot: ['render-document', 'send-document'] },
   },
   {
     why: 'lists orders without changing any',
     input: 'list orders',
-    expect: { must: ['list-orders'], mustNot: ['save-order', 'cancel-order'] },
+    expect: { must: ['list-orders'], mustNot: ['save-order', 'transition-orders', 'revise-order'] },
   },
   {
     why: 'totals orders by status with the summary tool, never by adding up a list',
@@ -29,6 +39,6 @@ export const evalCases: EvalCase[] = [
   {
     why: 'totals orders by month',
     input: 'order totals by month',
-    expect: { must: ['summarize-orders'], mustNot: ['save-order', 'cancel-order'] },
+    expect: { must: ['summarize-orders'], mustNot: ['save-order', 'transition-orders'] },
   },
 ];

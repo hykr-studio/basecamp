@@ -4,4 +4,5 @@
 export { NotifyService, scheduledJobId } from './channels/notify/notify.service.js';
 export { TemplateSync } from './channels/templates/template-sync.js';
 export { WHATSAPP } from './channels/whatsapp/adapter.provider.js';
+export { setTxtResolver } from './features/settings/domains.js';
 export { DB } from './infra/db.module.js';

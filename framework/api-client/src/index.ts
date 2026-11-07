@@ -6,14 +6,20 @@ import {
   type ChatRequest,
   type ChatResponse,
   type ChatStreamRequest,
+  type ClientSettings,
   type CommandSpec,
   type CreatedInvite,
   type CreateInviteInput,
   type CreditPurchase,
   type CreditsStatus,
   type DefineRoleInput,
+  type DocumentChannel,
+  type DocumentInfo,
+  type DocumentKindInfo,
+  type DocumentRecipient,
   type EditRoleInput,
   type EntitySpec,
+  type FeatureState,
   type FileInfo,
   type FileTarget,
   type FileTranscript,
@@ -31,14 +37,24 @@ import {
   type Page,
   type PresignFileInput,
   type PresignFileResult,
+  type PublicBranding,
   type PushDevice,
   pathParams,
+  type RecallQuery,
+  type RecallResult,
   type RecordGrant,
+  type RecordVersion,
   type RegisterPushToken,
+  type RenderDocumentInput,
+  RenderDocumentSpec,
   type RoleView,
+  SendDocumentSpec,
+  type SlaListInput,
+  type SlaTimer,
   type Summary,
   type SummaryInput,
   type TemplateStatus,
+  type TenantDomain,
   type Thread,
   type ThreadMessage,
   toQueryString,
@@ -301,6 +317,36 @@ export function createApiClient(opts: ApiClientOptions) {
     cancel: (id: string) => call<JobInfo>('POST', jobUrl(id, '/cancel')),
   };
 
+  const documentUrl = (id: string) => `/api/documents/${encodeURIComponent(id)}`;
+  const withDocumentUrl = (d: DocumentInfo): DocumentInfo =>
+    d.url ? { ...d, url: absolute(d.url) } : d;
+
+  const documents = {
+    /** Make a new version of a record's document; it starts `pending` (made in the background). */
+    render: (input: RenderDocumentInput, key = newKey()) => command(RenderDocumentSpec, input, key),
+    /** Send a document by WhatsApp or email (the assistant's send to others waits for approval). */
+    send: (documentId: string, to: DocumentRecipient, channel?: DocumentChannel, key = newKey()) =>
+      command(SendDocumentSpec, { documentId, to, ...(channel ? { channel } : {}) }, key),
+    /** One document, with its sends and, for people once it is made, a short-lived URL. */
+    get: async (id: string) => withDocumentUrl(await call<DocumentInfo>('GET', documentUrl(id))),
+    /** A record's documents the caller reaches, newest first. */
+    list: async (entity: string, id: string) =>
+      (
+        await call<{ items: DocumentInfo[] }>(
+          'GET',
+          `/api/documents?entity=${encodeURIComponent(entity)}&id=${encodeURIComponent(id)}`,
+        )
+      ).items,
+    /** The kinds of document an entity has (every kind without one). */
+    kinds: async (entity?: string) =>
+      (
+        await call<{ items: DocumentKindInfo[] }>(
+          'GET',
+          `/api/documents/kinds${entity ? `?entity=${encodeURIComponent(entity)}` : ''}`,
+        )
+      ).items,
+  };
+
   return {
     entity,
     summary,
@@ -309,6 +355,8 @@ export function createApiClient(opts: ApiClientOptions) {
     files,
     /** Long-running jobs: a record's, or the caller's own. */
     jobs,
+    /** Documents (PDFs) of records: make, read, send. */
+    documents,
     /** Who is signed in, in which business, with which roles. */
     me: () => call<Me>('GET', '/api/me'),
     /** The back office: conversations staff have taken from the assistant (staff only). */
@@ -417,6 +465,30 @@ export function createApiClient(opts: ApiClientOptions) {
           key,
         ),
     },
+    /**
+     * The business's setup (A11). Changes go through `command(SetFeatureSpec | UpdateBrandingSpec
+     * | UpdateWordingSpec | AddDomainSpec | VerifyDomainSpec | RemoveDomainSpec, input)`, custom
+     * fields through `entity(CustomFieldSpec)`.
+     */
+    settings: {
+      /** Flags on, what is off, branding and the business's phrases: what the apps need. */
+      get: () => call<ClientSettings>('GET', '/api/settings'),
+      /** Every declared flag, on or off here, and who switches it. */
+      features: () => call<FeatureState[]>('GET', '/api/features'),
+      /** The business's web addresses (settings managers only). */
+      domains: () => call<TenantDomain[]>('GET', '/api/settings/domains'),
+      /**
+       * Branding on a verified custom domain, before signing in: of `origin` (a web page passes
+       * its own, `window.location.origin`), else of the request's Origin. 404 anywhere else.
+       */
+      publicBranding: (origin?: string) =>
+        call<PublicBranding>(
+          'GET',
+          origin
+            ? `/api/branding/public?origin=${encodeURIComponent(origin)}`
+            : '/api/branding/public',
+        ),
+    },
     /** People only: the agent gets 403. */
     listApprovals: () => call<Approval[]>('GET', '/api/approvals'),
     getApproval: (id: string) => call<Approval>('GET', `/api/approvals/${encodeURIComponent(id)}`),
@@ -439,6 +511,40 @@ export function createApiClient(opts: ApiClientOptions) {
         }),
       unlink: () => call<void>('DELETE', '/api/channels/whatsapp'),
     },
+    /**
+     * Move a record along its state machine (POST /api/transitions): done with the record, or
+     * needs_approval when the transition waits. `input`: the transition's own fields.
+     */
+    transition: <S extends EntitySpec>(
+      spec: S,
+      id: string,
+      name: string,
+      input: Partial<z.input<S['schemas']['update']>> = {},
+      key = newKey(),
+    ): Promise<WriteResult<z.infer<S['schemas']['read']>>> =>
+      call(
+        'POST',
+        `/api/transitions/${spec.plural}/${encodeURIComponent(id)}/${encodeURIComponent(name)}`,
+        input,
+        key,
+      ),
+    /** SLA clocks: a record's (by its entity's plural), or the business's in one status. */
+    sla: {
+      of: (plural: string, id: string) =>
+        call<SlaTimer[]>('GET', `/api/sla/${plural}/${encodeURIComponent(id)}`),
+      list: (q: SlaListInput = {}) => {
+        const params = new URLSearchParams();
+        for (const [k, v] of Object.entries(q)) if (v !== undefined) params.set(k, String(v));
+        const qs = params.toString();
+        return call<SlaTimer[]>('GET', `/api/sla${qs ? `?${qs}` : ''}`);
+      },
+    },
+    /** The revisions of a versioned record's series, oldest first (people only). */
+    versions: (resourceType: string, resourceId: string) =>
+      call<RecordVersion[]>(
+        'GET',
+        `/api/history/versions?resourceType=${resourceType}&resourceId=${encodeURIComponent(resourceId)}`,
+      ),
     /** A record's history from the audit trail (people only). */
     /** `resourceType`: any entity name in the catalog (see entityNames). */
     history: (resourceType: string, resourceId: string) =>
@@ -513,6 +619,16 @@ export function createApiClient(opts: ApiClientOptions) {
           undefined,
           key,
         ),
+    },
+    /** What is remembered, by meaning: memories the caller may read now, best first. */
+    memory: {
+      recall: (q: RecallQuery) => {
+        const params = new URLSearchParams({ q: q.q });
+        if (q.about) params.set('about', q.about);
+        if (q.limit) params.set('limit', String(q.limit));
+        if (q.kinds) params.set('kinds', q.kinds);
+        return call<RecallResult>('GET', `/api/memory/recall?${params}`);
+      },
     },
     /** The person's conversations, kept on the server so every channel shares them (people only). */
     threads: {

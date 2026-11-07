@@ -7,7 +7,7 @@ import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { createApiClient } from '@hykr/api-client';
 import type { CoreOptions } from '@hykr/core';
-import { CORE_OPTIONS, TenantConfigService } from '@hykr/core';
+import { CORE_OPTIONS } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 // The API's entry is loaded in beforeAll, once the stand-in's address is in the environment.
@@ -26,6 +26,7 @@ import {
   pool,
   seedContact,
   server,
+  setTenantSettings,
   shutdown,
 } from '../../dist/testing.js';
 import { filesApp } from '../fixture/dist/features/files/index.js';
@@ -659,11 +660,7 @@ describe('WhatsApp media', () => {
     await sendPhoto(from);
     await eventually(() => textsTo(from).find((t) => t.includes('Which record should it go on?')));
 
-    await pool.query(
-      `update app.tenants set settings = settings || '{"files":{"keepInboundMedia":false}}'::jsonb where id = $1`,
-      [tenantId],
-    );
-    provider<TenantConfigService>(TenantConfigService).invalidate();
+    await setTenantSettings(tenantId, { files: { keepInboundMedia: false } });
     try {
       const before = (
         await pool.query('select count(*)::int as n from app.files where contact_id = $1', [
@@ -685,10 +682,7 @@ describe('WhatsApp media', () => {
       ).rows[0].n;
       expect(after).toBe(before);
     } finally {
-      await pool.query(`update app.tenants set settings = settings - 'files' where id = $1`, [
-        tenantId,
-      ]);
-      provider<TenantConfigService>(TenantConfigService).invalidate();
+      await setTenantSettings(tenantId, { files: null });
     }
   });
 

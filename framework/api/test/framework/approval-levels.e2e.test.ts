@@ -16,6 +16,7 @@ import {
   pool,
   seedContact,
   server,
+  setTenantSettings,
   shutdown,
   stamp,
 } from '../../dist/testing.js';
@@ -39,10 +40,7 @@ const final = { name: 'fixture_final', rank: 3, label: { en: 'Final' } };
 
 /** This business's approval settings, replaced. */
 async function approvalsSettings(approvals: object) {
-  await pool.query(
-    `update app.tenants set settings = jsonb_set(settings, '{approvals}', $2::jsonb) where id = $1`,
-    [tenantId, JSON.stringify(approvals)],
-  );
+  await setTenantSettings(tenantId, { approvals });
 }
 
 const pay = (person: Person, amountMinor: number, extra: object = {}) =>

@@ -20,6 +20,8 @@
     "@hykr/api": "workspace:*"
   },
   "devDependencies": {
+    "@hykr/api-client": "workspace:*",
+    "@hykr/contracts": "workspace:*",
     "@hykr/tsconfig": "workspace:*",
     "@hykr/voice-worker": "workspace:*",
     "@nestjs/bullmq": "^12.0.0",

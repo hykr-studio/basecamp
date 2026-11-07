@@ -176,7 +176,8 @@ describe('order totals', () => {
       expect(res.status, JSON.stringify(res.body)).toBe(200);
     }
     const third = (await owner.call('GET', '/api/orders?q=Third')).body.items[0];
-    expect((await owner.call('POST', `/api/orders/${third.id}/cancel`, {})).status).toBe(200);
+    const cancel = await owner.call('POST', `/api/transitions/orders/${third.id}/cancel`, {});
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(200);
   });
 
   it('by status: counts and totals, per currency', async () => {
@@ -189,7 +190,7 @@ describe('order totals', () => {
         sum: { total: { minor: 4000, currency: 'INR' } },
       },
       {
-        key: { status: 'open', currency: 'INR' },
+        key: { status: 'draft', currency: 'INR' },
         count: 2,
         sum: { total: { minor: 35050, currency: 'INR' } },
       },

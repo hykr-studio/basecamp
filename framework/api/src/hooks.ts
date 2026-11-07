@@ -384,6 +384,11 @@ export interface AuthPlugin {
   /** More origins that may call the API with cookies. */
   trustedOrigins?: readonly string[];
   /**
+   * Origins only known at run time (a business's verified custom domain): asked by CORS for an
+   * origin the static lists do not hold. Its plugin answers Better Auth the same way.
+   */
+  originAllowed?(origin: string): Promise<boolean>;
+  /**
    * The plugin's tables (drizzle, in `@hykr/db`), keyed by its model names, for Better Auth's
    * adapter: `{ oauthClient, oauthConsent, … }`.
    */

@@ -167,7 +167,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/api/src/runtime.ts`, `start.ts` | `defineServer`, `startApi`, `startWorker`, `migrate`, `runTemplates`, `runEval`, `startStudio`. `testing.ts` is `@hykr/api/testing`. `hooks.ts` holds the server's extension points (section 5.9), `module.ts` `defineModule`, and `module-checks.ts` the boot checks across modules (section 5.11). |
 | `framework/api/src/channels/` | WhatsApp webhook, queues, sending, notifications dispatch, template sync, handoff, back office API, erasure |
 | `framework/api/src/modules/` | Chat, threads, history, me, voice, pages |
-| `framework/api/src/features/` | Framework features, one folder each (`defineFeature`), among them `events` (the outbox relay), `files`, `money`, `push`, `approvals`, `integrations` (webhooks out and in, section 5.14) and `mcp` (outside AI clients, section 7.7) |
+| `framework/api/src/features/` | Framework features, one folder each (`defineFeature`), among them `events` (the outbox relay), `files`, `money`, `push`, `approvals`, `integrations` (webhooks out and in, section 5.14) and `mcp` (outside AI clients, section 7.8) |
 | `framework/app/src/` | `AppShell`, `defineAppModule` and the plugin types (`framework/app-domain.ts`), their merge (`framework/compose-app.ts`) and plugin slots (`framework/plugins.ts`), data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; framework features as plugins in `features/<x>/` (live, push, WebMCP); primitives in `@hykr/app/ui` |
 | `framework/cli/` | The `basecamp` command (`module-add.ts` scaffolds a module, `db-rebase.ts` regenerates migrations after a rebase), plus the `compose.yaml` and `infra/` it starts |
 
@@ -816,13 +816,13 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
 
 - **Traits.** `entitySpec({ ..., traits: { <key>: … } })`, and the same on `commandSpec`. A feature
   declares its key on `EntityTraits` or `CommandTraits` in its own file. Its plugin then acts on the
-  specs that carry the key.
+  specs that carry the key (`memory`, section 7.7, is one).
 - **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
   Each key is a list, collected by one registry: `roles` and `capabilities` (section 6.4), with
   `roleOverrides` and `roleDefaults`, and `approvalLevels` (section 5.8.1) in `@hykr/contracts`;
   `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql`, `levelRules`, `grantKinds`,
   `identityProviders` and `numberSeries` (section 5.13) in `@hykr/core`; `toolContributions` in
-  `@hykr/core/tools`;
+  `@hykr/core/tools`; `documents` (section 5.19),
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `fileHolders`
   (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
@@ -841,8 +841,9 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `isEnabled(tenantId, key)` is true only for a stored `true` (no business, an unknown one or
   settings that do not parse are all off). `get` throws when any part does not parse;
   `section(tenantId, key)` reads one section, parsed alone in that case, so another feature's
-  broken section does not stop yours. A test that changes settings with SQL calls
-  `settingsChanged(tenantId)` (`@hykr/api/testing`): the server reads them on every request.
+  broken section does not stop yours. A test changes settings with `setTenantSettings(tenantId,
+  patch)` (`@hykr/api/testing`), which drops the cached copy: the server reads them on every
+  request (section 12).
 
 A framework feature also keeps its phrases, its scripted-model scripts and its fixture tables in files of its own, so parallel work never edits a shared file. One line in a barrel registers each one: `framework/i18n/src/messages/index.ts` (section 9), `framework/agents/src/fake/scripts/index.ts` (section 7.3). The fixture's per-feature migration sets need no line (section 12). These barrels merge with `merge=union` (`.gitattributes`).
 
@@ -1193,7 +1194,7 @@ and take check-ins there.
 Every entity whose list has a route has a summary (`docs/decisions/B13B14.md`):
 
 ```text
-GET /api/orders/summary?status=open&groupBy=createdAt:month&sum=total&sort=-key&limit=4
+GET /api/orders/summary?status=submitted&groupBy=createdAt:month&sum=total&sort=-key&limit=4
 { groups: [{ key: { createdAt: '2026-11', currency: 'INR' }, count: 3, sum: { total: { minor, currency } } }],
   totals: [{ key: { currency: 'INR' }, count: 3, sum: { total: … } }], more: false }
 ```
@@ -1295,6 +1296,203 @@ run: async ({ tx, principal, loaded }) => ({
   `JOBS_SECRET` (derived from `BETTER_AUTH_SECRET` when unset), `JOBS_CALLBACK_TOLERANCE_S` (300),
   `JOBS_ALLOW_PRIVATE_URLS`. The fixture's `features/jobs` and `test/framework/jobs.e2e.test.ts`
   show a callback job and a polled one against a stand-in service.
+
+### 5.18 A business's setup: flags, custom fields, white label, shared records, wording
+
+The `settings` feature (`framework/api/src/features/settings/`, `docs/decisions/A11.md`). Every
+change to a business's setup goes through `runWrite` (validated, idempotent, audited) and needs the
+capability `settings.manage` (owners and admins). None of these commands is a tool: the assistant
+does not change a business's setup.
+
+- **Feature flags, failing closed.** A module declares its flags and what each gates, and
+  contributes them: `defineFeatureFlag({ key: 'todos.clear-done', label, description?, managedBy?,
+  gates: { modules?, entities?, commands?, tools?, nav? } })` in `contributes: { featureFlags }`.
+  A flag is on for a business only when its settings store `features[key] === true`; no business,
+  an unknown key or settings that do not parse are off. Something gated by several flags needs all
+  of them on. What is off:
+  - its routes answer 404 `not_found`, like a missing record (a global interceptor);
+  - every write that runs it or touches its records rolls back with 404, on every path (another
+    module's command, an approval approved after the flag went off, a system job);
+  - its tools are taken from the assistant for the turn (a turn hook's `withoutTools`);
+  - the app hides its destinations (`settingsPlugin`, by the item's `module` or href); `useFeature(key)`
+    hides anything else.
+  A flag that names a module, entity, command or tool the application does not have stops the start.
+  `managedBy: 'platform'` (the default) is switched only from server code
+  (`FeatureFlagsService.set(tenantId, key, on)`, as the system principal); `managedBy: 'tenant'` by
+  the business: `PUT /api/features/:key { on }`. `GET /api/features` lists every flag and its
+  state; `GET /api/me` and `GET /api/settings` list the ones that are on.
+- **Custom fields.** An entity opts in: the trait `customFields: {}`, `custom: CustomFieldValues`
+  in the read schema, `custom: CustomFieldsInput.optional()` in create and update, `custom:
+  'custom'` in `list.filterable`, and `custom: customFieldsColumn()` on the table (`@hykr/db`). A
+  business defines its fields at `/api/custom-fields` (`{ entity, key, type, label, options?,
+  required?, filterable? }`; key, type and entity never change). Types are a registry
+  (`defineCustomFieldType`); the framework's are `text`, `number`, `boolean`, `date` and `select`.
+  Values are checked in the write's transaction on every path (400 `custom_field_invalid`, rolled
+  back; a parked write when it parks). An update merges its patch in SQL, into the row as it is
+  when the update runs, so two updates that set different keys both keep theirs; `null` removes a
+  key. Only the values a write sets are checked, so a value kept from a removed field stays until
+  changed. A required field binds the entity's own create and any write that sets or changes
+  custom values; a record a command makes without any (a meeting's close making to-dos) is made
+  with the field unset, since the command cannot know the business's fields.
+  Filters: `custom[priority]=high` or `custom={"estimate":{"gte":3}}` (`eq`, `ne`, `in`, `lt`,
+  `lte`, `gt`, `gte`, `contains`), compared by the stored JSON type; a key the business has not
+  made filterable is a 400. The assistant gets the business's fields as turn context.
+- **White label.** The settings section `branding` (`name`, `logoUrl` (https), `colors.primary`,
+  `primaryText`, `rail`): `PATCH /api/settings/branding`. Custom domains:
+  `POST /api/settings/domains { origin }` returns a token; the business publishes it as a TXT record
+  at `_basecamp-verify.<host>`, then `POST /api/settings/domains/:id/verify`. Only a verified origin
+  is trusted, for CORS (`AuthPlugin.originAllowed`) and Better Auth (a dynamic `trustedOrigins`), and
+  `GET /api/branding/public?origin=` (no session; `api.settings.publicBranding(origin)`) returns its
+  name, logo and colours, which the back office's sign-in shows; the app's sign-in does not ask yet
+  (section 14). One origin belongs to one business (409). Anyone can ask about an origin, so each
+  process holds a copy of every verified origin (loaded at most every 30 seconds, and again after a
+  domain changes here) and never looks up anything that is not an exact https origin: a question
+  costs no query and keeps nothing.
+- **Shared records.** An entity opts in with the trait `shared: {}`, `...SharedFields` in its read
+  schema, `...SharedFromInput` in create, `sharedId: sharedFromColumn()` with a unique index on
+  `(tenant_id, shared_id)`, and `defineSharedEntity(spec, config)` instead of `defineEntity`. Rows of
+  the platform's business (`PLATFORM_TENANT_ID`, deployment configuration; unset: nothing is shared)
+  are read by every business with its own (`list`, `get`, tools), each through `toRead(row, p)`, and
+  are read-only to them (403 `shared_read_only`). A business overrides one by creating its own row
+  with `sharedId` (once: 409 `shared_override_exists`), and then reads its own instead. What is
+  shared (a catalog) is application data.
+- **Wording.** The application rewords framework phrases and notifications without declaring them
+  again: `defineServer({ wording: { phrases: { en: { 'channel.handoff': '…' } }, notifications:
+  [overrideNotification('approval.request', { channels, whatsapp, email })] } })`. A phrase must
+  exist and keep its `{placeholders}`; an unknown or twice-overridden key stops the start; a
+  replacement template must be in the catalog. A business words phrases and notification emails
+  its own way in the settings section `wording` (`PATCH /api/settings/wording`): the app shows its
+  phrases (`setTenantPhrases`), `tenantPhrase(settings, lang, key)` reads them on the server, and its
+  email subject and body (`{field}` from the record) replace the application's at send time.
+- **The apps.** `<AppShell plugins={[settingsPlugin()]} />` (`@hykr/app`) applies the business's
+  colours to the theme, its phrases, and hides what is off; `useFeature`, `useBranding`,
+  `<BrandMark>`, `useCustomFields(entity)`, `<CustomFieldValues>` and `<CustomFieldInputs>` are for
+  screens. `<CustomFieldInputs>` reports patches (`null` clears a value): a create form sends
+  `customForCreate(collected)` (`@hykr/contracts`, the cleared ones left out) and remounts the
+  inputs with a new `key` to start again; an edit sends the patch as `custom`. The shell's rail and phone bar still show the product's `title` (section 14), so a
+  screen shows the business's logo and name with `<BrandMark>`: the sample's Today does. The back
+  office's header shows them, its sign-in shows a verified domain's, and its `SettingsScreen` edits
+  branding, flags, custom fields and web addresses. The sample's to-dos screen sets a business's
+  fields (such as `priority`) in its add form and each row's editor, filters on a filterable
+  select field, and honours the business-managed flag `todos.clear-done`. Tests: `framework/api/test/framework/settings{,.e2e}.test.ts` on the fixture's
+  `features/settings/`, and `application/api/test/domain/todo-settings.e2e.test.ts`.
+
+### 5.19 Documents (PDFs)
+
+A module turns a record into a PDF by declaring a document (`docs/decisions/B2.md`). The
+framework draws it in the worker, stores it as a file and sends it; the template, its words
+and its languages are the module's.
+
+```ts
+// a module's server/document.ts, contributed in its index.ts: contributes: { documents: [OrderDocument] }
+export const OrderDocument = defineDocument<Data>({
+  name: 'orders.order',                 // <owner>.<kind>
+  label: { en: 'Order', hi: 'ऑर्डर', te: 'ఆర్డర్' },
+  entity: 'order',                      // the record it is about
+  capabilities: [],                     // what changes what it shows ([]: nothing restricted)
+  load: async ({ record, children }) => ({ order: record, items: await children(OrderItem) }),
+  render: (data, ctx) => ({ title, header, footer: { right: 'Page {page} of {pages}' }, blocks: [ … ] }),
+  fileName: (data) => data.order.number,
+  send: { whatsapp: { template: OrderDocumentTemplate, params }, email: { subject, body } },
+});
+```
+
+- **Asking for one** is a command: `POST /api/documents { document, id, lang? }`
+  (`document.render`, tool `render-document`). `load` runs in its transaction as the person: the
+  record (and `ctx.read`, `ctx.children`) arrive through the scoped repositories, projected for
+  them, so a hidden field never reaches a PDF. Its result is stored on the new version (1, 2, …)
+  and the stored event `document.requested` sends it to the worker's `documents.render` queue.
+  Nothing re-reads live rows: version N shows what was true when it was asked for.
+- **The layout** `render` returns: `heading`, `text`, `fields` (label and value, one or two
+  columns), `table` (weighted columns, rows of kind `line`, `group` or `subtotal` with an
+  indent; its header repeats on each page), `totals`, `spacer`, `rule`, `pageBreak`, plus a
+  header and footer on every page (`{page}`, `{pages}`). `ctx.label`, `ctx.money` and `ctx.date`
+  (the business's time zone) write in the document's language. It is checked when asked, so a
+  template's mistake fails the request.
+- **The engine** (`DOCUMENTS_ENGINE`): `pdf` is pdfkit with HarfBuzz shaping and the Noto fonts
+  (Latin, Devanagari, Telugu; regular and bold). A line may mix scripts: each run is set in its
+  own font. `fake` writes the layout's lines as plain text in a small PDF: both Vitest configs
+  and CI use it, and tests search the bytes. Production refuses it.
+- **Stored and reached.** The PDF is a server file held by the document (`FilesService.storeBytes`),
+  served only by `GET /api/documents/:id` (with its sends, and a short-lived URL for people).
+  Whoever reaches the record reaches its documents, if they see at least what the requester saw:
+  every role and capability the requester held, or only the definition's `capabilities`. Other
+  businesses, and readers who see less, get 404. `GET /api/documents?entity=&id=` lists a
+  record's; `GET /api/documents/kinds?entity=` names the kinds.
+- **Sending** is a command too: `POST /api/documents/:documentId/send { to, channel? }`
+  (`document.send`, tool `send-document`). `to` is `{ self: true }`, a `customerId`, a
+  `contactId`, a member's `userId` or an `email`. To yourself: allowed. To others:
+  `customers.message`, and the assistant's send waits for approval (`authorize.send` replaces
+  the default). The worker tries the document's channels in order: WhatsApp (the PDF uploaded as
+  media, then the template with a document header, approved in the reader's language or
+  English; inside the 24-hour window without one, a document message), then email with the PDF
+  attached. A send asked before the document is made waits for it. Each send leaves at most
+  once: the job that claims it (`sending`) delivers it; a try that stopped part way ends it
+  `failed` with `interrupted` rather than send it twice.
+- **Who sees the sends.** `GET /api/documents/:id` shows every send only to people with
+  `customers.message`; anyone else sees the sends they asked for or that went to them. Each one
+  passes the read projectors as resource type `documentSend`.
+- **Events** `document.requested`, `document.rendered`, `document.failed`,
+  `document.send_requested`, `document.sent` and `document.send_failed` carry ids and status,
+  never the data a document shows.
+- **In the app** `<RecordDocuments entity id />` (`@hykr/app`) makes each kind, lists every
+  version with its state, opens one with a fresh link and sends it to the person; the hooks
+  are `useDocuments`, `useDocumentKinds`, `useDocument`, `useRenderDocument`, `useSendDocument`.
+
+### 5.20 States, SLAs, versions and revisions
+
+A record's life is declared on its spec; the framework enforces it on every write
+(`docs/decisions/B6B4.md`). Which states exist, who may move a record, how long it may wait and
+who hears about it are the application's. The sample's `orders` module uses every part.
+
+- **States.** `traits.states: { field, initial, states: { <name>: { label?, terminal? } },
+  transitions, slas? }`. The field is a text column in the read and update schemas. A transition
+  is `{ name, from, to, label?, expose?, can?, requires?, fields?, guard?, approval?, level?,
+  event? }`: `expose` is `all` (default), `human` or `system` (only the server's own work); `can`
+  a capability; `requires` the fields the request must carry (a reason), listed in `fields`, the
+  update-schema fields it may set; `guard(row, input, p)` returns `{ rule, reason }` to refuse;
+  `approval` says when it waits and who decides (its object form's `level` names the level a
+  park is at); `level` puts the move at one of your approval levels, whose policy decides
+  (section 5.8). A level rule on `<entity>.transition` can read `input.transition` too. The
+  server checks the machine at start (`checkStates`): an unknown state or level, a terminal state
+  with a way out or a duplicate SLA name stops it.
+- **Moving a record.** `POST /api/transitions/<plural>/:id/<transition>` with the transition's
+  fields (anything else is a 400), `api.transition(spec, id, name, input)`, the assistant's
+  `transition-<plural>` tool, or `useTransition(spec)` and `<TransitionBar>` in the app (with `<StateBadge>`). It is one
+  write, `<entity>.transition`: loaded and locked, refused as 404 when the caller may not write
+  the record, checked (`not_from_state`, `system_only`, `humans_only`, `transition_not_allowed`,
+  `transition_requires`, the guard's rule), parked when its approval says so, audited, and it
+  stores `<entity>.<transition>` (or the transition's `event`) with the row before and after.
+  Plain CRUD never moves the field (`state_through_transition`), and a create starts in the
+  initial state (`state_initial`). Inside a command, `transition(tx, p, def, row, name, { via })`
+  makes the same move (who may run it and whether it waits are the command's `authorize`); list
+  its `touched` and `events` in your result. Entity rules see `via: '<entity>.transition'`.
+- **SLAs.** `slas: [{ name, state, within: '24h', hours?: 'business', escalate?: { notify?,
+  transition? } }]`. Entering the state starts a clock (`app.sla_timers`) in the write's
+  transaction; leaving it ends it (`met`, or `breached` when it was late). The `sla.sweep` queue
+  (every minute) breaches clocks that ran out: it stores `<entity>.sla.breached` (the row with
+  `sla: { name, state, startedAt, dueAt, escalate }`) for your notification to send to
+  the holders of the `escalate.notify` capabilities, then runs `escalate.transition` as `systemPrincipal({ job: 'sla.escalate' })`.
+  A refused escalation is kept on the clock (`escalationError`). A business's `businessHours`
+  settings (`week`, `holidays`, in its `timeZone`) decide what `hours: 'business'` counts; its
+  `sla` settings override a duration by name (`within: { 'orders.decision': '36h' }`) or switch
+  one off (`off`). `GET /api/sla/<plural>/:id` and `GET /api/sla?status=breached` read clocks on
+  records the caller reads (`&open=true`: only those whose record is still in the state, i.e.
+  still late); `<SlaBadge>` shows a record's, `<OverdueList>` the late ones (Today).
+- **Versions.** `traits.versioned: { field?, frozenWhen?, editableWhenFrozen?, revisions? }` and
+  a `versionColumn()` (`@hykr/db`). Every update bumps the version; an update carrying `version`
+  (put it in the update schema) or a write whose row moved since it was loaded answers 409
+  `{ error: 'stale' }`. A parked write keeps the version it loaded (`onPark`), and its approval
+  fails if the record changed since (`onReplay`). A command does the same for what its
+  `pin(loaded)` returns. A record matching `frozenWhen` refuses deletes and changes but its state
+  field, its transitions' fields and `editableWhenFrozen` (`record_frozen`); its children refuse
+  tree writes and are not reachable one by one.
+- **Revisions.** With `revisions: {}` and `...revisionColumns()` (`seriesId`, `revision`), call
+  `reviseWithChildren(tx, p, def, row, { via, values })` in a command: it copies the record (in
+  its initial state, version 1, the next revision number of its series) and every child tree
+  under it, audited, then you freeze the old one (a `system` transition such as `supersede`).
+  `GET /api/history/versions?resourceType&resourceId` lists a series as the caller may read it
+  (`<VersionList>`); `diffFields` and `diffLists` compare two revisions.
 
 ---
 
@@ -1408,7 +1606,7 @@ requireCapability(p, 'orders.cost.read', { rule: 'cost_hidden' });   // or a 403
 
 The framework registers five roles (`owner`, `admin`, `ops`, `staff`, `customer`) and these
 capabilities, with the roles that hold them by default (its features add their own, such as
-`models.manage`):
+`models.manage` and the `memory.*` ones):
 
 | Capability | Roles | What it opens |
 |---|---|---|
@@ -1423,6 +1621,9 @@ capabilities, with the roles that hold them by default (its features add their o
 | `models.manage` | owner, admin | Setting the business's model policy, and seeing what models cost (section 7.5) |
 | `credits.view` | owner, admin, ops, staff | Whether the business is paused, and how much of each cap it used (section 7.6) |
 | `credits.manage` | owner, admin | Credit amounts, the ledger, buying credits, the alert threshold (section 7.6) |
+| `memory.read` | owner, admin, ops, staff | Reading the business's memory, and having it recalled (section 7.7) |
+| `memory.write` | owner, admin, ops, staff | Adding to the business's memory, and changing your own |
+| `memory.manage` | owner, admin | Changing or deleting anyone's memories |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -1692,7 +1893,70 @@ Every business's use of what costs money is metered, priced and, when its plan s
   reply), so a test can price turns. The fixture's `features/credits/` shows a purchase provider,
   an alert notification and a write hook that parks a large purchase.
 
-### 7.7 Outside AI clients: MCP and OAuth
+### 7.7 Memory and recall
+
+The assistant keeps one thread per person across channels, and remembers three more things
+(`docs/decisions/A8.md`):
+
+- **The business's memory**: the framework's `memory` entity (`/api/memories`; tools
+  `list-memories`, `create-memory`, `update-memory`, `delete-memory`; the `memory.list` view).
+  Lasting facts every member shares. Who reaches it are capabilities, not roles: `memory.read`
+  and `memory.write` (owner, admin, ops and staff by default; write means add, and change your
+  own) and `memory.manage` (owner and admin: change anyone's). Give your own roles these with
+  `defineRole({ capabilities })`. The assistant adds memory when asked ("remember that…"); its
+  changes and deletes wait for the person's approval.
+- **Records that are memory**: any entity of yours, with the `memory` trait. `text` is what recall
+  searches and shows, built from the record as the reader may see it; `about` names the record it
+  is memory of. Who recalls a record is whoever may read it (its entity's own access), and the
+  record it is about.
+
+  ```ts
+  // application/domain/src/modules/notes/contracts/note.ts
+  traits: {
+    memory: {
+      text: (n: NoteView) => [n.title, n.body?.trim()].filter(Boolean).join(': '),
+      about: (n: NoteView) => (n.meetingId ? { type: 'meeting', id: n.meetingId } : null),
+    },
+  },
+  ```
+
+- **What a person said**: their own messages (never the assistant's replies), on any channel and
+  in any of their threads, in that business only.
+
+**Recall.** Before every chat turn (not back-office drafts), the turn hook `memory.recall` embeds the
+message with the business's embedding model (section 7.5), finds the nearest memories, and loads
+each one again as the person: through its entity's scoped repository and `toRead` (hidden fields
+are gone), the `about` record the same way, and only from entities whose `get` the assistant may
+call. What survives reaches the model as context lines, which it reads as data. `GET
+/api/memory/recall?q=…&about=<type>:<id>&limit=5&kinds=record,message` and the tool
+`recall-memory` do the same on request; an `about` record the caller cannot read is a 404.
+Recall's embedding gets one try and 4 s (1.5 s on a voice turn): past that the turn runs without
+recall and the API answers 503 `recall_unavailable`, so a slow provider never holds a turn.
+
+**The index.** `app.memory_index` keeps one vector per source and no text. A write hook marks every
+touched record of a trait entity (commands included, from `touched`) in the write's transaction; the
+worker embeds them each second. It claims rows in a short transaction and calls the provider with
+none open (30 s timeout), so a write never waits for the provider; a result is kept only while the
+row still carries that run's claim (a newer write wins and the row is embedded again), and a claim
+older than two minutes is taken over. A message is indexed with the vector its turn's recall made. When a
+business's model policy changes, its vectors are made again with the new model, and a daily job
+(`memory.backfill`) finds records written before the trait. Distance is pgvector's when the database
+has the extension (`framework/db/sql/pre/memory.sql` creates it when offered), otherwise
+`app.memory_cosine` over `real[]`.
+
+**Settings.** The section `memory`: `{ recall: true, conversation: true, limit: 5, minScore: 0.3 }`.
+`recall: false` stops recall before turns (and keeping what people say); `recall-memory` still
+searches. `conversation: false` leaves people's words out everywhere. A business without an
+embedding model its policy allows gets no recall, and its turns still run.
+
+A trait's `text` sees the record as the reader may see it, so a field hidden from them is missing:
+write it to cope (`n.body?.trim()`). A trait that throws drops that record from recall.
+
+**Personal data.** "Delete my data" removes the vectors of what the person said (a deleted message
+takes its vector with it); for a person with an account, the business memories they wrote go too,
+and their export lists them.
+
+### 7.8 Outside AI clients: MCP and OAuth
 
 A person connects Claude, ChatGPT or an IDE to the application over the Model Context Protocol
 (`framework/api/src/features/mcp`, `docs/decisions/A1.md`). Nothing to declare: the modules give
@@ -1807,6 +2071,10 @@ pnpm templates:check    # passes once every template a notification uses is appr
 
 Never edit an approved template's words. `templates:sync` fails with "bump the version". Make `_v2` instead.
 
+A template that carries a PDF has `header: { type: 'document' }`; the documents feature fills it
+when it sends (section 5.19). With `WA_APP_ID` set, `templates:sync` creates it with a sample PDF,
+as Meta's review asks.
+
 The usual way to send is an event plus `schedule` or `send.on`. `NotifyService.notify(def, row, tx)` (`framework/api/src/channels/notify/notify.service.ts`) is an instance method inside `@hykr/api`, not an export; a `defineCommand` `run` gets only `{ tx, principal, input, loaded, via }` and has no service to call. To send from inside a command, insert into the outbox with the command's transaction, as `framework/api/src/channels/notify/send-template.command.ts` does (`schema` from `@hykr/db`):
 
 ```ts
@@ -1854,6 +2122,9 @@ Add it to the read, create and update schemas. Add the column to the table. Run 
 **…keep photos or documents on a record?**
 Give it a file field (`fileRefs()` or `FileRef`, a `files` trait, a `fileColumns()` column) and use `<FileField>` in its form. Section 5.12.
 
+**…make a PDF of a record and send it?**
+Declare it with `defineDocument` in the module's `server/` (what it reads, how it lays out, how it is named and sent), contribute it as `documents`, add its WhatsApp template (with `header: { type: 'document' }`) to the module's templates, and show `<RecordDocuments entity id />` on the record's screen. Section 5.19; the sample's `orders/server/document.ts`.
+
 **…add an entity?**
 Follow section 5.
 
@@ -1865,6 +2136,12 @@ On an entity, set `expose: { delete: 'human' }`. On a command, set `expose: 'hum
 
 **…enforce a business rule ("a closed meeting cannot reopen")?**
 Add an entity `rule` that returns `deny(rule, reason)`. It runs on every path, including inside commands. Use `ctx.via` to allow a path only through one command.
+
+**…give a record stages (draft, submitted, approved) and a deadline on one?**
+Declare `traits.states` with its transitions and SLAs, and the SLA's breach notification on `<entity>.sla.breached`; freeze the stages that are final with `traits.versioned.frozenWhen`. Section 5.20.
+
+**…stop two people overwriting each other's edit?**
+Give the entity `traits.versioned` and a `versionColumn()`, put `version` in its update schema, and send the version you read: an older one answers 409. Section 5.20.
 
 **…let ops and admins see the whole business?**
 Give the entity `access` with `'tenant'` for those roles, like `BUSINESS_ACCESS`.
@@ -1960,7 +2237,7 @@ Both Vitest configs copy the `.env` into `process.env` when they load (the shell
 
 **Fixture tables for a framework feature.** Don't add to the fixture's `src/schema.ts` and its single journal. Give the feature its own migration set: tables in `framework/api/test/fixture/src/features/<f>/schema.ts` (import `app` from `@hykr/db`, don't export it), then `FIXTURE_FEATURE=<f> pnpm --filter @hykr/api fixture:generate --name <f>`, which writes `src/features/<f>/migrations/`. SQL hooks go in `src/features/<f>/sql/{pre,post}`. `migrationSetsIn` (`@hykr/db`) finds the folder, the e2e `globalSetup` applies it after the fixture's own tables, and it is recorded in `drizzle.__fixture_<f>_migrations`. Commit it with the feature. `src/features/par/` and `test/framework/migrations.e2e.test.ts` are the example.
 
-Other helpers: `me(person)`, `addMember(person, tenantId, roles)`, `seedContact(tenantId, name, address)`, `asAssistant(actingFor)` (agent headers), `eventually(check)`, `pool` (direct SQL) and `server` (the running Nest app). `@hykr/api/testing/internals` gives a test the services it drives directly: `NotifyService`, `TemplateSync`, `WHATSAPP` and `DB`.
+Other helpers: `me(person)`, `addMember(person, tenantId, roles)`, `setTenantSettings(tenantId, patch)`, `seedContact(tenantId, name, address)`, `asAssistant(actingFor)` (agent headers), `eventually(check)`, `pool` (direct SQL) and `server` (the running Nest app). Change a business's settings with `setTenantSettings` (each key replaces that section, `null` removes it), never a bare `UPDATE app.tenants`: settings are cached per process for 10 seconds, and any request before the change (`GET /api/me`) would leave the test reading the old ones. `@hykr/api/testing/internals` gives a test the services it drives directly: `NotifyService`, `TemplateSync`, `WHATSAPP` and `DB`.
 
 An eval case lists the tools that must run, in order:
 
@@ -2007,7 +2284,12 @@ These are not built. Each has a workaround for now.
 | Seed data | Create data through the API or the app. Maestro's demo assumes data exists. |
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
 | Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
-| Sending media (WhatsApp documents, email attachments) | Not built (B2). Send a link to the record instead. |
+| Images in documents (a logo, a signature, photos) | The layout has no image block. Put the business's name in the header. |
+| A Chromium engine, digital signatures, PDF/A | Documents are drawn by pdfkit only, unsigned; their SHA-256 is kept. |
+| Notifications that carry a document | The dispatcher sends no files. Send a document with `document.send` (a subscriber can call it as the person). |
+| A WhatsApp document's later failure | A send is `sent` once WhatsApp has it; its message's own status shows a later failure, and no email follows. |
+| Other scripts in documents (Tamil, Kannada, right to left) | Only the Noto Latin, Devanagari and Telugu fonts are bundled. |
+| A document send left `sending` for good | A send's job claims it before delivering, so it leaves at most once. If every try of that job stopped part way (the worker died each time), the row stays `sending`; nothing sweeps it. Send the document again. |
 | A file on two records, versioned files | One file belongs to one record field. Upload the file again for a second record. |
 | Storage quotas, malware scanning | Not built. Keep `FILES_MAX_BYTES` and each field's `maxBytes` small. |
 | Files of a deleted business or of rows deleted outside the write path | Their rows go with the business (cascade) or stay attached; their objects stay in the bucket. |
@@ -2019,7 +2301,7 @@ These are not built. Each has a workaround for now.
 | Every job of a business | `GET /api/jobs` lists a record's jobs or the caller's own; there is no operations view. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `pdfkit` with `harfbuzzjs` and the Noto fonts, `@mastra/memory` (in `@hykr/agents`) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.7) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. An inbound webhook's handler that creates a row fails with `no_access` until then. |
 | Integration screens | Endpoints, connections and the delivery log have an HTTP API only (`/api/integrations/*`): no app or back-office screen, and no typed `@hykr/api-client` methods. |
@@ -2029,7 +2311,7 @@ These are not built. Each has a workaround for now.
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
 | OAuth connectors | Credentials are stored as given; no OAuth flow or token refresh yet (B17 adds the first). |
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
-| Identity provider scopes | Enforced (section 7.7): a scoped credential reaches only routes that declare a scope. Only the generated entity and command routes declare one, so a feature's own routes are out of reach for scoped credentials until they say which scope they need. |
+| Identity provider scopes | Enforced (section 7.8): a scoped credential reaches only routes that declare a scope. Only the generated entity and command routes declare one, so a feature's own routes are out of reach for scoped credentials until they say which scope they need. |
 | MCP: several businesses | A token acts in the person's default business when they consent; the consent screen cannot choose another. Hiding the tools of a module a business's feature flag switches off is not done (the API answers 404 for its calls). |
 | MCP: older clients, other client registration | `@mastra/mcp` 2.x serves MCP revision 2026-07-28 only. Client ID metadata documents, the device grant, JWT access tokens and DPoP are not enabled. A client registered before a module existed registers again to ask for its scopes. Browser-based MCP clients from other origins are refused by CORS. |
 | MCP: screens | The app's `connectionsPlugin` lists and disconnects a person's clients; the back office has no view of every client in a business. The consent screen shows the application's name, not a business's branding. MCP Apps cards, resources and prompts are not served. |
@@ -2041,6 +2323,16 @@ These are not built. Each has a workaround for now.
 | Bulk writes for plain entities | Only children of a parent are inserted in bulk (`children.insert`/`replace`); `insertMany` for any other entity is one insert per row. There is no bulk update. |
 | Line-level tools | The assistant saves a whole tree in one call (the sample's `save-order`); there are no tools to add or move one line. |
 | Several currencies in one record | A record and its children have one currency, and there are no exchange rates. |
+| Business-editable workflows | States, transitions and SLAs are declared by modules. A business can change an SLA's duration or switch it off (`sla` settings) but cannot add a state or a transition. |
+| Editing `businessHours` and `sla` settings | Nothing in the API changes them yet: set them in `app.tenants.settings` with SQL. Half days and per-branch calendars are not supported. |
+| Escalations that ask a person | An SLA's escalation transition runs as the system principal, which cannot park; one that would wait is refused and kept on the clock. Notify the people instead (`escalate.notify`). |
+| `If-Match` on HTTP writes | Send the version in the body (`version`, when the update schema has it). |
+| A per-field approval pin | A parked write fails on approval when the record's version changed at all, even for a field it does not touch. |
+| Revisions without copying | A revision is a copy (its own id). There is no snapshot of one record in place. |
+| Memory recall at scale | Recall compares every vector of one business (no approximate index), and the compose and CI images have no pgvector, so it runs on `app.memory_cosine`. Fine for thousands of memories per business; beyond that, install pgvector and add an index. |
+| Memory of the record on screen | A turn's recall does not prefer memory of the record the person is looking at. Ask with `recall-memory` and `about`. |
+| Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it, or the `memory` settings, yet. |
+| Memory timings | The indexer gives the embedding provider 30 s per batch and takes over a claim after 120 s; recall gives it 4 s per turn (1.5 s on voice). All are constants in `features/memory/` (`indexer.ts`, `recall.service.ts`), not deployment settings. |
 | Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
 | Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates of an undoable write wait with its events until the window closes. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
@@ -2061,13 +2353,22 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots. Routes, nav and nav filters have no framework feature yet. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in and nav filter slots. Routes and nav have no framework feature yet. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
 | Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
 | Live deletions for everyone | A deleted record reaches only streams already told about it and the person who deleted it; others see it go at their next refetch (focus, reconnect, their own write). |
 | Live back office | The back office still polls its inbox (10 s) and an open conversation (5 s): inbound messages and handoffs write no outbox events. |
 | Missed live events | A reconnect refetches every query; `Last-Event-ID` replay is not supported. |
+| Data export for a business | Not built (A11's export waits for jobs and files). Read the business's records through the API's lists. |
+| Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
+| A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
+| Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |
+| Platform-managed flags from a screen | `managedBy: 'platform'` flags are switched with `FeatureFlagsService.set` in server code; no operator screen or route exists yet. |
+| Custom domains end to end | Verification, CORS, Better Auth's origin check and `GET /api/branding/public` work, and the back office's sign-in shows a verified domain's branding. The app's sign-in (`framework/app/src/screens/SignIn.tsx`, rendered by `AppShell`) does not call `api.settings.publicBranding(window.location.origin)` yet, so the app on a business's domain signs in under the product's name and colours. Sessions and cookies are not per domain, and TLS certificates are issued outside the framework. |
+| The business's brand in the app shell | The settings plugin applies a business's colours, but `AppShell` (a hot file: B9, then B12) still prints the product's `app.title` and `tagline` in the rail and the phone's top bar. Its next owner replaces them with `<BrandMark fallback={app.title}>` (or adds an `AppPlugin` header slot the settings plugin fills) and has the sign-in ask for the domain's public branding. Until then a screen shows the logo and name itself (the sample's Today). |
+| A logo upload | `branding.logoUrl` is an https URL; there is no upload for it yet. |
+| Shared records that follow their source | An override is a full copy: later changes to the platform's row do not reach it. Only the platform business (`PLATFORM_TENANT_ID`) publishes shared rows. |
 | WebMCP actions | WebMCP tools only read; the API refuses any write on the `webmcp` channel. There are no declarative forms or write tools for a browser agent, and no read tool for a command. Public and share-link screens offer no tools. |
 | One wording for read tools | The assistant's list and get tools (`tool-factory.ts`) still build their own text; WebMCP takes the same wording from `entityReadTools`. Keep the two in step until the assistant uses it. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |

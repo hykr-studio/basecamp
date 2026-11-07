@@ -2,8 +2,11 @@ import type { Todo } from '@application/domain/contracts';
 import {
   Button,
   ByAssistant,
+  CustomFieldInputs,
+  CustomFieldValues,
   colors,
   entityApi,
+  errorMessage,
   hrefFor,
   Icon,
   isFocused,
@@ -11,12 +14,14 @@ import {
   relativeDay,
   space,
   styles,
+  useCustomFields,
   useEntity,
   useEntityMutation,
   useToast,
   useUndo,
   useUndoableDelete,
 } from '@hykr/app';
+import type { CustomFieldsInput } from '@hykr/contracts';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'expo-router';
 import { useState } from 'react';
@@ -51,7 +56,43 @@ function FromMeeting({ id }: { id: string }) {
   );
 }
 
-/** A to-do: tick it, tap the title to rename, delete with undo. */
+/**
+ * The business's own fields of one to-do (Settings → Custom fields), changed together: what was
+ * changed is saved as one patch (`custom`, null clears a value), then the editor closes.
+ */
+function TodoFields({ todo, onDone }: { todo: Todo; onDone: () => void }) {
+  const { update } = useEntityMutation('todos');
+  const [patch, setPatch] = useState<CustomFieldsInput>({});
+  const changed = Object.keys(patch).length > 0;
+  const save = () =>
+    update
+      .mutateAsync({ id: todo.id, patch: { custom: patch } })
+      .then(onDone)
+      .catch(() => undefined);
+  return (
+    <View style={[styles.card, { gap: space.sm, marginTop: space.xs }]}>
+      <CustomFieldInputs
+        entity="todo"
+        values={{ ...todo.custom, ...patch }}
+        onChange={(p) => setPatch((c) => ({ ...c, ...p }))}
+      />
+      {update.error && <Text style={styles.error}>{errorMessage(update.error)}</Text>}
+      <View style={[styles.row, { gap: space.sm }]}>
+        <Button
+          title="Save"
+          icon="check"
+          onPress={save}
+          busy={update.isPending}
+          disabled={!changed}
+          accessibilityLabel={`Save the fields of “${todo.title}”`}
+        />
+        <Button title="Cancel" variant="subtle" onPress={onDone} />
+      </View>
+    </View>
+  );
+}
+
+/** A to-do: tick it, tap the title to rename, change the business's fields, delete with undo. */
 export function TodoRow({
   todo,
   canDelete = true,
@@ -95,6 +136,8 @@ export function TodoRow({
     });
   };
   const remove = useUndoableDelete('todos');
+  const hasFields = useCustomFields('todo').length > 0;
+  const [fields, setFields] = useState(false);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(todo.title);
   const due = todo.dueOn && !todo.done ? relativeDay(todo.dueOn) : null;
@@ -160,7 +203,23 @@ export function TodoRow({
             {todo.createdBy === 'assistant' && <ByAssistant />}
           </View>
         )}
+        {/* The business's own fields (Settings → Custom fields), such as a priority. */}
+        {fields ? (
+          <TodoFields todo={todo} onDone={() => setFields(false)} />
+        ) : (
+          <CustomFieldValues entity="todo" values={todo.custom} />
+        )}
       </View>
+      {hasFields && !fields && (
+        <Button
+          title="Fields"
+          icon="sliders"
+          iconOnly
+          variant="ghost"
+          accessibilityLabel={`Change the fields of “${todo.title}”`}
+          onPress={() => setFields(true)}
+        />
+      )}
       {canDelete && (
         <Button
           title="Delete"

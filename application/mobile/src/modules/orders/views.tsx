@@ -1,6 +1,6 @@
-import type { OrderView } from '@application/domain/modules/orders/contracts';
+import { OrderSpec, type OrderView } from '@application/domain/modules/orders/contracts';
 import type { OrderCardView, OrderListView } from '@application/domain/modules/orders/views';
-import { OpenRow, Rows, useMoneyText, ViewCard } from '@hykr/app';
+import { OpenRow, Rows, StateBadge, useMoneyText, ViewCard } from '@hykr/app';
 import { Text } from '@hykr/app/ui';
 import type { ViewProps } from '@hykr/ui-registry/react';
 import { View } from 'react-native';
@@ -13,10 +13,10 @@ function OrderLine({ o, onOpen }: { o: OrderView; onOpen: () => void }) {
         <Text className="shrink font-semibold">{o.title}</Text>
         <Text className="font-semibold">{money(o.total)}</Text>
       </View>
-      <Text variant="muted">
-        {o.number}
-        {o.status === 'cancelled' ? ' · cancelled' : ''}
-      </Text>
+      <View className="flex-row flex-wrap items-center gap-2">
+        <Text variant="muted">{o.number}</Text>
+        <StateBadge spec={OrderSpec} row={o} />
+      </View>
     </OpenRow>
   );
 }

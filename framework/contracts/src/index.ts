@@ -8,6 +8,7 @@ export * from './platform/index.js';
 export * from './platform/live.js';
 export * from './platform/mcp.js';
 export * from './platform/push.js';
+export * from './platform/sla.js';
 export * from './principal.js';
 export * from './roles.js';
 export * from './scopes.js';

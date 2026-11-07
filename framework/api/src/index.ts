@@ -27,6 +27,38 @@ export {
   SET_CREDITS_PLAN,
   SETTLE_PURCHASE,
 } from './features/credits/index.js';
+export {
+  type CheckedLayout,
+  channelsOf,
+  createFakeEngine,
+  createPdfEngine,
+  DOCUMENT_ENGINE,
+  DocumentBlock,
+  type DocumentBusiness,
+  type DocumentDef,
+  type DocumentEngine,
+  DocumentLayout,
+  type DocumentLoadContext,
+  type DocumentRenderContext,
+  type DocumentRow,
+  type DocumentSendRequest,
+  type DocumentsConfig,
+  DocumentsService,
+  defineDocument,
+  documents,
+  documentsConfig,
+  fontFile,
+  harfbuzz,
+  layoutLines,
+  layoutOf,
+  loadFonts,
+  pageText,
+  type Rendered,
+  type RenderMeta,
+  reachableDocument,
+  scriptRuns,
+  shaperFor,
+} from './features/documents/public.js';
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
 export {
@@ -87,11 +119,19 @@ export {
 } from './features/jobs/public.js';
 export { type LiveResource, liveResources } from './features/live/resources.js';
 export {
+  anyRole,
+  backfillAll,
+  MemoryIndexer,
+  RecallService,
+} from './features/memory/index.js';
+export {
   ModelPolicyChanged,
   ModelPolicyService,
   ModelRefused,
   SET_MODEL_POLICY,
 } from './features/models/index.js';
+export { FeatureFlagsService } from './features/settings/flags.service.js';
+export { SlaService } from './features/sla/sla.service.js';
 export {
   type AgentIdentity,
   type AgentIdentityProvider,
