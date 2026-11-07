@@ -281,6 +281,57 @@ describe('businesses', () => {
     expect(rows).toEqual([]);
   });
 
+  it('a retry with the same idempotency key makes one business and answers the same', async () => {
+    const tag = crypto.randomUUID().slice(0, 8);
+    const named = async (name: string) =>
+      (await pool.query('select id from app.tenants where name = $1', [`${name} ${tag}`])).rows;
+    const madeOnce = async (name: string) => {
+      const rows = await named(name);
+      expect(rows).toHaveLength(1);
+      const id = rows[0].id as string;
+      expect(
+        (await audits(id, 'tenant.provision')).filter((a) => a.outcome === 'committed'),
+      ).toHaveLength(1);
+      const events = await pool.query(
+        "select id from app.domain_events where tenant_id = $1 and name = 'tenant.provisioned'",
+        [id],
+      );
+      expect(events.rows).toHaveLength(1);
+      return id;
+    };
+    const provision = (name: string, key?: string) =>
+      root.call(
+        'POST',
+        '/api/platform/tenants',
+        { name: `${name} ${tag}`, owner: { email: newcomer.email } },
+        key ? { 'idempotency-key': key } : {},
+      );
+    // The answer was lost; the client asks again with the same key.
+    const key = `provision-${crypto.randomUUID()}`;
+    const first = await provision('Retried Platform', key);
+    expect(first.status).toBe(201);
+    const again = await provision('Retried Platform', key);
+    expect(again.status).toBe(201);
+    expect(again.body).toEqual(first.body);
+    expect(await madeOnce('Retried Platform')).toBe(first.body.value.id);
+    // The same key for another request: refused, nothing made.
+    expect((await provision('Other Platform', key)).status).toBe(409);
+    expect(await named('Other Platform')).toEqual([]);
+    // Both at once: one business, one answer.
+    const raced = `provision-${crypto.randomUUID()}`;
+    const [a, b] = await Promise.all([
+      provision('Raced Platform', raced),
+      provision('Raced Platform', raced),
+    ]);
+    expect([a.status, b.status]).toEqual([201, 201]);
+    expect(b.body).toEqual(a.body);
+    expect(await madeOnce('Raced Platform')).toBe(a.body.value.id);
+    // Without a key, each request is its own.
+    await provision('Unkeyed Platform');
+    await provision('Unkeyed Platform');
+    expect(await named('Unkeyed Platform')).toHaveLength(2);
+  });
+
   it('are listed, read and renamed; a platform-managed flag is switched', async () => {
     const page = (await root.call('GET', '/api/platform/tenants?q=provisioned%20plat')).body;
     expect(page.items.map((t: { id: string }) => t.id)).toEqual([made]);
@@ -454,10 +505,12 @@ describe('support access', () => {
 
   it('every request made under it is logged for the business and the operator', async () => {
     const logged = await eventually(async () => {
-      const rows = (await as(ana, A)('GET', `/api/support-access/${grant}/activity`)).body;
-      return rows.some((r: { path: string; actorKind: string }) => r.actorKind === 'agent')
-        ? rows
-        : undefined;
+      const rows: { method: string; actorKind: string }[] = (
+        await as(ana, A)('GET', `/api/support-access/${grant}/activity`)
+      ).body;
+      const has = (method: string, actorKind: string) =>
+        rows.some((r) => r.method === method && r.actorKind === actorKind);
+      return has('DELETE', 'agent') && has('PATCH', 'user') ? rows : undefined;
     });
     expect(logged).toEqual(
       expect.arrayContaining([
@@ -468,6 +521,20 @@ describe('support access', () => {
           actorKind: 'user',
         }),
         expect.objectContaining({ method: 'GET', path: '/api/me', status: 200 }),
+        // Refused by a guard before any handler: logged with the refusal, the business sees
+        // that support tried to write.
+        expect.objectContaining({
+          method: 'PATCH',
+          path: `/api/issues/${ticket}`,
+          status: 403,
+          actorKind: 'user',
+        }),
+        expect.objectContaining({
+          method: 'DELETE',
+          path: `/api/issues/${ticket}`,
+          status: 403,
+          actorKind: 'agent',
+        }),
       ]),
     );
     const theirs = (await helper.call('GET', `/api/platform/support/${grant}/activity`)).body;

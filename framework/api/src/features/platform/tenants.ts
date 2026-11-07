@@ -1,7 +1,7 @@
 // Businesses, as operators manage them (B19): list them, make one for a person who has an account
 // (they become its owner, with the creator's roles), rename one. Each write is the operator's
 // system job in that business, audited there on behalf of the operator.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   givenRoles,
   type PlatformTenant,
@@ -69,8 +69,33 @@ export async function oneTenant(db: DbOrTx, id: string): Promise<PlatformTenant>
   return tenant;
 }
 
-/** A new business's id, chosen before its write so the write is audited in it. */
-export const newTenantId = () => randomUUID();
+// The namespace of the businesses an operator makes with an idempotency key (UUIDv5).
+const PROVISIONED = Buffer.from('6f1f3c2e9b7a4d5e8c1a0b2d3e4f5a6b', 'hex');
+
+/**
+ * A new business's id, chosen before its write so the write is audited in it. With an
+ * idempotency key it is the same for the same operator and key (a UUIDv5 of both), so a retry
+ * is the same request (runWrite keys its stored answer on the business) and never makes a
+ * second business; without one, a random id.
+ */
+export function newTenantId(operatorId: string, idempotencyKey?: string): string {
+  if (!idempotencyKey) return randomUUID();
+  const b = createHash('sha1')
+    .update(PROVISIONED)
+    .update(`${operatorId}:${idempotencyKey}`)
+    .digest()
+    .subarray(0, 16);
+  b[6] = (b[6] & 0x0f) | 0x50;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = b.toString('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/** The database refused a second business with this id: the same key, at the same time. */
+export const isSameBusiness = (e: unknown) => {
+  const cause = ((e as { cause?: unknown })?.cause ?? e) as { code?: string; constraint?: string };
+  return cause?.code === '23505' && cause.constraint === 'tenants_pkey';
+};
 
 type Owner = { id: string; hasDefault: boolean };
 

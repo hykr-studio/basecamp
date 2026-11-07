@@ -65,7 +65,14 @@ import {
 import { parsed } from './parse.js';
 import { toRouted } from './routing.js';
 import { activityOf, endSupport, grantsWhere, requestSupport } from './support.js';
-import { listTenants, newTenantId, oneTenant, provisionTenant, renameTenant } from './tenants.js';
+import {
+  isSameBusiness,
+  listTenants,
+  newTenantId,
+  oneTenant,
+  provisionTenant,
+  renameTenant,
+} from './tenants.js';
 import { UsageQuery, usageReport } from './usage.js';
 
 // biome-ignore lint/suspicious/noExplicitAny: any write op
@@ -212,22 +219,41 @@ export class PlatformController {
     return oneTenant(this.core.db, id);
   }
 
-  /** Make a business for a person who has an account: they own it. */
+  /**
+   * Make a business for a person who has an account: they own it. A retry with the same
+   * idempotency key answers the first answer, even when both arrive at once.
+   */
   @Post('tenants')
   @OperatorCan(PlatformCapabilities.tenants)
-  provision(
+  async provision(
     @CurrentOperator() o: ActingOperator,
     @RequestMeta() meta: RequestMetaValue,
     @Body() body: unknown,
   ) {
     const input = parsed(ProvisionTenantInput, body);
-    const id = newTenantId();
-    return this.write(
-      operatorPrincipal(id, 'platform.tenants', o),
-      meta,
-      provisionTenant(id, o.id),
-      input,
-    );
+    const id = newTenantId(o.id, meta.idempotencyKey);
+    const make = () =>
+      this.write(
+        operatorPrincipal(id, 'platform.tenants', o),
+        meta,
+        provisionTenant(id, o.id),
+        input,
+      );
+    try {
+      return await make();
+    } catch (e) {
+      // The same key at the same time: the other request made it, so its stored answer is ours.
+      if (!meta.idempotencyKey || !isSameBusiness(e)) throw e;
+      try {
+        return await make();
+      } catch (again) {
+        if (!isSameBusiness(again)) throw again;
+        throw new ConflictException({
+          error: 'conflict',
+          reason: 'This idempotency-key already made a business',
+        });
+      }
+    }
   }
 
   @Patch('tenants/:id')
