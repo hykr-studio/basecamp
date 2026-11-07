@@ -18,7 +18,7 @@ import { can } from '@hykr/policy';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { runtime } from '../../runtime.js';
-import type { FileTarget } from '../files/targets.js';
+import type { UploadTarget } from '../files/targets.js';
 import { defineJob } from '../jobs/define.js';
 import { presentJob } from '../jobs/info.js';
 import { startJob } from '../jobs/start.js';
@@ -55,7 +55,7 @@ const mayImport = (p: Principal) =>
     : deny('needs_imports_run', 'Only someone who may import records can do this');
 
 /** `POST /api/files { for: IMPORT_UPLOAD }`: a file to import, by someone who may. */
-export const importUpload: FileTarget = {
+export const importUpload: UploadTarget = {
   type: IMPORT_UPLOAD.entity,
   field: IMPORT_UPLOAD.field,
   accept: IMPORT_MIME_TYPES,

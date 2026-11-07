@@ -17,4 +17,4 @@ export { fileLine, sizeText } from './lines.js';
 export { bytesFit, type Sniffed, sniff } from './sniff.js';
 export { SPEECH, type Speech } from './speech.js';
 export { STORAGE, type StorageDriver, StorageUnavailable } from './storage/index.js';
-export { type FileTarget, fileTargets } from './targets.js';
+export { type UploadTarget, uploadTargets } from './targets.js';

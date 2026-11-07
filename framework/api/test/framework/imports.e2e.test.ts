@@ -44,18 +44,19 @@ async function upload(person: Person, text: string, name = 'rows.csv', mime = 't
     as(person),
   );
   if (pre.status !== 201) return { id: '', pre };
-  await fetch(`${server.base}${pre.body.upload.url}`, {
+  const put = await fetch(`${server.base}${pre.body.upload.url}`, {
     method: 'PUT',
     headers: pre.body.upload.headers,
     body: new Uint8Array(bytes),
   });
+  expect(`${put.status} ${put.status === 200 ? '' : await put.text()}`).toBe('200 ');
   const confirmed = await person.call(
     'POST',
     `/api/files/${pre.body.file.id}/confirm`,
     undefined,
     as(person),
   );
-  expect(confirmed.status).toBe(201);
+  expect(confirmed.status).toBe(200);
   return { id: pre.body.file.id as string, pre };
 }
 
@@ -261,6 +262,8 @@ describe('rows that are not written', () => {
   ].join('\n');
 
   beforeAll(async () => {
+    // References are keys in the same source: this source's shelves, not S9.
+    await importText(owner, 'shelf', 'id,title\nS1,Bad top\nS3,Bad bottom\n', { source: 'bad' });
     done = await importText(owner, 'item', file, { source: 'bad', refs: { shelfId: 'shelf' } });
   });
 
@@ -305,7 +308,7 @@ describe('rows that are not written', () => {
     ]);
     expect(denied).toHaveLength(1);
     const { rows } = await pool.query(
-      `select count(*)::int as n from app.approvals where tenant_id = $1 and op = 'item.create'`,
+      `select count(*)::int as n from app.approvals where tenant_id = $1 and action = 'item.create'`,
       [tenantId],
     );
     expect(rows[0].n).toBe(0);
@@ -319,7 +322,7 @@ describe('rows that are not written', () => {
       .replace(',B1,Twice,1,', ',B7,Twice,1,')
       .replace('B4,Refused title', 'B4,Accepted title')
       .replace('B5,Lost,1,S9', 'B5,Lost,1,S3')
-      .replace('B6,Wait for it', 'B6,Waited for it');
+      .replace('B6,Wait for it', 'B6,Held for it');
     const again = await importText(owner, 'item', fixed, {
       source: 'bad',
       refs: { shelfId: 'shelf' },

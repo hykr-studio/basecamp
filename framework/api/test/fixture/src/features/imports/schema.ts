@@ -26,7 +26,7 @@ export const shelves = app.table('fixture_shelves', {
   title: text('title').notNull(),
 });
 
-export const items = app.table('fixture_items', {
+export const items = app.table('fixture_shelves_items', {
   ...common(),
   title: text('title').notNull(),
   shelfId: text('shelf_id').references(() => shelves.id, { onDelete: 'set null' }),

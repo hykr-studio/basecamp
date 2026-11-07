@@ -67,15 +67,15 @@ export {
   type FileRow,
   type FilesConfig,
   FilesService,
-  type FileTarget,
   fileHolders,
   fileLine,
   filesConfig,
-  fileTargets,
   STORAGE,
   type StorageDriver,
   StorageUnavailable,
   type Uploader,
+  type UploadTarget,
+  uploadTargets,
 } from './features/files/public.js';
 export {
   type ImportFileOptions,

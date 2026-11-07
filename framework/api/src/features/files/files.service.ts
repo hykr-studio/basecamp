@@ -44,7 +44,7 @@ import { fileHolders } from './holders.js';
 import { bytesFit, SNIFF_BYTES, sniff } from './sniff.js';
 import { SPEECH, type Speech } from './speech.js';
 import { STORAGE, type StorageDriver } from './storage/index.js';
-import { type FileTarget, fileTargets } from './targets.js';
+import { type UploadTarget, uploadTargets } from './targets.js';
 
 export type FileRow = typeof files.$inferSelect;
 
@@ -135,7 +135,7 @@ export class FilesService implements OnApplicationBootstrap {
    */
   async onApplicationBootstrap() {
     const problems = entityDefs().flatMap(fileFieldProblems);
-    for (const t of fileTargets.all())
+    for (const t of uploadTargets.all())
       if (entityDef(t.type)) problems.push(`The upload target "${t.type}" is named like an entity`);
     if (problems.length)
       throw new Error(`File fields are declared wrong:\n- ${problems.join('\n- ')}`);
@@ -192,12 +192,12 @@ export class FilesService implements OnApplicationBootstrap {
   private target(
     entity: string,
     field: string,
-  ): { label: string; policy: FileFieldPolicy; def?: AnyEntityDef; other?: FileTarget } {
+  ): { label: string; policy: FileFieldPolicy; def?: AnyEntityDef; other?: UploadTarget } {
     const def = entityDef(entity);
     const policy = def ? fileFieldOf(def, field) : undefined;
     if (def && policy) return { label: def.spec.label, policy, def };
     // Not an entity: a target a feature registered (an import's file).
-    const other = def ? undefined : fileTargets.get(entity);
+    const other = def ? undefined : uploadTargets.get(entity);
     if (other && other.field === field) return { label: other.type, policy: other, other };
     throw new BadRequestException({
       error: 'unknown_file_field',

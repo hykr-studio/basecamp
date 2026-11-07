@@ -1,11 +1,11 @@
 {
-  "id": "a83d4b5d-562c-49f0-811a-6644d2835565",
+  "id": "ec453ebf-4d65-4e28-9866-cbc737ebc48f",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "app.fixture_items": {
-      "name": "fixture_items",
+    "app.fixture_shelves_items": {
+      "name": "fixture_shelves_items",
       "schema": "app",
       "columns": {
         "id": {
@@ -95,9 +95,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "fixture_items_tenant_id_tenants_id_fk": {
-          "name": "fixture_items_tenant_id_tenants_id_fk",
-          "tableFrom": "fixture_items",
+        "fixture_shelves_items_tenant_id_tenants_id_fk": {
+          "name": "fixture_shelves_items_tenant_id_tenants_id_fk",
+          "tableFrom": "fixture_shelves_items",
           "tableTo": "tenants",
           "schemaTo": "app",
           "columnsFrom": [
@@ -109,9 +109,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "fixture_items_owner_id_user_id_fk": {
-          "name": "fixture_items_owner_id_user_id_fk",
-          "tableFrom": "fixture_items",
+        "fixture_shelves_items_owner_id_user_id_fk": {
+          "name": "fixture_shelves_items_owner_id_user_id_fk",
+          "tableFrom": "fixture_shelves_items",
           "tableTo": "user",
           "columnsFrom": [
             "owner_id"
@@ -122,9 +122,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "fixture_items_customer_id_customers_id_fk": {
-          "name": "fixture_items_customer_id_customers_id_fk",
-          "tableFrom": "fixture_items",
+        "fixture_shelves_items_customer_id_customers_id_fk": {
+          "name": "fixture_shelves_items_customer_id_customers_id_fk",
+          "tableFrom": "fixture_shelves_items",
           "tableTo": "customers",
           "schemaTo": "app",
           "columnsFrom": [
@@ -136,9 +136,9 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
-        "fixture_items_shelf_id_fixture_shelves_id_fk": {
-          "name": "fixture_items_shelf_id_fixture_shelves_id_fk",
-          "tableFrom": "fixture_items",
+        "fixture_shelves_items_shelf_id_fixture_shelves_id_fk": {
+          "name": "fixture_shelves_items_shelf_id_fixture_shelves_id_fk",
+          "tableFrom": "fixture_shelves_items",
           "tableTo": "fixture_shelves",
           "schemaTo": "app",
           "columnsFrom": [

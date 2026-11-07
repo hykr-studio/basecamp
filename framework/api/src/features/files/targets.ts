@@ -8,7 +8,7 @@ import {
 
 declare module '@hykr/contracts' {
   interface Contributions {
-    fileTargets: readonly FileTarget[];
+    uploadTargets: readonly UploadTarget[];
   }
 }
 
@@ -18,7 +18,7 @@ declare module '@hykr/contracts' {
  * size), then asks `may`. The file stays its uploader's own upload: it is reached by them alone
  * and never put on a record (the sweeper removes it once its grace period is over).
  */
-export interface FileTarget extends FileFieldPolicy {
+export interface UploadTarget extends FileFieldPolicy {
   /** What `for.entity` names: 'import'. Never an entity's name. */
   type: string;
   /** What `for.field` names: 'file'. */
@@ -28,6 +28,6 @@ export interface FileTarget extends FileFieldPolicy {
 }
 
 /** Upload targets that are not entities, by type. */
-export const fileTargets = createHookRegistry<FileTarget>('file target', (t) => t.type, {
-  collects: 'fileTargets',
+export const uploadTargets = createHookRegistry<UploadTarget>('upload target', (t) => t.type, {
+  collects: 'uploadTargets',
 });

@@ -437,16 +437,14 @@ export class Importer {
     const created = await write('create', null, create);
     const id = String(created.id);
     if (Object.keys(later).length) await write('update', id, later);
-    await tx
-      .insert(importKeys)
-      .values({
-        tenantId,
-        entity: def.name,
-        source: o.source,
-        externalId: row.key,
-        recordId: id,
-        jobId,
-      });
+    await tx.insert(importKeys).values({
+      tenantId,
+      entity: def.name,
+      source: o.source,
+      externalId: row.key,
+      recordId: id,
+      jobId,
+    });
     return { outcome: 'created', events };
   }
 

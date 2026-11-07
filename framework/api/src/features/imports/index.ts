@@ -17,6 +17,6 @@ export const importsFeature = defineFeature({
   exports: [Importer],
   contributes: {
     jobs: [ImportJob],
-    fileTargets: [importUpload],
+    uploadTargets: [importUpload],
   },
 });
