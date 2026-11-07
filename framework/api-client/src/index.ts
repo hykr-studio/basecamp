@@ -4,6 +4,7 @@ import {
   AddCommentSpec,
   type AddedPartyMember,
   type AddGrantInput,
+  type AddOperatorInput,
   type AddParticipantInput,
   type AddPartyMemberInput,
   type Approval,
@@ -45,14 +46,18 @@ import {
   type Me,
   type Member,
   type MentionablePage,
+  type Operator,
   type Page,
   type ParticipantRoleView,
   type Participation,
   type PartiesQuery,
   type Party,
   type PartyMember,
+  type PlatformMe,
+  type PlatformTenant,
   type PresignFileInput,
   type PresignFileResult,
+  type ProvisionTenantInput,
   type PublicBranding,
   type PushDevice,
   pathParams,
@@ -65,17 +70,26 @@ import {
   type RenderDocumentInput,
   RenderDocumentSpec,
   type RoleView,
+  type RoutedRequest,
   SendDocumentSpec,
   type SlaListInput,
   type SlaTimer,
   type Summary,
   type SummaryInput,
+  type SupportActivity,
+  type SupportConsentInput,
+  type SupportGrant,
+  type SupportRequestInput,
+  type SupportSettings,
+  type SupportSettingsInput,
   type TemplateStatus,
   type TenantDomain,
   type Thread,
   type ThreadMessage,
   toQueryString,
   type UndoResult,
+  type UpdateOperatorInput,
+  type UsageReport,
   type VoiceSessionEnd,
   type VoiceSessionRequest,
   type VoiceSessionResponse,
@@ -739,6 +753,128 @@ export function createApiClient(opts: ApiClientOptions) {
         if (q.kinds) params.set('kinds', q.kinds);
         return call<RecallResult>('GET', `/api/memory/recall?${params}`);
       },
+    },
+    /**
+     * The platform's operators (B19): signed-in people above the businesses. `me` answers anyone
+     * signed in; everything else needs an operator holding the route's capability.
+     */
+    platform: {
+      me: () => call<PlatformMe>('GET', '/api/platform/me'),
+      operators: () => call<Operator[]>('GET', '/api/platform/operators'),
+      addOperator: (input: AddOperatorInput, key = newKey()) =>
+        call<WriteResult<Operator>>('POST', '/api/platform/operators', input, key),
+      updateOperator: (id: string, input: UpdateOperatorInput, key = newKey()) =>
+        call<WriteResult<Operator>>(
+          'PATCH',
+          `/api/platform/operators/${encodeURIComponent(id)}`,
+          input,
+          key,
+        ),
+      tenants: (query: { q?: string; after?: string; limit?: number } = {}) =>
+        call<{ items: PlatformTenant[]; next: string | null }>(
+          'GET',
+          `/api/platform/tenants${toQueryString(query as Record<string, unknown>)}`,
+        ),
+      tenant: (id: string) =>
+        call<PlatformTenant>('GET', `/api/platform/tenants/${encodeURIComponent(id)}`),
+      /** Make a business for a person who has an account: they own it. */
+      provision: (input: ProvisionTenantInput, key = newKey()) =>
+        call<WriteResult<PlatformTenant>>('POST', '/api/platform/tenants', input, key),
+      rename: (id: string, name: string, key = newKey()) =>
+        call<WriteResult<PlatformTenant>>(
+          'PATCH',
+          `/api/platform/tenants/${encodeURIComponent(id)}`,
+          { name },
+          key,
+        ),
+      /** A business's feature flag, the platform-managed ones included. */
+      setFeature: (id: string, flag: string, on: boolean, key = newKey()) =>
+        call<WriteResult<{ key: string; on: boolean }>>(
+          'PUT',
+          `/api/platform/tenants/${encodeURIComponent(id)}/features/${encodeURIComponent(flag)}`,
+          { on },
+          key,
+        ),
+      /** The operator's own support access, newest first. */
+      support: (tenantId?: string) =>
+        call<SupportGrant[]>(
+          'GET',
+          `/api/platform/support${tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ''}`,
+        ),
+      /** Ask a business for access: it waits for the business's consent. */
+      askSupport: (input: z.input<typeof SupportRequestInput>, key = newKey()) =>
+        call<WriteResult<SupportGrant>>('POST', '/api/platform/support', input, key),
+      endSupport: (id: string, key = newKey()) =>
+        call<WriteResult<SupportGrant>>(
+          'DELETE',
+          `/api/platform/support/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+      supportActivity: (id: string) =>
+        call<SupportActivity[]>('GET', `/api/platform/support/${encodeURIComponent(id)}/activity`),
+      /** What every business used of each meter, and its wallet, over a range (UTC days). */
+      usage: (
+        query: {
+          from?: string;
+          to?: string;
+          tenantId?: string;
+          after?: string;
+          limit?: number;
+        } = {},
+      ) =>
+        call<UsageReport>(
+          'GET',
+          `/api/platform/usage${toQueryString(query as Record<string, unknown>)}`,
+        ),
+      routing: (
+        query: {
+          status?: RoutedRequest['status'];
+          tenantId?: string;
+          before?: string;
+          limit?: number;
+        } = {},
+      ) =>
+        call<RoutedRequest[]>(
+          'GET',
+          `/api/platform/routing${toQueryString(query as Record<string, unknown>)}`,
+        ),
+    },
+    /**
+     * Support access from the business's side (people holding `support.consent`): what the
+     * platform's operators asked, consent, decline, end it, and what was done under it.
+     */
+    supportAccess: {
+      list: () => call<SupportGrant[]>('GET', '/api/support-access'),
+      get: (id: string) =>
+        call<SupportGrant>('GET', `/api/support-access/${encodeURIComponent(id)}`),
+      activity: (id: string) =>
+        call<SupportActivity[]>('GET', `/api/support-access/${encodeURIComponent(id)}/activity`),
+      /** As asked, or shorter (`minutes`), or read only. */
+      consent: (id: string, input: SupportConsentInput = {}, key = newKey()) =>
+        call<WriteResult<SupportGrant>>(
+          'POST',
+          `/api/support-access/${encodeURIComponent(id)}/consent`,
+          input,
+          key,
+        ),
+      decline: (id: string, key = newKey()) =>
+        call<WriteResult<SupportGrant>>(
+          'POST',
+          `/api/support-access/${encodeURIComponent(id)}/decline`,
+          undefined,
+          key,
+        ),
+      revoke: (id: string, key = newKey()) =>
+        call<WriteResult<SupportGrant>>(
+          'POST',
+          `/api/support-access/${encodeURIComponent(id)}/revoke`,
+          undefined,
+          key,
+        ),
+      settings: () => call<SupportSettings>('GET', '/api/support-access/settings'),
+      setSettings: (input: SupportSettingsInput, key = newKey()) =>
+        call<WriteResult<SupportSettings>>('PUT', '/api/support-access/settings', input, key),
     },
     /** The person's conversations, kept on the server so every channel shares them (people only). */
     threads: {

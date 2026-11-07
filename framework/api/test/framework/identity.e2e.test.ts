@@ -106,9 +106,9 @@ describe('roles and capabilities', () => {
         'models.manage',
         'parties.manage',
         'parties.read',
-        'queues.admin',
         'records.grant',
         'settings.manage',
+        'support.consent',
       ],
     });
     expect((await inAna(ops)('GET', '/api/me')).body.capabilities).toEqual([

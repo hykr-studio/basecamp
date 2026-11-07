@@ -160,7 +160,7 @@ describe("a business's own roles", () => {
       ana.call('POST', '/api/members/roles', { name, label: { en: name }, capabilities });
     expect((await define('owner', [])).body).toMatchObject({ rule: 'role_exists' });
     expect((await define('site_lead', [])).body).toMatchObject({ rule: 'role_exists' });
-    expect((await define('watcher', ['queues.admin'])).body).toMatchObject({
+    expect((await define('watcher', ['shared.publish'])).body).toMatchObject({
       rule: 'bad_capability',
     });
     expect((await define('watcher', ['nope.nothing'])).body).toMatchObject({
@@ -197,8 +197,8 @@ describe("a business's own roles", () => {
     ).toEqual(['backoffice.use', 'members.read']);
     // A capability only code gives cannot be added by an edit either.
     expect(
-      (await ana.call('PATCH', '/api/members/roles/staff', { capabilities: ['queues.admin'] })).body
-        .rule,
+      (await ana.call('PATCH', '/api/members/roles/staff', { capabilities: ['shared.publish'] }))
+        .body.rule,
     ).toBe('bad_capability');
 
     await ana.call('PATCH', '/api/members/roles/staff', { label: null, capabilities: null });
