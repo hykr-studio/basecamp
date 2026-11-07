@@ -4,17 +4,6 @@
 
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
-export { IntegrationsCapability } from './features/integrations/capability.js';
-export { openConnection } from './features/integrations/credentials.js';
-export {
-  type ConnectorHandler,
-  type ConnectorHandlerContext,
-  connectorHandlers,
-  connectors,
-  defineConnectorHandler,
-  type InboundEventRecord,
-} from './features/integrations/registry.js';
-export { outboundPolicy } from './features/integrations/settings.js';
 export {
   dispositionOf,
   type FileRow,
@@ -27,6 +16,17 @@ export {
   StorageUnavailable,
   type Uploader,
 } from './features/files/public.js';
+export { IntegrationsCapability } from './features/integrations/capability.js';
+export { openConnection } from './features/integrations/credentials.js';
+export {
+  type ConnectorHandler,
+  type ConnectorHandlerContext,
+  connectorHandlers,
+  connectors,
+  defineConnectorHandler,
+  type InboundEventRecord,
+} from './features/integrations/registry.js';
+export { outboundPolicy } from './features/integrations/settings.js';
 export { type LiveResource, liveResources } from './features/live/resources.js';
 export {
   ModelPolicyChanged,
