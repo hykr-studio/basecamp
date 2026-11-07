@@ -91,6 +91,7 @@ describe('roles and capabilities', () => {
         'channels.manage',
         'customers.message',
         'fixture.reports',
+        'integrations.manage',
         'marketing.approve',
         'models.manage',
         'queues.admin',

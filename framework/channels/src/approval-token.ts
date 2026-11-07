@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { hmacDigest, safeEqual } from '@hykr/connectors';
 
 /**
  * An approval button's payload: apr:<approvalId>:<a|r>:<expiresAt>:<hmac>. The HMAC covers the
@@ -10,9 +10,9 @@ export type ApprovalDecision = { approvalId: string; approve: boolean; expiresAt
 const PREFIX = 'apr';
 
 const mac = (secret: string, d: ApprovalDecision, contactId: string) =>
-  createHmac('sha256', secret)
-    .update([d.approvalId, d.approve ? 'a' : 'r', d.expiresAt, contactId].join('|'))
-    .digest('base64url');
+  hmacDigest(secret, [d.approvalId, d.approve ? 'a' : 'r', d.expiresAt, contactId].join('|'), {
+    encoding: 'base64url',
+  });
 
 export function signApproval(secret: string, d: ApprovalDecision, contactId: string): string {
   return [PREFIX, d.approvalId, d.approve ? 'a' : 'r', d.expiresAt, mac(secret, d, contactId)].join(
@@ -34,10 +34,7 @@ export function verifyApproval(
   if (prefix !== PREFIX || !approvalId || (flag !== 'a' && flag !== 'r') || !given || !expiresAt)
     return { ok: false, reason: 'invalid' };
   const decision = { approvalId, approve: flag === 'a', expiresAt };
-  const expected = Buffer.from(mac(secret, decision, contactId));
-  const actual = Buffer.from(given);
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual))
-    return { ok: false, reason: 'invalid' };
+  if (!safeEqual(mac(secret, decision, contactId), given)) return { ok: false, reason: 'invalid' };
   if (now > expiresAt) return { ok: false, reason: 'expired' };
   return { ok: true, decision };
 }
