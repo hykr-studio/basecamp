@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import type { MigrationSet } from '@hykr/db';
+import type { ImportFileOptions } from './features/imports/cli.js';
 import { type Basecamp, setRuntime } from './runtime.js';
 
 // The server's configuration is read from the environment when a function here runs, not
@@ -133,4 +134,47 @@ export async function startStudio(app: Basecamp, dir: string, options: { dev?: b
   (await import('./features/install.js')).installFeatures();
   const { startStudio } = await import('@hykr/agents/studio');
   return startStudio(app.agents, { dir, dev: options.dev });
+}
+
+/**
+ * `basecamp import <entity> <file>`: import a file as a member of a business (decisions B20),
+ * in a process of its own with no HTTP and no processors; the worker runs the job. Prints its
+ * progress and a summary, and saves the error report. Exit code: 0 every row was written (or
+ * would be, for a dry run), 1 some were not or it failed, 2 it waits for an approval.
+ */
+export async function runImport(app: Basecamp, options: ImportFileOptions): Promise<number> {
+  const { assertConfig } = await loadConfig();
+  assertConfig();
+  setRuntime(app);
+  const { filesConfig } = await import('./features/files/config.js');
+  if (filesConfig().driver === 'memory') {
+    console.error(
+      'basecamp import needs file storage the worker shares: set STORAGE_DRIVER to s3 or fs (memory keeps files inside one process).',
+    );
+    return 1;
+  }
+  const { NestFactory } = await import('@nestjs/core');
+  const { CliModule } = await import('./cli.module.js');
+  const { importFile, importSummary } = await import('./features/imports/cli.js');
+  const { sharedDb } = await import('./infra/db.js');
+  const context = await NestFactory.createApplicationContext(CliModule, {
+    logger: ['warn', 'error'],
+  });
+  try {
+    const out = await importFile(context, options);
+    for (const line of importSummary(out)) console.log(line);
+    if (out.status === 'needs_approval') return 2;
+    return out.status === 'finished' &&
+      out.job?.status === 'succeeded' &&
+      out.result &&
+      out.result.failed === 0
+      ? 0
+      : 1;
+  } catch (e) {
+    console.error(`basecamp import: ${e instanceof Error ? e.message : e}`);
+    return 1;
+  } finally {
+    await context.close();
+    await sharedDb.pool.end().catch(() => {});
+  }
 }
