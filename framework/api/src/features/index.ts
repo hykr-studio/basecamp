@@ -1,6 +1,7 @@
 // The framework's features, one export per line (a union merge keeps lines added in parallel).
 // Each is a `defineFeature(...)` in its own folder; FeaturesModule loads every one of them.
 
+export { agentsFeature } from './agents/index.js';
 export { approvalsFeature } from './approvals/index.js';
 export { commentsFeature } from './comments/index.js';
 export { creditsFeature } from './credits/index.js';

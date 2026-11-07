@@ -6,9 +6,10 @@ export type {
   EvalSuite,
   VoiceEvalCase,
 } from './agent-domain.js';
+export { DATA_MAX, dataBlock, runData, runMessage } from './agent-run.js';
 export { AGENT_KEYS, type Agents, createAgents, profileFor } from './agents.js';
 export { ModelNotChosen, modelFor, turnModel } from './assistant.js';
-export { type ApiFor, createApiFor } from './context.js';
+export { type ApiFor, agentRunToken, createApiFor } from './context.js';
 export {
   durableAgent,
   findSuspension,

@@ -7,6 +7,7 @@ export type {
   EvalSetup,
   VoiceEvalCase,
 } from './agent-domain.js';
+export { runData } from './agent-run.js';
 export {
   type CanvasPage,
   call,

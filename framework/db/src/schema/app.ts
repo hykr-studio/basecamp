@@ -9,6 +9,7 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { agents } from './agents.js';
 import { user } from './auth.js';
 import { app, id } from './base.js';
 import { contacts } from './channel.js';
@@ -138,6 +139,15 @@ export const threads = app.table(
     ownerId: text('owner_id').references(() => user.id, { onDelete: 'cascade' }),
     contactId: text('contact_id').references(() => contacts.id, { onDelete: 'cascade' }),
     title: text('title'),
+    /**
+     * 'chat': a person's conversation with the assistant (every channel's); 'agent': one of their
+     * agents' runs (A6), which never becomes their current conversation.
+     */
+    kind: text('kind', { enum: ['chat', 'agent'] })
+      .notNull()
+      .default('chat'),
+    /** The agent whose runs it holds, for an 'agent' thread. */
+    agentId: text('agent_id').references(() => agents.id, { onDelete: 'cascade' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()
@@ -147,6 +157,7 @@ export const threads = app.table(
   (table) => [
     index('threads_owner_updated_idx').on(table.ownerId, table.updatedAt),
     index('threads_contact_updated_idx').on(table.contactId, table.updatedAt),
+    index('threads_agent_idx').on(table.agentId).where(sql`${table.agentId} is not null`),
     check('threads_one_subject', sql`(${table.ownerId} is null) <> (${table.contactId} is null)`),
   ],
 );
