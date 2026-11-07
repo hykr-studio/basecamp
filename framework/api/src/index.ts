@@ -110,6 +110,8 @@ export {
   erasureContributors,
   eventFeeds,
   exportContributors,
+  type GrantKind,
+  grantKinds,
   type InboundDecision,
   type InboundHook,
   type InboundInfo,

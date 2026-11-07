@@ -521,6 +521,7 @@ A row leaves the server only through `def.toRead(row, p)`: the read schema parse
 | `toJson` | reads, before the read schema parses | stored types as JSON (money as a number) |
 | `updateWhere` | update and delete | a stale write: no match on a row that is still there is 409 `{ error: 'stale' }` |
 | `project` | `toRead`, after parsing | hiding fields from a principal |
+| `query` | a list request (HTTP or a tool), before it runs | refusing a filter or sort (a hidden field) |
 
 `entityHandlers(def)` serves the entity: it joins `entityDefs()` (`entityDef(name)`, `entityDefForSchema(schema)`), and another entity with the same name or plural throws (serving the same one again is a no-op).
 
@@ -817,10 +818,11 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   declares its key on `EntityTraits` or `CommandTraits` in its own file. Its plugin then acts on the
   specs that carry the key.
 - **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
-  Each key is a list, collected by one registry: `roles`, `capabilities` (section 6.4) and
-  `approvalLevels` (section 5.8.1) in `@hykr/contracts`; `entityPlugins`, `writeHooks`,
-  `readProjectors`, `listFieldSql`, `levelRules`, `identityProviders` and `numberSeries`
-  (section 5.13) in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
+  Each key is a list, collected by one registry: `roles` and `capabilities` (section 6.4), with
+  `roleOverrides` and `roleDefaults`, and `approvalLevels` (section 5.8.1) in `@hykr/contracts`;
+  `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql`, `levelRules`, `grantKinds`,
+  `identityProviders` and `numberSeries` (section 5.13) in `@hykr/core`; `toolContributions` in
+  `@hykr/core/tools`;
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `fileHolders`
   (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
@@ -837,7 +839,10 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `TenantConfigService` (`@hykr/core`, global): `get(tenantId)` caches them for 10 seconds per process
   (`CoreModule.forRoot({ tenantConfigTtlMs })`), `invalidate(tenantId)` after you change them, and
   `isEnabled(tenantId, key)` is true only for a stored `true` (no business, an unknown one or
-  settings that do not parse are all off).
+  settings that do not parse are all off). `get` throws when any part does not parse;
+  `section(tenantId, key)` reads one section, parsed alone in that case, so another feature's
+  broken section does not stop yours. A test that changes settings with SQL calls
+  `settingsChanged(tenantId)` (`@hykr/api/testing`): the server reads them on every request.
 
 A framework feature also keeps its phrases, its scripted-model scripts and its fixture tables in files of its own, so parallel work never edits a shared file. One line in a barrel registers each one: `framework/i18n/src/messages/index.ts` (section 9), `framework/agents/src/fake/scripts/index.ts` (section 7.3). The fixture's per-feature migration sets need no line (section 12). These barrels merge with `merge=union` (`.gitattributes`).
 
@@ -1205,9 +1210,11 @@ GET /api/orders/summary?status=open&groupBy=createdAt:month&sum=total&sort=-key&
   in the business's time zone (`timeZone` setting); a week is keyed by its Monday. No rows: one
   zero bucket with the measures `null`. `more` says groups were cut at `limit`.
 - **Scope and hiding.** A summary covers exactly the rows the list would for the reader (the
-  list's own WHERE). A field the reader cannot see (removed by a plugin's `project` or a read
-  projector) in a filter, a group or a measure is a 403 `field_hidden`. The route follows the
-  list's `expose`.
+  list's own WHERE). A field the reader cannot see in a filter, a group or a measure is a 403
+  `field_hidden`: one the spec's `fieldPolicy` hides from them (even when they reach no record),
+  one a plugin's `query` hook refuses (the summary is asked as a list sorted by every field it
+  names), or one missing from their projection of a record (a plugin's `project`, a read
+  projector). The route follows the list's `expose`.
 - **Clients.** `api.entity(spec).summary(q)` and `api.summary(plural, q)` (`@hykr/api-client`);
   `useEntitySummary(plural, q)` (`@hykr/app`), refreshed with the entity's lists.
 - **Tiles.** `kpi.row` takes `of: { entity: '<plural>', query, labels? }` instead of `items`:
@@ -1309,9 +1316,9 @@ Every request becomes a `Principal` (`framework/contracts/src/principal.ts`). Th
 | `runId`, `agentVersion` | Set on agent calls, and written to audit |
 | `approvedBy` | Set on an approval replay |
 
-Everything comes from server data. Headers only choose: `x-tenant-id` picks among the businesses you belong to, and a WhatsApp channel lowers assurance. A role in a membership that nobody registered grants nothing (the server logs it once). Sign-up creates the person's own business, with them as `owner` (a Better Auth `user.create.after` database hook in `framework/api/src/infra/auth.ts`). If that failed, `PrincipalGuard` creates it on their first call (`ensureDefaultTenant`).
+Everything comes from server data. Headers only choose: `x-tenant-id` picks among the businesses you belong to, and a WhatsApp channel lowers assurance. A role in a membership that neither the application declared nor the business defined grants nothing (the server logs it once). Sign-up creates the person's own business, with them holding the creator's roles (`owner` unless the application's `roleDefaults` say otherwise; a Better Auth `user.create.after` database hook in `framework/api/src/infra/auth.ts`). If that failed, `PrincipalGuard` creates it on their first call (`ensureDefaultTenant`).
 
-A WhatsApp customer who has not linked an account acts as `actor.kind: 'user'` with id `contact:<id>`, roles `['customer']`.
+A WhatsApp customer who has not linked an account acts as `actor.kind: 'user'` with id `contact:<id>`, with the contact's roles (`['customer']` unless `roleDefaults` say otherwise).
 
 **Agents.** `PrincipalGuard` asks a chain of `AgentIdentityProvider`s who the caller is: the built-in
 agent key (`x-agent-key`, `x-agent-id`, `x-acting-for`, `x-run-id`) first, then each contributed
@@ -1335,13 +1342,14 @@ Read `p` in your rules with the helpers in `@hykr/policy`: `subjectOf(p)`, `user
 
 ### 6.2 Access
 
-`Access` (`framework/policy/src/access.ts`) says, per role name, which rows a read or write reaches:
+`Access` (`framework/policy/src/access.ts`) says, per role name or per capability, which rows a read or write reaches:
 
 | Grant | Rows |
 |---|---|
 | `'own'` | `owner = you`. Only for a user subject. |
 | `'customer'` | `customer_id = your customer`. Only when you are a customer. |
 | `'tenant'` | Every row in the business |
+| `{ grant: 'granted', of?, via? }` | The rows granted to you one by one (`POST /api/grants`, section 6.4). With `via: 'projectId', of: 'project'`, the rows whose project is granted to you. Only for a user subject. |
 
 The sample's rules:
 
@@ -1351,7 +1359,15 @@ export const BUSINESS_ACCESS: Access = {
   read:  { owner: 'own', admin: 'tenant', ops: 'tenant', staff: 'own', customer: 'customer' },
   write: { owner: 'own', admin: 'tenant', ops: 'tenant', staff: 'own', customer: 'customer' },
 };
+// application/domain/src/modules/todos/server/todo.entity.ts: buyers reach granted to-dos only
+read: { ...BUSINESS_ACCESS.read, buyer: { grant: 'granted' } },
 ```
+
+- A key may be a capability (a dotted name): `{ 'orders.read_all': 'tenant' }` reaches every row for anyone holding it. That is how a role a business made itself reaches rows (access maps are code; its roles are data). A capability key nobody defines throws.
+- A rule may be a list, ORed: `{ buyer: ['own', { grant: 'granted' }] }`.
+- Under `granted` alone a person cannot create a top-level row; a child row (`via` a parent's column) only under a parent granted to them, and they own it. A write on a row outside the grant is refused by the write's own query (404).
+- Don't give `'own'` on a child entity whose parent is limited: anyone could add a child to a parent they cannot see. Use `{ grant: 'granted', of: '<parent>', via: '<parentId>' }`.
+- More kinds plug in: declare the name on `GrantKinds` (`@hykr/policy`) and contribute a `GrantKind` (`grantKinds`, `@hykr/core`): `where(p, rule, target)` gives its rows as SQL, ORed with the others; `creates(...)` may let a person create a row under it.
 
 Ask for a signed-in session on a write with `{ grant: 'customer', minAssurance: 'session' }`. A WhatsApp-only customer is then refused with rule `needs_assurance`.
 
@@ -1390,7 +1406,7 @@ requireCapability(p, 'orders.cost.read', { rule: 'cost_hidden' });   // or a 403
 `can` reads `p.capabilities`, which the server works out from the roles when it resolves a request.
 `GET /api/me` returns the same list, so a client checks `me.capabilities` (the back office does).
 
-The framework registers five roles (`owner`, `admin`, `ops`, `staff`, `customer`) and five
+The framework registers five roles (`owner`, `admin`, `ops`, `staff`, `customer`) and these
 capabilities, with the roles that hold them by default (its features add their own, such as
 `models.manage`):
 
@@ -1400,7 +1416,10 @@ capabilities, with the roles that hold them by default (its features add their o
 | `customers.message` | owner, admin, ops, staff | `notify.send`: a template to a customer |
 | `history.all` | admin, ops | The whole business's history |
 | `channels.manage` | owner, admin | Setting the business's WhatsApp number |
-| `queues.admin` | owner, admin | Bull Board |
+| `queues.admin` | owner, admin | Bull Board (not grantable: a business cannot give it) |
+| `members.read` | owner, admin, ops, staff | The member list and the business's roles |
+| `members.manage` | owner, admin | Invitations, members' roles, the business's roles |
+| `records.grant` | owner, admin, ops | Giving a member access to one record (`granted`) |
 | `models.manage` | owner, admin | Setting the business's model policy, and seeing what models cost (section 7.5) |
 | `credits.view` | owner, admin, ops, staff | Whether the business is paused, and how much of each cap it used (section 7.6) |
 | `credits.manage` | owner, admin | Credit amounts, the ledger, buying credits, the alert threshold (section 7.6) |
@@ -1420,6 +1439,44 @@ contributes: {
 A role name is lower case (`[a-z][a-z0-9_]`, at most 32). A capability name is dotted (`<area>.<action>`).
 The API refuses to start when a role names a capability nobody defines. A role by itself grants nothing:
 give it rows in an entity's `access` and capabilities here.
+
+**Overriding what you did not declare.** `roleOverrides: [{ role, label?, capabilities? }]` relabels a
+role (the framework's or another module's) or replaces its whole capability set. `roleDefaults:
+[{ name: 'creator' | 'contact', roles }]` names the roles the framework hands out: to whoever creates a
+business (`owner` by default; sign-up and `ensureDefaultTenant`) and to a WhatsApp contact without an
+account (`customer`). A capability with `grantable: false` is given only by code.
+
+**A business's own roles.** Each business shapes its roles from the registered capabilities, without a
+deploy, in its `roles` settings section: `defined` (roles it made: name, label, capabilities) and `edits`
+(its label or capabilities for a declared role, which win over the application's). The resolver reads
+them per request (cached 10 seconds per process); a name nobody has grants nothing. A `roles` section
+that does not parse leaves members their roles' rows but no capability (fail closed); another section
+that does not parse does not touch capabilities, so its owner can still repair it. `standingIn(names,
+settings)` and `rolesOfBusiness(settings)` (`@hykr/contracts`) resolve them. The `members` feature
+serves them, people only, every write audited:
+
+| Route | Needs | Does |
+|---|---|---|
+| `GET /api/members` | `members.read` | The members and their roles |
+| `PATCH /api/members/:userId` `{ roles }`, `DELETE …` | `members.manage` | Change a member's roles; remove them (and their grants) |
+| `GET /api/members/roles` | `members.read` | Every role here (source, label, capabilities) and every capability |
+| `POST /api/members/roles`, `PATCH /api/members/roles/:name`, `DELETE …` | `members.manage` | Define, edit (`null` resets a declared role's part), delete or reset |
+| `GET/POST /api/members/invites`, `DELETE /api/members/invites/:id` | `members.manage` | Invitations by email with roles; the code is returned once |
+| `POST /api/members/invites/accept` `{ token }` | signed in, same email | Join; that business becomes the default |
+| `GET/POST /api/grants`, `DELETE /api/grants/:id` | `records.grant` | Who holds a grant on a record you reach; give or take one |
+
+A change that would leave nobody with `members.manage` is refused (`last_manager`). The back office has
+a Members screen (`MembersScreen`, route `/members`).
+
+**Fields only some capabilities read.** Put `traits: { fieldPolicy: { cost: 'orders.cost.read' } }` on
+an entity spec (or `{ cost: { read, write } }`; writing needs the read capability unless `write` says
+otherwise). The `field-policy` entity plugin removes the field wherever the record leaves for someone
+without it (list, get, write and command results, approvals, history, events, so tools and WhatsApp
+text too), refuses a filter or sort on it (403 `field_hidden`) and refuses a write to it on every path.
+Declare the field optional in the read schema, and keep it out of `search` and `defaultSort`: the API
+refuses to start otherwise. The same trait on a `commandSpec` hides its own output fields and its
+parked input. A module's notification parameters come from the raw row: don't put a hidden field in a
+template another role receives.
 
 ---
 
@@ -1784,7 +1841,13 @@ The 403 body has `rule` and `reason`. The `audit.events` row with `outcome = 'de
 Set `MODEL_MODE=fake`. Add a script in the module's `agent/scripts.ts` for any new phrase you want covered.
 
 **…add a business member?**
-There is no invitation flow yet. Tests insert into `app.memberships` directly (`addMember` in `@hykr/api/testing`). Do the same with SQL locally.
+Invite them: `POST /api/members/invites { email, roles }` (or the back office's Members screen) returns a code once; they sign in with that email and accept it (`POST /api/members/invites/accept`). Tests still insert into `app.memberships` directly (`addMember` in `@hykr/api/testing`).
+
+**…let a role see only some records ("assigned projects")?**
+Give it `{ grant: 'granted' }` in the entity's `access`, and its children `{ grant: 'granted', of: '<parent>', via: '<parentId>' }`; then grant records with `POST /api/grants` (section 6.2).
+
+**…hide a field (cost, margin) from some roles?**
+`traits: { fieldPolicy: { cost: '<module>.cost.read' } }` on the spec, with the capability defined by the module (section 6.4).
 
 ---
 
@@ -1888,7 +1951,9 @@ These are not built. Each has a workaround for now.
 
 | Missing | What to do now |
 |---|---|
-| Invitations to a business | Insert into `app.memberships` with SQL, as `addMember` in `@hykr/api/testing` does |
+| Emailing an invitation | `POST /api/members/invites` returns the code; the inviter shares it. Notifications have no recipient by address yet. |
+| Field policy in notification parameters | A module's `params(row)` gets the raw row. Leave hidden fields out of templates another role receives. |
+| Agent tools for members and grants | `/api/members` and `/api/grants` are people-only routes. |
 | Seed data | Create data through the API or the app. Maestro's demo assumes data exists. |
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
 | Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
@@ -1913,19 +1978,18 @@ These are not built. Each has a workaround for now.
 | One inbound URL per connector | Each connection has its own URL. Routing a provider's single URL by its account id is not built (decisions B10, 20). |
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
 | OAuth connectors | Credentials are stored as given; no OAuth flow or token refresh yet (B17 adds the first). |
-| Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |
+| Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
 | Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
-| Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
+| Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); `roleOverrides`, `roleDefaults` and `grantKinds` (A4); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
 | Editing a business's money settings | Nothing in the API changes `money` (currency, `fyStartMonth`, amounts, bands) yet: set it in `app.tenants.settings` with SQL. |
 | Bulk writes for plain entities | Only children of a parent are inserted in bulk (`children.insert`/`replace`); `insertMany` for any other entity is one insert per row. There is no bulk update. |
 | Line-level tools | The assistant saves a whole tree in one call (the sample's `save-order`); there are no tools to add or move one line. |
 | Several currencies in one record | A record and its children have one currency, and there are no exchange rates. |
 | Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
 | Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates of an undoable write wait with its events until the window closes. |
-| Deciders and per-business roles | `Recipient { capability }` finds the people to ask through the registered roles only. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
 | A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
 | Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |
@@ -2003,7 +2067,9 @@ An earlier outline described an API that was never built. Map it like this:
 | **Membership** | A person's roles in a tenant (`app.memberships`) |
 | **Customer** | A record of a business's customer (`app.customers`). It is not a login. |
 | **Contact** | A WhatsApp number known to a business (`channel.contacts`) |
-| **Grant** | `own`, `customer` or `tenant`: which rows a role reaches |
+| **Grant** | `own`, `customer`, `tenant` or `granted`: which rows a role or capability reaches |
+| **Record grant** | One person's access to one record (`app.record_grants`), for the `granted` reach |
+| **Field policy** | Fields only the holders of a capability read: `traits.fieldPolicy` |
 | **Capability** | Something a role may do besides reaching rows (`backoffice.use`), checked with `can(p, …)` |
 | **Assurance** | How sure we are of who it is: `whatsapp_number` < `otp` < `session` |
 | **Expose** | Who can reach an action: `all`, `human` or `internal` |

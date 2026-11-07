@@ -1,4 +1,6 @@
 import {
+  fieldPolicyOf,
+  hiddenFields,
   type ListFilter,
   type ListQuery,
   type Money,
@@ -168,22 +170,36 @@ export async function summarize(
   const currencyKey = q.measures.some((m) => m.money) ? (trait?.currency ?? 'currency') : undefined;
   const empty = (): Summary => ({ groups: [], totals: [emptyBucket(q)], more: false });
 
+  const refuse = (field: string) =>
+    new ForbiddenException({
+      error: 'forbidden',
+      rule: 'field_hidden',
+      reason: `You can't summarize ${spec.plural} by ${spec.fieldLabels?.[field]?.en ?? field}`,
+    });
+  const named = [...namedFields(def, q, currencyKey)];
+  // A field the spec's policy hides from this reader (A4's `fieldPolicy`) is refused first: the
+  // same answer on every record, and also when the reader reaches none.
+  const declared = new Set(hiddenFields(fieldPolicyOf(spec), p));
+  const policyHidden = named.find((f) => declared.has(f));
+  if (policyHidden) throw refuse(policyHidden);
+  // Plugins refuse a summary as they refuse a list (a filter or sort on a field they guard): it
+  // is asked as a list query sorted by every field it names.
+  const asList: ListQuery = {
+    filters: q.filters,
+    q: q.q,
+    sort: named.map((field) => ({ field, dir: 'asc' as const })),
+    limit: 1,
+    count: false,
+  };
+  for (const x of def.plugins()) x.query?.(asList, p, { spec, table: def.table });
   // The reader must see every field the summary names: each must be in their projection of a
   // record of their scope (plugins' `project`, read projectors), read without the filters so a
   // refusal never tells whether a filter on a hidden field matched. A reader who reaches no
   // record gets zeros, which reveal nothing.
-  const named = [...namedFields(def, q, currencyKey)];
   const visible = await visibleFields(conn, def, p);
   if (!visible) return empty();
   const hidden = named.find((f) => !visible.has(f));
-  if (hidden) {
-    const label = spec.fieldLabels?.[hidden]?.en ?? hidden;
-    throw new ForbiddenException({
-      error: 'forbidden',
-      rule: 'field_hidden',
-      reason: `You can't summarize ${spec.plural} by ${label}`,
-    });
-  }
+  if (hidden) throw refuse(hidden);
 
   const column = (field: string) => {
     const c = columns[field];

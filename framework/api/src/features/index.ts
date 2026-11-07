@@ -8,6 +8,7 @@ export { filesFeature } from './files/index.js';
 export { integrationsFeature } from './integrations/index.js';
 export { jobsFeature } from './jobs/index.js';
 export { liveFeature } from './live/index.js';
+export { membersFeature } from './members/index.js';
 export { modelsFeature } from './models/index.js';
 export { moneyFeature } from './money/index.js';
 export { pushFeature } from './push/index.js';

@@ -124,6 +124,15 @@ export async function me(person: Person): Promise<{ tenantId: string; roles: str
   return (await person.call('GET', '/api/me')).body;
 }
 
+/**
+ * Settings written straight to the database, as tests do: the server caches each business's
+ * settings for a few seconds (and reads them on every request), so drop its copy right after.
+ */
+export async function settingsChanged(tenantId?: string) {
+  const { TenantConfigService } = await import('@hykr/core');
+  server.app?.get(TenantConfigService).invalidate(tenantId);
+}
+
 /** Give a person roles in another business (the invitation flow is not built yet). */
 export async function addMember(person: Person, tenantId: string, roles: string[]) {
   await pool.query(

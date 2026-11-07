@@ -59,8 +59,9 @@ describe('contributions', () => {
       // The framework's features register their own too (the channel's queues, the events
       // queue, the files hooks, money's entity plugins `parent` and `money`, the push channel,
       // its schedule and contributors, the approvals sweeper, the integrations feature's queues,
-      // sweep schedule and read projector, the credits feature's sweep and turn hook): the
-      // application's is the only fixture one.
+      // sweep schedule and read projector, the credits feature's sweep and turn hook, the members
+      // feature's entity plugin, write hook and read projector): the application's is the only
+      // fixture one.
       expect(registry.all(), key).toContain(contributed);
       const fixtures = (registry.all() as readonly { name: string }[]).filter((x) =>
         x.name.startsWith('fixture.'),

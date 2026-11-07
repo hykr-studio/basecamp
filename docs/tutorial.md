@@ -332,13 +332,14 @@ export const Visit = defineEntity(VisitSpec, {
 });
 ```
 
-**Why not `BUSINESS_ACCESS`?** The sample `application/domain/src/server/access.ts` gives `staff: 'own'`. A customer's visit is owned by the business's default owner, so a staff member with `'own'` would never see the visits they need to confirm. Visits belong to the whole team, so every team role gets `'tenant'`. A `Grant` is one of three values (`framework/policy/src/access.ts`):
+**Why not `BUSINESS_ACCESS`?** The sample `application/domain/src/server/access.ts` gives `staff: 'own'`. A customer's visit is owned by the business's default owner, so a staff member with `'own'` would never see the visits they need to confirm. Visits belong to the whole team, so every team role gets `'tenant'`. A `Grant` is one of four values (`framework/policy/src/access.ts`):
 
 | Grant | Rows it reaches |
 |---|---|
 | `'own'` | Rows where the owner column equals the person's user id. |
 | `'customer'` | Rows where the customer column equals `p.customerId`. |
 | `'tenant'` | Every row in the business. |
+| `{ grant: 'granted' }` | Rows granted to the person one by one (`POST /api/grants`). |
 
 Any id outside your grants is a **404, never a 403**.
 

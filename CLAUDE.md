@@ -94,6 +94,8 @@ E2E test gotchas:
 - `OutboxRelay` only relays outbox rows of its own `BULL_PREFIX`, and each test run uses a fresh one. Two
   processes with the same prefix on one database (two `pnpm dev` workers, both `bull`) still take each other's
   rows: give each checkout its own `BULL_PREFIX`.
+- A business's settings are cached for 10 s and read on every request. A test that changes them with SQL
+  calls `settingsChanged(tenantId)` (`@hykr/api/testing`) right after, or the server keeps the old ones.
 
 Other gotchas:
 - `basecamp` is compiled, so it only works after `pnpm build`.
@@ -178,11 +180,15 @@ module that depends on this one) from `@hykr/db`. Each table needs an owner colu
 the application's (one journal for every module) in `drizzle.__app_migrations`.
 
 Tenancy: every row belongs to a business. Roles are names in a registry (`roles` in `@hykr/contracts`;
-the framework's are `owner`, `admin`, `ops`, `staff` and `customer`), and an entity's `access` grants each
-role `own`, `customer` or `tenant` per read and write (the sample is in
-`application/domain/src/server/access.ts`, shared by the modules). Anything else is a capability: check
-`can(p, 'backoffice.use')` (`@hykr/policy`), never a role name. A WhatsApp-only principal can be refused with
-`minAssurance: 'session'`. Background work writes as `systemPrincipal({ tenantId, job })` from `@hykr/core`.
+the framework's are `owner`, `admin`, `ops`, `staff` and `customer`; an application overrides them with
+`roleOverrides` and names the creator's and a contact's roles with `roleDefaults`), and each business adds
+and edits roles in its `roles` settings (`/api/members`). An entity's `access` grants each role, or each
+capability, `own`, `customer`, `tenant` or `{ grant: 'granted' }` (records granted one by one, `/api/grants`)
+per read and write (the sample is in `application/domain/src/server/access.ts`, shared by the modules).
+Anything else is a capability: check `can(p, 'backoffice.use')` (`@hykr/policy`), never a role name; hide a
+field with `traits: { fieldPolicy: { cost: '<module>.cost.read' } }`. A WhatsApp-only principal can be
+refused with `minAssurance: 'session'`. Background work writes as `systemPrincipal({ tenantId, job })` from
+`@hykr/core`.
 
 ### Non-obvious rules (each one has bitten someone)
 
