@@ -213,7 +213,6 @@ function Support({
   const [write, setWrite] = useState(false);
   const [error, setError] = useState<string>();
   const [open, setOpen] = useState<string>();
-  if (asking && tenantId !== asking.id && !reason) setTenantId(asking.id);
   const ask = useMutation({
     mutationFn: () =>
       api.platform.askSupport({
@@ -492,7 +491,9 @@ export function OperatorScreen() {
   return (
     <ScrollView contentContainerClassName="gap-6 p-4">
       {holds(TENANTS) ? <Businesses onWork={(t) => setAsking(t)} /> : null}
-      {holds(SUPPORT) ? <Support asking={asking} onWorkIn={workInGrant} /> : null}
+      {holds(SUPPORT) ? (
+        <Support key={asking?.id ?? 'none'} asking={asking} onWorkIn={workInGrant} />
+      ) : null}
       {holds(USAGE) ? <Usage /> : null}
       {holds(ROUTING) ? <Routing /> : null}
       {holds(OPERATORS) ? <Operators self={operator.id} /> : null}
