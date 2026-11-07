@@ -9,7 +9,13 @@ import {
 } from '@hykr/contracts';
 import { accessFor } from '@hykr/policy';
 import { describe, expect, it } from 'vitest';
-import { contextLine, parseAbout } from '../../dist/features/memory/index.js';
+import {
+  contextLine,
+  parseAbout,
+  RECALL_TIMEOUT_MS,
+  recallTimeoutMs,
+  VOICE_RECALL_TIMEOUT_MS,
+} from '../../dist/features/memory/index.js';
 import { anyRole } from '../../dist/index.js';
 
 const person = (roles: string[]): Principal => ({
@@ -92,6 +98,15 @@ describe('recall', () => {
       }),
     ).toBe('Recalled memo m: a Reply in Hindi.');
     expect(long.length).toBeLessThan(450);
+  });
+
+  it('waits a few seconds at most for the embedding, less on a spoken turn', () => {
+    expect(recallTimeoutMs('app')).toBe(RECALL_TIMEOUT_MS);
+    expect(recallTimeoutMs('whatsapp')).toBe(RECALL_TIMEOUT_MS);
+    expect(recallTimeoutMs(undefined)).toBe(RECALL_TIMEOUT_MS);
+    expect(recallTimeoutMs('voice')).toBe(VOICE_RECALL_TIMEOUT_MS);
+    expect(VOICE_RECALL_TIMEOUT_MS).toBeLessThan(RECALL_TIMEOUT_MS);
+    expect(RECALL_TIMEOUT_MS).toBeLessThanOrEqual(5_000);
   });
 
   it('refuses a query it cannot read', () => {

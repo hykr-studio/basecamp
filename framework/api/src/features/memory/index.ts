@@ -63,4 +63,11 @@ export const memoryFeature = defineFeature({
 export { anyRole, MemoryAccess } from './access.js';
 export { backfillAll, IndexOnWrite, MemoryIndexer, rebuild } from './indexer.js';
 export { Memory } from './memory.entity.js';
-export { contextLine, parseAbout, RecallService } from './recall.service.js';
+export {
+  contextLine,
+  parseAbout,
+  RECALL_TIMEOUT_MS,
+  RecallService,
+  recallTimeoutMs,
+  VOICE_RECALL_TIMEOUT_MS,
+} from './recall.service.js';

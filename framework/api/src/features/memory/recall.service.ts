@@ -1,4 +1,5 @@
 import {
+  type Channel,
   type MemoryAbout,
   type MemoryPolicy,
   memoryTraitOf,
@@ -24,6 +25,7 @@ import {
   Logger,
   type OnModuleDestroy,
   type OnModuleInit,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { embed } from 'ai';
@@ -45,6 +47,17 @@ const CONTEXT_CHARS = 400;
 const API_CHARS = 2000;
 /** Vectors made in a turn's `before`, kept for its `after` (or dropped after this long). */
 const KEEP_MS = 10 * 60_000;
+/**
+ * How long recall waits for the embedding provider, with no retry: someone is waiting on it. A
+ * turn then runs without recall, and the recall API answers 503. A spoken turn waits in silence,
+ * so it waits less.
+ */
+export const RECALL_TIMEOUT_MS = 4_000;
+export const VOICE_RECALL_TIMEOUT_MS = 1_500;
+
+/** The longest a turn on this channel waits for its recall's embedding. */
+export const recallTimeoutMs = (channel: Channel | undefined) =>
+  channel === 'voice' ? VOICE_RECALL_TIMEOUT_MS : RECALL_TIMEOUT_MS;
 
 const cut = (text: string, n: number) =>
   text.length > n
@@ -141,18 +154,34 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** The text's vector with the business's embedding model. Throws ModelRefused. */
-  async embed(tenantId: string, text: string): Promise<Embedded> {
+  /**
+   * The text's vector with the business's embedding model, made within `timeoutMs` (default
+   * RECALL_TIMEOUT_MS) in one try. Throws ModelRefused when the policy refuses the model, and an
+   * error when the provider fails or does not answer in time.
+   */
+  async embed(tenantId: string, text: string, timeoutMs = RECALL_TIMEOUT_MS): Promise<Embedded> {
     const models = this.ref.get(ModelPolicyService, { strict: false });
     const { ref, model } = await models.embeddingFor(tenantId);
-    const { embedding } = await embed({ model, value: text, maxRetries: 1 });
-    return { model: ref, vector: embedding };
+    const timeout = AbortSignal.timeout(timeoutMs);
+    try {
+      const { embedding } = await embed({
+        model,
+        value: text,
+        maxRetries: 0,
+        abortSignal: timeout,
+      });
+      return { model: ref, vector: embedding };
+    } catch (e) {
+      if (timeout.aborted) throw new Error(`${ref} did not answer within ${timeoutMs} ms`);
+      throw e;
+    }
   }
 
   /**
    * The memories nearest to the question that this principal may read now, best first. Records
    * of entities with the `memory` trait (the business's memory among them) and, for a person, what
-   * they said before. `model` is null when the business has no embedding model it may use.
+   * they said before. `model` is null when the business has no embedding model it may use; a
+   * provider that fails or does not answer in time is a 503 (`recall_unavailable`).
    */
   async recall(p: Principal, req: RecallRequest): Promise<RecallResult> {
     const tenantId = p.tenantId;
@@ -164,7 +193,11 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
         embedded = await this.embed(tenantId, req.query);
       } catch (e) {
         if (e instanceof ModelRefused) return { items: [], model: null };
-        throw e;
+        log.warn(`Recall in business ${tenantId} failed: ${reason(e)}`);
+        throw new ServiceUnavailableException({
+          error: 'recall_unavailable',
+          reason: 'The embedding model did not answer. Try again in a moment.',
+        });
       }
     }
     const limit = req.limit ?? policy?.limit ?? 5;
@@ -280,7 +313,8 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
   /**
    * Before a chat turn: what the business and the person remember about the message, as context
    * lines (data, not instructions). Never for a draft (it goes to a customer). Recall only adds:
-   * when it cannot run (off, no embedding model, an error), the turn runs without it.
+   * when it cannot run (off, no embedding model, an error, a provider that does not answer within
+   * the channel's bound), the turn runs without it.
    */
   async beforeTurn(turn: TurnInfo): Promise<TurnGate | null> {
     this.sweep();
@@ -289,7 +323,7 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
     const policy = await this.policyOf(p.tenantId);
     if (!policy?.recall || policy.limit === 0) return null;
     try {
-      const embedded = await this.embed(p.tenantId, turn.message);
+      const embedded = await this.embed(p.tenantId, turn.message, recallTimeoutMs(turn.channel));
       if (policy.conversation && turn.threadId)
         this.made.set(turn.runId, { ...embedded, at: Date.now() });
       const { items } = await this.recall(p, {

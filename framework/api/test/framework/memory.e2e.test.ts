@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { TenantConfigService } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { RECALL_TIMEOUT_MS } from '../../dist/features/memory/index.js';
 import * as api from '../../dist/index.js';
 import {
   addMember,
@@ -561,7 +562,7 @@ describe("a business's embedding model changes", () => {
 
 /**
  * An embedding provider that answers nothing until it is released: what a slow or hung provider
- * looks like to the indexer. Its vectors are [length of the text, 1, 0].
+ * looks like to the indexer and to recall. Its vectors are [length of the text, 1, 0].
  */
 async function heldProvider() {
   let release = () => {};
@@ -662,5 +663,62 @@ describe('the index waits for no provider', () => {
     });
     expect(done.embedding).toEqual(['Grey tarp. Folded in the garage by the door'.length, 1, 0]);
     expect(provider.inputs.at(-1)).toEqual(['Grey tarp. Folded in the garage by the door']);
+  });
+});
+
+describe('recall waits for no provider', () => {
+  const fay = new Person('Fay Memory');
+  let provider: Awaited<ReturnType<typeof heldProvider>>;
+  let fayTenant = '';
+
+  beforeAll(async () => {
+    // Never released while the tests run: a provider that keeps the connection open and says nothing.
+    provider = await heldProvider();
+    process.env.MODEL_PROVIDERS = JSON.stringify([
+      {
+        id: 'hung',
+        baseUrl: `${provider.url}/v1`,
+        apiKey: 'hung-key',
+        models: [{ id: 'embed', kind: 'embedding' }],
+      },
+    ]);
+    await fay.signUp();
+    fayTenant = (await me(fay)).tenantId;
+    await settings(fayTenant, 'models', { allowed: ['hung/embed'], embedding: 'hung/embed' });
+  });
+
+  afterAll(async () => {
+    provider?.release();
+    await provider?.close();
+  });
+
+  it('a turn runs without recall once the bound has passed, and keeps nothing', async () => {
+    const message = 'show context about the hung provider';
+    const before = seen.contexts.length;
+    const started = Date.now();
+    const turn = await fay.call('POST', '/api/chat/once', { message });
+    const took = Date.now() - started;
+    expect(turn.status).toBe(200);
+    // The provider was asked and never answered: the bound ended the wait, in one try.
+    expect(provider.inputs.filter((i) => i.includes(message))).toHaveLength(1);
+    expect(took).toBeGreaterThanOrEqual(RECALL_TIMEOUT_MS - 50);
+    expect(took).toBeLessThan(RECALL_TIMEOUT_MS + 3_000);
+    expect(seen.contexts.length).toBe(before + 1);
+    expect(seen.contexts.at(-1) ?? []).toEqual([]);
+    // Recall did not run, so the message is not kept as memory either.
+    const { rows } = await pool.query(
+      `select count(*)::int as n from app.memory_index where tenant_id = $1`,
+      [fayTenant],
+    );
+    expect(rows[0].n).toBe(0);
+  });
+
+  it('the recall API answers 503 within the bound', async () => {
+    const started = Date.now();
+    const res = await fay.call('GET', `/api/memory/recall?${new URLSearchParams({ q: 'tarp' })}`);
+    expect(Date.now() - started).toBeLessThan(RECALL_TIMEOUT_MS + 3_000);
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ error: 'recall_unavailable' });
+    expect(JSON.stringify(res.body)).not.toContain(provider.url);
   });
 });
