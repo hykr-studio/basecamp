@@ -32,6 +32,7 @@ import {
   memberships,
   privacyRequests,
   tenants,
+  user,
   writeAudit,
 } from '@hykr/db';
 import { type Lang, pick } from '@hykr/i18n';
@@ -44,7 +45,7 @@ import {
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { EventBus } from '@nestjs/cqrs';
-import { and, asc, eq, inArray, isNull, lte, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lte, ne, or } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ErasedContact, PrivacyIntake } from '../../channels/maintenance/erasure.js';
 import { eraseWithContributors, exportPersonalData } from '../../privacy/contributors.js';
@@ -62,7 +63,7 @@ import {
   personalEntityProblems,
   recordTargets,
 } from './records.js';
-import { redactCopies } from './redact.js';
+import { type FiledAbout, redactCopies, redactFilings } from './redact.js';
 import {
   processors,
   type RetentionTarget,
@@ -98,6 +99,24 @@ export interface RunOutcome {
   performed: boolean;
   /** A WhatsApp contact that was forgotten: tell them it is done. */
   confirm?: ErasedContact;
+}
+
+/** The email and numbers a person's privacy filings may name them by, before they go. */
+async function filedAbout(tx: Tx, ids: Identities): Promise<Omit<FiledAbout, 'requestIds'>> {
+  const account = ids.userId
+    ? await tx.select({ email: user.email }).from(user).where(eq(user.id, ids.userId))
+    : [];
+  const theirs = ids.contactIds.length
+    ? await tx
+        .select({ id: contacts.id, address: contacts.address })
+        .from(contacts)
+        .where(inArray(contacts.id, ids.contactIds))
+    : [];
+  return {
+    userId: ids.userId,
+    emails: account.map((a) => a.email.trim().toLowerCase()),
+    contacts: theirs.map((c) => ({ id: c.id, address: c.address.replace(/^\+/, '') })),
+  };
 }
 
 /** Every subject a person's data is filed under here: the account, then each contact. */
@@ -473,6 +492,8 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
             const [c] = await tx.select().from(contacts).where(eq(contacts.id, row.subjectId));
             if (c) confirm = { tenantId, address: c.address, locale: c.locale };
           }
+          // The email and numbers filings may name them by: read before they go.
+          const about = await filedAbout(tx, ids);
           const runs = await runsOf(tx, ids);
           const records = await eraseRecords(tx, ids);
           const features: Record<string, number> = {};
@@ -506,15 +527,22 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
             : [];
           const assistant = await eraseMastra(tx, ids, runs, elsewhere.length === 0);
           const redacted = await redactCopies(tx, tenantId, records.erased);
-          // Their earlier requests stay as the business's evidence, without notes or archives.
+          // Their requests (as a person and as each contact) stay as the business's evidence,
+          // without notes or archives.
           const earlier = await tx
             .update(privacyRequests)
             .set({ note: null, files: [] })
             .where(
               and(
                 eq(privacyRequests.tenantId, tenantId),
-                eq(privacyRequests.subjectKind, row.subjectKind),
-                eq(privacyRequests.subjectId, row.subjectId),
+                or(
+                  ...subjectsOf(ids).map((s) =>
+                    and(
+                      eq(privacyRequests.subjectKind, s.kind),
+                      eq(privacyRequests.subjectId, subjectOfRowId(s)),
+                    ),
+                  ),
+                ),
               ),
             )
             .returning({ id: privacyRequests.id });
@@ -523,6 +551,14 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
             resourceType: PRIVACY_REQUEST,
             ids: earlier.map((r) => r.id),
           });
+          // The filings about them: the approvals that held one, their audit rows, the replies.
+          const filings = await redactFilings(tx, tenantId, {
+            ...about,
+            requestIds: [...new Set([row.id, ...earlier.map((r) => r.id)])],
+          });
+          redacted.approvals += filings.approvals;
+          redacted.audit += filings.audit;
+          redacted.replies += filings.replies;
           const account = ids.userId ? await forgetAccount(tx, ids.userId) : false;
           outcome = {
             records: records.outcome,

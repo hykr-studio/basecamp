@@ -4,7 +4,8 @@
 // another business, the team without `privacy.manage` and the assistant reach neither the
 // request nor the archive; erasure deletes, keeps and blanks as declared, redacts the copies the
 // server keeps, and forgets the account; a business that reviews erasures makes them wait, and
-// processing one parks for an approval; deadlines are marked once; retention runs per business
+// processing one parks for an approval; an erasure the team files that waits for an approval
+// leaves no email, number or note behind; deadlines are marked once; retention runs per business
 // with its own periods; the register lists who holds what; the business's privacy team changes
 // its own settings, audited, and the register and the runner follow them.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -31,6 +32,7 @@ const carol = new Person('Carol Privacy'); // admin: handles privacy requests
 const cy = new Person('Cy Privacy'); // a customer, forgotten in the end
 const dee = new Person('Dee Privacy'); // a customer whose erasure is reviewed
 const eve = new Person('Eve Privacy'); // a customer whose cards expire
+const fay = new Person('Fay Privacy'); // a customer whose erasure the team files from a letter
 const ravi = new Person('Ravi Privacy'); // owner of another business
 let tenantId = '';
 let raviTenant = '';
@@ -94,12 +96,12 @@ const mastraSpans = async () =>
 
 beforeAll(async () => {
   await boot(privacyApp);
-  for (const p of [ana, bob, carol, cy, dee, eve, ravi]) await p.signUp();
+  for (const p of [ana, bob, carol, cy, dee, eve, fay, ravi]) await p.signUp();
   tenantId = (await me(ana)).tenantId;
   raviTenant = (await me(ravi)).tenantId;
   await addMember(bob, tenantId, ['staff']);
   await addMember(carol, tenantId, ['admin']);
-  for (const p of [cy, dee, eve]) customer[p.name] = await makeCustomer(p);
+  for (const p of [cy, dee, eve, fay]) customer[p.name] = await makeCustomer(p);
   await setTenantSettings(tenantId, { privacy: null });
 });
 
@@ -631,6 +633,124 @@ describe('the register', () => {
     });
     expect(theirs.body.fiduciary.tenantId).toBe(raviTenant);
     expect(theirs.body.processors.map((p: Json) => p.name)).toEqual(['Fixture mail']);
+  });
+});
+
+/**
+ * Rows of this business's approvals, audit trail, stored events, notifications and kept replies
+ * whose text holds any of these.
+ */
+async function copiesHolding(...texts: string[]) {
+  const like = texts.map((t) => `%${t.toLowerCase()}%`);
+  return (
+    await pool.query(
+      `select 'approval' as at, id::text as id from app.approvals
+         where tenant_id = $1 and lower(payload::text || coalesce(summary, '')) like any($2)
+       union all
+       select 'audit', id from audit.events
+         where tenant_id = $1
+           and lower(coalesce(before::text, '') || coalesce(after::text, '')) like any($2)
+       union all
+       select 'event', id::text from app.domain_events
+         where tenant_id = $1
+           and lower(coalesce("row"::text, '') || coalesce(before::text, '')) like any($2)
+       union all
+       select 'outbox', id::text from app.outbox
+         where tenant_id = $1 and lower(payload::text) like any($2)
+       union all
+       select 'reply', key from app.idempotency
+         where split_part(principal_id, ':', 3) = $1 and lower(response::text) like any($2)`,
+      [tenantId, like],
+    )
+  ).rows;
+}
+
+describe('an erasure the team files from a letter', () => {
+  /** The completed erasure of this subject, as the privacy team lists it. */
+  const erased = (subjectId: string) =>
+    eventually(async () => {
+      const list = await call(carol, 'GET', '/api/privacy/requests?kind=erase');
+      return list.body.items.find(
+        (r: Json) => r.subject.id === subjectId && ['completed', 'failed'].includes(r.status),
+      );
+    }, 20_000);
+
+  it('waits for an approval, and leaves no email or note behind', async () => {
+    await setTenantSettings(tenantId, { privacy: null });
+    await call(fay, 'POST', '/api/cards', { name: 'Fay card' });
+    const note = 'Letter of the third, from flat 4B';
+    // As the back office files it: with a key, so its reply is kept for a retry.
+    const res = await carol.call(
+      'POST',
+      '/api/privacy/requests',
+      { kind: 'erase', for: { email: fay.email.toUpperCase() }, intake: 'post', note },
+      here({ 'idempotency-key': `fay-${fay.id}` }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('needs_approval');
+    const approvalId = res.body.approval.id;
+    // The approval names Fay by id, never by the email she was filed with.
+    const parked = await pool.query('select payload from app.approvals where id = $1', [
+      approvalId,
+    ]);
+    expect(parked.rows[0].payload.input.for).toEqual({ userId: fay.id });
+    expect(parked.rows[0].payload.input.note).toBe(note);
+
+    const approved = await call(ana, 'POST', `/api/approvals/${approvalId}/approve`);
+    expect(approved.body).toMatchObject({ status: 'approved' });
+    const done = await erased(fay.id);
+    expect(done).toMatchObject({ status: 'completed', intake: 'post', note: null });
+    expect(done.outcome).toMatchObject({
+      records: { cards: { deleted: 1 } },
+      account: true,
+      redacted: {
+        approvals: expect.any(Number),
+        audit: expect.any(Number),
+        replies: expect.any(Number),
+      },
+    });
+    expect(done.outcome.redacted.approvals).toBeGreaterThanOrEqual(1);
+    expect(done.outcome.redacted.audit).toBeGreaterThanOrEqual(1);
+    expect(done.outcome.redacted.replies).toBeGreaterThanOrEqual(1);
+    expect(await copiesHolding(fay.email, note)).toEqual([]);
+    // The trail still says whom it was for, by id, and who approved it.
+    const trail = await pool.query(
+      `select after from audit.events where action = 'approval.approved' and resource_id = $1`,
+      [approvalId],
+    );
+    expect(trail.rows[0].after.payload.input).toEqual({
+      kind: 'erase',
+      for: { userId: fay.id },
+      intake: 'post',
+    });
+  });
+
+  it('waits for an approval, and leaves no WhatsApp number or note behind', async () => {
+    const number = '919800000088';
+    const hari = await seedContact(tenantId, 'Hari Privacy', number);
+    await call(ana, 'POST', '/api/callers', {
+      caller: 'Hari',
+      phone: number,
+      contactId: hari.contactId,
+    });
+    const note = 'Hari wrote in, letter kept in the file';
+    const res = await carol.call(
+      'POST',
+      '/api/privacy/requests',
+      { kind: 'erase', for: { address: `+${number}` }, intake: 'post', note },
+      here({ 'idempotency-key': `hari-${hari.contactId}` }),
+    );
+    expect(res.body.status).toBe('needs_approval');
+    expect(
+      (await pool.query('select payload from app.approvals where id = $1', [res.body.approval.id]))
+        .rows[0].payload.input.for,
+    ).toEqual({ contactId: hari.contactId });
+    const approved = await call(ana, 'POST', `/api/approvals/${res.body.approval.id}/approve`);
+    expect(approved.body).toMatchObject({ status: 'approved' });
+    const done = await erased(hari.contactId);
+    expect(done).toMatchObject({ status: 'completed', subject: { kind: 'contact' } });
+    expect(done.outcome).toMatchObject({ records: { callers: { anonymised: 1 } } });
+    expect(await copiesHolding(number, note)).toEqual([]);
   });
 });
 

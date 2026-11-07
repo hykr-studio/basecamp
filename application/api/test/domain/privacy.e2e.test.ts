@@ -2,7 +2,8 @@
 // (notes' `privacy` trait). The customer's copy holds their notes; the application's policy gives
 // the deadline and its processors fill the register; notes expire two years after their last
 // change; and when the team files an erasure for someone, it waits for a second person
-// (`irreversible`), then forgets them and their notes. Another customer's notes stay.
+// (`irreversible`), then forgets them and their notes, leaving their email nowhere: not in the
+// approval, its audit rows or the reply kept for a retry. Another customer's notes stay.
 import { PrivacyService, readZip } from '@hykr/api';
 import {
   addMember,
@@ -135,11 +136,14 @@ describe('personal data in the sample', () => {
   });
 
   it('an erasure the team files waits for a second person, then forgets the customer', async () => {
-    const res = await call(owner, 'POST', '/api/privacy/requests', {
-      kind: 'erase',
-      for: { email: asha.email },
-      intake: 'email',
-    });
+    const note = 'Asha wrote from her personal address';
+    // As the back office files it: with a key, so its reply is kept for a retry.
+    const res = await owner.call(
+      'POST',
+      '/api/privacy/requests',
+      { kind: 'erase', for: { email: asha.email }, intake: 'email', note },
+      { ...here(), 'idempotency-key': `erase-${asha.id}` },
+    );
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('needs_approval');
     expect(res.body.approval.level).toMatchObject({ name: 'irreversible' });
@@ -157,5 +161,19 @@ describe('personal data in the sample', () => {
     ]);
     expect(left.rows.map((r) => r.title)).toEqual(['Bala likes teak']);
     expect((await asha.call('GET', '/api/me')).status).toBe(401);
+    // Her email and the team's note are in no approval, audit row or kept reply.
+    const copies = await pool.query(
+      `select 'approval' as at from app.approvals
+         where tenant_id = $1 and lower(payload::text) like any($2)
+       union all
+       select 'audit' from audit.events
+         where tenant_id = $1
+           and lower(coalesce(before::text, '') || coalesce(after::text, '')) like any($2)
+       union all
+       select 'reply' from app.idempotency
+         where split_part(principal_id, ':', 3) = $1 and lower(response::text) like any($2)`,
+      [tenantId, [`%${asha.email.toLowerCase()}%`, `%${note.toLowerCase()}%`]],
+    );
+    expect(copies.rows).toEqual([]);
   });
 });

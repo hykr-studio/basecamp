@@ -12,7 +12,7 @@ import { defineSubscriber } from '../events/subscriber.js';
 import { defineFeature } from '../feature.js';
 import type { FileHolder } from '../files/holders.js';
 import type { LiveResource } from '../live/resources.js';
-import { privacyCommands } from './commands.js';
+import { PrivacyFilingHook, privacyCommands } from './commands.js';
 import { PrivacyController } from './privacy.controller.js';
 import { ARCHIVE_FIELD, PrivacyService } from './privacy.service.js';
 import { reachesRequest } from './requests.js';
@@ -108,5 +108,6 @@ export const privacyFeature = defineFeature({
     subscribers: [PrivacyRunner],
     fileHolders: [PrivacyArchives],
     liveResources: [PrivacyLive],
+    writeHooks: [PrivacyFilingHook],
   },
 });

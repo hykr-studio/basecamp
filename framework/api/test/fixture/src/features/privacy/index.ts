@@ -2,8 +2,9 @@
 // customer's personal data (deleted when they are forgotten, and after 30 days), whose ledger
 // entries are kept for a legal hold, and whose callers (a customer's or a WhatsApp contact's)
 // are anonymised; a processor, a policy (answer within 30 days), a period for relayed
-// notifications, and a level rule that makes processing an erasure wait for an approval. Only
-// the privacy e2e test boots `privacyApp`; its tables are a migration set of their own.
+// notifications, and a level rule that makes processing an erasure, or filing one from a letter,
+// wait for an approval. Only the privacy e2e test boots `privacyApp`; its tables are a migration
+// set of their own.
 import { defineModule, definePrivacyPolicy, defineProcessor, defineServer } from '@hykr/api';
 import {
   type Contributions,
@@ -189,14 +190,23 @@ export const ForgetLevel = defineApprovalLevel({
   policy: { approver: { by: { capability: 'approvals.decide' } } },
 });
 
-/** Processing an erasure someone reviewed waits for a second person. */
+/**
+ * Processing an erasure someone reviewed waits for a second person, and so does an erasure the
+ * team files from a letter (intake `post`).
+ */
 export const ForgetWaits = defineLevelRule({
   name: 'fixture.privacy',
-  on: ['privacy.process'],
-  decide: ({ loaded }) =>
-    (loaded as { kind?: string }).kind === 'erase'
+  on: ['privacy.process', 'privacy.request'],
+  decide: ({ op, input, loaded }) => {
+    const filed = input as { kind?: string; intake?: string } | undefined;
+    const waits =
+      op.name === 'privacy.process'
+        ? (loaded as { kind?: string }).kind === 'erase'
+        : filed?.kind === 'erase' && filed.intake === 'post';
+    return waits
       ? atLevel(ForgetLevel.name, 'erasure_waits', 'Forgetting a person cannot be undone')
-      : null,
+      : null;
+  },
 });
 
 export const privacyContributions: Partial<Contributions> = {

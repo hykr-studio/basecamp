@@ -9,6 +9,7 @@ import {
   OPEN_PRIVACY_STATUSES,
   PRIVACY_REQUEST,
   type PrivacyConfiguration,
+  type PrivacyFor,
   PrivacyManageCapability,
   PrivacySettings,
   ProcessPrivacyRequestSpec,
@@ -25,8 +26,9 @@ import {
   settingsIn,
   type Tx,
   tenantOf,
+  type WriteHook,
 } from '@hykr/core';
-import { privacyRequests, tenants } from '@hykr/db';
+import { approvals, privacyRequests, tenants } from '@hykr/db';
 import { can, subjectOf } from '@hykr/policy';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { and, eq, inArray, type SQL, sql } from 'drizzle-orm';
@@ -184,6 +186,29 @@ export const FilePrivacyRequest = defineCommand(FilePrivacyRequestSpec, {
   },
   present: (row: RequestRow) => requestOut(row),
 });
+
+/**
+ * A filing that waits for an approval names its person there by id, never by the email or the
+ * WhatsApp number it was filed with: the approval keeps the filing to replay it, and the
+ * approval's audit rows keep copies of it. The replay finds the same person by id.
+ */
+export const PrivacyFilingHook: WriteHook = {
+  name: 'privacy.filing',
+  async afterRun({ op, input, loaded, tx, result }) {
+    if (op.name !== FilePrivacyRequestSpec.name || result.status !== 'needs_approval') return;
+    const who = (input as { for?: PrivacyFor }).for;
+    const subject = (loaded as Filing | undefined)?.subject;
+    if (!who || !subject || 'userId' in who || 'contactId' in who) return;
+    const byId =
+      subject.kind === 'user' ? { userId: subject.userId } : { contactId: subject.contactId };
+    await tx
+      .update(approvals)
+      .set({
+        payload: sql`jsonb_set(${approvals.payload}, '{input,for}', ${JSON.stringify(byId)}::jsonb)`,
+      })
+      .where(eq(approvals.id, result.approval.id));
+  },
+};
 
 /** The request as `privacy.process` and `privacy.refuse` load it. */
 interface Loaded {
