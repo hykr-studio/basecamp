@@ -31,9 +31,11 @@ export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/
 export { defineFeature, type FeatureDef } from './features/feature.js';
 export {
   dispositionOf,
+  type FileHolder,
   type FileRow,
   type FilesConfig,
   FilesService,
+  fileHolders,
   fileLine,
   filesConfig,
   STORAGE,
@@ -52,6 +54,37 @@ export {
   type InboundEventRecord,
 } from './features/integrations/registry.js';
 export { outboundPolicy } from './features/integrations/settings.js';
+export {
+  type CompleteContext,
+  callbackSecret,
+  checkResultUrl,
+  defineJob,
+  fetchResult,
+  isPrivateAddress,
+  JOB_SIGNATURE_HEADER,
+  type JobCallbackOptions,
+  type JobCallbackRequest,
+  type JobCallbackTarget,
+  type JobContext,
+  type JobDef,
+  JobEvent,
+  type JobRecord,
+  type JobRow,
+  JobRunner,
+  type JobSignatureCheck,
+  type JobsConfig,
+  jobDefs,
+  jobInfoOf,
+  jobsConfig,
+  presentJob,
+  ResultRefused,
+  reachesJob,
+  type SubmitContext,
+  type SubmitResult,
+  signJobCallback,
+  startJob,
+  verifyJobCallback,
+} from './features/jobs/public.js';
 export { type LiveResource, liveResources } from './features/live/resources.js';
 export {
   ModelPolicyChanged,

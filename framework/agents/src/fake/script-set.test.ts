@@ -32,6 +32,8 @@ describe('script sets', () => {
       'file-words',
       'file-about',
       'file-only',
+      'job-status',
+      'jobs-running',
       'fail',
     ]);
   });

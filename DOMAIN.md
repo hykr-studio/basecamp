@@ -221,6 +221,11 @@ From the contracts declaration alone:
   WhatsApp kept for its sender (the assistant puts it on a record), transcription of audio, and
   `<FileField>` / `<FileThumbs>` in the app (developer guide, section 5.12). The sample's notes
   keep photos.
+- Long-running jobs (`/api/jobs`, `app.jobs`): a module declares a kind of job with `defineJob`
+  (contributed as `jobs`) and starts one in a command with `startJob`; the worker submits it, its
+  service reports back by signed callback or is polled, and its result files are kept on the job
+  and reached through the record it is about. `<JobProgress>` and `useJob` in the app (developer
+  guide, section 5.17). The fixture's `drawings` shows one; the sample has none yet.
 - Threads (one saved conversation per person, shared by every channel), voice sessions
   (`/api/voice/*`, LiveKit, the voice worker), and the framework's phrases in `@hykr/i18n`.
 - Businesses, memberships and customers (`/api/me`), and the scope engine behind `access`.
