@@ -10,6 +10,7 @@ import {
   commandSpec,
   defineCapability,
   defineFeatureFlag,
+  defineShareable,
   entitySpec,
   moduleSpec,
   SharedFields,
@@ -209,12 +210,22 @@ export const platformContributions: Partial<Contributions> = {
   inboundRouters: [ByCode],
   featureFlags: [PriorityFlag],
   capabilities: [
+    // A read: support access may hold it when the business consents.
     defineCapability({
       name: 'fixture.issue.note',
       label: label("Read an issue's note"),
       roles: ['owner', 'admin'],
+      supportable: true,
+    }),
+    // Says nothing about support access: support never holds it.
+    defineCapability({
+      name: 'fixture.issue.close',
+      label: label('Close issues'),
+      roles: ['owner'],
     }),
   ],
+  // Issues may be shared by link (what support access must not leave behind).
+  shareables: [defineShareable({ entity: 'issue' })],
 };
 
 /** The fixture with issues, parts and the router. */
