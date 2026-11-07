@@ -17,6 +17,7 @@ import { CalendarController, CalendarPublicController } from './calendar.control
 import { CalendarService } from './calendar.service.js';
 import { INVITES_QUEUE, type InviteJob, InvitesService, SendInvite } from './invites.js';
 import { CalendarLocks } from './lock.js';
+import { calendarErasure, calendarExport, calendarParts } from './privacy.js';
 import './routes.js';
 import { schedulable } from './schedulable.js';
 import { CalendarSyncService, SYNC_QUEUE, type SyncJob } from './sync.service.js';
@@ -119,5 +120,8 @@ export const calendarFeature = defineFeature({
     schedules: [CalendarMaintain],
     subscribers: [CalendarRecords, CalendarConnected, CalendarInviteRequested],
     toolContributions: [calendarTools],
+    erasureContributors: [calendarErasure],
+    exportContributors: [calendarExport],
+    personalDataParts: calendarParts,
   },
 });
