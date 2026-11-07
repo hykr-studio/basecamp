@@ -42,7 +42,7 @@ and registers it.
 | Notifications | `notifications/` (isomorphic) | Its templates (`defineTemplate`) and notifications (`defineNotification`) |
 | Views | `views/` (isomorphic) | `<name>Views = { name, views, screens }`, declared with `defineView` / `defineScreen` |
 | Assistant | `agent/` | An `AgentModule` (`@hykr/agents/script`): its rules, the scripted model's scripts, eval cases (and spoken `voiceEvalCases`) and setup |
-| Bundle | `index.ts` (server only) | `<name> = defineModule({ ...<name>Spec, server, views, screens, templates, notifications, agent, tables })` from `@hykr/api` |
+| Bundle | `index.ts` (server only) | `<name> = defineModule({ ...<name>Spec, server, views, screens, templates, notifications, agent, tables, contributes })` from `@hykr/api`; `contributes.featureFlags` lists the module's flags (`defineFeatureFlag`) |
 
 Around the modules, the application keeps:
 
@@ -135,6 +135,34 @@ it can be undone) is the application's: the sample declares `read`, `internal`, 
 `irreversible` (`application/domain/src/server/approval-levels.ts`), and the to-dos module maps its
 writes to `internal` with a level rule. Thresholds and approvers per amount band are each
 business's settings (`approvals`).
+
+## What a business sets up for itself
+
+The framework's `settings` feature (developer guide, section 5.18) gives every business its own
+setup, changed by people with `settings.manage` (owners and admins) through the write path:
+
+- **Feature flags.** A module declares each flag and what it gates (modules, entities, commands,
+  tools, app destinations) with `defineFeatureFlag`; a business has it on only when its settings
+  say so. Off, its routes and writes answer 404, its tools leave the assistant and the app hides
+  it. `managedBy: 'tenant'` lets the business switch it; otherwise only the platform does.
+- **Custom fields.** An entity with the `customFields` trait and a `custom` column takes the
+  fields a business defines (`/api/custom-fields`: text, number, yes/no, date, one of a list),
+  checked on every write and filterable in lists. A required field binds the entity's own create
+  and any write that sets custom values, not a command that makes the record without any.
+- **White label.** Its name, logo and colours (`branding`), and its own web addresses, trusted once
+  verified by a DNS TXT record. The settings plugin applies the colours; a screen shows the logo
+  and name with `<BrandMark>` (the sample's Today does), since the shell still shows the product's
+  title.
+- **Shared records.** An entity defined with `defineSharedEntity` (trait `shared`) shows every
+  business the rows of the platform's business (`PLATFORM_TENANT_ID`), read-only, and a business
+  overrides one with its own copy. What is shared is the application's data.
+- **Wording.** The application rewords framework phrases and notifications in `defineServer({
+  wording })` instead of declaring them again; a business words phrases and notification emails
+  in its `wording` settings.
+
+The sample's to-dos take custom fields (a business adds its `priority`; the to-dos screen sets it
+in its add form and each row's editor with `<CustomFieldInputs>`), and "clear done to-dos"
+(`todo.clearDone`) sits behind the flag `todos.clear-done`, which the business switches itself.
 
 ## Money, numbers and lines
 
@@ -268,6 +296,10 @@ From the contracts declaration alone:
   (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
   (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
   sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+- Each business's setup: feature flags, custom field definitions (`app.custom_fields`), branding
+  and verified web addresses (`app.tenant_domains`), shared records and wording (`/api/settings`,
+  `/api/features`, `/api/custom-fields`, the back office's Settings screen, `settingsPlugin` in the
+  app).
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

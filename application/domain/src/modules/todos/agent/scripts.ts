@@ -18,6 +18,7 @@ import {
  *   done <title>                    list-todos → update-todo { done: true }
  *   delete <title>                  list-todos → delete-todo (parked for approval)
  *   what's due this week            list-todos due within 7 days → one line (the view shows them)
+ *   clear done to-dos               clear-done-todos (when the business has todos.clear-done on)
  *
  * Add, list, done and delete also take Hindi and Telugu verbs, before or after the title
  * ("జోడించు Call the plumber", "Order tiles हटाओ"), and answer in the turn's language.
@@ -70,6 +71,23 @@ export const todosScripts = [
           te: `${quoted(t.title)} జోడించాను.`,
         })[turn.lang];
       return [say(written(r, added, turn))];
+    },
+  }),
+  defineScript({
+    // Only when the business switched "clear done to-dos" on: off, the tool is not offered.
+    name: 'clear-done',
+    match: (text) =>
+      /^clear (?:the |my )?done(?: to-?dos)?\.?$/i.test(first(text)) ? true : undefined,
+    step: (_, turn) => {
+      const r = turn.result('clear-done-todos');
+      if (!r) return [call('clear-done-todos', {})];
+      const cleared = (v: { cleared?: number }) =>
+        ({
+          en: `Cleared ${plural(v.cleared ?? 0, 'done to-do')}.`,
+          hi: `${v.cleared ?? 0} पूरे हुए काम हटा दिए।`,
+          te: `${v.cleared ?? 0} పూర్తయిన పనులను తొలగించాను.`,
+        })[turn.lang];
+      return [say(written(r, cleared as never, turn))];
     },
   }),
   defineScript({

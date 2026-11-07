@@ -1,3 +1,4 @@
+export * from './custom-fields.js';
 export * from './domain.js';
 export * from './events.js';
 export * from './field-policy.js';
@@ -11,6 +12,7 @@ export * from './numbering.js';
 export * from './present.js';
 export * from './read-tools.js';
 export * from './registry.js';
+export * from './shared.js';
 export * from './spec.js';
 export * from './summary.js';
 export * from './tax.js';

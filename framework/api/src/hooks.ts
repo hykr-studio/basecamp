@@ -383,6 +383,11 @@ export interface AuthPlugin {
   plugin?: BetterAuthPlugin;
   /** More origins that may call the API with cookies. */
   trustedOrigins?: readonly string[];
+  /**
+   * Origins only known at run time (a business's verified custom domain): asked by CORS for an
+   * origin the static lists do not hold. Its plugin answers Better Auth the same way.
+   */
+  originAllowed?(origin: string): Promise<boolean>;
 }
 
 /** Auth plugins, in registration order: added to Better Auth when it is built (infra/auth.ts). */

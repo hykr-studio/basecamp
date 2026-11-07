@@ -89,13 +89,15 @@ E2E test gotchas:
   guard and fail unless `VOICE_AGENT_KEY` is set in `.env`.
 - Both Vitest configs load the root `.env` into the main process, so `globalSetup` migrates the same database
   the tests use. Turbo runs test tasks uncached and passes them every environment variable.
+- Change a business's settings with `setTenantSettings` (`@hykr/api/testing`), never a bare
+  `UPDATE app.tenants`: settings are cached per process for 10 s, so a request before the change
+  (`me(person)` included) leaves the test reading the old ones. A test that must write them with SQL
+  (a shape `setTenantSettings` cannot) calls `settingsChanged(tenantId)` right after.
 - The golden WhatsApp conversations (`application/api/test/whatsapp/`) need `whaloc-test` on :8090, which
   `pnpm infra:up` starts. Without it they skip.
 - `OutboxRelay` only relays outbox rows of its own `BULL_PREFIX`, and each test run uses a fresh one. Two
   processes with the same prefix on one database (two `pnpm dev` workers, both `bull`) still take each other's
   rows: give each checkout its own `BULL_PREFIX`.
-- A business's settings are cached for 10 s and read on every request. A test that changes them with SQL
-  calls `settingsChanged(tenantId)` (`@hykr/api/testing`) right after, or the server keeps the old ones.
 
 Other gotchas:
 - `basecamp` is compiled, so it only works after `pnpm build`.
@@ -239,6 +241,12 @@ refused with `minAssurance: 'session'`. Background work writes as `systemPrincip
 
 A framework change needs its own tests: e2e tests in `framework/api/test/framework` against the fixture
 app in `framework/api/test/fixture`. Framework tests must not depend on the sample domain.
+
+A business's setup (developer guide, section 5.18, `framework/api/src/features/settings/`): feature
+flags (`defineFeatureFlag`, contributed as `featureFlags`; off unless the business's settings store
+`true`, and a flag naming something that does not exist stops the start), custom fields (trait
+`customFields`), branding and verified domains, shared records (`defineSharedEntity`,
+`PLATFORM_TENANT_ID`) and wording overrides (`defineServer({ wording })`, never a second declaration).
 
 Extension points (developer guide, section 5.9): spec `traits`, `contributes` lists collected by
 registries (`createHookRegistry`, in `framework/core/src/hooks.ts` and `framework/api/src/hooks.ts`),

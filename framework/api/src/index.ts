@@ -92,6 +92,7 @@ export {
   ModelRefused,
   SET_MODEL_POLICY,
 } from './features/models/index.js';
+export { FeatureFlagsService } from './features/settings/flags.service.js';
 export {
   type AgentIdentity,
   type AgentIdentityProvider,

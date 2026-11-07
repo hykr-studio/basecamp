@@ -6,6 +6,7 @@ import {
   type ChatRequest,
   type ChatResponse,
   type ChatStreamRequest,
+  type ClientSettings,
   type CommandSpec,
   type CreatedInvite,
   type CreateInviteInput,
@@ -14,6 +15,7 @@ import {
   type DefineRoleInput,
   type EditRoleInput,
   type EntitySpec,
+  type FeatureState,
   type FileInfo,
   type FileTarget,
   type FileTranscript,
@@ -30,6 +32,7 @@ import {
   type Page,
   type PresignFileInput,
   type PresignFileResult,
+  type PublicBranding,
   type PushDevice,
   pathParams,
   type RecordGrant,
@@ -38,6 +41,7 @@ import {
   type Summary,
   type SummaryInput,
   type TemplateStatus,
+  type TenantDomain,
   type Thread,
   type ThreadMessage,
   toQueryString,
@@ -414,6 +418,30 @@ export function createApiClient(opts: ApiClientOptions) {
           `/api/grants/${encodeURIComponent(id)}`,
           undefined,
           key,
+        ),
+    },
+    /**
+     * The business's setup (A11). Changes go through `command(SetFeatureSpec | UpdateBrandingSpec
+     * | UpdateWordingSpec | AddDomainSpec | VerifyDomainSpec | RemoveDomainSpec, input)`, custom
+     * fields through `entity(CustomFieldSpec)`.
+     */
+    settings: {
+      /** Flags on, what is off, branding and the business's phrases: what the apps need. */
+      get: () => call<ClientSettings>('GET', '/api/settings'),
+      /** Every declared flag, on or off here, and who switches it. */
+      features: () => call<FeatureState[]>('GET', '/api/features'),
+      /** The business's web addresses (settings managers only). */
+      domains: () => call<TenantDomain[]>('GET', '/api/settings/domains'),
+      /**
+       * Branding on a verified custom domain, before signing in: of `origin` (a web page passes
+       * its own, `window.location.origin`), else of the request's Origin. 404 anywhere else.
+       */
+      publicBranding: (origin?: string) =>
+        call<PublicBranding>(
+          'GET',
+          origin
+            ? `/api/branding/public?origin=${encodeURIComponent(origin)}`
+            : '/api/branding/public',
         ),
     },
     /** People only: the agent gets 403. */

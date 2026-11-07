@@ -1,5 +1,13 @@
 /** The to-dos module's tables. */
-import { app, customerColumn, id, tableRef, tenantColumn, user } from '@hykr/db';
+import {
+  app,
+  customerColumn,
+  customFieldsColumn,
+  id,
+  tableRef,
+  tenantColumn,
+  user,
+} from '@hykr/db';
 import { boolean, date, index, integer, text, timestamp } from 'drizzle-orm/pg-core';
 
 export const todos = app.table(
@@ -20,6 +28,8 @@ export const todos = app.table(
     meetingId: text('meeting_id').references(() => tableRef('meetings').id, {
       onDelete: 'set null',
     }),
+    /** The business's own fields: keys and types from its custom field definitions. */
+    custom: customFieldsColumn(),
     /** Who made the row: the person, or the assistant acting for them. Set by the framework. */
     createdBy: text('created_by', { enum: ['person', 'assistant'] })
       .notNull()

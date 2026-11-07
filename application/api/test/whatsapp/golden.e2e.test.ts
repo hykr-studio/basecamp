@@ -10,7 +10,7 @@ import {
   Person,
   pool,
   server,
-  settingsChanged,
+  setTenantSettings,
   shutdown,
 } from '@hykr/api/testing';
 import { getQueueToken } from '@nestjs/bullmq';
@@ -134,11 +134,7 @@ beforeAll(async () => {
   expect(
     (await owner.call('POST', '/api/channels/whatsapp/number', { phoneNumberId: NUMBER })).status,
   ).toBe(201);
-  await pool.query(
-    `update app.tenants set settings = settings || '{"quietHours":{"from":"00:00","to":"00:00"}}' where id = $1`,
-    [tenantId],
-  );
-  await settingsChanged(tenantId);
+  await setTenantSettings(tenantId, { quietHours: { from: '00:00', to: '00:00' } });
   // Templates as a fresh install has them: created at the provider, then approved.
   const { TemplateSync } = await import('@hykr/api/testing/internals');
   const { WHATSAPP } = await import('@hykr/api/testing/internals');

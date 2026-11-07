@@ -65,9 +65,11 @@ export interface EntityPlugin {
   /** More conditions on the rows this principal reaches, for reading or for writing. */
   scope?(p: Principal, op: 'read' | 'write', target: EntityPluginTarget): SQL | undefined;
   /**
-   * The column values an insert or update writes: add or change some (a version bump). Keys
-   * that are not columns are dropped, and the business, owner, customer and `createdBy` are
-   * always the framework's.
+   * The column values an insert or update writes: add or change some (a version bump). A value
+   * may be SQL computed from the row as it is when the update runs (a jsonb merge): `row` was
+   * read without a lock, so a value built from it would undo a concurrent write. Keys that are
+   * not columns are dropped, and the business, owner, customer and `createdBy` are always the
+   * framework's.
    */
   toValues?(
     values: Values,
