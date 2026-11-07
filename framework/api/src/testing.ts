@@ -221,6 +221,31 @@ export async function eventually<T>(
   throw new Error(`timed out waiting (last: ${JSON.stringify(last)})`);
 }
 
+/** The in-memory Google a test server talks to with GOOGLE_CALENDAR_TRANSPORT=fake. */
+export { type FakeGoogle, fakeGoogle } from '@hykr/connectors/google-calendar';
+
+/**
+ * Connect a person's Google calendar on the fake Google (GOOGLE_CALENDAR_TRANSPORT=fake), as the
+ * app does: the API's consent URL (the fake agrees at once), Google's redirect through the API's
+ * callback to the app, and the app finishing it under the person's session. `headers` go with
+ * both of the person's calls (`x-tenant-id`). Returns the finish's answer and where the browser
+ * landed.
+ */
+export async function connectGoogleCalendar(person: Person, headers: Record<string, string> = {}) {
+  const start = await person.call<{ url: string }>(
+    'POST',
+    '/api/calendar/connections',
+    { provider: 'google' },
+    headers,
+  );
+  if (start.status !== 201) throw new Error(`connecting: ${JSON.stringify(start.body)}`);
+  const back = await fetch(start.body.url, { redirect: 'manual' });
+  const landing = new URL(back.headers.get('location') ?? '');
+  const code = landing.searchParams.get('code') ?? '';
+  const state = landing.searchParams.get('state') ?? '';
+  const done = await person.call('POST', '/api/calendar/google/complete', { code, state }, headers);
+  return { ...done, landing };
+}
 /** The application the test booted (its catalog, registry, notifications and assistant). */
 export { runtime } from './runtime.js';
 

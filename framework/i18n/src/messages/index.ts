@@ -3,6 +3,8 @@
 export { approvalMessages } from './approvals.js';
 export { assistantMessages } from './assistant.js';
 export { businessesMessages } from './businesses.js';
+export { calendarMessages } from './calendar.js';
+export { callsMessages } from './calls.js';
 export { channelMessages } from './channels.js';
 export { commentMessages } from './comments.js';
 export { creditsMessages } from './credits.js';

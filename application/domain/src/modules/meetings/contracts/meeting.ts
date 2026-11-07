@@ -90,6 +90,10 @@ export const MeetingSpec = entitySpec({
   expose: { list: 'all', get: 'all', create: 'all', update: 'all', delete: 'human' },
   approval: { delete: (p) => p.actor.kind === 'agent' },
   views: { list: 'meeting.list', item: 'meeting.card' },
+  // Meetings are events in their owner's connected calendar, in feeds and in invites.
+  traits: {
+    schedulable: { title: 'title', startsAt: 'startsAt', endsAt: 'endsAt', location: 'address' },
+  },
 });
 
 /** A check-in at a meeting: where the person was, how far from the meeting, how precise. */

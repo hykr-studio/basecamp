@@ -29,6 +29,11 @@ export interface InboundEvent {
 
 /** How a connector takes requests in. */
 export interface ConnectorInbound<C> {
+  /**
+   * The sender posts no body: what `verify` checks is in the headers (a push channel's token).
+   * Default false: a request without a body is refused before `verify`.
+   */
+  bodyless?: boolean;
   /** Is this request from the sender these credentials belong to? Constant-time checks only. */
   verify(req: InboundRequest, credentials: C, now?: number): boolean;
   /** The events in a verified request. Throw when it cannot be read: the sender gets a 400. */

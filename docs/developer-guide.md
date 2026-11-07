@@ -872,7 +872,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources`,
   `fileHolders` (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
   `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21),
-  `dataExportSources` (section 5.22) and `uploadTargets` (section 5.23) in `@hykr/api`.
+  `dataExportSources` (section 5.22), `uploadTargets` (section 5.23) and `telephonyProviders`
+  (section 5.24) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -1209,7 +1210,8 @@ contributes: {
 
   `ctx.write(op, input)` is `runWrite` with an idempotency key per event, handler and call. A
   4xx refusal (another business's record is a 404) fails the event for good; other errors retry.
-  `GET /api/integrations/connections/:id/inbound` is the log.
+  `GET /api/integrations/connections/:id/inbound` is the log. A connector whose sender posts
+  no body (Google Calendar's push notices) sets `inbound.bodyless`; its `verify` reads headers.
 - **Server code** that calls a sender back opens a connection's credentials with
   `openConnection(db, tenantId, id)`, and makes any request to a business-given address with
   `safeRequest(url, init, outboundPolicy())`.
@@ -1696,6 +1698,100 @@ pnpm exec basecamp import todo domain/src/modules/todos/import/todos.csv \
   `useCanImport()` under it. The sample's to-dos screen shows it; `import/todos.csv` is its file.
 - **Limits.** `IMPORTS_MAX_ROWS` (50 000), `IMPORTS_BATCH_SIZE` (100), `IMPORTS_REPORT_ROWS`
   (10 000), `IMPORTS_TIMEOUT_S` (14 400); the file's size is `FILES_MAX_BYTES`.
+
+### 5.24 Calendars and calls
+
+Records with a time reach people's calendars, and calls are logged on records
+(`docs/decisions/B17.md`). Which entities are events, whose calendars they go on and what a
+move in a calendar means are the application's. The sample's `meetings` module uses them.
+
+- **The trait.** `traits.schedulable: { title, startsAt, endsAt, location?, description?,
+  people?, hiddenWhen? }` names read-schema fields (`location` is text or an `Address`),
+  `people` the table's columns holding user ids (one or a list; default the owner column), and
+  `hiddenWhen: { field, in }` the values that take a record off every calendar. The server
+  checks it at start: a field or column that does not exist stops it.
+- **Google Calendar** (`@hykr/connectors/google-calendar`, transport only). Each person
+  connects their own account: `POST /api/calendar/connections { provider: 'google', returnTo? }`
+  returns the authorization URL (PKCE, offline access, scopes `calendar.events` and
+  `calendar.freebusy`). The `state` is a random token; the server keeps who started the sign-in,
+  in which business, and the PKCE verifier (sealed), for ten minutes. Google returns to
+  `GET /api/calendar/google/callback`, which exchanges nothing: it sends the browser on to the
+  app (`CALENDAR_RETURN_URL`, or `CALENDAR_APP_RETURN_URL` for `returnTo: 'app'`) with `code`
+  and `state`, and the app calls `POST /api/calendar/google/complete { code, state }` under its
+  session. Only the person who started it, in that business, finishes it; anyone else's try is
+  403 (`calendar_sign_in_not_yours`, `calendar_sign_in_other_business`) and uses the sign-in up,
+  so a consent link sent to someone else connects nothing. Tokens are stored sealed; a refused
+  refresh marks the connection `needs_reauth`. People only (the assistant cannot connect).
+  `connectGoogleCalendar(person)` (`@hykr/api/testing`) does the round trip on the fake.
+  `GET /api/calendar/connections`
+  lists yours; `DELETE /api/calendar/connections/:id` takes our events out of Google and revokes
+  the grant.
+- **Sync** is one way, records to Google. The subscriber `calendar.records` queues
+  `calendar.sync` for every stored event about a schedulable record; the job reads the record
+  **as each person** it belongs on (scoped repository, `toRead`): reachable and not hidden →
+  upsert, otherwise → delete. A field hidden from them never reaches their calendar, and someone
+  who loses access loses the event. Google reports changes through a watch channel that posts
+  to the B10 inbound webhook (`/webhooks/google-calendar/:connection`; it needs an https
+  `CALENDAR_PUBLIC_URL`, elsewhere `calendar.maintain` polls every 10 minutes). A change to one
+  of our events stores `calendar.event_moved` or `calendar.event_removed`
+  (`CalendarEventChange`: the entity, record, person and times); the framework writes nothing
+  back. A module that wants the move subscribes and writes as the person: the sample's
+  `meetings.calendar-moved` runs `meeting.reschedule` with `writeAs(ctx, { principal, requestId,
+  idempotencyKey }, op, input)`, the principal from `memberPrincipal(ctx.get, { userId,
+  tenantId })` (both from `@hykr/api`).
+- **Free time.** `GET /api/calendar/busy?from&to[&userId]` (busy intervals, no titles) and
+  `GET /api/calendar/free?from&to&minutes[&step&hoursFrom&hoursTo&userId]` (slots, in the
+  business's time zone; `freeSlots` in `@hykr/contracts` is the pure version). With
+  `hoursFrom`/`hoursTo`, slots keep inside those local hours. Without them, slots keep to the
+  business's `businessHours` week and holidays (section 5.20; a slot may run past midnight where
+  it stays open), and to every hour when it has none: the framework has no working day of its
+  own. Another member's needs `calendar.availability.read`. The assistant's tool is
+  `find-free-time`. Not connected: `{ connected: false }`.
+- **Invites.** `POST /api/calendar/invites { entity, id, to: [{ email, name? } | { userId }],
+  lang? }` (`calendar.invite`, tool `send-calendar-invite`) emails an `.ics` (METHOD:REQUEST,
+  also as the mail's calendar part). To yourself: allowed; to others: `customers.message`, and
+  the assistant's invite waits for approval. The record is read as the person who invites.
+  Later changes send an update (SEQUENCE + 1), a deleted or hidden record a CANCEL, from the
+  worker, one send of an invite at a time. Each outcome is audited and stored as
+  `calendar.invite_sent`, `calendar.invite_cancelled` or `calendar.invite_failed` (resource type
+  `calendarInvite`, row `CalendarInviteOutcome`, as the system principal `calendar.invites`): a
+  module subscribes to act on one. `GET /api/calendar/invites?entity&id` lists a record's.
+- **One job at a time.** Every job that sends a record's events holds an advisory lock on the
+  record, and every send of an invite one on the invite, so the last change wins. The locks have
+  their own small pool (4 connections per process; a job waits 60 s for one, then 60 s for the
+  lock, then fails and retries), so holders never starve the main pool. The main pool fails a
+  query that waits 30 s for a connection.
+- **Feeds.** `POST /api/calendar/feeds { label? }` returns a private URL once
+  (`/api/calendar/feed/<token>.ics`; only the token's hash is stored); `DELETE
+  /api/calendar/feeds/:id` revokes it. A feed lists the person's own records (the trait's
+  `people`) from 90 days back to a year ahead, each read as them now.
+- **Calls** (`features/calls`). `POST /api/calls` logs one (`call.log`, tool `log-call`; on a
+  record or about none), `PATCH /api/calls/:callId` changes its notes, status or times, and
+  `GET /api/calls?entity&id` lists a record's (whoever reads the record reads its calls; a call
+  about no record: who logged it, the member on it and `calls.read_all`). `POST /api/calls/dial
+  { to, entity?, id? }` (`call.dial`, tool `dial-call`; the assistant's dial waits for approval)
+  asks the business's telephony provider, from the worker, to connect it. Each step of the dial
+  (`started`, once; `placed`; `failed`) is the system op `call.dial_outcome` through `runWrite`:
+  audited on the call, with `call.updated` stored. `GET /api/calls/provider` says whether the
+  business has one it may use.
+- **A telephony provider** is the application's: `defineTelephonyProvider({ name, label,
+  connector?, dial(request, { credentials }) })` (`@hykr/connectors`), contributed as
+  `telephonyProviders`. With `connector`, it gets the business's active B10 connection's
+  credentials. None ships: without one, `call.dial` is refused with `no_telephony_provider`.
+  The provider's status webhook is a B10 connector handler that calls
+  `ctx.write(callProviderUpdate(), { provider, externalId, status, … })`.
+- **In the app** `calendarPlugin()` adds `/calendar` (connect or disconnect Google; make, copy
+  and revoke feeds), `<RecordInvites entity id />` a record's invites and `<RecordCalls entity
+  id />` its calls (log one; "Call" when the business has a provider). The hooks are
+  `useCalendarConnections`, `useConnectCalendar`, `useCompleteCalendar` (the `/calendar` screen
+  finishes a sign-in it is handed), `useDisconnectCalendar`, `useCalendarFeeds`,
+  `useCreateFeed`, `useRevokeFeed`, `useInvites`, `useSendInvite`, `useCalls`,
+  `useCallProvider`, `useLogCall` and `useDialCall`.
+- **Configuration**: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (unset: Google is not
+  offered), `GOOGLE_CALENDAR_TRANSPORT=fake` (the in-memory Google, `fakeGoogle()` in
+  `@hykr/api/testing`; production refuses it), `CALENDAR_PUBLIC_URL`, `CALENDAR_RETURN_URL`,
+  `CALENDAR_APP_RETURN_URL` (a native app's link, such as `agenticstack://calendar`) and
+  `CALENDAR_SYNC_DAYS` (`application/.env.example`).
 
 ---
 
@@ -2604,7 +2700,15 @@ These are not built. Each has a workaround for now.
 | Webhook delivery order, auto-pause, alerts | Deliveries of one record can arrive out of order; an endpoint that keeps failing is not paused and nobody is told. |
 | One inbound URL per connector | Each connection has its own URL. Routing a provider's single URL by its account id is not built (decisions B10, 20). |
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
-| OAuth connectors | Credentials are stored as given; no OAuth flow or token refresh yet (B17 adds the first). |
+| OAuth connectors | Business connections store credentials as given; only the calendar's per-person Google connection has an OAuth flow and token refresh (section 5.24). |
+| Other calendars (Microsoft 365, CalDAV), a calendar other than the primary one | Only Google, into each person's primary calendar. Others subscribe to their ICS feed. |
+| Changes made in Google written back | Sync is one way; a move or deletion in Google is stored as `calendar.event_moved` / `calendar.event_removed` for a module's subscriber to act on (the sample's meetings do). |
+| Invite replies | Attendees' accept or decline is not read (no inbound mail); invites go out with `RSVP=FALSE`. |
+| Confirming invite updates | A change to an invited record emails every recipient an update at once; nobody confirms it first. |
+| Telling someone an invite failed | `calendar.invite_failed` is stored and audited; no notification is declared on it. |
+| A calendar sign-in across the app's own sign-in | Google's code is finished only in an app already signed in as the person who started, in that business. The app's sign-in screen does not keep it: someone signed out there (a phone's browser, say) starts again. One web and one native return address per deployment. |
+| A team feed | A feed lists one person's own records. |
+| A telephony provider, call recordings | None ships: contribute a `telephonyProviders` entry. Recordings and transcripts are not stored (no consent flow). |
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
 | Identity provider scopes | Enforced (section 7.8): a scoped credential reaches only routes that declare a scope. Only the generated entity and command routes declare one, so a feature's own routes are out of reach for scoped credentials until they say which scope they need. |
 | MCP: several businesses | A token acts in the business the person is in by default when they consent (their default membership, else their latest participation); the consent screen cannot choose another. Hiding the tools of a module a business's feature flag switches off is not done (the API answers 404 for its calls). |
