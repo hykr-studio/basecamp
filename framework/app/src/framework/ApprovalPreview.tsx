@@ -1,4 +1,13 @@
-import type { Approval } from '@hykr/contracts';
+import {
+  type Approval,
+  revisionFields,
+  stateLabel,
+  statesOf,
+  transitionLabel,
+  transitionNamed,
+  versionedOf,
+  versionField,
+} from '@hykr/contracts';
 import { firstFew, type Labels, type Lang, moneyText, pick } from '@hykr/i18n';
 import { useQuery } from '@tanstack/react-query';
 import { Text, View } from 'react-native';
@@ -237,15 +246,81 @@ function RecordPreview({ approval }: { approval: Approval }) {
   );
 }
 
+const specOf = (type: string) => Object.values(specs()).find((s) => s.name === type);
+
+/**
+ * The record a write is for, as it stands now: its state and, for a versioned record, which
+ * revision and version ("v2 · version 4"). The summary names the version the request was made
+ * on; approving after the record moved on fails, so a difference here is worth reading.
+ */
+function RecordNow({ approval }: { approval: Approval }) {
+  const { lang } = useT();
+  const spec = specOf(approval.resourceType);
+  const plural = pluralOf(approval.resourceType);
+  const id = approval.resourceId;
+  const trait = spec ? versionedOf(spec) : undefined;
+  const states = spec ? statesOf(spec) : undefined;
+  const q = useQuery({
+    queryKey: [plural, 'get', id],
+    queryFn: () => entityApi(plural as EntityName).get(id as string),
+    enabled: Boolean(plural && id && (trait || states)),
+    retry: false,
+  });
+  const row = q.data as Record<string, unknown> | undefined;
+  if (!spec || !row || (!trait && !states)) return null;
+  const rev = trait ? revisionFields(trait) : undefined;
+  const words = [
+    states ? stateLabel(states, String(row[states.field] ?? ''), lang) : '',
+    rev && Number(row[rev.number] ?? 1) > 1 ? `v${row[rev.number]}` : '',
+    trait ? `version ${String(row[versionField(trait)] ?? '')}` : '',
+  ].filter(Boolean);
+  return <Text style={styles.muted}>{`Now: ${words.join(' · ')}`}</Text>;
+}
+
+/** A transition: "<Label>: <from> → <to>", then the fields it takes with it. */
+function TransitionPreview({ approval }: { approval: Approval }) {
+  const { lang } = useT();
+  const spec = specOf(approval.resourceType);
+  const states = spec ? statesOf(spec) : undefined;
+  const { transition: name, ...fields } = (approval.input ?? {}) as Record<string, unknown>;
+  const t = states && typeof name === 'string' ? transitionNamed(states, name) : undefined;
+  const from = t ? (typeof t.from === 'string' ? [t.from] : t.from) : [];
+  return (
+    <View style={{ gap: space.md }}>
+      {t && states ? (
+        <Text style={[styles.text, { fontWeight: '600' }]}>
+          {`${transitionLabel(t, lang)}: ${from.map((s) => stateLabel(states, s, lang)).join(' / ')} → ${stateLabel(states, t.to, lang)}`}
+        </Text>
+      ) : null}
+      <RecordNow approval={approval} />
+      {Object.entries(fields).some(([k, v]) => !hidden(k) && !isEmpty(v)) ? (
+        <Fields type={approval.resourceType} input={fields} />
+      ) : null}
+    </View>
+  );
+}
+
 /**
  * Exactly what approving will do, read from the parked input (or, for a delete, the record
- * itself). Generic: any command's or entity action's input renders here with no new UI.
+ * itself). Generic: any command's or entity action's input renders here with no new UI. A
+ * transition shows its move; a write to a versioned record shows the version it is on now.
  */
 export function ApprovalPreview({ approval }: { approval: Approval }) {
   if (approval.action.endsWith('.delete')) return <RecordPreview approval={approval} />;
+  if (approval.action.endsWith('.transition')) return <TransitionPreview approval={approval} />;
   const input = (approval.input ?? {}) as Record<string, unknown>;
   const visible = Object.entries(input).filter(([k, v]) => !hidden(k) && !isEmpty(v));
   if (visible.length === 0)
-    return <Text style={styles.text}>Approving runs it with no further changes.</Text>;
-  return <Fields type={approval.resourceType} input={input} />;
+    return (
+      <View style={{ gap: space.md }}>
+        <RecordNow approval={approval} />
+        <Text style={styles.text}>Approving runs it with no further changes.</Text>
+      </View>
+    );
+  return (
+    <View style={{ gap: space.md }}>
+      <RecordNow approval={approval} />
+      <Fields type={approval.resourceType} input={input} />
+    </View>
+  );
 }

@@ -1,6 +1,7 @@
 import { defineDocument } from '@hykr/api';
-import { buildTree, type Money, type TaxLine, type TreeNode } from '@hykr/contracts';
+import { buildTree, type Money, stateLabel, type TaxLine, type TreeNode } from '@hykr/contracts';
 import { type Labels, moneyText } from '@hykr/i18n';
+import { ORDER_STATES, type OrderStatus } from '../contracts/index.js';
 import { OrderDocumentTemplate } from '../notifications/index.js';
 import { OrderItem } from './order.entity.js';
 
@@ -9,7 +10,7 @@ export interface OrderDocumentData {
   order: {
     number: string;
     title: string;
-    status: 'open' | 'cancelled';
+    status: OrderStatus;
     currency: string;
     subtotal: Money;
     taxTotal: Money;
@@ -35,8 +36,6 @@ const L = {
   date: { en: 'Date', hi: 'तारीख', te: 'తేదీ' },
   title: { en: 'Title', hi: 'शीर्षक', te: 'శీర్షిక' },
   status: { en: 'Status', hi: 'स्थिति', te: 'స్థితి' },
-  open: { en: 'Open', hi: 'खुला', te: 'తెరిచి ఉంది' },
-  cancelled: { en: 'Cancelled', hi: 'रद्द', te: 'రద్దు చేయబడింది' },
   item: { en: 'Item', hi: 'आइटम', te: 'ఐటమ్' },
   quantity: { en: 'Qty', hi: 'मात्रा', te: 'పరిమాణం' },
   unitPrice: { en: 'Unit price', hi: 'इकाई मूल्य', te: 'యూనిట్ ధర' },
@@ -136,7 +135,8 @@ export const OrderDocument = defineDocument<OrderDocumentData>({
             { label: ctx.label(L.number), value: order.number },
             { label: ctx.label(L.date), value: ctx.date(order.createdAt) },
             { label: ctx.label(L.title), value: order.title },
-            { label: ctx.label(L.status), value: ctx.label(L[order.status]) },
+            // The state in the document's language, as the orders state machine names it.
+            { label: ctx.label(L.status), value: stateLabel(ORDER_STATES, order.status, ctx.lang) },
           ],
         },
         ...(order.status === 'cancelled'

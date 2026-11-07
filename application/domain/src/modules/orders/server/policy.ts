@@ -23,13 +23,13 @@ import { Levels } from '../../../server/approval-levels.js';
 export const APPROVAL_LIMIT_KEY = 'orders.approval';
 export const DEFAULT_APPROVAL_LIMIT: Money = { minor: 50_000_000, currency: 'INR' };
 
-/** Who may save an order above the limit without asking anyone. */
+/** Who approves a submitted order, and saves one above the limit without asking anyone. */
 export const OrdersApprove = defineCapability({
   name: 'orders.approve',
   label: {
-    en: 'Save large orders without approval',
-    hi: 'बड़े ऑर्डर बिना मंज़ूरी के सहेजें',
-    te: 'పెద్ద ఆర్డర్లను ఆమోదం లేకుండా సేవ్ చేయండి',
+    en: 'Approve orders, and save large ones without asking',
+    hi: 'ऑर्डर मंज़ूर करें, और बड़े ऑर्डर बिना पूछे सहेजें',
+    te: 'ఆర్డర్లను ఆమోదించండి, పెద్దవాటిని అడగకుండా సేవ్ చేయండి',
   },
   roles: ['owner', 'admin'],
 });

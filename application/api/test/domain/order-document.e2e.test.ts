@@ -96,7 +96,7 @@ describe("an order's PDF", () => {
       'Tax 12%: ₹96.06',
       'Tax 18%: ₹540.00',
       'Total: ₹4,436.56',
-      'Status: Open',
+      'Status: Draft',
     ])
       expect(text).toContain(words);
     expect(text).not.toContain('987.65');
@@ -108,7 +108,7 @@ describe("an order's PDF", () => {
   it('in Hindi and Telugu', async () => {
     const hi = await ready(owner, (await render(owner, order.id, 'hi')).body.value.id);
     const hiText = await pdfText(hi.url);
-    for (const words of [`ऑर्डर ${order.number}`, 'कुल: ₹4,436.56', 'स्थिति: खुला'])
+    for (const words of [`ऑर्डर ${order.number}`, 'कुल: ₹4,436.56', 'स्थिति: ड्राफ़्ट'])
       expect(hiText).toContain(words);
     const te = await ready(owner, (await render(owner, order.id, 'te')).body.value.id);
     expect(await pdfText(te.url)).toContain(`ఆర్డర్ ${order.number}`);

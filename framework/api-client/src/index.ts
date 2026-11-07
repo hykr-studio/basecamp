@@ -52,6 +52,7 @@ import {
   type PushDevice,
   pathParams,
   type RecordGrant,
+  type RecordVersion,
   type RegisterPushToken,
   type RenderDocumentInput,
   RenderDocumentSpec,
@@ -59,6 +60,8 @@ import {
   SendDocumentSpec,
   type SendInviteInput,
   SendInviteSpec,
+  type SlaListInput,
+  type SlaTimer,
   type Summary,
   type SummaryInput,
   type TemplateStatus,
@@ -520,6 +523,40 @@ export function createApiClient(opts: ApiClientOptions) {
         }),
       unlink: () => call<void>('DELETE', '/api/channels/whatsapp'),
     },
+    /**
+     * Move a record along its state machine (POST /api/transitions): done with the record, or
+     * needs_approval when the transition waits. `input`: the transition's own fields.
+     */
+    transition: <S extends EntitySpec>(
+      spec: S,
+      id: string,
+      name: string,
+      input: Partial<z.input<S['schemas']['update']>> = {},
+      key = newKey(),
+    ): Promise<WriteResult<z.infer<S['schemas']['read']>>> =>
+      call(
+        'POST',
+        `/api/transitions/${spec.plural}/${encodeURIComponent(id)}/${encodeURIComponent(name)}`,
+        input,
+        key,
+      ),
+    /** SLA clocks: a record's (by its entity's plural), or the business's in one status. */
+    sla: {
+      of: (plural: string, id: string) =>
+        call<SlaTimer[]>('GET', `/api/sla/${plural}/${encodeURIComponent(id)}`),
+      list: (q: SlaListInput = {}) => {
+        const params = new URLSearchParams();
+        for (const [k, v] of Object.entries(q)) if (v !== undefined) params.set(k, String(v));
+        const qs = params.toString();
+        return call<SlaTimer[]>('GET', `/api/sla${qs ? `?${qs}` : ''}`);
+      },
+    },
+    /** The revisions of a versioned record's series, oldest first (people only). */
+    versions: (resourceType: string, resourceId: string) =>
+      call<RecordVersion[]>(
+        'GET',
+        `/api/history/versions?resourceType=${resourceType}&resourceId=${encodeURIComponent(resourceId)}`,
+      ),
     /** A record's history from the audit trail (people only). */
     /** `resourceType`: any entity name in the catalog (see entityNames). */
     history: (resourceType: string, resourceId: string) =>
