@@ -38,6 +38,11 @@ const inA = () => ({ 'x-tenant-id': tenantId });
 type Clock = {
   tick(now?: Date): Promise<unknown>;
   onInbound(msg: unknown): Promise<number>;
+  identify(req: {
+    method: string;
+    path: string;
+    headers: Record<string, string>;
+  }): Promise<{ scopes?: readonly string[]; narrowing?: readonly string[] } | null>;
 };
 let svc: () => Clock;
 
@@ -335,6 +340,34 @@ describe('a run', () => {
     expect((await rex.call('GET', `/api/tasks/${anas.id}`, undefined, inA())).status).toBe(404);
   });
 
+  it('a manager runs anyone’s agent, but only its owner gives the run a note', async () => {
+    const anas = await task(ana, 'Ana’s own, for the note');
+    const reader = await agent(rex, {
+      name: 'Rex reader',
+      instructions: 'Read the task in the data.',
+      scope: { tools: ['get-task'] },
+    });
+    // Ana manages the business's agents, but her words never steer a run that acts as Rex.
+    const steered = await ana.call(
+      'POST',
+      `/api/agents/${reader.id}/run`,
+      { note: anas.id },
+      inA(),
+    );
+    expect(steered).toMatchObject({ status: 403, body: { rule: 'agent_note_owner_only' } });
+    expect(await runsOf(reader.id)).toEqual([]);
+    const { rows } = await pool.query(
+      `select outcome, rule from audit.events
+        where action = 'agent.run' and resource_id = $1 and actor_id = $2`,
+      [reader.id, ana.id],
+    );
+    expect(rows).toEqual([{ outcome: 'denied', rule: 'agent_note_owner_only' }]);
+    // Without a note it runs, as Rex; Rex's own note is his to give.
+    expect((await settled(ana, await runNow(ana, reader.id))).status).toBe('done');
+    const own = await settled(rex, await runNow(rex, reader.id, randomUUID()));
+    expect(own.reply).toBe("I couldn't do that: No such task.");
+  });
+
   it('its token reaches its scope only, as its owner, and nothing after the run', async () => {
     const anas = await task(ana, 'Token target');
     const scoped = await agent(ana, {
@@ -343,6 +376,16 @@ describe('a run', () => {
       scope: { tools: ['get-task'] },
     });
     const runId = await runningRun(scoped.id);
+    // Its limits are the feature's own narrowing, not route scopes: no route-scope check applies.
+    const identity = await svc().identify({
+      method: 'GET',
+      path: `/api/tasks/${anas.id}`,
+      headers: { 'x-agent-run': agentRunToken(runId), 'x-run-id': runId },
+    });
+    expect(identity?.scopes).toBeUndefined();
+    expect(identity?.narrowing).toEqual(
+      expect.arrayContaining(['agent-run', 'agent-run.read:task']),
+    );
     expect((await asRun(runId, 'GET', `/api/tasks/${anas.id}`)).status).toBe(200);
     // Not in its scope: a read of another entity, a write.
     const visits = await asRun(runId, 'GET', '/api/visits');
@@ -614,6 +657,90 @@ describe('triggers', () => {
     await svc().tick(new Date(Date.now() + 1000));
     await new Promise((r) => setTimeout(r, 1000));
     expect(await runsOf(watch.id)).toHaveLength(1);
+  });
+
+  it('an edit keeps the triggers it does not change: a pause, a resume or a rename fires nothing again', async () => {
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const late = await task(ana, 'Steady late', { dueOn: yesterday });
+    // Keys in another order than the schema's, as jsonb gives them back too.
+    const triggers = [
+      {
+        where: { title: { contains: 'Steady' }, done: false, dueOn: { lt: '$today' } },
+        everyMinutes: 5,
+        entity: 'task',
+        kind: 'condition',
+      },
+      { cron: '0 9 * * 1', kind: 'recurring' },
+      { at: new Date(Date.now() + 3_600_000).toISOString(), kind: 'once' },
+      { where: { title: 'Steady', done: false }, on: ['visit.created'], kind: 'event' },
+    ];
+    const steady = await agent(ana, {
+      name: 'Steady',
+      instructions: 'Report what started this run.',
+      scope: { tools: ['list-tasks'] },
+      triggers,
+    });
+    const rowsOf = async () =>
+      (
+        await pool.query(
+          'select id, next_at from app.agent_triggers where agent_id = $1 order by position',
+          [steady.id],
+        )
+      ).rows as { id: string; next_at: Date | null }[];
+    const before = await rowsOf();
+    expect(before).toHaveLength(4);
+    await svc().tick(new Date(Date.now() + 1000));
+    const run = await eventually(
+      async () => (await runsOf(steady.id)).find((r) => r.status === 'done'),
+      20_000,
+    );
+    const hitsOf = async () =>
+      (
+        await pool.query('select record_id from app.agent_condition_hits where trigger_id = $1', [
+          before[0].id,
+        ])
+      ).rows.map((r) => r.record_id);
+    expect(await hitsOf()).toEqual([late.id]);
+    const ticked = await rowsOf();
+
+    // A pause and a resume (status only), then a rename with the whole definition again, as the
+    // editor saves it.
+    for (const status of ['paused', 'active'])
+      expect((await ana.call('PATCH', `/api/agents/${steady.id}`, { status }, inA())).status).toBe(
+        200,
+      );
+    const renamed = await ana.call(
+      'PATCH',
+      `/api/agents/${steady.id}`,
+      { name: 'Steady still', triggers, scope: { tools: ['list-tasks'] } },
+      inA(),
+    );
+    expect(renamed.status, JSON.stringify(renamed.body)).toBe(200);
+    expect(await rowsOf()).toEqual(ticked);
+    expect(await hitsOf()).toEqual([late.id]);
+    const { rows } = await pool.query('select trigger_id from app.agent_runs where id = $1', [
+      run.id,
+    ]);
+    expect(rows).toEqual([{ trigger_id: before[0].id }]);
+
+    // Due again: the record it already saw starts nothing.
+    await pool.query('update app.agent_triggers set next_at = now() where id = $1', [before[0].id]);
+    await svc().tick(new Date(Date.now() + 1000));
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(await runsOf(steady.id)).toHaveLength(1);
+
+    // A trigger that does change starts again, under a new row.
+    const moved = await ana.call(
+      'PATCH',
+      `/api/agents/${steady.id}`,
+      { triggers: [triggers[0], { cron: '0 10 * * 1', kind: 'recurring' }] },
+      inA(),
+    );
+    expect(moved.status).toBe(200);
+    const now = await rowsOf();
+    expect(now.map((r) => r.id)).toEqual([before[0].id, expect.any(String)]);
+    expect(now[1].id).not.toBe(before[1].id);
+    await ana.call('PATCH', `/api/agents/${steady.id}`, { status: 'paused' }, inA());
   });
 
   it('an @-mention: the agent runs with the comment; one whose owner cannot read the record cannot be named', async () => {

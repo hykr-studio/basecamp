@@ -1727,7 +1727,8 @@ the application's.
   of the run id with `AGENT_API_KEY`): the API sees `agent:<id>` acting for the owner, with the
   owner's roles as they are now, on the `background` channel. A write outside the scope is 403
   `agent_scope` (audited), and so is a read of an entity outside it; an agent run never reaches the
-  agents' own routes. Every audit row carries the run id and `agent:<id>@<model>#<hash>`.
+  agents' own routes. The token's identity carries this as `narrowing` (the feature enforces it), not
+  as route `scopes`. Every audit row carries the run id and `agent:<id>@<model>#<hash>`.
 - **Waiting.** A write that waits for approval suspends the run (section 5.8.3); the owner decides
   it, and the run goes on in the agent's thread (`threads.kind: 'agent'`, never the person's
   conversation).
@@ -1737,7 +1738,10 @@ the application's.
 - **The run log**: `GET /api/agent-runs?agentId=&status=` and `GET /api/agent-runs/:id` (with its
   messages), for the owner and managers; anyone else gets 404. `agent.run.finished` and
   `agent.run.waiting` are stored events (live type `agent_run`). Run now: `POST
-  /api/agents/:agentId/run` (`run-agent`).
+  /api/agents/:agentId/run` (`run-agent`), with an optional `note` the run gets as data: only the
+  owner's (403 `agent_note_owner_only` for a manager), since the run acts with the owner's rights.
+- **Editing** keeps each unchanged trigger's row (its id, when it fires next, a condition's records
+  seen), compared key by key: a rename, a pause or a resume fires nothing again.
 - **Templates** are the application's: `defineAgentTemplate({ key, name, description,
   instructions, triggers, scope, budget })`, contributed as `agentTemplates`, listed at `GET
   /api/agent-templates` (with the tools an agent may use here). The sample's meetings module offers
@@ -1783,7 +1787,9 @@ identity: the session. A contributed provider cannot use a configured agent's id
 a different header, a person who is not a member, or a contact of another business is 403
 (`tenant_mismatch` or `not_a_member`). The assistant may forward only a turn's channel in
 `x-channel` (`app`, `voice`, `whatsapp`). The identity is on the request as `req.agent`; relay checks
-read `req.agent.relay`.
+read `req.agent.relay`. An identity's `scopes` and its `narrowing` both go into the principal's
+`scopes`; `narrowing` is what the provider's own feature enforces (an agent run's scope, section
+5.24) and is never checked against a route.
 
 **The system principal.** Background work (a sweeper, a timer, an inbound webhook's job) writes
 through `runWrite` as `systemPrincipal({ tenantId, job, capabilities? })` from `@hykr/core`. It reaches
@@ -2597,7 +2603,7 @@ These are not built. Each has a workaround for now.
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
 | OAuth connectors | Credentials are stored as given; no OAuth flow or token refresh yet (B17 adds the first). |
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
-| Identity provider scopes | `scopes` from an identity provider are copied into the principal. Only an agent run's (section 5.24) are enforced; another provider's are not. |
+| Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
 | Agent tools for parties | `/api/parties` and `/api/participants` are people-only routes; the assistant cannot add someone to a record. |
 | A participant who decides | A participant reaches records (and writes them, in the roles `as` names) but is never a named approver: A5's named approvers are members. Capabilities per participant role are not built either. |
