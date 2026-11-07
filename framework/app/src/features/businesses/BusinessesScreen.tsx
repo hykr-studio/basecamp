@@ -15,6 +15,7 @@ import { Loading } from '../../framework/Loading';
 import { useT } from '../../framework/lang';
 import { useToast } from '../../framework/Toast';
 import { styles } from '../../theme';
+import { JoinForm } from './JoinForm';
 
 /** One business: how the person is there, and the way in. */
 function Row({ b, current }: { b: Business; current: boolean }) {
@@ -71,6 +72,7 @@ function Row({ b, current }: { b: Business; current: boolean }) {
 /**
  * Every business the person is in, as a member of its team or as a participant on its records,
  * and the one they are working in. Choosing another sends it as `x-tenant-id` from then on.
+ * Under them, joining another with an invitation link or code.
  */
 export function BusinessesScreen() {
   useScreenContext({ screen: 'businesses' });
@@ -91,6 +93,7 @@ export function BusinessesScreen() {
       ) : (
         <Text variant="muted">{t('businesses.none')}</Text>
       )}
+      <JoinForm />
     </ScrollView>
   );
 }

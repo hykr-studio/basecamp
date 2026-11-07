@@ -39,6 +39,7 @@ describe('a sign-up with no business', () => {
       customerId: null,
       as: null,
       businesses: [],
+      features: [],
     });
     const { rows } = await pool.query('select 1 from app.memberships where user_id = $1', [
       guest.id,
@@ -74,6 +75,8 @@ describe('a sign-up with no business', () => {
     const { token } = (
       await owner.call('POST', `/api/parties/${party.id}/members`, { email: guest.email })
     ).body.value;
+    // A party's code is no team invitation (the app's join tries the party first).
+    expect((await guest.call('POST', '/api/members/invites/accept', { token })).status).toBe(404);
     expect((await guest.call('POST', '/api/parties/join', { token })).status).toBe(200);
     const mine = (await guest.call('GET', '/api/me')).body;
     expect(mine).toMatchObject({ tenantId, as: 'participant', roles: ['customer'] });
@@ -97,6 +100,8 @@ describe('a sign-up with no business', () => {
     const { token } = (
       await owner.call('POST', '/api/members/invites', { email: joiner.email, roles: ['staff'] })
     ).body.value;
+    // A team's code is no party's: 404, so the app's join tries it as a team invitation next.
+    expect((await joiner.call('POST', '/api/parties/join', { token })).status).toBe(404);
     expect((await joiner.call('POST', '/api/members/invites/accept', { token })).status).toBe(200);
     expect(await me(joiner)).toMatchObject({ tenantId, roles: ['staff'] });
     expect((await joiner.call('GET', '/api/me')).body.as).toBe('member');
