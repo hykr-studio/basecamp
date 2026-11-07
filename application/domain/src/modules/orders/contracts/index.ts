@@ -5,6 +5,7 @@ import { OrderItemSpec, OrderSpec } from './order.js';
 
 export * from './commands.js';
 export * from './order.js';
+export * from './participants.js';
 
 export const ordersSpec = moduleSpec({
   name: 'orders',

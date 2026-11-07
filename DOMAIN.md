@@ -106,15 +106,26 @@ An entity's `access` says what each role, or each capability, reaches, per read 
 
 - `own`: rows the person owns; `customer`: rows of the customer they are; `tenant`: every row
   in the business; `{ grant: 'granted' }`: the rows granted to the person one by one
-  (`/api/grants`), or, with `of` and `via`, the children of such a row.
+  (`/api/grants`), or, with `of` and `via`, the children of such a row;
+  `{ grant: 'participant', as: [...] }`: the rows a party the person (or WhatsApp contact) is a
+  member of participates in, in those participant roles (`/api/participants`).
 - A key may be a capability (`'orders.read_all': 'tenant'`): that is how a role a business made
   reaches rows. A rule may be a list (`['own', { grant: 'granted' }]`).
 - A write may need `minAssurance: 'session'`: a WhatsApp number alone (`whatsapp_number`) is
   refused with `needs_assurance`.
 
+People outside the team are **participants**, never members: a party (a person, or an
+organisation reached on WhatsApp) put on a record in a participant role the module declares,
+`contributes: { participantRoles: [defineParticipantRole({ name, label, kinds?, on? })] }`
+(developer guide 6.5). The sample's meetings module declares `household` (people of a meeting's
+customer read it) and its orders module `supplier` (an organisation reads the orders it supplies,
+never their cost). What the application knows about a party (KYC details, agreed rates) is its own
+tables, keyed by the party id. A person can be a member of one business and a participant of
+another: `GET /api/me` lists both, and `x-tenant-id` switches.
+
 The sample modules give the owner and staff their own rows, admin and ops the whole business,
-and a customer their own customer's rows (`application/domain/src/server/access.ts`, shared by
-the modules). With
+a customer their own customer's rows, and participants the records they are on, read only
+(`application/domain/src/server/access.ts`, shared by the modules). With
 `customer: (t) => t.customerId`, a customer's assistant creates rows for that customer, owned by
 the business's default owner.
 

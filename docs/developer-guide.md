@@ -1309,14 +1309,15 @@ Every request becomes a `Principal` (`framework/contracts/src/principal.ts`). Th
 | `actor` | `{ kind, id }`. `kind` is `'user'`, `'agent'`, `'system'` (the server's own work, below) or `'guest'` (a share link; not built yet). |
 | `actingFor` | For an agent: the person it acts for |
 | `subject` | Whose business this is: `{ kind: 'user', userId }` or `{ kind: 'contact', contactId }`. Set by the server only. |
-| `tenantId`, `roles`, `customerId` | The business, your roles in it, and your customer record if you are one |
+| `tenantId`, `roles`, `customerId` | The business, your roles in it, and your customer record if you are one. No `tenantId`: a person in no business yet (section 6.5) |
+| `standing` | `'member'` (a membership of the team) or `'participant'` (a member of one of its parties, never of the team; section 6.5). Absent for a contact |
 | `capabilities` | What your roles allow there, by name (`'backoffice.use'`). Worked out by the server; check it with `can(p, …)` (6.4) |
 | `assurance` | `'whatsapp_number'` (a number alone) < `'otp'` (a one-time code; nothing sets it yet) < `'session'` (signed in) |
 | `channel` | `'app'`, `'voice'`, `'whatsapp'`, `'mcp'`, `'webmcp'`, `'api'`, `'background'` or `'share'`. A session request has none, unless it names `app` or `webmcp` in `x-channel` (any other value is 400 `bad_channel`). `webmcp` (a page's WebMCP tools) only reads and is refused on people-only routes. |
 | `runId`, `agentVersion` | Set on agent calls, and written to audit |
 | `approvedBy` | Set on an approval replay |
 
-Everything comes from server data. Headers only choose: `x-tenant-id` picks among the businesses you belong to, and a WhatsApp channel lowers assurance. A role in a membership that neither the application declared nor the business defined grants nothing (the server logs it once). Sign-up creates the person's own business, with them holding the creator's roles (`owner` unless the application's `roleDefaults` say otherwise; a Better Auth `user.create.after` database hook in `framework/api/src/infra/auth.ts`). If that failed, `PrincipalGuard` creates it on their first call (`ensureDefaultTenant`).
+Everything comes from server data. Headers only choose: `x-tenant-id` picks among the businesses you are in (as a member, or as a participant), and a WhatsApp channel lowers assurance. A role in a membership that neither the application declared nor the business defined grants nothing (the server logs it once). Sign-up creates the person's own business, with them holding the creator's roles (`owner` unless the application's `roleDefaults` say otherwise; a Better Auth `user.create.after` database hook in `framework/api/src/infra/auth.ts`). If that failed, `PrincipalGuard` creates it on their first call (`ensureDefaultTenant`). An application where people sign up without running a business (clients, outside organisations) turns this off with `defineServer({ signUp: { createBusiness: false } })` (section 6.5).
 
 A WhatsApp customer who has not linked an account acts as `actor.kind: 'user'` with id `contact:<id>`, with the contact's roles (`['customer']` unless `roleDefaults` say otherwise).
 
@@ -1350,6 +1351,7 @@ Read `p` in your rules with the helpers in `@hykr/policy`: `subjectOf(p)`, `user
 | `'customer'` | `customer_id = your customer`. Only when you are a customer. |
 | `'tenant'` | Every row in the business |
 | `{ grant: 'granted', of?, via? }` | The rows granted to you one by one (`POST /api/grants`, section 6.4). With `via: 'projectId', of: 'project'`, the rows whose project is granted to you. Only for a user subject. |
+| `{ grant: 'participant', as?, of?, via? }` | The rows a party you are a member of participates in (`POST /api/participants`, section 6.5), in the participant roles `as` names (default any). `of` and `via` as for `granted`. For a person and for a WhatsApp contact. |
 
 The sample's rules:
 
@@ -1367,6 +1369,7 @@ read: { ...BUSINESS_ACCESS.read, buyer: { grant: 'granted' } },
 - A rule may be a list, ORed: `{ buyer: ['own', { grant: 'granted' }] }`.
 - Under `granted` alone a person cannot create a top-level row; a child row (`via` a parent's column) only under a parent granted to them, and they own it. A write on a row outside the grant is refused by the write's own query (404).
 - Don't give `'own'` on a child entity whose parent is limited: anyone could add a child to a parent they cannot see. Use `{ grant: 'granted', of: '<parent>', via: '<parentId>' }`.
+- `participant` works like `granted` for creating: a person may add a child under a record they participate in (in a role `as` names), never a top-level row; a WhatsApp contact creates nothing under it. A participant role named in `as` that nobody declares throws.
 - More kinds plug in: declare the name on `GrantKinds` (`@hykr/policy`) and contribute a `GrantKind` (`grantKinds`, `@hykr/core`): `where(p, rule, target)` gives its rows as SQL, ORed with the others; `creates(...)` may let a person create a row under it.
 
 Ask for a signed-in session on a write with `{ grant: 'customer', minAssurance: 'session' }`. A WhatsApp-only customer is then refused with rule `needs_assurance`.
@@ -1479,6 +1482,62 @@ parked input. A module's notification parameters come from the raw row: don't pu
 template another role receives.
 
 ---
+
+### 6.5 Participants: people outside the team
+
+A business works with people who are not on its team: several people of a client's household,
+an outside organisation it reaches on WhatsApp. They are **participants**, never members. The
+framework holds the mechanism (`features/parties`, `framework/db/src/schema/parties.ts`); what
+kinds of participant exist and what each may do is the application's.
+
+- **Parties.** A party is a `person` or an `organisation` of one business (`POST /api/parties`),
+  optionally belonging to a customer record (`customerId`: a household is several person parties
+  of one customer). Its **members** are how it is reached: `{ address }` (a WhatsApp number: the
+  business's contact for it, made without a customer record) or `{ email }` (an invitation: the
+  answer carries a token once; `POST /api/parties/join { token }`, signed in with that email,
+  within `members.inviteDays`). Reading needs `parties.read` (the team), changing `parties.manage`
+  (owner, admin, ops); both are overridable like any capability.
+- **Participant roles** are declared by a module: `defineParticipantRole({ name, label, kinds?,
+  on? })`, contributed as `participantRoles`. `kinds` says which parties may hold it, `on` which
+  entities it applies to (checked at start). The sample's: `household` (meetings) and `supplier`
+  (orders).
+- **Participations.** `POST /api/participants { resourceType, resourceId, partyId, role }` puts a
+  party on a record you reach; `GET /api/participants?resourceType&resourceId` lists them
+  (`parties.read`); `DELETE /api/participants/:id`. Deleting the record deletes them.
+- **Reach.** Give the participant grant in the entity's access, under the role outsiders hold
+  (the framework's `customer`, section 6.2):
+
+  ```ts
+  // application/domain/src/server/access.ts: read by the household, write as before
+  read: { ...BUSINESS_ACCESS.read, customer: ['customer', { grant: 'participant', as: ['household'] }] },
+  // a child follows its record (orders' lines)
+  customer: ['customer', { grant: 'participant', of: 'order', via: 'orderId', as: ['supplier'] }],
+  ```
+
+  Field policy, rules and approvals apply to participants like anyone else: a supplier never
+  reads an order line's cost.
+- **Who a participant is.** A person who is no member of a business but a member of one of its
+  parties (by account, or by a WhatsApp number linked to their account there) works there with
+  the roles `roleDefaults` gives `participant` (unset: the contact's, `customer`), their customer
+  record there if one is theirs, and `standing: 'participant'`. A WhatsApp contact keeps the
+  contact's roles and reaches through its own party memberships.
+- **Businesses per person.** `GET /api/me` lists `businesses`: each one the person is in, `as`
+  member (roles, default) or participant (participant roles there). A client sends `x-tenant-id`
+  to work in another; `PUT /api/me/default { tenantId }` makes one of their memberships the
+  default. In the app, list `businessesPlugin` first in `<AppShell plugins>`: a Businesses screen
+  (in the navigation when there is more than one), the choice kept per person on the device and
+  sent on every call, and everything under it started again on a switch.
+- **No business on sign-up.** With `signUp: { createBusiness: false }`, a new account is in no
+  business: `/api/me` answers with `tenantId: null`, scoped routes and chat answer 403
+  `no_tenant`, and invitations (members or parties) can be accepted.
+- **Channels.** A notification can go to `{ partyId }` (every joined member of the party) or
+  `{ participantsOf: { type, id }, as? }` (everyone on a record), each person once. A business's
+  `parties.unknownSenders` setting (`'customer'`, the default, or `'contact'`) says whether a
+  new WhatsApp sender becomes a customer. "Delete my data" removes a contact's party memberships,
+  and a person party left with nobody; the data export lists them.
+- **Application data.** KYC details, agreed rates and the like are the application's tables (or
+  files) keyed by the party id (`parties.id` in `@hykr/db`). The framework stores a party's kind,
+  name and customer only.
 
 ## 7. The assistant and how it shows things
 
@@ -1981,9 +2040,16 @@ These are not built. Each has a workaround for now.
 | Removing a built-in role | An application relabels or re-grants a built-in role (`roleOverrides`) but cannot remove it. |
 | Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
+| Agent tools for parties | `/api/parties` and `/api/participants` are people-only routes; the assistant cannot add someone to a record. |
+| A participant who decides | A participant reaches records (and writes them, in the roles `as` names) but is never a named approver: A5's named approvers are members. Capabilities per participant role are not built either. |
+| Parties shared across businesses | A party belongs to one business: the same organisation at two businesses is two parties, and its details are kept twice. |
+| Party screens | Parties and participants have an HTTP API and typed `@hykr/api-client` methods, but no app or back-office screen; the back office has no business switcher. |
+| Emailing a party invitation | `POST /api/parties/:id/members { email }` returns the token; the business shares the link. |
+| A WhatsApp contact adding child rows | Under the participant grant only a person with an account creates a child row (an owner column needs a user). |
+| A participant's assistant writing outside its roles | Its change parks (if the operation parks for agents) and the approved replay finds no row (404); the business sees a request it cannot carry out. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
-| Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); `roleOverrides`, `roleDefaults` and `grantKinds` (A4); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
+| Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); `roleOverrides`, `roleDefaults` and `grantKinds` (A4); `participantRoles` (B7); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10). |
 | Editing a business's money settings | Nothing in the API changes `money` (currency, `fyStartMonth`, amounts, bands) yet: set it in `app.tenants.settings` with SQL. |
 | Bulk writes for plain entities | Only children of a parent are inserted in bulk (`children.insert`/`replace`); `insertMany` for any other entity is one insert per row. There is no bulk update. |
 | Line-level tools | The assistant saves a whole tree in one call (the sample's `save-order`); there are no tools to add or move one line. |
@@ -2008,7 +2074,7 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots. Routes, nav and nav filters have no framework feature yet. |
+| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, routes, nav, nav filter). `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `creditsPlugin` and `businessesPlugin` use routes, nav and nav filters too. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
 | Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |

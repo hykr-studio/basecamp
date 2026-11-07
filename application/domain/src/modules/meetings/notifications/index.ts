@@ -2,6 +2,7 @@
 import { type Lang, pick, spokenWhen } from '@hykr/i18n';
 import { defineNotification, defineTemplate, type Row } from '@hykr/notifications';
 import { z } from 'zod';
+import { HouseholdRole } from '../contracts/participants.js';
 
 export const MeetingReminder = defineTemplate({
   name: 'meeting_reminder_v1',
@@ -40,7 +41,10 @@ const SOON = {
   te: '30 నిమిషాల్లో ప్రారంభమవుతుంది',
 } as const;
 
-/** 30 minutes before a meeting, to its customer and its owner. A reschedule moves it. */
+/**
+ * 30 minutes before a meeting, to its customer, its owner and the people of the household the
+ * business put on it. A reschedule moves it.
+ */
 export const MeetingReminderNotification = defineNotification<MeetingRow>({
   key: 'meeting.reminder',
   topic: 'reminders',
@@ -50,7 +54,11 @@ export const MeetingReminderNotification = defineNotification<MeetingRow>({
       m.status === 'scheduled' ? new Date(new Date(m.startsAt).getTime() - 30 * 60_000) : null,
     cancelOn: ['meeting.deleted', 'meeting.closed'],
   },
-  to: (m) => [...(m.customerId ? [{ customerId: m.customerId }] : []), { userId: m.ownerId }],
+  to: (m) => [
+    ...(m.customerId ? [{ customerId: m.customerId }] : []),
+    { userId: m.ownerId },
+    { participantsOf: { type: 'meeting', id: m.id }, as: [HouseholdRole.name] },
+  ],
   channels: ['whatsapp', 'email'],
   whatsapp: {
     template: MeetingReminder,

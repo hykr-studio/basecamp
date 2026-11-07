@@ -1,17 +1,17 @@
 import { defineChildEntity, defineEntity, deny } from '@hykr/core';
-import { BUSINESS_ACCESS } from '../../../server/access.js';
-import { OrderItemSpec, OrderSpec } from '../contracts/index.js';
+import { BUSINESS_ACCESS, readByParticipants } from '../../../server/access.js';
+import { OrderItemSpec, OrderSpec, SupplierRole } from '../contracts/index.js';
 import { orderItems, orders } from '../db/schema.js';
 
 /**
  * Orders: written only by order.save and order.cancel, never deleted (a number, once given,
- * stays taken), with the domain's usual access.
+ * stays taken), with the domain's usual access, and read by the organisation that supplies one.
  */
 export const Order = defineEntity(OrderSpec, {
   table: orders,
   owner: (t) => t.ownerId,
   customer: (t) => t.customerId,
-  access: BUSINESS_ACCESS,
+  access: readByParticipants([SupplierRole.name]),
   rules: [
     (_p, action) =>
       action === 'delete'
@@ -35,12 +35,22 @@ export const Order = defineEntity(OrderSpec, {
 
 /**
  * An order's groups and lines: children of the order (traits.parent), written whole by
- * order.save. They take the order's owner, customer and currency, and its access.
+ * order.save. They take the order's owner, customer and currency, and its access: its supplier
+ * reads them (without their cost, `costHidden`).
  */
 export const OrderItem = defineChildEntity(OrderItemSpec, {
   table: orderItems,
   owner: (t) => t.ownerId,
   customer: (t) => t.customerId,
-  access: BUSINESS_ACCESS,
+  access: {
+    read: {
+      ...BUSINESS_ACCESS.read,
+      customer: [
+        'customer',
+        { grant: 'participant', of: 'order', via: 'orderId', as: [SupplierRole.name] },
+      ],
+    },
+    write: BUSINESS_ACCESS.write,
+  },
   parent: { def: Order, owner: (t) => t.ownerId, customer: (t) => t.customerId },
 });
