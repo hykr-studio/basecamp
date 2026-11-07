@@ -165,7 +165,8 @@ Each module (`application/domain/src/modules/<name>/`) declares its contracts in
 - the server: `defineEntity(Spec, { table, owner, customer, access, rules })` and
   `defineCommand(...)` in the module's `server/`, wired with
   `entityController` / `entityHandlers` / `commandController` into the module's Nest module;
-- the agent tools: `list-*`, `get-*`, `create-*`, `update-*`, `delete-*`, plus one per command;
+- the agent tools: `list-*`, `summarize-*`, `get-*`, `create-*`, `update-*`, `delete-*`, plus one
+  per command (`summarize-*` is `GET /api/<plural>/summary`: counts and totals under the list's scope);
 - the typed client (`@hykr/api-client`, built at runtime from the spec, nothing to codegen) and the app hooks
   (`useEntityList`, `useEntity`, `useEntityMutation`, `useCommand` in `framework/app/src/framework/hooks.ts`);
 - the views (`defineView` / `defineScreen` in the module's `views/`), bound to React components in

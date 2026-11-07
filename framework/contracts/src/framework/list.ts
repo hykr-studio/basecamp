@@ -40,6 +40,20 @@ export interface ListFilterOps {
 }
 export type FilterOp = keyof ListFilterOps;
 
+/** A calendar period a date field is grouped by in a summary. */
+export const DATE_BUCKETS = ['day', 'week', 'month', 'quarter', 'year'] as const;
+export type DateBucket = (typeof DATE_BUCKETS)[number];
+
+/**
+ * What a field of a type does in a summary (`GET /api/<plural>/summary`): group rows by its
+ * value (`value`) or by a calendar period of it (`bucket`), and be measured (sum, avg, min,
+ * max) as a number or as money. A type without it is filtered only.
+ */
+export interface FieldSummary {
+  group?: 'value' | 'bucket';
+  measure?: 'number' | 'money';
+}
+
 /** What a field type's value schema is built from. */
 export interface FieldValueContext {
   /** The field in the entity's read schema (an enum takes its values from it). */
@@ -60,6 +74,8 @@ export interface ListFieldType {
   value(ctx: FieldValueContext): z.ZodType;
   /** The value of an operator that is not one value or a list of them (near: { lat, lng, m }). */
   opValue?(op: FilterOp, ctx: FieldValueContext): z.ZodType | undefined;
+  /** What its fields do in a summary. Absent: they are only filtered. */
+  summary?: FieldSummary;
 }
 
 /** Every list field type, built-in and added. A name is defined once. */
@@ -147,29 +163,43 @@ for (const type of [
       const base = readField ? inner(readField) : undefined;
       return base instanceof z.ZodEnum ? base : z.string();
     },
+    summary: { group: 'value' },
   },
-  { name: 'id', ops: EQUALITY, value: () => z.string().min(1) },
-  { name: 'boolean', ops: ['eq', 'ne'], value: ({ coerce }) => coerceBoolean(coerce) },
-  { name: 'text', ops: [...EQUALITY, 'contains'], value: () => z.string().max(200) },
+  { name: 'id', ops: EQUALITY, value: () => z.string().min(1), summary: { group: 'value' } },
+  {
+    name: 'boolean',
+    ops: ['eq', 'ne'],
+    value: ({ coerce }) => coerceBoolean(coerce),
+    summary: { group: 'value' },
+  },
+  {
+    name: 'text',
+    ops: [...EQUALITY, 'contains'],
+    value: () => z.string().max(200),
+    summary: { group: 'value' },
+  },
   {
     name: 'date',
     ops: ORDERED,
     value: () => z.union([z.iso.datetime({ offset: true }), z.iso.date()]),
+    summary: { group: 'bucket' },
   },
   {
     name: 'number',
     ops: ORDERED,
     value: ({ coerce }) => (coerce ? z.coerce.number() : z.number()),
+    summary: { measure: 'number' },
   },
 ] satisfies ListFieldType[])
   defineListFieldType(type);
 
-/** The raw object form, strict: unknown fields and unknown operators are rejected. */
-export function listInputObject(spec: Spec, opts: { coerce?: boolean; maxLimit?: number } = {}) {
-  const { list } = spec;
-  const coerce = opts.coerce ?? false;
+/**
+ * The filters of a list config as object-schema fields: what lists and summaries both accept.
+ * `coerce`: from a query string, strings are coerced to each field's type.
+ */
+export function filterShape(spec: Spec, coerce: boolean): Record<string, z.ZodType> {
   const shape: Record<string, z.ZodType> = {};
-  for (const [field, typeName] of Object.entries(list.filterable)) {
+  for (const [field, typeName] of Object.entries(spec.list.filterable)) {
     const type = listFieldType(typeName);
     const ctx: FieldValueContext = { readField: spec.schemas.read.shape[field], coerce };
     const value = type.value(ctx);
@@ -192,7 +222,15 @@ export function listInputObject(spec: Spec, opts: { coerce?: boolean; maxLimit?:
     const byOp = z.object(ops).strict();
     shape[field] = (type.ops.includes('eq') ? z.union([value, byOp]) : byOp).optional();
   }
-  if (list.search?.length) shape.q = z.string().min(1).max(200).optional();
+  if (spec.list.search?.length) shape.q = z.string().min(1).max(200).optional();
+  return shape;
+}
+
+/** The raw object form, strict: unknown fields and unknown operators are rejected. */
+export function listInputObject(spec: Spec, opts: { coerce?: boolean; maxLimit?: number } = {}) {
+  const { list } = spec;
+  const coerce = opts.coerce ?? false;
+  const shape = filterShape(spec, coerce);
   const limit = z
     .number()
     .int()
@@ -211,10 +249,10 @@ const isOpForm = (v: unknown, ops: readonly string[]): v is Record<string, unkno
   !Array.isArray(v) &&
   Object.keys(v).every((k) => ops.includes(k));
 
-function normalize(spec: Spec, raw: Record<string, unknown>, ctx: z.RefinementCtx): ListQuery {
-  const { list } = spec;
+/** The filters in a validated raw input (from `filterShape`), as the repository runs them. */
+export function filtersIn(spec: Spec, raw: Record<string, unknown>): ListFilter[] {
   const filters: ListFilter[] = [];
-  for (const [field, typeName] of Object.entries(list.filterable)) {
+  for (const [field, typeName] of Object.entries(spec.list.filterable)) {
     const v = raw[field];
     if (v === undefined) continue;
     const ops: readonly string[] = opsOf(typeName);
@@ -228,6 +266,12 @@ function normalize(spec: Spec, raw: Record<string, unknown>, ctx: z.RefinementCt
       filters.push({ field, op: 'eq', value: v });
     }
   }
+  return filters;
+}
+
+function normalize(spec: Spec, raw: Record<string, unknown>, ctx: z.RefinementCtx): ListQuery {
+  const { list } = spec;
+  const filters = filtersIn(spec, raw);
   const sort: ListSort[] = [];
   const sortText = raw.sort as string | undefined;
   if (sortText) {
@@ -266,7 +310,7 @@ export function listInputSchema(spec: Spec, opts: { maxLimit?: number } = {}) {
 }
 
 /** `a[b]=c` keys from a flat query string become `{ a: { b: c } }`. */
-function nestBrackets(value: unknown) {
+export function nestBrackets(value: unknown) {
   if (value === null || typeof value !== 'object') return value;
   const out: Record<string, unknown> = {};
   for (const [key, v] of Object.entries(value)) {
@@ -289,18 +333,28 @@ export function listQuerySchema(spec: Spec) {
   );
 }
 
-/** The client's side: JSON form → query string with bracket operators. */
-export function toQueryString(input: ListInput = {}): string {
+/** One operator's value in a query string: a list as a comma list, an object as JSON. */
+const queryValue = (v: unknown): string =>
+  Array.isArray(v)
+    ? v.join(',')
+    : v !== null && typeof v === 'object'
+      ? JSON.stringify(v)
+      : String(v);
+
+/**
+ * The client's side: JSON form → query string with bracket operators. An operator whose value
+ * is an object (a geo field's `near: { lat, lng, radiusM }`) goes as JSON, which its type reads.
+ */
+export function toQueryString(input: Record<string, unknown> = {}): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(input)) {
     if (value === undefined) continue;
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
       for (const [op, v] of Object.entries(value)) {
-        if (v !== undefined)
-          params.append(`${key}[${op}]`, Array.isArray(v) ? v.join(',') : String(v));
+        if (v !== undefined) params.append(`${key}[${op}]`, queryValue(v));
       }
     } else {
-      params.append(key, String(value));
+      params.append(key, queryValue(value));
     }
   }
   const text = params.toString();

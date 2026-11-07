@@ -1,4 +1,11 @@
-import { type ListQuery, listQuerySchema, type Principal, pathParams } from '@hykr/contracts';
+import {
+  type ListQuery,
+  listQuerySchema,
+  type Principal,
+  pathParams,
+  type SummaryQuery,
+  summaryQuerySchema,
+} from '@hykr/contracts';
 import {
   Body,
   Controller,
@@ -82,10 +89,14 @@ const principal = { decorator: CurrentPrincipal() as ParamDecorator, type: Objec
 const meta = { decorator: RequestMeta() as ParamDecorator, type: Object };
 const idParam = { decorator: Param('id', ParseUUIDPipe) as ParamDecorator, type: String };
 
-/** GET/POST /api/<plural>, GET/PATCH/DELETE /api/<plural>/:id — parsing only, then the buses. */
+/**
+ * GET/POST /api/<plural>, GET /api/<plural>/summary, GET/PATCH/DELETE /api/<plural>/:id — parsing
+ * only, then the buses.
+ */
 export function entityController(def: AnyEntityDef): Type {
   const { spec, cqrs } = def;
   const ListDto = createZodDto(listQuerySchema(spec));
+  const SummaryDto = createZodDto(summaryQuerySchema(spec));
   const CreateDto = createZodDto(spec.schemas.create);
   const UpdateDto = createZodDto(spec.schemas.update);
   const human = (action: keyof typeof spec.expose) => spec.expose[action] === 'human';
@@ -98,6 +109,16 @@ export function entityController(def: AnyEntityDef): Type {
       params: [principal, { decorator: Query() as ParamDecorator, type: ListDto }],
       fn(p: Principal, q: ListQuery) {
         return this.queries.execute(new cqrs.ListQuery(p, q));
+      },
+    },
+    // Before ':id', so 'summary' is never taken for an id. A summary is a read of the list.
+    summary: {
+      verb: Get,
+      path: 'summary',
+      human: human('list'),
+      params: [principal, { decorator: Query() as ParamDecorator, type: SummaryDto }],
+      fn(p: Principal, q: SummaryQuery) {
+        return this.queries.execute(new cqrs.SummaryQuery(p, q));
       },
     },
     get: {
@@ -137,11 +158,11 @@ export function entityController(def: AnyEntityDef): Type {
       },
     },
   };
-  // 'internal' actions get no route: only commands can call them.
+  // 'internal' actions get no route: only commands can call them. The summary goes with the list.
+  const exposeOf = (route: string) =>
+    (route === 'summary' ? 'list' : route) as keyof typeof spec.expose;
   const routes = Object.fromEntries(
-    Object.entries(all).filter(
-      ([action]) => spec.expose[action as keyof typeof spec.expose] !== 'internal',
-    ),
+    Object.entries(all).filter(([route]) => spec.expose[exposeOf(route)] !== 'internal'),
   );
   return controllerClass(`${def.pascal}Controller`, `api/${def.plural}`, routes);
 }

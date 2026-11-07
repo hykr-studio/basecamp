@@ -10,6 +10,7 @@ import {
   isValidDate,
   isValidTime,
   LoadError,
+  LocationField,
   listRow,
   ScreenTitle,
   SearchBox,
@@ -17,11 +18,13 @@ import {
   styles,
   TimeField,
   todayLocal,
+  useCurrentLocation,
   useEntityList,
   useEntityMutation,
   useScreenContext,
   useToast,
 } from '@hykr/app';
+import type { Address, GeoPoint } from '@hykr/contracts';
 import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
@@ -39,6 +42,10 @@ const chips = (): Chip[] => {
     { label: 'Closed', query: { status: 'closed', sort: '-startsAt' } },
   ];
 };
+
+/** "Near me": meetings within this many metres of the phone, nearest first. */
+const NEAR_ME_M = 10_000;
+const NEAR_ME = 'Near me';
 
 /**
  * A new meeting starts at the next full hour, so it is not born "Needs closing"; after the
@@ -65,6 +72,8 @@ function NewMeeting({ onDone }: { onDone: () => void }) {
   const [time, setTime] = useState(slot.time);
   const [minutes, setMinutes] = useState('60');
   const [attendees, setAttendees] = useState('');
+  const [location, setLocation] = useState<GeoPoint | null>(null);
+  const [address, setAddress] = useState<Address | null>(null);
   const valid = title.trim() && isValidDate(date) && isValidTime(time) && Number(minutes) > 0;
   return (
     <View style={styles.card}>
@@ -97,6 +106,14 @@ function NewMeeting({ onDone }: { onDone: () => void }) {
         onChangeText={setAttendees}
         placeholder="e.g. Ravi, Asha"
       />
+      <LocationField
+        label="Place (optional)"
+        value={location}
+        onChange={setLocation}
+        address={address}
+        onAddress={setAddress}
+        hint="Set it where the meeting is held: people check in there."
+      />
       {create.error && <Text style={styles.error}>{errorMessage(create.error)}</Text>}
       <View style={styles.row}>
         <Button
@@ -115,6 +132,8 @@ function NewMeeting({ onDone }: { onDone: () => void }) {
                 .split(',')
                 .map((a) => a.trim())
                 .filter(Boolean),
+              ...(location ? { location } : {}),
+              ...(address ? { address } : {}),
             });
             toast.show({ tone: 'success', message: `Created ${title.trim()}` });
             onDone();
@@ -129,8 +148,22 @@ function NewMeeting({ onDone }: { onDone: () => void }) {
 export function Meetings() {
   useScreenContext({ screen: 'meetings' });
   const params = useLocalSearchParams<{ new?: string }>();
-  const options = chips();
+  const here = useCurrentLocation({ accuracy: 'balanced' });
+  const options = [...chips(), { label: NEAR_ME, query: { sort: '-startsAt' } }];
   const [chip, setChip] = useState(options[0]);
+  // Near me: the phone's position, then meetings around it, nearest first (the server measures).
+  const pick = async (next: Chip) => {
+    if (next.label !== NEAR_ME) {
+      setChip(next);
+      return;
+    }
+    const fix = await here.locate();
+    if (fix)
+      setChip({
+        label: NEAR_ME,
+        query: { location: { near: { ...fix.point, radiusM: NEAR_ME_M } }, sort: 'location' },
+      });
+  };
   const [q, setQ] = useState('');
   const [adding, setAdding] = useState(params.new === '1');
   const list = useEntityList('meetings', {
@@ -156,7 +189,8 @@ export function Meetings() {
           {adding && <NewMeeting onDone={() => setAdding(false)} />}
           <View style={{ gap: space.md }}>
             <SearchBox value={q} onChange={setQ} placeholder="e.g. Search meetings" />
-            <FilterChips chips={options} selected={chip.label} onSelect={setChip} />
+            <FilterChips chips={options} selected={chip.label} onSelect={pick} />
+            {here.error && <Text style={styles.error}>{here.error}</Text>}
           </View>
         </View>
       }
@@ -178,7 +212,9 @@ export function Meetings() {
                 ? `No meetings match “${q.trim()}”`
                 : chip.label === 'Needs closing'
                   ? 'Nothing to close'
-                  : 'No meetings here'
+                  : chip.label === NEAR_ME
+                    ? `No meetings within ${NEAR_ME_M / 1000} km`
+                    : 'No meetings here'
             }
             body={
               chip.label === 'Needs closing'

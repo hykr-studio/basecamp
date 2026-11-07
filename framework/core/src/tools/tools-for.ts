@@ -2,6 +2,7 @@ import type { CommandSpec, EntitySpec } from '@hykr/contracts';
 import type { ToolsInput } from '@mastra/core/agent';
 import { canvasTools } from './canvas-tools.js';
 import { toolContributions } from './contributions.js';
+import { summaryTools } from './summary-tools.js';
 import { commandTools, entityTools, type ToolKit } from './tool-factory.js';
 
 /** Tools by id, and who defined each one ('entity task', 'contribution memory'). */
@@ -31,8 +32,10 @@ export function generatedTools(
   options: { canvas: boolean },
 ): ToolSet {
   let set: ToolSet = { tools: {}, owners: new Map() };
-  for (const spec of Object.values(catalog.entities))
+  for (const spec of Object.values(catalog.entities)) {
     set = merge(set, `entity ${spec.name}`, entityTools(spec, kit));
+    set = merge(set, `entity ${spec.name}`, summaryTools(spec, kit));
+  }
   for (const spec of catalog.commands)
     set = merge(set, `command ${spec.name}`, commandTools([spec], kit));
   if (options.canvas) set = merge(set, 'the canvas', canvasTools(kit));

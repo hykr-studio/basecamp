@@ -1,11 +1,12 @@
 import {
   assertNoProblems,
   drawsComponents,
+  type EntitySpec,
   type PageSpec,
   type Present,
   type Surface,
 } from '@hykr/contracts';
-import type { ScreenDef, ViewDef } from './define-view.js';
+import type { ScreenDef, ViewCheckContext, ViewDef } from './define-view.js';
 import { checkProps, checkQuery, problem } from './validate.js';
 
 export type Checked =
@@ -26,7 +27,18 @@ export function createRegistry(input: {
   screens: readonly ScreenDef[];
   /** The module that declares a view or screen, when the registry was built from modules. */
   moduleOf?: (name: string) => string | undefined;
+  /**
+   * The entities views may name in their props (kpi.row's `of`), so the server checks them. The
+   * app's registry may leave them out: the API checks every query again.
+   */
+  entities?: readonly EntitySpec[];
 }) {
+  const entitiesByPlural = input.entities
+    ? new Map(input.entities.map((e) => [e.plural, e]))
+    : undefined;
+  const checkCtx: ViewCheckContext = entitiesByPlural
+    ? { entity: (plural) => entitiesByPlural.get(plural) }
+    : {};
   const viewsByName = new Map(input.views.map((v) => [v.name, v]));
   const screensByName = new Map(input.screens.map((s) => [s.name, s]));
   // A name given twice would leave the first one unreachable.
@@ -64,7 +76,7 @@ export function createRegistry(input: {
         errors.push(`Block "${block.id}": ${view.name} cannot be shown on a page`);
       const q = checkQuery(view, block.query);
       if (q) errors.push(`Block "${block.id}": ${q}`);
-      const p = checkProps(view, block.props);
+      const p = checkProps(view, block.props, checkCtx);
       if (p) errors.push(`Block "${block.id}": ${p}`);
     }
     return errors;
@@ -110,7 +122,7 @@ export function createRegistry(input: {
       case 'inline': {
         const view = getViewDef(present.view);
         if (!view) return { kind: 'error', error: `No view called ${present.view}` };
-        const bad = checkQuery(view, present.query) ?? checkProps(view, present.props);
+        const bad = checkQuery(view, present.query) ?? checkProps(view, present.props, checkCtx);
         if (bad) return { kind: 'error', error: bad };
         if (!drawsComponents(surfaces))
           return { kind: 'drop', reason: 'This surface shows words, not views' };
@@ -150,13 +162,15 @@ export function createRegistry(input: {
     moduleOf: (name: string) => input.moduleOf?.(name),
     getViewDef,
     getScreenDef,
+    /** An entity views may name, by plural, when the registry was given entities. */
+    entity: (plural: string): EntitySpec | undefined => entitiesByPlural?.get(plural),
     viewsFor,
     /** "todo.list: A checklist of …" lines, for the canvas tools' descriptions. */
     catalog: (surface: Surface) =>
       viewsFor(surface)
         .map(
           (v) =>
-            `- ${v.name}${v.source ? ` (${v.source.entity.plural} query)` : ' (props)'}: ${v.description}`,
+            `- ${v.name}${v.source ? ` (${v.source.entity.plural} ${v.source.by === 'summary' ? 'summary' : 'query'})` : ' (props)'}: ${v.description}`,
         )
         .join('\n'),
     checkPage,

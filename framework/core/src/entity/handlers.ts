@@ -1,7 +1,8 @@
-import type { Page, Principal, WriteAction } from '@hykr/contracts';
+import type { Page, Principal, Summary, WriteAction } from '@hykr/contracts';
 import { ForbiddenException, Inject, type Type } from '@nestjs/common';
 import { CommandHandler, EventBus, QueryHandler } from '@nestjs/cqrs';
 import { z } from 'zod';
+import { summarize } from '../query/aggregate.js';
 import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
 import { registerOp } from '../write/approvals.js';
 import { runWrite, type WriteCtx, type WriteOp } from '../write/pipeline.js';
@@ -77,8 +78,9 @@ function assertExposed(def: AnyEntityDef, action: 'list' | 'get', p: Principal) 
 }
 
 /**
- * The five CQRS handlers for one entity. List them in the business module's providers. This
- * serves the entity: it joins `entityDefs()` and its writes can be replayed after approval.
+ * The CQRS handlers for one entity: list, summary, get, create, update and delete. List them in
+ * the business module's providers. This serves the entity: it joins `entityDefs()` and its
+ * writes can be replayed after approval.
  */
 export function entityHandlers(def: AnyEntityDef): Type[] {
   const { cqrs } = def;
@@ -101,6 +103,16 @@ export function entityHandlers(def: AnyEntityDef): Type[] {
         x.query?.(q.query, q.principal, { spec: def.spec, table: def.table });
       const page = await def.repo.list(this.options.db, q.principal, q.query);
       return { ...page, items: page.items.map((row) => def.toRead(row, q.principal)) };
+    }
+  }
+
+  @QueryHandler(cqrs.SummaryQuery)
+  class SummaryHandler {
+    constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {}
+    async execute(q: InstanceType<typeof cqrs.SummaryQuery>): Promise<Summary> {
+      // A summary is a read of the list: the same exposure, scope and filters.
+      assertExposed(def, 'list', q.principal);
+      return summarize(this.options.db, def, q.principal, q.query);
     }
   }
 
@@ -139,8 +151,10 @@ export function entityHandlers(def: AnyEntityDef): Type[] {
 
   Object.defineProperty(ListHandler, 'name', { value: `${cqrs.ListQuery.name}Handler` });
   Object.defineProperty(GetHandler, 'name', { value: `${cqrs.GetQuery.name}Handler` });
+  Object.defineProperty(SummaryHandler, 'name', { value: `${cqrs.SummaryQuery.name}Handler` });
   return [
     ListHandler,
+    SummaryHandler,
     GetHandler,
     writeHandler(cqrs.CreateCommand, 'create', () => undefined),
     writeHandler(cqrs.UpdateCommand, 'update', (c) => c.id),

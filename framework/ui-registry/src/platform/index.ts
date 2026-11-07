@@ -4,6 +4,7 @@ import { PageListView } from './page.js';
 import { PageScreen } from './screens.js';
 import { ApprovalCardView, KpiRowView } from './views.js';
 
+export * from './kpi.js';
 export * from './page.js';
 export * from './screens.js';
 export * from './views.js';

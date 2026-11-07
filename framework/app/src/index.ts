@@ -25,6 +25,16 @@ export {
 export * from './features/index';
 export { createInvalidator, liveKeysFor } from './features/live/keys';
 export {
+  addressOf,
+  currentLocation,
+  type Fix,
+  type FixAccuracy,
+  LocationField,
+  LocationUnavailable,
+  pointOf,
+  useCurrentLocation,
+} from './features/location';
+export {
   ApprovalCard,
   ApprovalItem,
   amountText,
@@ -93,6 +103,7 @@ export {
   useEntity,
   useEntityList,
   useEntityMutation,
+  useEntitySummary,
   useUndoableDelete,
 } from './framework/hooks';
 export { isFocused, isHovered } from './framework/hover';
