@@ -770,9 +770,24 @@ export function createApiClient(opts: ApiClientOptions) {
      */
     calendar: {
       providers: () => call<CalendarProviderInfo[]>('GET', '/api/calendar/providers'),
-      /** The consent screen's URL: open it, and Google sends the browser back to the API. */
-      connect: (provider: 'google' = 'google') =>
-        call<{ url: string }>('POST', '/api/calendar/connections', { provider }),
+      /**
+       * The consent screen's URL: open it. Google sends the browser back to the API, which sends
+       * it on to the app (`returnTo`: the web app, or the native app's link) with a code and a
+       * state for `complete`.
+       */
+      connect: (provider: 'google' = 'google', returnTo?: 'web' | 'app') =>
+        call<{ url: string }>('POST', '/api/calendar/connections', {
+          provider,
+          ...(returnTo ? { returnTo } : {}),
+        }),
+      /** Finish connecting, as the person who started it, in the business they started it in. */
+      complete: (input: { code: string; state: string }, key = newKey()) =>
+        call<WriteResult<CalendarConnectionInfo>>(
+          'POST',
+          '/api/calendar/google/complete',
+          input,
+          key,
+        ),
       connections: () => call<CalendarConnectionInfo[]>('GET', '/api/calendar/connections'),
       disconnect: (id: string, key = newKey()) =>
         call<WriteResult<null>>(

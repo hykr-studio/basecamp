@@ -1,5 +1,6 @@
 import type { InviteRecipient } from '@hykr/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Platform } from 'react-native';
 import { api } from '../../api';
 
 /** Whether this server offers each calendar service. */
@@ -19,9 +20,23 @@ export function useCalendarConnections() {
   });
 }
 
-/** Start connecting: the consent screen's URL, to open in the browser. */
+/**
+ * Start connecting: the consent screen's URL, to open in the browser. Google comes back to this
+ * app: the web app's `/calendar`, or on a phone the app's own link (`CALENDAR_APP_RETURN_URL`).
+ */
 export function useConnectCalendar() {
-  return useMutation({ mutationFn: () => api.calendar.connect('google') });
+  return useMutation({
+    mutationFn: () => api.calendar.connect('google', Platform.OS === 'web' ? 'web' : 'app'),
+  });
+}
+
+/** Finish connecting with what Google sent back: only as the person who started it. */
+export function useCompleteCalendar() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { code: string; state: string }) => api.calendar.complete(input),
+    onSettled: () => void client.invalidateQueries({ queryKey: ['calendar', 'connections'] }),
+  });
 }
 
 export function useDisconnectCalendar() {

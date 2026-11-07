@@ -1,5 +1,6 @@
 import type { CalendarConnectionInfo, CalendarFeedInfo } from '@hykr/contracts';
-import { useEffect, useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import { Linking, Platform, ScrollView, Text, View } from 'react-native';
 import { Button } from '../../components/Button';
 import { ScreenTitle, SectionHeading } from '../../components/ScreenTitle';
@@ -16,6 +17,7 @@ import {
   useCalendarConnections,
   useCalendarFeeds,
   useCalendarProviders,
+  useCompleteCalendar,
   useConnectCalendar,
   useCreateFeed,
   useDisconnectCalendar,
@@ -167,24 +169,64 @@ function Feeds() {
   );
 }
 
+type Param = string | string[] | undefined;
+const first = (v: Param) => (Array.isArray(v) ? v[0] : v) ?? '';
+
+/**
+ * Back from Google (`?code=&state=`, or `?error=`): the sign-in is finished here, once, under
+ * this app's session (the server refuses it to anyone but the person who started it), and the
+ * address is cleared after.
+ */
+function useFinishSignIn(): boolean {
+  const { t } = useT();
+  const toast = useToast();
+  const complete = useCompleteCalendar();
+  const params = useLocalSearchParams<{ code?: string; state?: string; error?: string }>();
+  const code = first(params.code as Param);
+  const state = first(params.state as Param);
+  const error = first(params.error as Param);
+  const seen = useRef('');
+  const { mutate } = complete;
+  useEffect(() => {
+    if (!error && !(code && state)) return;
+    const key = `${state}|${error}`;
+    if (seen.current === key) return;
+    seen.current = key;
+    const clear = () => router.replace('/calendar' as never);
+    if (error) {
+      toast.show({ message: t('calendar.signInStopped', { reason: error }), tone: 'error' });
+      clear();
+      return;
+    }
+    mutate(
+      { code, state },
+      {
+        onSuccess: () => toast.show({ message: t('calendar.connected'), tone: 'success' }),
+        onError: (e) =>
+          toast.show({
+            message: t('calendar.signInStopped', { reason: errorMessage(e) }),
+            tone: 'error',
+          }),
+        onSettled: clear,
+      },
+    );
+  }, [code, state, error, mutate, t, toast]);
+  return complete.isPending;
+}
+
 /**
  * The person's calendars (`/calendar`): connect Google, see when it last synced, disconnect;
- * make, copy and revoke private feed links. Google sends the browser back here
- * (`?connected=google` or `?error=`).
+ * make, copy and revoke private feed links. Google sends the browser back here, through the
+ * API, with a code and a state that this screen finishes connecting with.
  */
 export function CalendarScreen() {
   useScreenContext({ screen: 'calendar' });
   const { t } = useT();
-  const toast = useToast();
-  useEffect(() => {
-    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
-    const q = new URLSearchParams(window.location.search);
-    if (q.get('connected')) toast.show({ message: t('calendar.connected'), tone: 'success' });
-    else if (q.get('error')) toast.show({ message: q.get('error') ?? '', tone: 'error' });
-  }, [t, toast]);
+  const finishing = useFinishSignIn();
   return (
     <ScrollView contentContainerStyle={[styles.content, { gap: space.lg }]}>
       <ScreenTitle title={t('calendar.title')} />
+      {finishing && <Text style={styles.muted}>{t('calendar.connecting')}</Text>}
       <Connections />
       <Feeds />
     </ScrollView>

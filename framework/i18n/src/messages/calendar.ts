@@ -20,6 +20,8 @@ export const calendarMessages = defineMessages({
     'calendar.needsReauth': 'Connect again: Google stopped accepting this connection.',
     'calendar.lastSynced': 'Last synced {when}',
     'calendar.connected': 'Your calendar is connected.',
+    'calendar.connecting': 'Connecting your calendar…',
+    'calendar.signInStopped': 'Nothing was connected: {reason}',
     'calendar.feeds': 'Calendar feeds',
     'calendar.feedsHint':
       'A private link any calendar app can subscribe to. Anyone with it sees your schedule.',
@@ -54,6 +56,8 @@ export const calendarMessages = defineMessages({
     'calendar.needsReauth': 'फिर से जोड़ें: Google ने यह कनेक्शन मानना बंद कर दिया।',
     'calendar.lastSynced': 'आखिरी सिंक {when}',
     'calendar.connected': 'आपका कैलेंडर जुड़ गया है।',
+    'calendar.connecting': 'आपका कैलेंडर जोड़ा जा रहा है…',
+    'calendar.signInStopped': 'कुछ नहीं जुड़ा: {reason}',
     'calendar.feeds': 'कैलेंडर फ़ीड',
     'calendar.feedsHint':
       'एक निजी लिंक जिसे कोई भी कैलेंडर ऐप जोड़ सकता है। जिसके पास यह है, वह आपका कार्यक्रम देखता है।',
@@ -88,6 +92,8 @@ export const calendarMessages = defineMessages({
     'calendar.needsReauth': 'మళ్ళీ కనెక్ట్ చేయండి: Google ఈ కనెక్షన్‌ను అంగీకరించడం ఆపేసింది.',
     'calendar.lastSynced': 'చివరి సింక్ {when}',
     'calendar.connected': 'మీ క్యాలెండర్ కనెక్ట్ అయింది.',
+    'calendar.connecting': 'మీ క్యాలెండర్ కనెక్ట్ అవుతోంది…',
+    'calendar.signInStopped': 'ఏదీ కనెక్ట్ కాలేదు: {reason}',
     'calendar.feeds': 'క్యాలెండర్ ఫీడ్‌లు',
     'calendar.feedsHint': 'ఏ క్యాలెండర్ యాప్ అయినా సబ్‌స్క్రైబ్ చేయగల ప్రైవేట్ లింక్. ఇది ఉన్న ఎవరైనా మీ షెడ్యూల్ చూస్తారు.',
     'calendar.newFeed': 'ఫీడ్ లింక్ సృష్టించండి',

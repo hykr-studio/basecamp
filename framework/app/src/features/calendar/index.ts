@@ -8,6 +8,7 @@ export {
   useCalendarConnections,
   useCalendarFeeds,
   useCalendarProviders,
+  useCompleteCalendar,
   useConnectCalendar,
   useCreateFeed,
   useDisconnectCalendar,
