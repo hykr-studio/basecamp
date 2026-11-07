@@ -1,0 +1,223 @@
+// Credits arithmetic, without a server: CREDITS_CONFIG, the effective plan, prices, the budget
+// and limits, overrides and headroom.
+import { describe, expect, it } from 'vitest';
+import { assess, headroomOf, refusalFor } from '../../dist/features/credits/budget.js';
+import {
+  CreditsConfigError,
+  creditsFor,
+  parseCreditsConfig,
+  priceFor,
+  resolvePlan,
+} from '../../dist/features/credits/config.js';
+import { FrameworkMeters } from '../../dist/features/credits/meters.js';
+import { providerFor } from '../../dist/features/credits/writes.js';
+
+const config = parseCreditsConfig(
+  JSON.stringify({
+    currency: 'XXX',
+    prices: { tool_calls: 10, messages: 4, 'messages.marketing': 9, voice_seconds: 60 },
+    defaults: { allowance: 100, alertAt: 75 },
+  }),
+);
+
+const plan = (settings: object = {}, now = new Date('2030-01-15T00:00:00Z')) =>
+  resolvePlan(config, settings, now);
+
+describe('CREDITS_CONFIG', () => {
+  it('unset is no currency, no prices and the neutral plan', () => {
+    const empty = parseCreditsConfig(undefined);
+    expect(empty).toEqual({ prices: {}, markupPercent: 0, defaults: {} });
+    expect(resolvePlan(empty, undefined)).toMatchObject({
+      enforce: false,
+      allowance: 0,
+      period: 'month',
+      alertAt: 80,
+      pauseAt: 100,
+      limits: {},
+      prices: {},
+      pauseMessages: [],
+      override: null,
+      currency: null,
+    });
+  });
+
+  it('refuses malformed JSON, unknown fields and a bad currency, listing every problem', () => {
+    expect(() => parseCreditsConfig('{')).toThrow(CreditsConfigError);
+    try {
+      parseCreditsConfig(JSON.stringify({ currency: 'xx', extra: 1, prices: { 'BAD KEY': 1 } }));
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(CreditsConfigError);
+      expect((e as CreditsConfigError).problems.length).toBeGreaterThanOrEqual(3);
+    }
+    expect(() => parseCreditsConfig(JSON.stringify({ defaults: { pauseAt: 0 } }))).toThrow(
+      /pauseAt/,
+    );
+  });
+});
+
+describe('the effective plan', () => {
+  it('is the business’s, then the deployment’s, then the framework’s; maps merge by key', () => {
+    const p = plan({
+      enforce: true,
+      prices: { tool_calls: 12, voice_seconds: 30 },
+      limits: { messages: 5 },
+    });
+    expect(p).toMatchObject({
+      enforce: true,
+      allowance: 100,
+      alertAt: 75,
+      pauseAt: 100,
+      limits: { messages: 5 },
+      prices: { tool_calls: 12, messages: 4, 'messages.marketing': 9, voice_seconds: 30 },
+      currency: 'XXX',
+    });
+  });
+
+  it('keeps an override only while it holds', () => {
+    const until = '2030-01-16T00:00:00Z';
+    expect(plan({ override: { mode: 'run', until, reason: 'x' } }).override?.mode).toBe('run');
+    expect(
+      plan({ override: { mode: 'run', until, reason: 'x' } }, new Date('2030-01-17T00:00:00Z'))
+        .override,
+    ).toBeNull();
+    expect(plan({ override: { mode: 'pause', reason: 'x' } }).override?.mode).toBe('pause');
+  });
+});
+
+describe('prices', () => {
+  it('a variant’s own price wins over its meter’s', () => {
+    const prices = plan().prices;
+    expect(priceFor(prices, 'messages', 'marketing')).toBe(9);
+    expect(priceFor(prices, 'messages', 'utility')).toBe(4);
+    expect(priceFor(prices, 'messages')).toBe(4);
+    expect(priceFor(prices, 'tokens')).toBeUndefined();
+  });
+
+  it('credits round up, per the meter’s pricing unit', () => {
+    expect(creditsFor(60, 30, 60)).toBe(30);
+    expect(creditsFor(60, 31, 60)).toBe(31);
+    expect(creditsFor(1000, 1, 1_000_000)).toBe(1);
+    expect(creditsFor(0.1, 30)).toBe(3);
+    expect(creditsFor(0, 1000)).toBe(0);
+  });
+});
+
+const counters = (
+  cost: number,
+  extra: { meter: string; quantity: number; cost: number }[] = [],
+) => [{ meter: 'tool_calls', quantity: cost / 10, cost }, ...extra];
+
+describe('the budget', () => {
+  it('is not there without credits on, or without a currency', () => {
+    expect(assess(plan(), counters(1000), null).budget).toBeNull();
+    const noCurrency = resolvePlan(parseCreditsConfig('{}'), { enforce: true, allowance: 5 });
+    expect(assess(noCurrency, counters(10), null).budget).toBeNull();
+  });
+
+  it('spends the allowance, then the wallet; alerts and pauses at the thresholds', () => {
+    const on = plan({ enforce: true });
+    const at = (spent: number, balance: number | null) => assess(on, counters(spent), balance);
+    expect(at(70, null).budget).toMatchObject({
+      remaining: 30,
+      total: 100,
+      usedPercent: 70,
+      alert: false,
+      pause: false,
+    });
+    expect(at(75, null).budget).toMatchObject({ usedPercent: 75, alert: true, pause: false });
+    expect(at(100, null).budget).toMatchObject({ remaining: 0, usedPercent: 100, pause: true });
+    // 150 spent, 50 of it from a wallet that held 200: 150 left of 300.
+    expect(at(150, 150).budget).toMatchObject({ remaining: 150, total: 300, usedPercent: 50 });
+    expect(at(150, 150).levels).toEqual([]);
+    expect(at(100, null).levels.map((l) => `${l.cap}/${l.level}`)).toEqual([
+      'credits/alert',
+      'credits/pause',
+    ]);
+  });
+
+  it('with nothing to spend, a business on credits is paused at once', () => {
+    const empty = plan({ enforce: true, allowance: 0 });
+    const a = assess(empty, [], null);
+    expect(a.budget).toMatchObject({ total: 0, usedPercent: 100, pause: true });
+    expect(refusalFor(a, FrameworkMeters.tokens)?.rule).toBe('credits_exhausted');
+  });
+
+  it('pauses past 100% when the plan allows an overdraft', () => {
+    const over = plan({ enforce: true, pauseAt: 110 });
+    expect(assess(over, counters(100), 0).budget?.pause).toBe(false);
+    expect(assess(over, counters(110), -10).budget?.pause).toBe(true);
+  });
+});
+
+describe('what a pause refuses', () => {
+  const paused = assess(plan({ enforce: true, pauseMessages: ['marketing'] }), counters(100), null);
+
+  it('turns, voice and the message variants the plan names; never other messages', () => {
+    expect(refusalFor(paused, FrameworkMeters.tokens)?.rule).toBe('credits_exhausted');
+    expect(refusalFor(paused, FrameworkMeters.voiceSeconds)?.cap).toBe('credits');
+    expect(refusalFor(paused, FrameworkMeters.messages, 'marketing')?.rule).toBe(
+      'credits_exhausted',
+    );
+    expect(refusalFor(paused, FrameworkMeters.messages, 'utility')).toBeNull();
+    expect(refusalFor(paused, FrameworkMeters.messages, null)).toBeNull();
+  });
+
+  it('a limit stops only its meter', () => {
+    const a = assess(
+      plan({ enforce: true, allowance: 1000, limits: { tool_calls: 2 } }),
+      [{ meter: 'tool_calls', quantity: 2, cost: 20 }],
+      null,
+    );
+    expect(refusalFor(a, FrameworkMeters.toolCalls)).toMatchObject({
+      rule: 'usage_limit_reached',
+      cap: 'tool_calls',
+    });
+    expect(refusalFor(a, FrameworkMeters.tokens)).toBeNull();
+    expect(a.levels.map((l) => `${l.cap}/${l.level}`)).toEqual([
+      'tool_calls/alert',
+      'tool_calls/pause',
+    ]);
+  });
+
+  it('the override wins: run lets everything through, pause stops it', () => {
+    const run = assess(
+      plan({ enforce: true, override: { mode: 'run', reason: 'support' } }),
+      counters(100),
+      null,
+    );
+    expect(refusalFor(run, FrameworkMeters.tokens)).toBeNull();
+    const stop = assess(plan({ override: { mode: 'pause', reason: 'unpaid' } }), [], null);
+    expect(refusalFor(stop, FrameworkMeters.tokens)).toMatchObject({
+      rule: 'credits_suspended',
+      reason: expect.stringContaining('unpaid'),
+    });
+    // Even a pause never stops the messages that always go.
+    expect(refusalFor(stop, FrameworkMeters.messages, 'utility')).toBeNull();
+  });
+});
+
+describe('headroom', () => {
+  it('is what is left before the pause, by the limit and by the credits at the price', () => {
+    const p = plan({ enforce: true, limits: { voice_seconds: 600 } });
+    // 40 of 100 credits spent, voice at 60 a minute: 60 credits are 60 seconds.
+    const a = assess(p, [{ meter: 'voice_seconds', quantity: 40, cost: 40 }], null);
+    expect(headroomOf(a, FrameworkMeters.voiceSeconds, 60)).toBe(60);
+    // Without a price only the limit counts.
+    expect(headroomOf(a, FrameworkMeters.voiceSeconds, undefined)).toBe(560);
+    expect(headroomOf(assess(plan(), [], null), FrameworkMeters.voiceSeconds, 60)).toBeUndefined();
+  });
+});
+
+describe('purchase providers', () => {
+  it('none registered is a 503', () => {
+    try {
+      providerFor();
+      expect.unreachable();
+    } catch (e) {
+      const http = e as { getStatus(): number; getResponse(): { error: string } };
+      expect(http.getStatus()).toBe(503);
+      expect(http.getResponse().error).toBe('purchases_unavailable');
+    }
+  });
+});

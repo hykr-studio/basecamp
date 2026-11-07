@@ -1,0 +1,168 @@
+// How much of its caps a business has used this period, and what that refuses. Pure: the
+// service reads the counters and the wallet, this does the arithmetic.
+import type { UsageRefusal } from '@hykr/contracts';
+import type { CreditsPlanResolved } from './config.js';
+import type { MeterDef } from './meters.js';
+
+/** One meter's use this period. */
+export interface Counter {
+  meter: string;
+  quantity: number;
+  cost: number;
+}
+
+/** The budget: the period's allowance plus the wallet. */
+export interface Budget {
+  allowance: number;
+  spent: number;
+  balance: number;
+  /** What is left before the wallet is empty: unspent allowance plus the balance. */
+  remaining: number;
+  /** spent + remaining: the allowance plus what the wallet held for this period. */
+  total: number;
+  usedPercent: number;
+  alert: boolean;
+  pause: boolean;
+}
+
+/** A meter with a limit this period. */
+export interface Limit {
+  quantity: number;
+  limit: number;
+  usedPercent: number;
+  alert: boolean;
+  pause: boolean;
+}
+
+/** A level a cap has reached: 'credits' (the budget) or a meter's name. */
+export interface Level {
+  cap: string;
+  level: 'alert' | 'pause';
+  usedPercent: number;
+  threshold: number;
+}
+
+export interface Assessment {
+  plan: CreditsPlanResolved;
+  spent: number;
+  /** Null when the business is not on credits or the deployment has no currency. */
+  budget: Budget | null;
+  limits: Map<string, Limit>;
+  /** Every level reached now (on credits only). */
+  levels: Level[];
+  quantities: Map<string, Counter>;
+}
+
+/** Per cent of `of`, to one decimal; nothing to use up counts as all of it used. */
+const percent = (used: number, of: number) => (of > 0 ? Math.round((used / of) * 1000) / 10 : 100);
+
+/** At or past `threshold` per cent: integers, so 80 of 100 is exactly 80%. */
+const reached = (used: number, of: number, threshold: number) =>
+  of <= 0 ? true : used * 100 >= threshold * of;
+
+export function assess(
+  plan: CreditsPlanResolved,
+  counters: readonly Counter[],
+  balance: number | null,
+): Assessment {
+  const quantities = new Map(counters.map((c) => [c.meter, c]));
+  const spent = counters.reduce((sum, c) => sum + c.cost, 0);
+  let budget: Budget | null = null;
+  if (plan.enforce && plan.currency) {
+    const wallet = balance ?? 0;
+    const remaining = Math.max(0, plan.allowance - spent) + wallet;
+    const total = spent + remaining;
+    budget = {
+      allowance: plan.allowance,
+      spent,
+      balance: wallet,
+      remaining,
+      total,
+      usedPercent: percent(spent, total),
+      alert: reached(spent, total, plan.alertAt),
+      pause: reached(spent, total, plan.pauseAt),
+    };
+  }
+  const limits = new Map<string, Limit>();
+  if (plan.enforce)
+    for (const [meter, limit] of Object.entries(plan.limits)) {
+      const quantity = quantities.get(meter)?.quantity ?? 0;
+      limits.set(meter, {
+        quantity,
+        limit,
+        usedPercent: percent(quantity, limit),
+        alert: reached(quantity, limit, plan.alertAt),
+        pause: reached(quantity, limit, plan.pauseAt),
+      });
+    }
+  const levels: Level[] = [];
+  const add = (cap: string, x: { alert: boolean; pause: boolean; usedPercent: number }) => {
+    if (x.alert)
+      levels.push({ cap, level: 'alert', usedPercent: x.usedPercent, threshold: plan.alertAt });
+    if (x.pause)
+      levels.push({ cap, level: 'pause', usedPercent: x.usedPercent, threshold: plan.pauseAt });
+  };
+  if (budget) add('credits', budget);
+  for (const [meter, limit] of limits) add(meter, limit);
+  return { plan, spent, budget, limits, levels, quantities };
+}
+
+/**
+ * Whether a use of this meter (and variant) is refused now. The operator's override wins: `run`
+ * lets it through, `pause` stops it. Otherwise a business on credits is stopped by its budget or
+ * by the meter's limit. A variant its meter never pauses (a reply, a code) always goes.
+ */
+export function refusalFor(
+  a: Assessment,
+  meter: MeterDef,
+  variant?: string | null,
+): UsageRefusal | null {
+  const { plan } = a;
+  if (meter.pausable && !meter.pausable(variant, plan)) return null;
+  if (plan.override?.mode === 'run') return null;
+  if (plan.override?.mode === 'pause')
+    return {
+      rule: 'credits_suspended',
+      reason: `The business is paused by its operator: ${plan.override.reason}`,
+      cap: 'credits',
+    };
+  if (!plan.enforce) return null;
+  if (a.budget?.pause)
+    return {
+      rule: 'credits_exhausted',
+      reason: `This business has used ${a.budget.usedPercent}% of its credits this period`,
+      cap: 'credits',
+    };
+  const limit = a.limits.get(meter.name);
+  if (limit?.pause)
+    return {
+      rule: 'usage_limit_reached',
+      reason: `This business has used ${limit.quantity} of its ${limit.limit} ${meter.unit}s of ${meter.name} this period`,
+      cap: meter.name,
+    };
+  return null;
+}
+
+/**
+ * How many base units of this meter may still be used before the business is paused, by its
+ * limit and by its credits at the meter's price. Undefined: nothing caps it.
+ */
+export function headroomOf(
+  a: Assessment,
+  meter: MeterDef,
+  price: number | undefined,
+): number | undefined {
+  const { plan } = a;
+  if (plan.override?.mode === 'run') return undefined;
+  if (plan.override?.mode === 'pause') return 0;
+  if (!plan.enforce) return undefined;
+  let left = Number.POSITIVE_INFINITY;
+  const limit = a.limits.get(meter.name);
+  if (limit) left = Math.min(left, Math.ceil((plan.pauseAt * limit.limit) / 100) - limit.quantity);
+  if (a.budget && price && price > 0) {
+    // Spending moves credits from remaining to spent: their sum, the total, stays the same.
+    const credits = Math.ceil((plan.pauseAt * a.budget.total) / 100) - a.budget.spent;
+    left = Math.min(left, Math.floor((credits * (meter.per ?? 1)) / price));
+  }
+  return left === Number.POSITIVE_INFINITY ? undefined : Math.max(0, left);
+}

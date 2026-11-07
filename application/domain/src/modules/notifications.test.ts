@@ -1,12 +1,14 @@
 // The modules' templates: they pass Meta's rules, and every notification names one.
 import { contentHash, createNotificationCatalog, toTemplateSpec } from '@hykr/notifications';
 import { describe, expect, it } from 'vitest';
+import { accountNotifications } from './account/notifications/index.js';
 import { meetingsNotifications } from './meetings/notifications/index.js';
 import { todosNotifications } from './todos/notifications/index.js';
 
 const { notifications, templates } = createNotificationCatalog(
   todosNotifications,
   meetingsNotifications,
+  accountNotifications,
 );
 
 describe('the application’s templates and notifications', () => {

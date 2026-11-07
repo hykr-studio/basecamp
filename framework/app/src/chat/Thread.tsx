@@ -107,6 +107,17 @@ function replyError(error: unknown): string {
   } else if (error instanceof Error) detail = { message: error.message };
   else if (error && typeof error === 'object') detail = error;
   const message = typeof detail.message === 'string' ? detail.message.split('\n')[0] : '';
+  // A turn the server refused before the model ran (the business's credits are used up, a model
+  // it does not allow): the API's own reason.
+  const refused = (() => {
+    try {
+      const body = JSON.parse(message) as { error?: unknown; reason?: unknown };
+      return body.error === 'turn_refused' && typeof body.reason === 'string' ? body.reason : '';
+    } catch {
+      return '';
+    }
+  })();
+  if (refused) return refused;
   if (detail.statusCode === 429 || /rate.?limit/i.test(message))
     return 'The model is busy right now (rate-limited). Wait a moment, then send it again.';
   return message

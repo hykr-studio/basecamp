@@ -7,6 +7,31 @@ export {
   type MentionKind,
   mentionKinds,
 } from './features/comments/mention-kinds.js';
+export {
+  BUY_CREDITS,
+  type CreditPurchaseProvider,
+  CreditPurchaseRequested,
+  CreditPurchaseSettled,
+  CreditsConfig,
+  CreditsConfigError,
+  CreditsCredited,
+  CreditsService,
+  CreditsSettingsChanged,
+  CreditsThreshold,
+  creditPurchaseProviders,
+  creditsConfig,
+  defineMeter,
+  FrameworkMeters,
+  GRANT_CREDITS,
+  type MeterDef,
+  meters,
+  type PurchaseStart,
+  type PurchaseStarted,
+  SET_CREDIT_ALERTS,
+  SET_CREDITS_OVERRIDE,
+  SET_CREDITS_PLAN,
+  SETTLE_PURCHASE,
+} from './features/credits/index.js';
 export { defineSubscriber, EVENTS_QUEUE, matchesEvent } from './features/events/subscriber.js';
 export { defineFeature, type FeatureDef } from './features/feature.js';
 export {
@@ -21,6 +46,17 @@ export {
   StorageUnavailable,
   type Uploader,
 } from './features/files/public.js';
+export { IntegrationsCapability } from './features/integrations/capability.js';
+export { openConnection } from './features/integrations/credentials.js';
+export {
+  type ConnectorHandler,
+  type ConnectorHandlerContext,
+  connectorHandlers,
+  connectors,
+  defineConnectorHandler,
+  type InboundEventRecord,
+} from './features/integrations/registry.js';
+export { outboundPolicy } from './features/integrations/settings.js';
 export { type LiveResource, liveResources } from './features/live/resources.js';
 export {
   ModelPolicyChanged,
@@ -76,6 +112,7 @@ export {
   type WriteHook,
   writeHooks,
 } from './hooks.js';
+export { type Metering, metering, setMetering, type UsageInput } from './metering.js';
 export { defineModule, type ModuleDef } from './module.js';
 export { type ModelGate, TurnRefused } from './modules/chat/turn-hooks.js';
 export { eraseWithContributors, exportPersonalData } from './privacy/contributors.js';

@@ -91,8 +91,11 @@ describe('roles and capabilities', () => {
         'channels.manage',
         'comments.internal',
         'comments.moderate',
+        'credits.manage',
+        'credits.view',
         'customers.message',
         'fixture.reports',
+        'integrations.manage',
         'marketing.approve',
         'models.manage',
         'queues.admin',
@@ -102,12 +105,14 @@ describe('roles and capabilities', () => {
       'approvals.decide',
       'backoffice.use',
       'comments.internal',
+      'credits.view',
       'customers.message',
       'history.all',
     ]);
     expect((await inAna(staffer)('GET', '/api/me')).body.capabilities).toEqual([
       'backoffice.use',
       'comments.internal',
+      'credits.view',
       'customers.message',
     ]);
     // A role the application added, with the capability it names.

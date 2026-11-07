@@ -161,11 +161,13 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/ui-registry/src/` | `defineView`, `createUiRegistry`, platform views; `react.ts` for `bindView` / `bindScreen` |
 | `framework/i18n/src/` | `LANGS`, `Labels`, the framework's phrases (`messages.ts`), date and plural formatting |
 | `framework/channels/src/` | WhatsApp transport only: adapter, render, split, keywords, approval tokens |
+| `framework/connectors/src/` | Talking to other systems, transport only: Standard Webhooks signing, HMAC checks, the secret box, the egress guard (`safeRequest`), the `Connector` interface (section 5.14) |
 | `framework/notifications/src/` | `defineTemplate`, `defineNotification`, `createNotificationCatalog`, quiet hours and marketing cap rules |
 | `framework/api-client/src/` | `createApiClient`: `entity(spec)`, `command(spec, input)`, and typed calls for every framework route |
 | `framework/api/src/runtime.ts`, `start.ts` | `defineServer`, `startApi`, `startWorker`, `migrate`, `runTemplates`, `runEval`, `startStudio`. `testing.ts` is `@hykr/api/testing`. `hooks.ts` holds the server's extension points (section 5.9), `module.ts` `defineModule`, and `module-checks.ts` the boot checks across modules (section 5.11). |
 | `framework/api/src/channels/` | WhatsApp webhook, queues, sending, notifications dispatch, template sync, handoff, back office API, erasure |
 | `framework/api/src/modules/` | Chat, threads, history, me, voice, pages |
+| `framework/api/src/features/` | Framework features, one folder each (`defineFeature`), among them `events` (the outbox relay), `files`, `money`, `push`, `approvals` and `integrations` (webhooks out and in, section 5.14) |
 | `framework/app/src/` | `AppShell`, `defineAppModule` and the plugin types (`framework/app-domain.ts`), their merge (`framework/compose-app.ts`) and plugin slots (`framework/plugins.ts`), data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; framework features as plugins in `features/<x>/` (live, push, WebMCP); primitives in `@hykr/app/ui` |
 | `framework/cli/` | The `basecamp` command (`module-add.ts` scaffolds a module, `db-rebase.ts` regenerates migrations after a rebase), plus the `compose.yaml` and `infra/` it starts |
 
@@ -187,6 +189,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `db-policy-not-to-mastra` | `db` and `policy` know nothing about the model. |
 | `ui-registry-no-runtime` | The registry imports only contracts and i18n. React bindings live in `@hykr/ui-registry/react`. |
 | `channels-is-transport`, `notifications-are-definitions` | These packages hold no database, queue, Nest or policy code. Sending and consent live in `@hykr/api`. |
+| `connectors-is-transport` | `@hykr/connectors` imports only `@hykr/i18n`, zod and Node: no database, contracts, core, Nest or queue. The clients and the isomorphic layers never import it. |
 | `clients-hold-no-server-code` | `@hykr/app`, `@hykr/back-office` and `@hykr/voice-worker` talk to the API over HTTP only. |
 
 ---
@@ -208,6 +211,7 @@ The `.env` stays at the repository root: the `basecamp` command loads the neares
 - `AGENT_API_KEY`
 - `VOICE_AGENT_KEY` (must differ from `AGENT_API_KEY`; the API refuses to start otherwise, because audit tells them apart)
 - `APPROVAL_SECRET` (signs WhatsApp approval buttons; without it approvals are decided in the app only)
+- `SECRETS_KEY` (seals integration credentials and webhook signing secrets; without it webhook endpoints and connections cannot be saved, section 5.14)
 
 To run without any model or speech keys, set:
 
@@ -814,8 +818,9 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `readProjectors`, `listFieldSql`, `levelRules`, `identityProviders` and `numberSeries`
   (section 5.13) in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
-  `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources` and
-  `mentionKinds` (section 5.14) in `@hykr/api`.
+  `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources`,
+  `connectors`, `connectorHandlers`, `meters`, `creditPurchaseProviders` and `mentionKinds`
+  (sections 5.14 and 5.15) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -1090,7 +1095,67 @@ sample's `orders` module uses every part.
   `JSON_BODY_LIMIT` (1 MB), and a tree holds at most 1000 nodes and 8 levels (`maxNodes`,
   `maxDepth` on the trait). The approval card sums up long lists.
 
-### 5.14 Comments and mentions
+### 5.14 Integrations: webhooks out and in
+
+The `integrations` feature (`framework/api/src/features/integrations/`, decisions in
+`docs/decisions/B10.md`) connects a business to other systems. Which events leave, where they go
+and which systems send in are the business's data; what an inbound event does is the
+application's handler. Set `SECRETS_KEY` (32+ characters) first: secrets are stored only sealed
+with it.
+
+- **Who.** People with the capability `integrations.manage` (owner and admin by default) use
+  `/api/integrations/*`. Agents never reach it. Every change goes through `runWrite` (audited,
+  parked when a write hook asks, replayed after approval).
+- **Outbound.** `POST /api/integrations/endpoints { url, events: ['task.*'], capabilities? }`
+  returns the signing secret once. Each committed entity event becomes one delivery per matching
+  endpoint: the record projected as the endpoint may read it (it reads as the business's system
+  principal with the `capabilities` it was given, so a field that needs a capability stays
+  hidden), signed the Standard Webhooks way (`webhook-id`, `webhook-timestamp`,
+  `webhook-signature`), sent only to public addresses (`INTEGRATIONS_ALLOWED_HOSTS` lets a
+  development host through), and retried on `INTEGRATIONS_RETRY_SCHEDULE` (checked at start).
+  Every try counts when it is claimed, so a try that never finishes (a worker that died) uses up
+  its place: the sweeper logs it and moves the delivery on, or ends it `failed`. The log is
+  `GET /api/integrations/endpoints/:id/deliveries` and `GET /api/integrations/deliveries/:id`;
+  `POST .../retry` sends one again. Each try sends the stored body projected again for the
+  endpoint as it is then, so a capability taken away leaves retries and redeliveries too.
+  Changing an endpoint's URL or capabilities, or retrying its delivery, needs every capability
+  it reads with. An entity opts out with `traits: { webhooks: false }`.
+  Receivers verify with `verifyWebhook` from `@hykr/connectors` or any Standard Webhooks library.
+- **Inbound.** A connector is a kind of sender (`defineConnector`, or `hmacConnector({ name,
+  header, prefix })` for one that signs the body in a header; `standard-webhooks` is built in),
+  contributed as `connectors`. A business adds a connection (`POST /api/integrations/connections
+  { connector, credentials? }`; credentials are checked and sealed, generated ones returned once).
+  The sender posts to `/webhooks/<connector>/<connection id>`: verified with that connection's
+  credentials, each event stored once (a redelivery is a no-op) and queued. In the worker, each
+  `connectorHandlers` entry whose `on` matches runs as `systemPrincipal({ tenantId, job:
+  'integrations.<connector>', runId: <stored event id> })`:
+
+```ts
+contributes: {
+  connectorHandlers: [
+    defineConnectorHandler({
+      name: 'orders.paid',
+      connector: 'standard-webhooks',
+      on: ['payment.captured'],
+      handle: async (event, ctx) => {
+        const { orderId } = Paid.parse(event.data); // the sender's data is input: validate it
+        await ctx.write(entityOp(Order, 'update', { id: orderId }), { paid: true });
+      },
+    }),
+  ],
+}
+```
+
+  `ctx.write(op, input)` is `runWrite` with an idempotency key per event, handler and call. A
+  4xx refusal (another business's record is a 404) fails the event for good; other errors retry.
+  `GET /api/integrations/connections/:id/inbound` is the log.
+- **Server code** that calls a sender back opens a connection's credentials with
+  `openConnection(db, tenantId, id)`, and makes any request to a business-given address with
+  `safeRequest(url, init, outboundPolicy())`.
+
+The fixture's `framework/api/test/fixture/src/features/integrations/` uses each part.
+
+### 5.15 Comments and mentions
 
 Every record a person can read takes comments (`docs/decisions/B16.md`). The framework's `comments`
 feature keeps them in `app.comments`, keyed by the record's entity and id, and reaches them only
@@ -1246,6 +1311,8 @@ capabilities, with the roles that hold them by default (its features add their o
 | `channels.manage` | owner, admin | Setting the business's WhatsApp number |
 | `queues.admin` | owner, admin | Bull Board |
 | `models.manage` | owner, admin | Setting the business's model policy, and seeing what models cost (section 7.5) |
+| `credits.view` | owner, admin, ops, staff | Whether the business is paused, and how much of each cap it used (section 7.6) |
+| `credits.manage` | owner, admin | Credit amounts, the ledger, buying credits, the alert threshold (section 7.6) |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -1424,6 +1491,59 @@ The deployment configures its models; each business chooses among them (`docs/de
 - **Evals per model.** `basecamp eval --live --model <ref>` runs the evals on one registered model,
   before a business allows it.
 
+### 7.6 Credits and caps
+
+Every business's use of what costs money is metered, priced and, when its plan says so, capped
+(`docs/decisions/A3.md`). A credit is one minor unit of the deployment's credits currency.
+
+- **Meters.** `tokens` (a turn's input and output, the model as variant), `tool_calls` (one per
+  tool a turn called), `messages` (a WhatsApp message the provider accepted, its template's
+  category as variant) and `voice_seconds` (a reported voice session). Each use is a row in
+  `app.usage_events`, added to its period's counter (`app.usage_counters`). A feature or module adds
+  a meter with `defineMeter({ name, unit, per })` (contributed as `meters`) and records with
+  `CreditsService.record({ tenantId, meter, quantity, source, ref })`; `ref` makes a retried
+  report count once. Turns without a business (Studio) are not metered.
+- **Prices** come from `CREDITS_CONFIG` (JSON): `currency`, `prices` by `<meter>` or
+  `<meter>.<variant>` in credits per pricing unit (tokens per million, voice per minute),
+  `markupPercent` on a model's own `MODEL_PROVIDERS` price (used when no `tokens` price is set and
+  the currencies match), and `defaults`, the plan every business starts on. Malformed JSON stops
+  the start. Unset, uses are metered at no cost and nothing is capped.
+- **The plan** is the settings section `credits`: `enforce`, `allowance` (credits per period),
+  `period` (`day`, `week`, `month` in the business's time zone), `alertAt` (80) and `pauseAt`
+  (100), per-meter `limits`, `prices` and `pauseMessages` (message categories a paused business
+  does not send), each over the deployment's defaults. Only the operator writes it; the business
+  sets only its `alertAt` (`PUT /api/credits/alerts`, `credits.manage`).
+- **Budget and wallet.** On credits, a period's spending uses the allowance first, then the
+  prepaid wallet (`app.credit_wallets`, every change a row in `app.credit_ledger`). Used per cent is
+  spent over spent plus what is left. At `alertAt` of a cap (the budget or a meter's limit) the
+  named event `credits.threshold` (`{ cap, level: 'alert' | 'pause', usedPercent, recipients }`,
+  recipients holding `credits.manage`) is stored in the outbox and published, once per period and
+  level; the application's notification words it. At `pauseAt` the business is paused.
+- **What a pause refuses** (402, rules `credits_exhausted`, `usage_limit_reached`,
+  `credits_suspended`): assistant turns and back-office drafts (the `credits` turn hook), new voice
+  sessions (and a session's `maxSeconds` is cut to what is left), and outbound messages of a
+  category in `pauseMessages` (recorded as failed, never sent). Replies, codes, approvals, handoffs
+  and staff messages always go. A paused business's WhatsApp customer is handed to the team.
+  One action may overshoot the cap; the wallet goes below zero by that much.
+- **The operator** holds `OPERATOR_API_KEY` (header `x-operator-key`; without it the routes are
+  404): `GET /api/credits/operator/:tenantId` (full status) and `/ledger`, `PUT …/settings` (the
+  plan), `PUT …/override` (`{ override: { mode: 'run' | 'pause', until?, reason } }` or `null`) and
+  `POST …/grants` (`{ amount, note }`). Each write runs through `runWrite` as
+  `systemPrincipal({ tenantId, job: 'credits.operator' })`, audited in that business.
+- **People.** `GET /api/credits` (`credits.view`: owner, admin, ops, staff) says whether the
+  business is paused and how much of each cap is used; amounts, `GET /api/credits/ledger`,
+  `GET /api/credits/usage` and purchases need `credits.manage` (owner, admin). People only.
+- **Buying credits.** `POST /api/credits/purchases { amount, provider? }` goes through `runWrite`
+  (a write hook may park it) and records the purchase; its `CreditPurchaseProvider` (contributed
+  as `creditPurchaseProviders`, a payment connector's) starts it and returns a checkout URL or the
+  outcome. The connector's confirmation calls `CreditsService.settlePurchase(id, { status, ref })`,
+  which tops the wallet up once. No provider ships with the framework: without one, 503.
+- **In the app.** List `creditsPlugin` in `<AppShell plugins>`: a `/credits` screen (usage, the
+  pause, the balance, buying, the history) and its destination for people with `credits.view`.
+- **In tests.** The scripted model reports usage (a token per four characters of prompt and
+  reply), so a test can price turns. The fixture's `features/credits/` shows a purchase provider,
+  an alert notification and a write hook that parks a large purchase.
+
 ---
 
 ## 8. Channels, notifications and voice
@@ -1478,7 +1598,7 @@ export const MeetingReminder = defineTemplate({
 | `approval` | `(row) => approvalId`: the quick replies `approve` and `reject` decide that approval |
 | `dedupe` | Required. `(row) => string`: one pending schedule per key |
 
-Event names are `<entity>.created|updated|deleted`, your commands' `NamedEvent`s, `approval.requested` / `approval.decided`, and `comment.mentioned` (section 5.14).
+Event names are `<entity>.created|updated|deleted`, your commands' `NamedEvent`s, `approval.requested` / `approval.decided`, and `comment.mentioned` (section 5.15).
 
 Add the template and notification to the module's `<name>Notifications` (the module's `index.ts` passes them to `defineModule`). Template names and notification keys are unique across modules. Then run:
 
@@ -1504,7 +1624,7 @@ Either way the send is part of the write, so a rollback sends nothing. The outbo
 
 ### 8.3 Voice
 
-Voice is a framework channel. The worker (`@hykr/voice-worker`, started by `basecamp dev` or `basecamp start voice`) calls `/api/chat` as a relay for the person in the call. Surfaces are forced to `['inline', 'canvas', 'speech']`. A feature needs only:
+Voice is a framework channel. The worker (`@hykr/voice-worker`, started by `basecamp dev` or `basecamp start voice`) calls `/api/chat` as a relay for the person in the call. Each person has a daily limit (`VOICE_DAILY_MINUTES`), and each business's reported seconds count against its credits and its `voice_seconds` limit (section 7.6). Surfaces are forced to `['inline', 'canvas', 'speech']`. A feature needs only:
 
 - `speak` on its views.
 - `labels` with `noun` and `empty` on spoken lists.
@@ -1691,7 +1811,13 @@ These are not built. Each has a workaround for now.
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
 | Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `pdfkit` with `harfbuzzjs` and the Noto fonts, `@mastra/memory` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-location` (in the mobile app). Each feature that uses one adds its code. Their Expo config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client (the image picker's is in, for files, and `expo-notifications`', for push). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
-| System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. |
+| System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. An inbound webhook's handler that creates a row fails with `no_access` until then. |
+| Integration screens | Endpoints, connections and the delivery log have an HTTP API only (`/api/integrations/*`): no app or back-office screen, and no typed `@hykr/api-client` methods. |
+| Webhooks for approvals and other non-entity records | Only entity events are sent (their read schema projects them). |
+| Webhook delivery order, auto-pause, alerts | Deliveries of one record can arrive out of order; an endpoint that keeps failing is not paused and nobody is told. |
+| One inbound URL per connector | Each connection has its own URL. Routing a provider's single URL by its account id is not built (decisions B10, 20). |
+| Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
+| OAuth connectors | Credentials are stored as given; no OAuth flow or token refresh yet (B17 adds the first). |
 | Per-business roles | Roles and capabilities are registered in code, per process. A business cannot add or edit roles, and an application cannot remove a built-in one. |
 | Identity provider scopes | `scopes` from an identity provider are copied into the principal but nothing enforces them. |
 | Guest principals and `otp` | `actor.kind: 'guest'` and assurance `otp` exist in the contract; nothing produces them yet. |
@@ -1708,6 +1834,10 @@ These are not built. Each has a workaround for now.
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
 | A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
 | Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |
+| Credits operators | One shared `OPERATOR_API_KEY` stands in for platform operators (B19): no named operators, no screen. Use the operator routes (section 7.6) with the key. |
+| Buying credits | No purchase provider ships: register a `CreditPurchaseProvider` from a payment connector and call `CreditsService.settlePurchase` from its verified webhook. |
+| Credits mid-turn | A turn, a voice session or a message is checked before it starts; one may take a business past its cap. Tool calls are not refused in the middle of a turn. |
+| Metering everything | The guardrail's model calls, embeddings, WhatsApp voice-note transcription and voice sessions whose worker never reported an end are not metered. Call `CreditsService.record` from the feature. |
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |

@@ -214,7 +214,25 @@ export function runScripts(
   return [say(help)];
 }
 
-const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+/** Characters per token, as the scripted model counts them: roughly a real tokenizer's. */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * What a step "used", as a real model would report it: the prompt's characters and the reply's
+ * (its words and tool calls), a token per four, at least one out. Deterministic, so tests can
+ * price a turn.
+ */
+export function usageOf(prompt: LanguageModelV2Prompt, content: LanguageModelV2Content[]) {
+  const tokens = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN);
+  const inputTokens = tokens(JSON.stringify(prompt).length);
+  const out = content
+    .map((part) =>
+      part.type === 'text' ? part.text : part.type === 'tool-call' ? JSON.stringify(part) : '',
+    )
+    .join('');
+  const outputTokens = Math.max(1, tokens(out.length));
+  return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
+}
 
 export function fakeModel(scripts: readonly Script[], help: string): LanguageModelV2 {
   return {
@@ -226,7 +244,12 @@ export function fakeModel(scripts: readonly Script[], help: string): LanguageMod
     async doGenerate(options: LanguageModelV2CallOptions) {
       const content = runScripts(options.prompt, scripts, help);
       const calledTool = content.some((part) => part.type === 'tool-call');
-      return { content, finishReason: calledTool ? 'tool-calls' : 'stop', usage, warnings: [] };
+      return {
+        content,
+        finishReason: calledTool ? 'tool-calls' : 'stop',
+        usage: usageOf(options.prompt, content),
+        warnings: [],
+      };
     },
 
     async doStream(options: LanguageModelV2CallOptions) {
@@ -244,7 +267,11 @@ export function fakeModel(scripts: readonly Script[], help: string): LanguageMod
           parts.push(part);
         }
       }
-      parts.push({ type: 'finish', finishReason: calledTool ? 'tool-calls' : 'stop', usage });
+      parts.push({
+        type: 'finish',
+        finishReason: calledTool ? 'tool-calls' : 'stop',
+        usage: usageOf(options.prompt, content),
+      });
       return {
         stream: new ReadableStream<LanguageModelV2StreamPart>({
           start(controller) {
