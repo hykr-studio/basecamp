@@ -309,12 +309,15 @@ describe('outbound webhooks', () => {
     expect(body.data.row).not.toHaveProperty('dueOn');
     for (const internal of ['tenantId', 'ownerId', 'customerId', 'updatedAt'])
       expect(body.data.row).not.toHaveProperty(internal);
-    // The webhook-id is the delivery's id.
-    const [delivery] = (await deliveryRows(plain.id)).filter(
-      (d) => d.event_name === 'task.created',
-    );
+    // The webhook-id is the delivery's id. The worker marks it delivered once the receiver has
+    // answered, so the receiver can see the request before the row says so.
     expect(r.headers['webhook-id']).toBeTruthy();
-    expect(delivery.status).toBe('delivered');
+    const delivery = await eventually(async () =>
+      (await deliveryRows(plain.id)).find(
+        (d) => d.id === r.headers['webhook-id'] && d.status === 'delivered',
+      ),
+    );
+    expect(delivery.event_name).toBe('task.created');
   });
 
   it('an endpoint given the capability gets the date', async () => {
