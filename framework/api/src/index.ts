@@ -10,6 +10,7 @@ export {
   schedulable,
   schedulables,
   uidOf,
+  writeAs,
 } from './features/calendar/public.js';
 export {
   type CallRow,

@@ -7,6 +7,7 @@ import { meetingsAgent } from './agent/index.js';
 import { meetingsSpec } from './contracts/index.js';
 import * as tables from './db/schema.js';
 import { meetingsNotifications } from './notifications/index.js';
+import { MeetingMovedInCalendar } from './server/calendar-moved.subscriber.js';
 import { MeetingsModule } from './server/meetings.module.js';
 import { meetingsViews } from './views/index.js';
 
@@ -19,4 +20,6 @@ export const meetings = defineModule({
   notifications: meetingsNotifications.notifications,
   agent: meetingsAgent,
   tables,
+  // A meeting its owner moves in their connected calendar moves here too.
+  contributes: { subscribers: [MeetingMovedInCalendar] },
 });

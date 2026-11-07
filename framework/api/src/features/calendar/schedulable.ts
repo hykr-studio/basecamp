@@ -2,7 +2,13 @@
 // belongs on (from its raw row), and what a calendar shows of it (from its read, projected for
 // whoever it is shown to).
 import { createHash } from 'node:crypto';
-import { type Address, addressText, type SchedulableTrait, schedulableOf } from '@hykr/contracts';
+import {
+  type Address,
+  addressText,
+  type SchedulableTrait,
+  schedulableOf,
+  schedulableProblems,
+} from '@hykr/contracts';
 import { type AnyEntityDef, entityDef, entityDefs } from '@hykr/core';
 import { getTableColumns, type SQL, sql } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
@@ -41,6 +47,29 @@ function ownerKey(def: AnyEntityDef): string | undefined {
 export function peopleKeys(s: Schedulable): string[] {
   const keys = s.trait.people?.length ? [...s.trait.people] : [ownerKey(s.def)].filter(Boolean);
   return keys as string[];
+}
+
+/**
+ * What is wrong with the served schedulable entities: fields their read schemas lack, people
+ * columns their tables lack. Checked when the server starts.
+ */
+export function checkSchedulables(): void {
+  const problems = schedulables().flatMap((s) => {
+    const columns = getTableColumns(s.def.table) as Record<string, PgColumn>;
+    const keys = peopleKeys(s);
+    return [
+      ...schedulableProblems(s.def.spec),
+      ...(keys.length
+        ? []
+        : [`${s.def.name}: name the people columns (traits.schedulable.people)`]),
+      ...keys
+        .filter((k) => !columns[k])
+        .map(
+          (k) => `${s.def.name}: the schedulable trait's people column "${k}" is not in its table`,
+        ),
+    ];
+  });
+  if (problems.length) throw new Error(`Schedulable entities:\n- ${problems.join('\n- ')}`);
 }
 
 /** The people (user ids) a raw row names. */

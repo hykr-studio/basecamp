@@ -676,6 +676,25 @@ describe('calls', () => {
   });
 });
 
+describe('the assistant', () => {
+  it('finds free time, invites (waiting for approval) and logs calls', async () => {
+    await setTenantSettings(tenantId, { timeZone: 'UTC' });
+    const free = await owner.chat('when am I free tomorrow for 60 minutes');
+    expect(free.status).toBe(200);
+    expect(free.body.reply).toMatch(/^You're free tomorrow at \d\d:\d\d/);
+    const appt = await createAppointment(owner, { title: 'Asked by chat' });
+    const invited = await owner.chat(
+      `invite chat-${Date.now()}@example.test to appointment ${appt}`,
+    );
+    expect(invited.body.reply).toMatch(/^I've asked for your approval/);
+    const logged = await owner.chat(`log a call on appointment ${appt}: left a message`);
+    expect(logged.body.reply).toBe('Logged the call.');
+    const calls = await owner.call('GET', `/api/calls?entity=appointment&id=${appt}`);
+    expect(calls.body.items[0]).toMatchObject({ notes: 'left a message', createdBy: 'assistant' });
+    expect((await other.chat('when am I free today')).body.reply).toMatch(/^You/);
+  });
+});
+
 describe('disconnecting', () => {
   it('takes our events out of Google, closes the channel and revokes the grant', async () => {
     const [mine] = (await owner.call('GET', '/api/calendar/connections')).body;

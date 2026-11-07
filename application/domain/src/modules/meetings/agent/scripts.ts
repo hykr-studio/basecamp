@@ -16,6 +16,7 @@ import {
  *   close <meeting>\n<summary>\n- item …   list-meetings → close-meeting (parked for approval)
  *   close this one\n<notes>        on a meeting: close-meeting on it (parked for approval)
  *   move <meeting> to <YYYY-MM-DD>  list-meetings → reschedule-meeting
+ *   invite <email> to <meeting>     list-meetings → send-calendar-invite (to others: approval)
  *   open <meeting>                  list-meetings → canvas-open; without a canvas, get-meeting
  *   plan my week                    canvas-compose (week, to-dos due, meetings to prepare);
  *                                   without a canvas, the three lists, then one line
@@ -131,6 +132,25 @@ export const meetingsScripts = [
           endsAt: new Date(startsAt.getTime() + length).toISOString(),
         }),
       ];
+    },
+  }),
+  defineScript({
+    name: 'invite',
+    match: (text) => {
+      const m = /^invite (\S+@\S+\.\S+) to (.+)$/i.exec(first(text));
+      return m ? { email: m[1], title: m[2] } : undefined;
+    },
+    step: ({ email, title }, turn) => {
+      const r = turn.result('send-calendar-invite');
+      if (r) {
+        if (!r.ok) return [say(`I couldn't invite ${email} to ${title}.`)];
+        return [say(written(r, () => `Sent ${email} an invite to ${title}.`, turn))];
+      }
+      const list = turn.result('list-meetings');
+      if (!list) return [call('list-meetings', { q: title })];
+      const meeting = items(list).find((x) => sameTitle(x.title, title)) ?? items(list)[0];
+      if (!meeting) return [say(`I couldn't find a meeting called "${title}".`)];
+      return [call('send-calendar-invite', { entity: 'meeting', id: meeting.id, to: [{ email }] })];
     },
   }),
   defineScript({

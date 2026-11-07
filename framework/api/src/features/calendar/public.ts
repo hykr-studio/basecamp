@@ -2,6 +2,6 @@
 // acts for the person who moved an event in their calendar), and the schedulable helpers.
 import './routes.js';
 
-export { memberPrincipal } from './principal.js';
+export { memberPrincipal, writeAs } from './principal.js';
 export { contentOf, type EventContent, schedulable, schedulables, uidOf } from './schedulable.js';
 export { googleSettings } from './settings.js';

@@ -221,5 +221,7 @@ export async function eventually<T>(
   throw new Error(`timed out waiting (last: ${JSON.stringify(last)})`);
 }
 
+/** The in-memory Google a test server talks to with GOOGLE_CALENDAR_TRANSPORT=fake. */
+export { type FakeGoogle, fakeGoogle } from '@hykr/connectors/google-calendar';
 /** The application the test booted (its catalog, registry, notifications and assistant). */
 export { runtime } from './runtime.js';

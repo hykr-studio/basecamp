@@ -28,6 +28,11 @@ export const evalCases: EvalCase[] = [
     },
   },
   {
+    why: 'an invite to someone else is a parked send-calendar-invite',
+    input: 'invite guest@example.com to Eval sync',
+    expect: { must: ['list-meetings', 'send-calendar-invite'], replyIncludes: 'approv' },
+  },
+  {
     why: 'one meeting opens in the canvas',
     input: 'open Eval sync',
     expect: { must: ['list-meetings', 'canvas-open'], mustNot: ['canvas-compose'] },

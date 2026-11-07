@@ -11,7 +11,7 @@ import {
 import type { CalendarEventChange } from '@hykr/contracts';
 import { recordEvents, systemPrincipal, toJson } from '@hykr/core';
 import { calendarConnections, calendarEventLinks, type Database } from '@hykr/db';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import {
   and,
@@ -36,6 +36,7 @@ import { openConnection } from '../integrations/credentials.js';
 import { CalendarEvent } from './ops.js';
 import { memberPrincipal } from './principal.js';
 import {
+  checkSchedulables,
   contentOf,
   type EventContent,
   googleEventId,
@@ -82,7 +83,7 @@ export interface Leftovers {
 }
 
 @Injectable()
-export class CalendarSyncService {
+export class CalendarSyncService implements OnApplicationBootstrap {
   private readonly ctx: ServerContext;
 
   constructor(
@@ -91,6 +92,11 @@ export class CalendarSyncService {
     @Inject(ModuleRef) ref: ModuleRef,
   ) {
     this.ctx = serverContext(ref);
+  }
+
+  /** Every schedulable entity names fields and columns it has: a mistake stops the start. */
+  onApplicationBootstrap() {
+    checkSchedulables();
   }
 
   /* ── Queueing ─────────────────────────────────────────────────────────── */

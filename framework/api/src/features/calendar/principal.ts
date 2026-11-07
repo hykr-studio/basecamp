@@ -1,9 +1,10 @@
 // A member as a principal, for work done for them in the background: reading a record as they
 // may see it (their calendar, their feed, an invite they asked for), or a module's subscriber
 // writing as the person who changed something in their own calendar.
-import type { Channel, Principal } from '@hykr/contracts';
-import { PrincipalResolver } from '@hykr/core';
+import type { Channel, Principal, WriteResult } from '@hykr/contracts';
+import { PrincipalResolver, runWrite, type WriteOp } from '@hykr/core';
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { EventBus } from '@nestjs/cqrs';
 import type { ServerContext } from '../../hooks.js';
 
 type Get = ServerContext['get'];
@@ -28,4 +29,22 @@ export async function memberPrincipal(
     if (e instanceof ForbiddenException || e instanceof UnauthorizedException) return null;
     throw e;
   }
+}
+
+/**
+ * One write through the write path from background code (a subscriber, a queue job), as the
+ * principal given: audited, refused or parked like any other, its in-process events published
+ * after it commits. Give an idempotency key that is the same on every retry of the job.
+ */
+export async function writeAs(
+  ctx: Pick<ServerContext, 'db' | 'get'>,
+  a: { principal: Principal; requestId: string; idempotencyKey?: string },
+  // biome-ignore lint/suspicious/noExplicitAny: any operation
+  op: WriteOp<any, any, any>,
+  input: unknown,
+): Promise<WriteResult> {
+  const out = await runWrite(ctx.db, a, op, input);
+  const bus = ctx.get(EventBus);
+  for (const event of out.events) bus.publish(event);
+  return out.result;
 }
