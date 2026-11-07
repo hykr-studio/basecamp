@@ -106,7 +106,7 @@ const inboxItem = async (p: Person, dedupe: string) =>
 
 /** The text of the email with this subject sent to this person, from Mailpit. */
 async function mailText(p: Person, subject: string): Promise<string | undefined> {
-  // By address only: a subject may hold quotes, which the search syntax would take apart.
+  // By address only: the search syntax would take apart a subject that holds a double mark.
   const query = encodeURIComponent(`to:"${p.email}"`);
   const found = (await (
     await fetch(`http://localhost:8025/api/v1/search?query=${query}`)
