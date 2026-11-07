@@ -123,8 +123,8 @@ module.exports = {
       from: { path: '^framework/(app|back-office|voice-worker)/src/' },
       to: {
         path: [
-          '^framework/(db|policy|core|agents|channels|notifications|api)/',
-          '(^|/)@hykr/(db|policy|core|agents|channels|notifications|api)(/|$)',
+          '^framework/(db|policy|core|agents|channels|connectors|notifications|api)/',
+          '(^|/)@hykr/(db|policy|core|agents|channels|connectors|notifications|api)(/|$)',
           '(^|/)(@mastra|@nestjs|drizzle-orm|bullmq)(/|$)',
         ],
       },
@@ -140,6 +140,20 @@ module.exports = {
           '^framework/(db|policy|core|agents)/',
           '(^|/)@hykr/(db|policy|core|agents)(/|$)',
           '(^|/)(@mastra|@nestjs|drizzle-orm|bullmq)(/|$)',
+        ],
+      },
+    },
+    {
+      name: 'connectors-is-transport',
+      comment:
+        'framework/connectors talks to other systems (sign, verify, seal, a guarded request): no database, policy, framework core, contracts, agent, channel, Nest, queue or model in it. What an event does is a handler on the server.',
+      severity: 'error',
+      from: { path: '^framework/connectors/src/' },
+      to: {
+        path: [
+          '^framework/(?!connectors/|i18n/)',
+          '(^|/)@hykr/(?!connectors|i18n)',
+          '(^|/)(@mastra|@nestjs|drizzle-orm|bullmq|pg|ioredis)(/|$)',
         ],
       },
     },
@@ -181,8 +195,8 @@ module.exports = {
           `${MODULES}[^/]+/(server|db|agent)/`,
           `${MODULES}index\\.`,
           `${MODULES}[^/]+/index\\.`,
-          '^framework/(db|policy|core|agents|api)/',
-          '(^|/)@hykr/(db|policy|core|agents|api)(/|$)',
+          '^framework/(db|policy|core|agents|api|connectors)/',
+          '(^|/)@hykr/(db|policy|core|agents|api|connectors)(/|$)',
           '(^|/)(@mastra|@nestjs|drizzle-orm|bullmq)(/|$)',
         ],
       },
@@ -202,7 +216,7 @@ module.exports = {
           '(^|/)@application/domain/(db|modules)$',
           '(^|/)@application/domain/modules/[^/]+/(?!contracts$|views$)',
           '^application/api/',
-          '^framework/(db|policy|core|agents|api|channels|notifications)/',
+          '^framework/(db|policy|core|agents|api|channels|connectors|notifications)/',
         ],
       },
     },

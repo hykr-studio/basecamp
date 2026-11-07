@@ -24,6 +24,8 @@ export {
   type GrantKind,
   grantKinds,
   identityProviders,
+  type LevelRule,
+  levelRules,
   projectRead,
   type ReadProjector,
   readProjectors,

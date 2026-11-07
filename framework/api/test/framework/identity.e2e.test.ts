@@ -86,10 +86,15 @@ describe('roles and capabilities', () => {
     expect((await ana.call('GET', '/api/me')).body).toMatchObject({
       roles: ['owner'],
       capabilities: [
+        'approvals.decide',
         'backoffice.use',
         'channels.manage',
+        'credits.manage',
+        'credits.view',
         'customers.message',
         'fixture.reports',
+        'integrations.manage',
+        'marketing.approve',
         'members.manage',
         'members.read',
         'models.manage',
@@ -98,7 +103,9 @@ describe('roles and capabilities', () => {
       ],
     });
     expect((await inAna(ops)('GET', '/api/me')).body.capabilities).toEqual([
+      'approvals.decide',
       'backoffice.use',
+      'credits.view',
       'customers.message',
       'history.all',
       'members.read',
@@ -106,6 +113,7 @@ describe('roles and capabilities', () => {
     ]);
     expect((await inAna(staffer)('GET', '/api/me')).body.capabilities).toEqual([
       'backoffice.use',
+      'credits.view',
       'customers.message',
       'members.read',
     ]);

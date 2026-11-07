@@ -117,11 +117,14 @@ Keep these, which you will edit:
   (the lists of modules: step 9)
 - `domain/src/db/index.ts`
 - `domain/src/server/access.ts`
+- `domain/src/server/approval-levels.ts` and `domain/src/server/index.ts` (what each approval
+  level means in your product, and which writes reach it: developer guide 5.8.1)
 - `api/src/server.ts`
 - `mobile/src/modules/index.ts` (the list of app modules), `mobile/src/catalog.ts`,
   `mobile/src/settings.ts` (step 10)
 - `mobile/src/app/_layout.tsx`
 - `mobile/src/app/pages/*`
+- `mobile/src/app/approvals/*` (the approvals list and the `/approvals/<id>` link WhatsApp sends)
 - `mobile/src/app/+not-found.tsx`
 
 > **A shortcut:** `pnpm exec basecamp module add jobs` writes every file of a `jobs` module with
@@ -785,6 +788,7 @@ the assistant does.
 
 import { migrations } from '@application/domain/db';
 import { modules } from '@application/domain/modules';
+import { contributions } from '@application/domain/server';
 import { defineServer } from '@hykr/api';
 
 export const server = defineServer({
@@ -802,6 +806,8 @@ export const server = defineServer({
   },
   modules,
   migrations: [migrations],
+  // Fixit's approval levels, and the level rules that are not one module's.
+  contributes: contributions,
 });
 ```
 
@@ -1205,8 +1211,11 @@ export default function Pages() {
 render the framework's shell and screens: `_layout.tsx` passes `settings`, the modules barrel
 (`import * as modules from '@/modules'`), `catalog`, `registry` and the framework plugins
 (`livePlugin()` for live updates, `pushPlugin()` for push notifications, `webMcpPlugin()` for a
-browser agent's read tools) to `<AppShell>`, and
-`+not-found.tsx` also serves the framework plugins' screens. Rename the app in `mobile/app.json` (`name`, `slug`,
+browser agent's read tools, `creditsPlugin` for the credits screen) to `<AppShell>`, and
+`+not-found.tsx` also serves the framework plugins' screens. The scaffold's `account` module words
+the credits alerts and `.env.example`'s `CREDITS_CONFIG` sets the prices and the plan every
+business starts on (developer guide, section 7.6): change both for your product, or remove
+`CREDITS_CONFIG` to measure usage without caps. Rename the app in `mobile/app.json` (`name`, `slug`,
 `scheme`, the iOS `bundleIdentifier` and the Android `package`). If you change `scheme`, change
 it in `_layout.tsx` too.
 

@@ -1,3 +1,5 @@
+export * from './approvals.js';
+export * from './credits.js';
 export * from './files.js';
 export * from './models.js';
 export * from './money.js';

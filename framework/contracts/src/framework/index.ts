@@ -2,6 +2,7 @@ export * from './domain.js';
 export * from './events.js';
 export * from './field-policy.js';
 export * from './files.js';
+export * from './integrations.js';
 export * from './list.js';
 export * from './module.js';
 export * from './money.js';

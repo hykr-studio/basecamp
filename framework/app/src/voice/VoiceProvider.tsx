@@ -43,7 +43,7 @@ export type VoiceStatus = 'off' | 'connecting' | 'listening' | 'thinking' | 'spe
 type Voice = {
   status: VoiceStatus;
   /** Why voice is not working (no microphone, today's minutes used, …), as a catalog key. */
-  problem?: 'voice.noMic' | 'voice.budget' | 'voice.failed' | 'voice.noAnswer';
+  problem?: 'voice.noMic' | 'voice.budget' | 'voice.failed' | 'voice.noAnswer' | 'credits.paused';
   muted: boolean;
   /** The microphone is on and published: mute means something. */
   micReady: boolean;
@@ -338,7 +338,8 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       if (stale()) return;
       const code = (e as { status?: number }).status;
-      setProblem(code === 429 ? 'voice.budget' : 'voice.failed');
+      // 429: the person's voice minutes today; 402: the business's credits or voice limit.
+      setProblem(code === 429 ? 'voice.budget' : code === 402 ? 'credits.paused' : 'voice.failed');
       roomRef.current = null;
       await room.disconnect().catch(() => {});
       await stopAudio().catch(() => {});

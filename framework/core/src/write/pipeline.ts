@@ -1,10 +1,14 @@
 import { createHash } from 'node:crypto';
-import type {
-  Approval,
-  ApprovalRule,
-  AuthorizeResult,
-  Principal,
-  WriteResult,
+import {
+  type Approval,
+  type ApprovalRule,
+  type AuthorizeResult,
+  approverOf,
+  type DecisionDetails,
+  type Principal,
+  rankOf,
+  type TenantConfig,
+  type WriteResult,
 } from '@hykr/contracts';
 import {
   type WriteCtx as AuditCtx,
@@ -23,6 +27,8 @@ import type { Tx } from '../tokens.js';
 import { parkForApproval } from './approvals.js';
 import { strongerDecision } from './decisions.js';
 import { recordEvents } from './events.js';
+import { applyLevels, settingsIn } from './levels.js';
+import { openUndoWindow, undoWindowMs } from './undo.js';
 
 /** Who is writing and how to recognise a repeat. Carried by every command. */
 export interface WriteCtx {
@@ -31,6 +37,11 @@ export interface WriteCtx {
   idempotencyKey?: string;
   /** Run inside this transaction instead of opening one (an approval replay). */
   tx?: Tx;
+  /**
+   * An approval replay: what the decider approved (the level and amount it parked with). A
+   * replay that now needs more (a higher level, a larger amount) fails instead of running.
+   */
+  approved?: DecisionDetails;
 }
 
 /** One row a write changed: one audit row each. */
@@ -66,6 +77,11 @@ export interface WriteOp<I, L, V> {
   run(a: { tx: Tx; principal: Principal; input: I; loaded: L }): Promise<RunResult<V>>;
   /** The value as it leaves the API for this principal (rows → contract shapes, projected). */
   present(value: V, p: Principal): unknown;
+  /**
+   * The framework's own operation (undoing a write): level rules skip it, and it opens no undo
+   * window of its own.
+   */
+  system?: boolean;
 }
 
 export interface WriteOutcome {
@@ -99,6 +115,17 @@ export function auditCtx(
     rule: result.rule,
     reason: result.reason,
   };
+}
+
+/**
+ * Does a replay now need more than was approved: a higher level, or a larger amount (another
+ * currency, or an amount where none was approved, counts as larger)?
+ */
+function raisedSince(asked: DecisionDetails, now: AuthorizeResult): boolean {
+  if (rankOf(now.level) > rankOf(asked.level)) return true;
+  if (!now.amount) return false;
+  if (!asked.amount || asked.amount.currency !== now.amount.currency) return true;
+  return now.amount.minor > asked.amount.minor;
 }
 
 /** Keys are per caller: the agent acting for Ana never shares a key with Ana herself. */
@@ -154,13 +181,36 @@ export async function runWrite<I, L, V>(
       const tighter = hook.decide({ ctx, op, input, loaded, decision });
       decision = strongerDecision(decision, tighter) ?? decision;
     }
+    // Then the application's approval levels: its level rules on the input and the row, and
+    // the level's policy in this business (does it wait, how long can it be undone).
+    let settings: TenantConfig | undefined;
+    if (!op.system)
+      decision = await applyLevels({
+        decision,
+        p,
+        op,
+        input,
+        loaded,
+        settings: async () => (settings ??= await settingsIn(tx, p.tenantId)),
+      });
+    // A park names the level its approval rule declares, when nothing else named one.
+    const ruleLevel = approverOf(op.approval).level;
+    if (decision.decision === 'needs_approval' && decision.level === undefined && ruleLevel)
+      decision = { ...decision, level: ruleLevel };
     // A person's approval turns needs_approval into allow for the replay, keeping what is at
-    // stake (the tier, the undo window).
+    // stake (the level, the amount), unless it now needs more than was approved. The approval
+    // ends the undo window: the replay opens none.
     if (decision.decision === 'needs_approval' && p.approvedBy) {
+      if (ctx.approved && raisedSince(ctx.approved, decision))
+        throw new ConflictException({
+          error: 'changed_since_asked',
+          reason: 'It needs more approval now than when it was asked: ask again',
+        });
+      const { undoMs: _ended, ...kept } = decision;
       decision = allow(
         `approved:${decision.rule}`,
         `Approved by the owner: ${decision.reason}`,
-        decision,
+        kept,
       );
     }
     if (decision.decision === 'deny') {
@@ -172,8 +222,9 @@ export async function runWrite<I, L, V>(
     let events: object[] = [];
     let value: unknown;
     let touched: Touched[] = [];
+    let undoMs = 0;
     if (decision.decision === 'needs_approval') {
-      const parked = await parkForApproval(tx, ctx, op, input, loaded, decision);
+      const parked = await parkForApproval(tx, ctx, op, input, loaded, decision, settings);
       const approval: Approval = parked.approval;
       events = [parked.event];
       await writeAudit(tx, {
@@ -185,7 +236,7 @@ export async function runWrite<I, L, V>(
         after: {
           approvalId: approval.id,
           summary: approval.summary,
-          ...(decision.tier !== undefined ? { tier: decision.tier } : {}),
+          ...(decision.level !== undefined ? { level: decision.level } : {}),
         },
       });
       result = { status: 'needs_approval', approval };
@@ -224,16 +275,29 @@ export async function runWrite<I, L, V>(
       touched = out.touched;
       // 7. Events: stored here, in the transaction; published by the caller after commit.
       events = out.events ?? [];
+      undoMs = undoWindowMs(p, op, decision, touched);
     }
 
-    // 8. The durable outbox: each named event. A write that ran is held back for its undo
-    // window; a park's approval.requested goes at once.
-    await recordEvents(tx, {
+    // 8. The durable outbox: each named event. A write that can be undone is held back for its
+    // undo window (undoing it withdraws them); a park's approval.requested goes at once.
+    const stored = await recordEvents(tx, {
       principal: p,
       requestId: ctx.requestId,
       events,
-      delayMs: decision.decision === 'allow' ? decision.undoMs : undefined,
+      delayMs: undoMs || undefined,
     });
+    if (undoMs && result.status === 'done') {
+      const undo = await openUndoWindow(tx, {
+        p,
+        op,
+        resourceId,
+        touched,
+        eventIds: stored.map((e) => e.id),
+        undoMs,
+        requestId: ctx.requestId,
+      });
+      result = { ...result, undo };
+    }
 
     // 9. Write hooks, still in the transaction: throwing rolls the whole write back.
     for (const hook of writeHooks.all())

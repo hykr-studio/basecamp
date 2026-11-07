@@ -1,7 +1,8 @@
 # The domain is replaceable
 
 Basecamp, the agentic development stack for full-stack applications, ships with a sample
-application: meetings, notes, to-dos and orders, as four modules. The framework (the API pipeline with
+application: meetings, notes, to-dos and orders, as four modules, plus `account`, which words the
+credits alerts. The framework (the API pipeline with
 its rules, approvals and audit; the assistant with its tools, surfaces, canvas and WhatsApp;
 saved pages; the app shell) lives in `framework/` and is published as `@hykr/*` packages. The
 application lives in `application/`. The framework never imports the application; the
@@ -51,7 +52,7 @@ Around the modules, the application keeps:
 | Aggregates for the apps | `application/domain/src/contracts/index.ts`, `src/views/index.ts` | Every module's specs and views (`moduleSpecs`, `moduleViews`), one line per module. The apps import `@application/domain/contracts` and `/views`, or one module's `@application/domain/modules/<name>/contracts` and `/views` |
 | Migrations | `application/domain/drizzle/`, `src/db/index.ts` | One journal for every module, generated from `src/modules/*/db/schema.ts`; `migrations` |
 | Shared server code | `application/domain/src/server/` | What several modules use, such as `BUSINESS_ACCESS` |
-| Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`: what the product is called, who the assistant is, and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools and delivery channels (developer guide, sections 5.9 and 5.10) |
+| Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`: what the product is called, who the assistant is, and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools, delivery channels, connectors and connector handlers (developer guide, sections 5.9, 5.10 and 5.14), and the application's approval levels and level rules (section 5.8.1; the sample's are in `application/domain/src/server/approval-levels.ts`, passed through `@application/domain/server`) |
 | App modules | `application/mobile/src/modules/<name>/` and the barrel `src/modules/index.ts` (one line per module) | The app half of each module: `defineAppModule({ name, nav, suggestions, bind, hrefFor, webmcp })` from `@hykr/app`, in `index.tsx`: destinations under `/<name>`; `bind` calls `bindView` / `bindScreen` for the module's views and screens; `hrefFor` says where each of its records opens. Other modules import only that `index.tsx` |
 | App | `application/mobile/src/catalog.ts`, `settings.ts`, `home/` | `catalog = createCatalog(...moduleSpecs)` and `registry = createUiRegistry(...moduleViews)` with the `Register` declaration; `settings: AppSettings` (`title`, `tagline`, `home`, and the nav and suggestions of the screens that combine modules, such as the home screen) |
 | App routes | `application/mobile/src/app/<name>/` and `src/app/index.tsx` | One-line re-exports of each module's route components (Expo Router only knows files); `index.tsx` is the home screen |
@@ -125,9 +126,15 @@ capabilities for the apps. A field only some may see is declared on the spec,
 for anyone without the capability, and filtering, sorting or writing it is refused. The sample's
 to-dos module declares a `buyer` role and `todos.cost.read` this way.
 
-Approvals take an object form, `{ when, by, channels, minAssurance }`: who decides (the person
-it is for by default; a customer's request goes to `owner` and `ops`), and where (`channels:
-['app']` for anything irreversible keeps it off WhatsApp buttons).
+Approvals take an object form, `{ when, by, channels, minAssurance, level }`: who decides (the
+person it is for by default; a customer's request goes to holders of `approvals.decide`; `by`
+names a capability, a person or an amount band, never a role), and where (`channels: ['app']` for
+anything irreversible keeps it off WhatsApp buttons). Nobody decides their own request unless the
+policy sends it back to them. What each approval level means (does it wait, who decides, how long
+it can be undone) is the application's: the sample declares `read`, `internal`, `external` and
+`irreversible` (`application/domain/src/server/approval-levels.ts`), and the to-dos module maps its
+writes to `internal` with a level rule. Thresholds and approvers per amount band are each
+business's settings (`approvals`).
 
 ## Money, numbers and lines
 
@@ -218,6 +225,12 @@ From the contracts declaration alone:
   returns and every approval request and decision, stored with the write that caused it. The worker
   relays each one to the event subscribers (developer guide, section 5.10). And the read path: each
   record leaves through `toRead(row, p)`, projected for whoever reads it.
+- The integration bus (`framework/api/src/features/integrations`, `framework/connectors`):
+  webhook endpoints that get the business's entity events signed, projected for each endpoint
+  and retried, with a delivery log; connections to other systems with sealed credentials
+  (`SECRETS_KEY`); inbound `/webhooks/<connector>/<connection>`, verified and stored once, whose
+  events the application's `connectorHandlers` handle as the business's system principal. An
+  entity keeps its events inside with `traits: { webhooks: false }` (developer guide, 5.14).
 - The WhatsApp channel (`framework/api/src/channels`, `framework/channels`): the webhook, the queues
   (`/admin/queues` in development) and the worker, contacts and linking by code, consent and the
   keywords (STOP, START, HELP, talk to a person, delete my data) in every language, erasure,
@@ -232,6 +245,12 @@ From the contracts declaration alone:
   OpenRouter in development) and each business's model policy (`GET /api/models`,
   `PUT /api/models/policy`), which picks every turn's model and fails closed (developer guide,
   section 7.5). The application only configures them in `.env`.
+- Credits and caps: every business's assistant tokens and tool calls, WhatsApp messages and
+  voice seconds metered and priced, a per-period allowance and a prepaid wallet, an alert and a
+  pause as caps fill, an operator's override, and buying credits through a purchase provider
+  (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
+  (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
+  sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

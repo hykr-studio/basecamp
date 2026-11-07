@@ -52,8 +52,8 @@ export interface EntityPlugin {
   rules?: readonly EntityRule<Table>[];
   /**
    * A CRUD write's decision, after the rules and before the spec's approval rule: refuse, park
-   * with a tier and approver, or allow with an undo window. null: no opinion. The strictest
-   * decision wins (`strongerDecision`).
+   * at an approval level with an approver, or allow with a level or an undo window. null: no
+   * opinion. The strictest decision wins (`strongerDecision`).
    */
   decide?(
     p: Principal,

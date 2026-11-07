@@ -22,7 +22,8 @@ Node 24 (`.nvmrc`), pnpm 12 (pinned in `packageManager`), Docker.
 ```bash
 pnpm install && cp application/.env.example .env   # .env lives at the repo ROOT
 # Set BETTER_AUTH_SECRET, AGENT_API_KEY, VOICE_AGENT_KEY (must differ from AGENT_API_KEY),
-# APPROVAL_SECRET (each >= 32 chars: openssl rand -hex 32). Offline: MODEL_MODE=fake VOICE_MODE=fake
+# APPROVAL_SECRET, SECRETS_KEY (each >= 32 chars: openssl rand -hex 32). Offline: MODEL_MODE=fake VOICE_MODE=fake
+# Optional: CREDITS_CONFIG (prices and plans), OPERATOR_API_KEY (>= 32 chars, the credits operator)
 pnpm build            # everything; the basecamp CLI, API and tests all run from dist/
 pnpm infra:up         # Postgres/PostGIS, Redis, MinIO, Mailpit, pgAdmin, LiveKit, whaloc (WhatsApp emulator)
 pnpm db:migrate       # framework migrations first, then the application's
@@ -125,7 +126,8 @@ Other gotchas:
 - Framework libraries never import the runtimes (`api`, `app`, `back-office`, `voice-worker`, `cli`,
   `create-basecamp`).
 - `contracts` and `i18n` are leaves. `ui-registry` holds no runtime code: React lives in its `/react`
-  subpath. `channels` and `notifications` hold no DB, Nest, queue or policy code.
+  subpath. `channels` and `notifications` hold no DB, Nest, queue or policy code. `connectors`
+  (signing, sealing, the egress guard, the `Connector` interface) imports only `i18n`, zod and Node.
 - The client packages (`app`, `back-office`, `voice-worker`) reach the API only over HTTP, through `@hykr/api-client`.
 - A module's `contracts`, `views` and `notifications` folders (and the `src/contracts` and `src/views`
   aggregates) are isomorphic: the server and the Expo apps both load them. They must not import Nest, Drizzle,
@@ -198,7 +200,14 @@ refused with `minAssurance: 'session'`. Background work writes as `systemPrincip
   its `deny` counts. A command parks through its own `authorize`.
 - Every read leaves through `def.toRead(row, p)`, projected for the principal (entity plugins' `project`,
   then read projectors). Never return a repo row from a controller or service as is.
-- A command's `approval.by` says who decides. Without it, the person decides on their own assistant's request.
+- A command's `approval.by` says who decides, by capability (`{ capability }`), a named person (`{ userId }`) or
+  an amount band in the business's settings (`{ band }`), never by role name. Without it, the person decides
+  on their own assistant's request (a customer's goes to holders of `approvals.decide`). Nobody decides
+  their own request otherwise.
+- What an approval level means is the application's: it declares its levels (`defineApprovalLevel`,
+  contributed as `approvalLevels`) and which writes reach them (`defineLevelRule`, `levelRules`); thresholds
+  and per-band approvers are tenant settings (`approvals`). A write whose level gives an undo window answers
+  with `undo: { id, until }`, and `POST /api/undo/:id` reverses it (developer guide 5.8).
 - Money is `Money = { minor, currency }` everywhere (`minorUnits()` columns, the spec's `money` trait), never
   a float or `numeric`. Take a document number with `nextNumber` in a command's `run` (a parked write
   then takes none), and cancel numbered records instead of deleting them. Line items are a child entity

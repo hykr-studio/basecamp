@@ -187,7 +187,7 @@ describe('who decides, and who sees the cost', () => {
     const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
     const parked = await asks('POST', '/api/orders/save', { title: 'Asked', items: rooms });
     expect(parked.body.status).toBe('needs_approval');
-    expect(parked.body.approval).toMatchObject({ tier: 2, amount: 497_051 });
+    expect(parked.body.approval).toMatchObject({ amount: inr(497_051) });
     expect(parked.body.approval.summary).toContain('5 items');
     const approved = await owner.call('POST', `/api/approvals/${parked.body.approval.id}/approve`);
     expect(approved.body.status).toBe('approved');
@@ -202,20 +202,63 @@ describe('who decides, and who sees the cost', () => {
     const big = [{ ref: 'a', title: 'Marble', quantity: 100, unitPrice: '500' }];
     const parked = await save(staff, { title: 'Big', items: big }, inTenant());
     expect(parked.body.status).toBe('needs_approval');
-    expect(parked.body.approval).toMatchObject({ tier: 3, rule: 'order_over_limit' });
-    // Staff cannot decide it; the owner can.
+    expect(parked.body.approval).toMatchObject({
+      level: { name: 'irreversible' },
+      amount: inr(5_000_000),
+      rule: 'order_over_limit',
+    });
+    // Staff may open their own request, never decide it; the owner can.
+    const seen = await staff.call(
+      'GET',
+      `/api/approvals/${parked.body.approval.id}`,
+      undefined,
+      inTenant(),
+    );
+    expect(seen.body).toMatchObject({
+      canDecide: false,
+      decider: { by: 'capability', capability: 'orders.approve' },
+    });
     const byStaff = await staff.call(
       'POST',
       `/api/approvals/${parked.body.approval.id}/approve`,
       undefined,
       inTenant(),
     );
-    expect(byStaff.status).toBe(404);
+    expect(byStaff.status).toBe(403);
+    expect(byStaff.body.rule).toBe('own_request');
     const byOwner = await owner.call('POST', `/api/approvals/${parked.body.approval.id}/approve`);
     expect(byOwner.body.status).toBe('approved');
     // The owner holds orders.approve: the same order saves at once.
     const direct = await save(owner, { title: 'Big too', items: big });
     expect(direct.body.status).toBe('done');
+  });
+
+  it("the owner's assistant above the limit waits for the owner, at the same level", async () => {
+    const big = [{ ref: 'a', title: 'Granite', quantity: 100, unitPrice: '500' }];
+    const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
+    const parked = await asks('POST', '/api/orders/save', { title: 'Asked big', items: big });
+    expect(parked.body.status).toBe('needs_approval');
+    expect(parked.body.approval).toMatchObject({
+      level: { name: 'irreversible' },
+      rule: 'order_over_limit',
+      decider: { by: 'requester', userId: owner.id },
+    });
+    // The park is audited with its level.
+    const audit = await pool.query(
+      `select outcome, rule, after from audit.events where after->>'approvalId' = $1`,
+      [parked.body.approval.id],
+    );
+    expect(audit.rows[0]).toMatchObject({
+      outcome: 'needs_approval',
+      rule: 'order_over_limit',
+      after: { level: 'irreversible' },
+    });
+    // Another business never sees it.
+    const id = parked.body.approval.id;
+    expect((await stranger.call('GET', `/api/approvals/${id}`)).status).toBe(404);
+    expect((await stranger.call('POST', `/api/approvals/${id}/approve`)).status).toBe(404);
+    const approved = await owner.call('POST', `/api/approvals/${parked.body.approval.id}/approve`);
+    expect(approved.body.status).toBe('approved');
   });
 
   it('a line cost is hidden from staff, in the save result, the items and the approval card', async () => {
