@@ -307,6 +307,12 @@ From the contracts declaration alone:
   service reports back by signed callback or is polled, and its result files are kept on the job
   and reached through the record it is about. `<JobProgress>` and `useJob` in the app (developer
   guide, section 5.17). The fixture's `drawings` shows one; the sample has none yet.
+- Bulk import (`/api/imports`, `basecamp import <entity> <file>`, `app.import_keys`): a CSV, JSON
+  or NDJSON file of one entity's records written row by row through the write path by a job, as
+  the person who imports it (`imports.run`); each row's id in the other system is kept, so the same
+  import run again updates instead of adding, and the rows it could not write come back in an
+  error report file. A module opts an entity out with `traits: { imports: false }` (developer
+  guide, section 5.21). The sample's to-dos ship `import/todos.csv` and `<ImportRecords>`.
 - Documents (`/api/documents`, `app.documents`): a module's PDFs made in the worker from data
   read as the person who asked (pdfkit, HarfBuzz and the Noto fonts for English, Hindi and
   Telugu), stored as files the document holds, reached through their record, and sent by
