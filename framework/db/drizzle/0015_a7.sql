@@ -1,0 +1,1 @@
+CREATE INDEX "thread_messages_run_idx" ON "app"."thread_messages" USING btree ("run_id") WHERE "app"."thread_messages"."run_id" is not null;

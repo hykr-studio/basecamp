@@ -1,8 +1,10 @@
 import '../../global.css';
 import {
   AppShell,
+  businessesPlugin,
   calendarPlugin,
   creditsPlugin,
+  exportPlugin,
   inboxPlugin,
   livePlugin,
   pushPlugin,
@@ -22,14 +24,19 @@ const config = {
 };
 
 /**
- * The framework features the app uses, made once, outside render: the business's flags, branding
- * and phrases, live updates (other people's changes show without a reload), push notifications
- * (the to-do reminder goes to the phone first), WebMCP (each screen's read tools, the modules'
+ * The framework features the app uses, made once, outside render: the business switcher
+ * (`/businesses`: a person in several businesses, as a member or a participant, chooses the one
+ * they work in, or joins one with an invitation code), the business's flags, branding and
+ * phrases, live updates (other people's changes show without a reload), push notifications (the
+ * to-do reminder goes to the phone first), WebMCP (each screen's read tools, the modules'
  * `webmcp`, offered to the browser's agent where the browser supports it), the business's
- * credits (usage, the pause, buying more: `/credits`), the in-app inbox (mentions in comments)
- * and the person's calendars (connect Google, feed links: `/calendar`).
+ * credits (usage, the pause, buying more: `/credits`), the person's calendars (connect Google,
+ * feed links: `/calendar`), the in-app inbox (mentions in comments) and exporting the business's
+ * data (`/export`, for people who may: owners, unless the business grants it to another role).
+ * The switcher goes first: switching starts everything after it again in the other business.
  */
 const plugins = [
+  businessesPlugin,
   settingsPlugin(),
   livePlugin(),
   pushPlugin({ androidChannel: 'Reminders' }),
@@ -37,6 +44,7 @@ const plugins = [
   creditsPlugin,
   calendarPlugin(),
   inboxPlugin(),
+  exportPlugin,
 ];
 
 export default function RootLayout() {

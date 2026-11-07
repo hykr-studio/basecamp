@@ -1,6 +1,6 @@
 import { defineEntity, deny } from '@hykr/core';
-import { BUSINESS_ACCESS } from '../../../server/access.js';
-import { MeetingSpec, type MeetingStatus } from '../contracts/index.js';
+import { readByParticipants } from '../../../server/access.js';
+import { HouseholdRole, MeetingSpec, type MeetingStatus } from '../contracts/index.js';
 import { meetings } from '../db/schema.js';
 
 const order: MeetingStatus[] = ['scheduled', 'held', 'closed'];
@@ -9,9 +9,10 @@ export const Meeting = defineEntity(MeetingSpec, {
   table: meetings,
   owner: (t) => t.ownerId,
   // Who reaches which meetings: the owner theirs, ops and admins the whole business, a
-  // customer (on WhatsApp, or with an account) the ones that are theirs.
+  // customer (on WhatsApp, or with an account) the ones that are theirs, and someone of their
+  // household the ones the business put them on (reading only).
   customer: (t) => t.customerId,
-  access: BUSINESS_ACCESS,
+  access: readByParticipants([HouseholdRole.name]),
   rules: [
     // Domain rules run after the framework's owner and expose checks.
     (_p, action, row, input) =>

@@ -4,7 +4,7 @@
  */
 import { defineModule } from '@hykr/api';
 import { meetingsAgent } from './agent/index.js';
-import { meetingsSpec } from './contracts/index.js';
+import { HouseholdRole, meetingsSpec } from './contracts/index.js';
 import * as tables from './db/schema.js';
 import { meetingsNotifications } from './notifications/index.js';
 import { MeetingMovedInCalendar } from './server/calendar-moved.subscriber.js';
@@ -20,6 +20,10 @@ export const meetings = defineModule({
   notifications: meetingsNotifications.notifications,
   agent: meetingsAgent,
   tables,
-  // A meeting its owner moves in their connected calendar moves here too.
-  contributes: { subscribers: [MeetingMovedInCalendar] },
+  contributes: {
+    // People of a customer's household the business puts on a meeting: they read it.
+    participantRoles: [HouseholdRole],
+    // A meeting its owner moves in their connected calendar moves here too.
+    subscribers: [MeetingMovedInCalendar],
+  },
 });

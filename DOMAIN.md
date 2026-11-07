@@ -106,15 +106,26 @@ An entity's `access` says what each role, or each capability, reaches, per read 
 
 - `own`: rows the person owns; `customer`: rows of the customer they are; `tenant`: every row
   in the business; `{ grant: 'granted' }`: the rows granted to the person one by one
-  (`/api/grants`), or, with `of` and `via`, the children of such a row.
+  (`/api/grants`), or, with `of` and `via`, the children of such a row;
+  `{ grant: 'participant', as: [...] }`: the rows a party the person (or WhatsApp contact) is a
+  member of participates in, in those participant roles (`/api/participants`).
 - A key may be a capability (`'orders.read_all': 'tenant'`): that is how a role a business made
   reaches rows. A rule may be a list (`['own', { grant: 'granted' }]`).
 - A write may need `minAssurance: 'session'`: a WhatsApp number alone (`whatsapp_number`) is
   refused with `needs_assurance`.
 
+People outside the team are **participants**, never members: a party (a person, or an
+organisation reached on WhatsApp) put on a record in a participant role the module declares,
+`contributes: { participantRoles: [defineParticipantRole({ name, label, kinds?, on? })] }`
+(developer guide 6.5). The sample's meetings module declares `household` (people of a meeting's
+customer read it) and its orders module `supplier` (an organisation reads the orders it supplies,
+never their cost). What the application knows about a party (KYC details, agreed rates) is its own
+tables, keyed by the party id. A person can be a member of one business and a participant of
+another: `GET /api/me` lists both, and `x-tenant-id` switches.
+
 The sample modules give the owner and staff their own rows, admin and ops the whole business,
-and a customer their own customer's rows (`application/domain/src/server/access.ts`, shared by
-the modules). With
+a customer their own customer's rows, and participants the records they are on, read only
+(`application/domain/src/server/access.ts`, shared by the modules). With
 `customer: (t) => t.customerId`, a customer's assistant creates rows for that customer, owned by
 the business's default owner.
 
@@ -141,6 +152,12 @@ it can be undone) is the application's: the sample declares `read`, `internal`, 
 `irreversible` (`application/domain/src/server/approval-levels.ts`), and the to-dos module maps its
 writes to `internal` with a level rule. Thresholds and approvers per amount band are each
 business's settings (`approvals`).
+
+When the assistant's write waits for approval, its run waits too, and goes on once the request is
+decided: the tool's result then says `approved`, `rejected` or `expired` (`failed` reads as a
+refusal). A module's scripts for the scripted model handle that with `decided(outcome)` and
+`written(...)` from `@hykr/agents/script`; the sample's meetings close, once approved, lists what is
+left to follow up (developer guide, section 5.8.3).
 
 ## What a business sets up for itself
 
@@ -245,7 +262,7 @@ A state column can also get a CHECK in the module's `sql/post` hook (the sample'
 ## Calendars and calls
 
 A module puts its records with a time in people's calendars with one trait (developer guide,
-5.22):
+5.23):
 
 - **`traits.schedulable`** names the read-schema fields of the title, start and end (and the
   place and description), the table's columns of the people whose calendars it goes on (default
@@ -371,6 +388,9 @@ From the contracts declaration alone:
 - The framework's templates and notifications: login codes, approval requests and outcomes,
   staff replies after the 24-hour window, and a mention in a comment (in the in-app inbox). The agent tools `send-template` (a template to a
   customer; marketing waits for approval) and `request-human`.
+- Durable runs: an assistant run whose write waits for approval is suspended and stored (Mastra,
+  in the `mastra` schema), and resumed in the worker when the request is decided, in the same
+  thread and under the same run id (the `resume` feature, developer guide section 5.8.3).
 - The streaming chat, and the scripted model's platform scripts (`save this as …`,
   `open my … page`, `talk to the manager`, the back office's draft reply).
 - The models the assistant runs on: the deployment's OpenAI-compatible gateways (`MODEL_PROVIDERS`,
@@ -383,6 +403,11 @@ From the contracts declaration alone:
   (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
   (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
   sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+- Exporting a business's data (`POST /api/exports`, `data.export`, owners by default): a job that
+  reads every entity as the person who asked (their access and hidden fields) and keeps one zip of
+  JSON and CSV files on the job; a module adds data no entity serves as a `dataExportSources`
+  entry. `exportPlugin` in the app, a section of the back office's Settings (developer guide,
+  section 5.22).
 - Each business's setup: feature flags, custom field definitions (`app.custom_fields`), branding
   and verified web addresses (`app.tenant_domains`), shared records and wording (`/api/settings`,
   `/api/features`, `/api/custom-fields`, the back office's Settings screen, `settingsPlugin` in the

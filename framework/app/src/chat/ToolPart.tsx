@@ -11,6 +11,9 @@ import { colors } from '../theme';
 import { InlineView } from '../views/InlineView';
 import { toolWords } from './toolWords';
 
+/** How a resumed call's request was decided (@hykr/core tools: durable.ts). */
+const DECIDED = new Set(['approved', 'rejected', 'expired']);
+
 /** What every tool returns (@hykr/core tools: tool-factory.ts). */
 export type ToolOutput = {
   ok: boolean;
@@ -162,6 +165,10 @@ function ToolLine({ toolName, result, status }: ToolCallMessagePartProps) {
         withCard={out.present?.kind === 'inline'}
       />
     );
+  }
+  // A run that waited went on (durable runs): the call says how its request was decided.
+  if (out.result?.approval && DECIDED.has(out.result.status ?? '')) {
+    return <ParkedLine tool={toolName} approvalId={out.result.approval.id} withCard={false} />;
   }
   return <Line icon="check" tone={colors.muted} tool={toolName} label={said.did} />;
 }

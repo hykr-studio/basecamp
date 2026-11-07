@@ -81,10 +81,19 @@ export class ContactsService {
 
   /**
    * The contact for a sender, created on their first message as the business's customer
-   * (a customer record, with service consent: they wrote to us). Safe under concurrency: the
-   * unique address index makes a second insert a lookup.
+   * (a customer record, with service consent: they wrote to us). With `customer: false` it is
+   * only a contact (no customer record): someone the business does not know yet (its
+   * `parties.unknownSenders` setting), or an organisation's person it adds to a party
+   * (`wroteIn: false`: no consent is recorded for them). An
+   * existing contact is returned as it is. Safe under concurrency: the unique address index
+   * makes a second insert a lookup.
    */
-  async findOrCreate(tenantId: string, address: string, profileName?: string): Promise<Contact> {
+  async findOrCreate(
+    tenantId: string,
+    address: string,
+    profileName?: string,
+    opts: { customer?: boolean; wroteIn?: boolean } = {},
+  ): Promise<Contact> {
     const found = await this.byAddress(tenantId, address);
     if (found) {
       if (profileName && profileName !== found.profileName)
@@ -104,16 +113,20 @@ export class ContactsService {
           .where(and(eq(contacts.tenantId, tenantId), eq(contacts.address, address)));
         return existing;
       }
+      // They wrote to us: the consent they gave by writing is on record. (A number the business
+      // took down itself has none: service messages follow the defaults, until STOP.)
+      if (opts.wroteIn !== false)
+        await tx.insert(consents).values({
+          contactId: created.id,
+          topic: 'service',
+          granted: true,
+          source: 'inbound_message',
+        });
+      if (opts.customer === false) return created;
       const [customer] = await tx
         .insert(customers)
         .values({ tenantId, displayName: profileName || `+${address}`, contactId: created.id })
         .returning();
-      await tx.insert(consents).values({
-        contactId: created.id,
-        topic: 'service',
-        granted: true,
-        source: 'inbound_message',
-      });
       const [linked] = await tx
         .update(contacts)
         .set({ customerId: customer.id })

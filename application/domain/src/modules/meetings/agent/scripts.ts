@@ -1,6 +1,7 @@
 import {
   call,
   dayWords,
+  decided,
   defineScript,
   items,
   plural,
@@ -13,8 +14,9 @@ import {
 /**
  * The scripted model's knowledge of the meetings module (for tests, CI and demos without a key):
  *   today                           list-meetings + list-todos for today → summary
- *   close <meeting>\n<summary>\n- item …   list-meetings → close-meeting (parked for approval)
- *   close this one\n<notes>        on a meeting: close-meeting on it (parked for approval)
+ *   close <meeting>\n<summary>\n- item …   list-meetings → close-meeting (the run waits for approval;
+ *                                   once approved it goes on: list-todos of the meeting → how many)
+ *   close this one\n<notes>        on a meeting: close-meeting on it (likewise)
  *   move <meeting> to <YYYY-MM-DD>  list-meetings → reschedule-meeting
  *   invite <email> to <meeting>     list-meetings → send-calendar-invite (to others: approval)
  *   open <meeting>                  list-meetings → canvas-open; without a canvas, get-meeting
@@ -94,8 +96,19 @@ export const meetingsScripts = [
       };
     },
     step: (intent, turn) => {
+      const name = THIS.test(intent.title) ? 'the meeting' : intent.title;
       const r = turn.result('close-meeting');
-      if (r) return [say(written(r, () => `Closed ${intent.title}.`))];
+      // The run went on after the close was approved: what is left to follow up.
+      if (r && decided(r) === 'approved') {
+        const meetingId = (r.result as { approval?: { resourceId?: string | null } }).approval
+          ?.resourceId;
+        const todos = turn.result('list-todos');
+        if (!todos && meetingId)
+          return [call('list-todos', { meetingId, done: false, sort: 'title' })];
+        const n = items(todos).length;
+        return [say(`Closed ${name}. ${plural(n, 'to-do')} to follow up.`)];
+      }
+      if (r) return [say(written(r, () => `Closed ${name}.`, turn))];
       // "close this one" on a meeting: the screen names it, so there is nothing to look up.
       const here = turn.record?.type === 'meeting' && THIS.test(intent.title);
       if (here && turn.record) return [closeCall(turn.record.id, intent)];

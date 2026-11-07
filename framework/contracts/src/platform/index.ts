@@ -14,6 +14,7 @@ export * from './calendar.js';
 export * from './calls.js';
 export * from './comment.js';
 export * from './document.js';
+export * from './export.js';
 export * from './file.js';
 export * from './handoff.js';
 export * from './job.js';
@@ -21,6 +22,7 @@ export * from './members.js';
 export * from './memory.js';
 export * from './notify.js';
 export * from './page.js';
+export * from './parties.js';
 
 export const platformEntities = {
   pages: SavedPageSpec,

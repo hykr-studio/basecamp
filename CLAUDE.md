@@ -185,8 +185,11 @@ Tenancy: every row belongs to a business. Roles are names in a registry (`roles`
 the framework's are `owner`, `admin`, `ops`, `staff` and `customer`; an application overrides them with
 `roleOverrides` and names the creator's and a contact's roles with `roleDefaults`), and each business adds
 and edits roles in its `roles` settings (`/api/members`). An entity's `access` grants each role, or each
-capability, `own`, `customer`, `tenant` or `{ grant: 'granted' }` (records granted one by one, `/api/grants`)
-per read and write (the sample is in `application/domain/src/server/access.ts`, shared by the modules).
+capability, `own`, `customer`, `tenant`, `{ grant: 'granted' }` (records granted one by one, `/api/grants`) or
+`{ grant: 'participant', as }` (records a party the person is a member of is on, `/api/participants`, in the
+participant roles a module declares with `participantRoles`) per read and write (the sample is in
+`application/domain/src/server/access.ts`, shared by the modules). Participants are never members; `/api/me`
+lists every business a person is in, and `x-tenant-id` switches.
 Anything else is a capability: check `can(p, 'backoffice.use')` (`@hykr/policy`), never a role name; hide a
 field with `traits: { fieldPolicy: { cost: '<module>.cost.read' } }`. A WhatsApp-only principal can be
 refused with `minAssurance: 'session'`. Background work writes as `systemPrincipal({ tenantId, job })` from
@@ -221,6 +224,10 @@ refused with `minAssurance: 'session'`. Background work writes as `systemPrincip
   (`defineChildEntity`, `traits.parent`), written whole with `children.replace` (developer guide 5.13).
 - Return `deny(...)` with a stable `rule` code and a plain `reason` instead of throwing. The caller gets
   403 `{ error: 'forbidden', rule, reason }`. "Not yours" is a 404, never a 403.
+- An assistant write that parks suspends the agent's run (Mastra stores it); the `resume` feature resumes it
+  when the request is decided, and the tool answers with the decision (developer guide 5.8.3). Never hold a
+  database transaction open around a model run: Mastra's first storage use builds indexes concurrently,
+  which waits for every open transaction.
 - WhatsApp templates (`defineTemplate`) are versioned forever. To change the wording, add `_v2`;
   `templates:sync` refuses an edit to an approved template.
 - Every user-facing word is `Labels` (`{ en, hi, te }`), which won't compile with a language missing. A list
