@@ -6,8 +6,8 @@ import { contacts } from './channel.js';
 import { customerColumn, tenantColumn } from './tenancy.js';
 
 /**
- * A person or an organisation a business works with who is not on its team: someone of a
- * customer's household, an outside organisation. Per business: the same organisation at two
+ * A person or an organisation a business works with who is not on its team: one of several
+ * people of a customer, an outside organisation. Per business: the same organisation at two
  * businesses is two parties. What the application keeps about one (its own details, files) lives
  * in its tables, keyed by this id. Kind (`person` | `organisation`) is checked in
  * sql/post/parties.sql.

@@ -194,11 +194,11 @@ describe('parties', () => {
     expect((await stranger.call('GET', '/api/parties')).body).toEqual([]);
   });
 
-  it("belongs to a customer of its own business only (a household's people)", async () => {
-    const theirs = await seedContact(tenantId, 'Household Customer', phone());
+  it('belongs to a customer of its own business only (several people of one customer)', async () => {
+    const theirs = await seedContact(tenantId, 'Grouped Customer', phone());
     const made = await ana.call('POST', '/api/parties', {
       kind: 'person',
-      name: 'Household member',
+      name: 'Grouped member',
       customerId: theirs.customerId,
     });
     expect(made.body.value.customerId).toBe(theirs.customerId);

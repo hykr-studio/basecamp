@@ -6,13 +6,13 @@ import { boot, me, Person, pool, shutdown } from '../../dist/testing.js';
 import { noBusinessServer } from '../fixture/dist/features/parties/index.js';
 
 const owner = new Person('Owner Nobiz');
-const homeowner = new Person('Guest Nobiz');
+const guest = new Person('Guest Nobiz');
 const joiner = new Person('Joiner Nobiz');
 let tenantId = '';
 
 beforeAll(async () => {
   await boot(noBusinessServer);
-  for (const p of [owner, homeowner, joiner]) await p.signUp();
+  for (const p of [owner, guest, joiner]) await p.signUp();
   // Someone has to run a business: made here as an operator would (sign-up made none).
   const { rows } = await pool.query(
     "insert into app.tenants (name, default_owner_id) values ('Nobiz Studio', $1) returning id",
@@ -29,10 +29,10 @@ afterAll(shutdown);
 
 describe('a sign-up with no business', () => {
   it('is signed in, in no business: /api/me says so', async () => {
-    const res = await homeowner.call('GET', '/api/me');
+    const res = await guest.call('GET', '/api/me');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      userId: homeowner.id,
+      userId: guest.id,
       tenantId: null,
       roles: [],
       capabilities: [],
@@ -41,22 +41,22 @@ describe('a sign-up with no business', () => {
       businesses: [],
     });
     const { rows } = await pool.query('select 1 from app.memberships where user_id = $1', [
-      homeowner.id,
+      guest.id,
     ]);
     expect(rows).toHaveLength(0);
   });
 
   it('reaches nothing, and has nobody to talk to', async () => {
-    const tasks = await homeowner.call('GET', '/api/tasks');
+    const tasks = await guest.call('GET', '/api/tasks');
     expect(tasks.status).toBe(403);
     expect(tasks.body).toMatchObject({ rule: 'no_tenant' });
-    expect((await homeowner.call('POST', '/api/tasks', { title: 'Nope' })).status).toBe(403);
-    const chat = await homeowner.chat('hello');
+    expect((await guest.call('POST', '/api/tasks', { title: 'Nope' })).status).toBe(403);
+    const chat = await guest.chat('hello');
     expect(chat.status).toBe(403);
     expect(chat.body).toMatchObject({ rule: 'no_tenant' });
     // Naming a business they are not in changes nothing.
     expect(
-      (await homeowner.call('GET', '/api/tasks', undefined, { 'x-tenant-id': tenantId })).status,
+      (await guest.call('GET', '/api/tasks', undefined, { 'x-tenant-id': tenantId })).status,
     ).toBe(403);
   });
 
@@ -72,10 +72,10 @@ describe('a sign-up with no business', () => {
       role: 'fixture_client',
     });
     const { token } = (
-      await owner.call('POST', `/api/parties/${party.id}/members`, { email: homeowner.email })
+      await owner.call('POST', `/api/parties/${party.id}/members`, { email: guest.email })
     ).body.value;
-    expect((await homeowner.call('POST', '/api/parties/join', { token })).status).toBe(200);
-    const mine = (await homeowner.call('GET', '/api/me')).body;
+    expect((await guest.call('POST', '/api/parties/join', { token })).status).toBe(200);
+    const mine = (await guest.call('GET', '/api/me')).body;
     expect(mine).toMatchObject({ tenantId, as: 'participant', roles: ['customer'] });
     expect(mine.businesses).toEqual([
       expect.objectContaining({
@@ -86,11 +86,11 @@ describe('a sign-up with no business', () => {
         isDefault: false,
       }),
     ]);
-    const list = await homeowner.call('GET', '/api/cases');
+    const list = await guest.call('GET', '/api/cases');
     expect(list.body.items.map((c: { id: string }) => c.id)).toEqual([kase.id]);
     expect(list.body.items[0]).not.toHaveProperty('budget');
     // Still never a member.
-    expect((await homeowner.call('GET', '/api/members')).status).toBe(403);
+    expect((await guest.call('GET', '/api/members')).status).toBe(403);
   });
 
   it('accepts an invitation to the team and works there as a member', async () => {
