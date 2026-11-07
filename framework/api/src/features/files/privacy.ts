@@ -1,6 +1,7 @@
 import type { Subject } from '@hykr/contracts';
+import type { Tx } from '@hykr/core';
 import { files } from '@hykr/db';
-import { and, eq, ne, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, ne, type SQL } from 'drizzle-orm';
 import type { ErasureContributor, ExportContributor } from '../../hooks.js';
 
 /** What a subject sent: a contact's files from their number, a person's uploads. */
@@ -36,6 +37,38 @@ export const filesErasure: ErasureContributor = {
     return { count: erased.length };
   },
 };
+
+/**
+ * The files kept on these records go with them (a record erased or expired for personal data,
+ * B18): erased now, deleted by the sweeper, so a rollback deletes nothing. `fields`: only the
+ * files of these fields (an anonymised record keeps the rest).
+ */
+export async function eraseFilesOn(
+  tx: Tx,
+  a: { tenantId: string; resourceType: string; ids: readonly string[]; fields?: readonly string[] },
+): Promise<number> {
+  if (!a.ids.length || a.fields?.length === 0) return 0;
+  const erased = await tx
+    .update(files)
+    .set({
+      status: 'erased',
+      detachedAt: new Date(),
+      name: 'erased',
+      transcript: null,
+      transcriptLang: null,
+    })
+    .where(
+      and(
+        eq(files.tenantId, a.tenantId),
+        eq(files.resourceType, a.resourceType),
+        inArray(files.resourceId, [...a.ids]),
+        a.fields ? inArray(files.field, [...a.fields]) : undefined,
+        ne(files.status, 'erased'),
+      ) as SQL,
+    )
+    .returning({ id: files.id });
+  return erased.length;
+}
 
 /** The subject's files, for their data export: what each is and the record it is on. */
 export const filesExport: ExportContributor = {

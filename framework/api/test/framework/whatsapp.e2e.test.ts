@@ -430,6 +430,15 @@ describe('whatsapp', () => {
         sends: 0,
         audited: 1,
       });
+      // Filed as the business's privacy request, carried out at once (B18).
+      const filed = await pool.query(
+        `select kind, status, intake, requested_by_kind from app.privacy_requests
+         where subject_kind = 'contact' and subject_id = $1`,
+        [id],
+      );
+      expect(filed.rows).toEqual([
+        { kind: 'erase', status: 'completed', intake: 'whatsapp', requested_by_kind: 'contact' },
+      ]);
     });
   });
 });

@@ -112,6 +112,7 @@ describe('roles and capabilities', () => {
         'models.manage',
         'parties.manage',
         'parties.read',
+        'privacy.manage',
         'records.grant',
         'settings.manage',
         'support.consent',

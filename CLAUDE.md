@@ -251,6 +251,11 @@ audited `on_behalf_of`), never through a role.
   (`scripts/check-tokens.mjs`) fails if they drift apart.
 - `framework/create-basecamp/template/` is a copy of `application/` made at pack time. Don't edit it; it is
   git-ignored.
+- Personal data is declared, never hard-coded: a spec whose records are someone's says so in
+  `traits.privacy` (subject columns, fields, erase, retention), and a feature table that holds
+  personal data contributes `erasureContributors` and `exportContributors` (and a
+  `retentionTargets` entry). Periods, processors and the request deadline are the application's
+  and each business's (`privacy` settings); developer guide 5.27.
 - Files are reached only through the record that holds them (`/api/files`, `docs/decisions/B1.md`). Put a
   file on a record by writing its id into the record's file field (`FileRef`, `fileRefs()`, the `files`
   trait); never write `app.files` yourself. `STORAGE_DRIVER=s3` with MinIO in development (`.env.example`);

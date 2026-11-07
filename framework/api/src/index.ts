@@ -223,6 +223,28 @@ export {
   supportWithheld,
   TenantProvisioned,
 } from './features/platform/index.js';
+export {
+  ARCHIVE_FIELD,
+  definePrivacyPolicy,
+  defineProcessor,
+  type ErasedRecords,
+  type Identities,
+  identitiesOf,
+  type PrivacyPolicy,
+  PrivacyService,
+  type ProcessorDef,
+  personalEntities,
+  personalEntityProblems,
+  privacyPolicies,
+  processors,
+  type Redacted,
+  type RetentionPeriod,
+  type RetentionTarget,
+  type RunOutcome,
+  redactCopies,
+  retentionPeriods,
+  retentionTargets,
+} from './features/privacy/public.js';
 export { FeatureFlagsService } from './features/settings/flags.service.js';
 export { SlaService } from './features/sla/sla.service.js';
 export {

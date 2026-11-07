@@ -69,12 +69,24 @@ export const NoteSpec = entitySpec({
   views: { list: 'note.list', item: 'note.card' },
   // Up to ten images of 10 MB each; SVG is not an image here. Notes are memory too: the
   // assistant recalls them by meaning, as memory of their meeting, for whoever may read both
-  // (the framework loads each again as the reader).
+  // (the framework loads each again as the reader). A note about a customer is that customer's
+  // personal data: it goes when they ask to be forgotten, and two years after its last change.
   traits: {
     files: { photos: { accept: ['image/*'], maxBytes: 10 * 1024 * 1024, max: 10 } },
     memory: {
       text: (n: NoteView) => [n.title, n.body?.trim()].filter(Boolean).join(': '),
       about: (n: NoteView) => (n.meetingId ? { type: 'meeting', id: n.meetingId } : null),
+    },
+    privacy: {
+      subject: { customer: ['customerId'] },
+      fields: ['title', 'body', 'photos'],
+      erase: 'delete',
+      retention: { name: 'notes.personal', days: 730, from: 'updatedAt', action: 'delete' },
+      purpose: {
+        en: 'Notes the team keeps about a customer and their meetings',
+        hi: 'ग्राहक और उनकी मीटिंग के बारे में टीम के नोट',
+        te: 'కస్టమర్ గురించి, వారి మీటింగ్‌ల గురించి బృందం ఉంచే నోట్స్',
+      },
     },
   },
 });

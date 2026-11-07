@@ -7,6 +7,7 @@ import { type ApiClient, ApiError } from '@hykr/api-client';
 import {
   AgentCapabilities,
   FrameworkCapabilities,
+  PrivacyManageCapability,
   SupportConsentCapability,
 } from '@hykr/contracts';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
@@ -35,6 +36,8 @@ const READ_MEMBERS = FrameworkCapabilities.readMembers.name;
 const AGENTS = [AgentCapabilities.create.name, AgentCapabilities.manage.name];
 /** And the Support access screen this one. */
 const CONSENTS = SupportConsentCapability.name;
+/** And the Privacy screen this one. */
+const MANAGE_PRIVACY = PrivacyManageCapability.name;
 type Me = Awaited<ReturnType<ApiClient['me']>>;
 type PlatformMe = Awaited<ReturnType<ApiClient['platform']['me']>>;
 
@@ -96,7 +99,15 @@ function NavLink({
   href,
   label,
 }: {
-  href: '/' | '/templates' | '/members' | '/agents' | '/settings' | '/support' | '/operator';
+  href:
+    | '/'
+    | '/templates'
+    | '/members'
+    | '/agents'
+    | '/settings'
+    | '/support'
+    | '/privacy'
+    | '/operator';
   label: string;
 }) {
   const path = usePathname();
@@ -159,6 +170,9 @@ function Shell({
         ) : null}
         {AGENTS.some((c) => me.capabilities.includes(c)) ? (
           <NavLink href="/agents" label="Agents" />
+        ) : null}
+        {me.capabilities.includes(MANAGE_PRIVACY) ? (
+          <NavLink href="/privacy" label="Privacy" />
         ) : null}
         {team ? <NavLink href="/settings" label="Settings" /> : null}
         {me.capabilities.includes(CONSENTS) ? <NavLink href="/support" label="Support" /> : null}

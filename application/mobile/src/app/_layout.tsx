@@ -9,6 +9,7 @@ import {
   exportPlugin,
   inboxPlugin,
   livePlugin,
+  privacyPlugin,
   pushPlugin,
   settingsPlugin,
   webMcpPlugin,
@@ -35,8 +36,9 @@ const config = {
  * credits (usage, the pause, buying more: `/credits`), the person's calendars (connect Google,
  * feed links: `/calendar`), the in-app inbox (mentions in comments), exporting the business's
  * data (`/export`, for people who may: owners, unless the business grants it to another role),
- * the AI apps a person connected over MCP (`/connections`) and the business's agents (`/agents`:
- * the meetings module's ready-made ones among them). The switcher goes first: switching starts
+ * the AI apps a person connected over MCP (`/connections`), the business's agents (`/agents`:
+ * the meetings module's ready-made ones among them) and "Your data" (`/privacy`: a copy of what
+ * the business keeps about you, or erasure). The switcher goes first: switching starts
  * everything after it again in the other business.
  */
 const plugins = [
@@ -51,6 +53,7 @@ const plugins = [
   exportPlugin,
   connectionsPlugin,
   agentsPlugin(),
+  privacyPlugin,
 ];
 
 export default function RootLayout() {
