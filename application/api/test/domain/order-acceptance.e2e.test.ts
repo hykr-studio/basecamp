@@ -18,6 +18,7 @@ import { server as application } from '../../dist/server.js';
 
 const owner = new Person('Owner Order Accept');
 const customer = new Person('Customer Order Accept');
+const ops = new Person('Ops Order Accept');
 const staff = new Person('Staff Order Accept');
 const stranger = new Person('Stranger Order Accept');
 let tenantId = '';
@@ -41,8 +42,9 @@ async function mails(email: string) {
 
 beforeAll(async () => {
   await boot(application);
-  for (const p of [owner, customer, staff, stranger]) await p.signUp();
+  for (const p of [owner, customer, ops, staff, stranger]) await p.signUp();
   tenantId = (await me(owner)).tenantId;
+  await addMember(ops, tenantId, ['ops']);
   await addMember(staff, tenantId, ['staff']);
   await setTenantSettings(tenantId, { money: { currency: 'INR', fyStartMonth: 4 } });
   // The customer has an account and is this business's customer.
@@ -96,14 +98,31 @@ describe("an order's acceptance by its customer", () => {
         `^I accept order ${order.number.replaceAll('/', '\\/')}, "Flat 9C", for .+, as shown in this PDF\\.$`,
       ),
     );
-    // Only the customer accepts.
-    const notTheirs = await staff.call(
+    // Only the customer accepts: a colleague who reaches the order may not, and staff (who
+    // reach their own orders only) do not reach it at all.
+    const notTheirs = await ops.call(
       'GET',
       `/api/acceptances/documents/${doc.id}`,
       undefined,
       inTenant(),
     );
-    expect(notTheirs.body.can).toMatchObject({ ok: false });
+    expect(notTheirs.status).toBe(200);
+    expect(notTheirs.body.can).toMatchObject({ ok: false, rule: 'not_signer' });
+    const asks = await ops.call(
+      'POST',
+      '/api/acceptances/challenges',
+      { documentId: doc.id },
+      inTenant(),
+    );
+    expect(asks.status).toBe(403);
+    expect(asks.body.rule).toBe('not_signer');
+    const unreached = await staff.call(
+      'GET',
+      `/api/acceptances/documents/${doc.id}`,
+      undefined,
+      inTenant(),
+    );
+    expect(unreached.status).toBe(404);
   });
 
   it('the customer accepts with the code emailed to them; the order is accepted and frozen', async () => {
