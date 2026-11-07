@@ -13,8 +13,12 @@ import {
 
 /** The bytes of a request: already read by a body parser (JSON), or read now, up to a cap. */
 async function bodyOf(req: Request, cap: number): Promise<Buffer | null> {
-  const parsed = req as Request & { rawBody?: Buffer; _body?: boolean };
-  if (parsed._body) return Buffer.isBuffer(parsed.rawBody) ? parsed.rawBody : null;
+  // The JSON body parser (on for every route, with rawBody) has read a JSON upload already and
+  // kept its bytes; body-parser 2 sets no `_body` flag, so look at what it kept, and never read
+  // a stream it ended.
+  const parsed = req as Request & { rawBody?: Buffer };
+  if (Buffer.isBuffer(parsed.rawBody)) return parsed.rawBody;
+  if (req.readableEnded) return null;
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req as AsyncIterable<Buffer>) {

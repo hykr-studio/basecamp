@@ -3,6 +3,7 @@ import {
   AppShell,
   businessesPlugin,
   calendarPlugin,
+  connectionsPlugin,
   creditsPlugin,
   exportPlugin,
   inboxPlugin,
@@ -31,9 +32,10 @@ const config = {
  * to-do reminder goes to the phone first), WebMCP (each screen's read tools, the modules'
  * `webmcp`, offered to the browser's agent where the browser supports it), the business's
  * credits (usage, the pause, buying more: `/credits`), the person's calendars (connect Google,
- * feed links: `/calendar`), the in-app inbox (mentions in comments) and exporting the business's
- * data (`/export`, for people who may: owners, unless the business grants it to another role).
- * The switcher goes first: switching starts everything after it again in the other business.
+ * feed links: `/calendar`), the in-app inbox (mentions in comments), exporting the business's
+ * data (`/export`, for people who may: owners, unless the business grants it to another role)
+ * and the AI apps a person connected over MCP (`/connections`). The switcher goes first:
+ * switching starts everything after it again in the other business.
  */
 const plugins = [
   businessesPlugin,
@@ -45,6 +47,7 @@ const plugins = [
   calendarPlugin(),
   inboxPlugin(),
   exportPlugin,
+  connectionsPlugin,
 ];
 
 export default function RootLayout() {

@@ -45,6 +45,8 @@ import {
   type FreeTimes,
   type HandoffThread,
   type HistoryEntry,
+  IMPORT_UPLOAD,
+  type ImportOptionsInput,
   type Inbox,
   type InboxPage,
   type Invite,
@@ -55,6 +57,7 @@ import {
   type ListJobsQuery,
   type LogCallInput,
   LogCallSpec,
+  type McpConnection,
   type Me,
   type Member,
   type MentionablePage,
@@ -83,6 +86,7 @@ import {
   SendInviteSpec,
   type SlaListInput,
   type SlaTimer,
+  StartImportSpec,
   type Summary,
   type SummaryInput,
   type TemplateStatus,
@@ -385,6 +389,18 @@ export function createApiClient(opts: ApiClientOptions) {
     cancel: (id: string) => call<JobInfo>('POST', jobUrl(id, '/cancel')),
   };
 
+  const imports = {
+    /** Upload a file to import (CSV, JSON or NDJSON): a ready file whose id `start` takes. */
+    upload: (body: Blob | ArrayBuffer | Uint8Array, o: { name: string; mime: string }) =>
+      files.upload(body, { ...o, for: { ...IMPORT_UPLOAD } }),
+    /**
+     * Import one entity's records from an uploaded file, through the write path: a job
+     * (`imports.records`) the worker runs, whose output is the counts and whose file is the error
+     * report. People with `imports.run`; it may wait for an approval.
+     */
+    start: (options: ImportOptionsInput, key = newKey()) => command(StartImportSpec, options, key),
+  };
+
   const documentUrl = (id: string) => `/api/documents/${encodeURIComponent(id)}`;
   const withDocumentUrl = (d: DocumentInfo): DocumentInfo =>
     d.url ? { ...d, url: absolute(d.url) } : d;
@@ -423,6 +439,8 @@ export function createApiClient(opts: ApiClientOptions) {
     files,
     /** Long-running jobs: a record's, or the caller's own. */
     jobs,
+    /** Bulk import: a file of one entity's records, through the write path. */
+    imports,
     /** Documents (PDFs) of records: make, read, send. */
     documents,
     /** Comments and @-mentions on records. */
@@ -795,6 +813,18 @@ export function createApiClient(opts: ApiClientOptions) {
         call<WriteResult<null>>(
           'DELETE',
           `/api/calendar/feeds/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+    },
+    /** Outside AI clients the person connected over MCP, in this business (people only). */
+    mcp: {
+      connections: () => call<{ items: McpConnection[] }>('GET', '/api/mcp/connections'),
+      /** Disconnect one: its tokens stop working at once. */
+      disconnect: (clientId: string, key = newKey()) =>
+        call<WriteResult<{ revoked: true }>>(
+          'DELETE',
+          `/api/mcp/connections/${encodeURIComponent(clientId)}`,
           undefined,
           key,
         ),

@@ -262,7 +262,7 @@ A state column can also get a CHECK in the module's `sql/post` hook (the sample'
 ## Calendars and calls
 
 A module puts its records with a time in people's calendars with one trait (developer guide,
-5.23):
+5.24):
 
 - **`traits.schedulable`** names the read-schema fields of the title, start and end (and the
   place and description), the table's columns of the people whose calendars it goes on (default
@@ -358,6 +358,12 @@ From the contracts declaration alone:
   service reports back by signed callback or is polled, and its result files are kept on the job
   and reached through the record it is about. `<JobProgress>` and `useJob` in the app (developer
   guide, section 5.17). The fixture's `drawings` shows one; the sample has none yet.
+- Bulk import (`/api/imports`, `basecamp import <entity> <file>`, `app.import_keys`): a CSV, JSON
+  or NDJSON file of one entity's records written row by row through the write path by a job, as
+  the person who imports it (`imports.run`); each row's id in the other system is kept, so the same
+  import run again updates instead of adding, and the rows it could not write come back in an
+  error report file. A module opts an entity out with `traits: { imports: false }` (developer
+  guide, section 5.23). The sample's to-dos ship `import/todos.csv` and `<ImportRecords>`.
 - Documents (`/api/documents`, `app.documents`): a module's PDFs made in the worker from data
   read as the person who asked (pdfkit, HarfBuzz and the Noto fonts for English, Hindi and
   Telugu), stored as files the document holds, reached through their record, and sent by
@@ -410,6 +416,12 @@ From the contracts declaration alone:
   (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
   (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
   sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+- Outside AI clients over MCP (developer guide, section 7.8): an OAuth 2.1 server (Better Auth's
+  oauth-provider, with its sign-in and consent pages), the `/mcp` endpoint with two tools per
+  module (`<module>_read`, `<module>_write`), scopes per module that the API enforces on every
+  route, a parked write answered with its `/approvals/<id>` link in the app, and the person's
+  connections (`/api/mcp/connections`, the app's `connectionsPlugin`). The modules give the scopes
+  and the tools; the deployment gives the addresses (`MCP_URL`, `APP_URL`).
 - Exporting a business's data (`POST /api/exports`, `data.export`, owners by default): a job that
   reads every entity as the person who asked (their access and hidden fields) and keeps one zip of
   JSON and CSV files on the job; a module adds data no entity serves as a `dataExportSources`
