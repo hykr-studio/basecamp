@@ -252,4 +252,6 @@ defineListFieldType({
   name: 'money',
   ops: ['eq', 'ne', 'in', 'lt', 'lte', 'gt', 'gte'],
   value: ({ coerce }) => (coerce ? z.coerce.number().pipe(MinorUnits) : MinorUnits),
+  // Summed per currency: a summary never adds amounts in two currencies.
+  summary: { measure: 'money' },
 });

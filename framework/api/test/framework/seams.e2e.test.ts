@@ -58,7 +58,9 @@ describe('contributions', () => {
       // The framework's features register their own too (the channel's queues, the events
       // queue, the files hooks, money's entity plugins `parent` and `money`, the push channel,
       // its schedule and contributors, the approvals sweeper, the settings feature's plugins,
-      // write hooks and turn hook): the application's is the only fixture one.
+      // write hooks and turn hook, the integrations feature's queues, sweep schedule and read
+      // projector, the credits feature's sweep and turn hook): the application's is the only
+      // fixture one.
       expect(registry.all(), key).toContain(contributed);
       const fixtures = (registry.all() as readonly { name: string }[]).filter((x) =>
         x.name.startsWith('fixture.'),
@@ -80,8 +82,7 @@ describe('contributions', () => {
     expect(() => api.turnHooks.register({ name: NAME })).toThrow(
       'The turn hook "fixture.seams" is registered twice',
     );
-    // The settings feature registers its own turn hook; the fixture registered one.
-    expect(api.turnHooks.all().filter((h) => h.name.startsWith('fixture.'))).toHaveLength(1);
+    expect(api.turnHooks.all().filter((h) => h.name === NAME)).toHaveLength(1);
   });
 
   it('a key that nothing collects fails closed, before anything is registered', () => {

@@ -22,7 +22,8 @@ Node 24 (`.nvmrc`), pnpm 12 (pinned in `packageManager`), Docker.
 ```bash
 pnpm install && cp application/.env.example .env   # .env lives at the repo ROOT
 # Set BETTER_AUTH_SECRET, AGENT_API_KEY, VOICE_AGENT_KEY (must differ from AGENT_API_KEY),
-# APPROVAL_SECRET (each >= 32 chars: openssl rand -hex 32). Offline: MODEL_MODE=fake VOICE_MODE=fake
+# APPROVAL_SECRET, SECRETS_KEY (each >= 32 chars: openssl rand -hex 32). Offline: MODEL_MODE=fake VOICE_MODE=fake
+# Optional: CREDITS_CONFIG (prices and plans), OPERATOR_API_KEY (>= 32 chars, the credits operator)
 pnpm build            # everything; the basecamp CLI, API and tests all run from dist/
 pnpm infra:up         # Postgres/PostGIS, Redis, MinIO, Mailpit, pgAdmin, LiveKit, whaloc (WhatsApp emulator)
 pnpm db:migrate       # framework migrations first, then the application's
@@ -126,7 +127,8 @@ Other gotchas:
 - Framework libraries never import the runtimes (`api`, `app`, `back-office`, `voice-worker`, `cli`,
   `create-basecamp`).
 - `contracts` and `i18n` are leaves. `ui-registry` holds no runtime code: React lives in its `/react`
-  subpath. `channels` and `notifications` hold no DB, Nest, queue or policy code.
+  subpath. `channels` and `notifications` hold no DB, Nest, queue or policy code. `connectors`
+  (signing, sealing, the egress guard, the `Connector` interface) imports only `i18n`, zod and Node.
 - The client packages (`app`, `back-office`, `voice-worker`) reach the API only over HTTP, through `@hykr/api-client`.
 - A module's `contracts`, `views` and `notifications` folders (and the `src/contracts` and `src/views`
   aggregates) are isomorphic: the server and the Expo apps both load them. They must not import Nest, Drizzle,
@@ -164,7 +166,8 @@ Each module (`application/domain/src/modules/<name>/`) declares its contracts in
 - the server: `defineEntity(Spec, { table, owner, customer, access, rules })` and
   `defineCommand(...)` in the module's `server/`, wired with
   `entityController` / `entityHandlers` / `commandController` into the module's Nest module;
-- the agent tools: `list-*`, `get-*`, `create-*`, `update-*`, `delete-*`, plus one per command;
+- the agent tools: `list-*`, `summarize-*`, `get-*`, `create-*`, `update-*`, `delete-*`, plus one
+  per command (`summarize-*` is `GET /api/<plural>/summary`: counts and totals under the list's scope);
 - the typed client (`@hykr/api-client`, built at runtime from the spec, nothing to codegen) and the app hooks
   (`useEntityList`, `useEntity`, `useEntityMutation`, `useCommand` in `framework/app/src/framework/hooks.ts`);
 - the views (`defineView` / `defineScreen` in the module's `views/`), bound to React components in
@@ -234,7 +237,7 @@ role `own`, `customer` or `tenant` per read and write (the sample is in
 A framework change needs its own tests: e2e tests in `framework/api/test/framework` against the fixture
 app in `framework/api/test/fixture`. Framework tests must not depend on the sample domain.
 
-A business's setup (developer guide, section 5.14, `framework/api/src/features/settings/`): feature
+A business's setup (developer guide, section 5.17, `framework/api/src/features/settings/`): feature
 flags (`defineFeatureFlag`, contributed as `featureFlags`; off unless the business's settings store
 `true`, and a flag naming something that does not exist stops the start), custom fields (trait
 `customFields`), branding and verified domains, shared records (`defineSharedEntity`,

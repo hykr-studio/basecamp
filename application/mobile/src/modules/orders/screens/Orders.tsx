@@ -1,8 +1,11 @@
 import {
   EmptyState,
+  InlineView,
   LoadError,
   OpenRow,
   ScreenTitle,
+  SectionHeading,
+  space,
   styles,
   useEntityList,
   useMoneyText,
@@ -11,7 +14,32 @@ import {
 import { router } from 'expo-router';
 import { FlatList, Text, View } from 'react-native';
 
-/** Every order, newest first, with its number and total. */
+/**
+ * Live totals: summaries of the orders computed by the server for whoever looks (the same
+ * scope as the list), shown as kpi.row tiles. Never numbers typed in by anyone.
+ */
+const BY_STATUS = {
+  entity: 'orders',
+  query: { groupBy: ['status'], sum: ['total'] },
+  labels: { open: 'Open', cancelled: 'Cancelled' },
+};
+const BY_MONTH = {
+  entity: 'orders',
+  query: { groupBy: ['createdAt:month'], sum: ['total'], sort: '-key', limit: 4 },
+};
+
+function Totals() {
+  return (
+    <View style={{ gap: space.sm, marginBottom: space.md }}>
+      <SectionHeading>By status</SectionHeading>
+      <InlineView view="kpi.row" props={{ of: BY_STATUS }} />
+      <SectionHeading>By month</SectionHeading>
+      <InlineView view="kpi.row" props={{ of: BY_MONTH }} />
+    </View>
+  );
+}
+
+/** Every order, newest first, with its number and total; their totals above. */
 export function Orders() {
   useScreenContext({ screen: 'orders' });
   const list = useEntityList('orders', { sort: '-createdAt' });
@@ -21,7 +49,12 @@ export function Orders() {
       contentContainerStyle={styles.content}
       data={list.items}
       keyExtractor={(item) => item.id}
-      ListHeaderComponent={<ScreenTitle title="Orders" />}
+      ListHeaderComponent={
+        <View>
+          <ScreenTitle title="Orders" />
+          {list.items.length ? <Totals /> : null}
+        </View>
+      }
       renderItem={({ item }) => (
         <OpenRow
           label={`Open order ${item.number}, ${item.title}`}

@@ -103,11 +103,15 @@ export {
   sharedRecordsHook,
   sharedRecordsPlugin,
 } from './plugins/shared.js';
+export { listWhere, summarize } from './query/aggregate.js';
 export {
   type ListFieldFilter,
+  type ListFieldOrder,
+  type ListFieldSort,
   type ListFieldSql,
   listFieldSql,
 } from './query/field-sql.js';
+export { metersBetween, withinMeters } from './query/geo.js';
 export { buildListSql, decodeCursor, encodeCursor } from './query/list-grammar.js';
 export { type SystemPrincipalOptions, systemPrincipal } from './system.js';
 export { TenantConfigService, type TenantInfo } from './tenants/tenant-config.service.js';

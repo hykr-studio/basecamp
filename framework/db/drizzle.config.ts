@@ -12,4 +12,6 @@ export default defineConfig({
   dbCredentials: { url },
   // Own public, app, and audit. Leave mastra and mastra_obs to Mastra.
   schemaFilter: ['public', 'app', 'audit', 'channel'],
+  // PostGIS's own table (spatial_ref_sys, in public) is the extension's, never a migration's.
+  extensionsFilters: ['postgis'],
 });

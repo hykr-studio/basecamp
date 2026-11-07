@@ -51,7 +51,10 @@ it('a to-do added through the assistant reaches Alice’s stream as ids only, no
   expect(add.body.toolCalls).toEqual([{ tool: 'create-todo', ok: true, outcome: 'done' }]);
   const [todo] = (await alice.call('GET', '/api/todos?q=live%20tiles')).body.items;
   const line = `data: ${JSON.stringify({ name: 'todo.created', type: 'todo', id: todo.id })}`;
-  await eventually(() => (mine.text.includes(line) ? true : undefined));
+  // A to-do is an internal change Alice can undo for 10 seconds (the sample's `internal` level):
+  // its events, the live signal among them, wait until the window closes.
+  expect(mine.text).not.toContain(line);
+  await eventually(() => (mine.text.includes(line) ? true : undefined), 20_000);
   expect(mine.text).not.toContain('Order the live tiles');
   await new Promise((r) => setTimeout(r, 2000));
   expect(his.text).not.toContain(todo.id);

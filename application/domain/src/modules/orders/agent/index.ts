@@ -10,6 +10,7 @@ import { ordersScripts } from './scripts.js';
 export const ordersAgent: AgentModule = {
   rules: [
     'An order is saved whole with save-order: every item at once, prices as decimal strings in the order currency. To change one, send its orderId and every item to keep, with their ids.',
+    'For how many orders there are or what they add up to (by status, by month), use summarize-orders: never add up a list yourself.',
   ],
   scripts: ordersScripts,
   evalCases,

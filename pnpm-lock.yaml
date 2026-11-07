@@ -588,6 +588,9 @@ importers:
       '@hykr/channels':
         specifier: workspace:*
         version: link:../channels
+      '@hykr/connectors':
+        specifier: workspace:*
+        version: link:../connectors
       '@hykr/contracts':
         specifier: workspace:*
         version: link:../contracts
@@ -915,6 +918,9 @@ importers:
 
   framework/channels:
     dependencies:
+      '@hykr/connectors':
+        specifier: workspace:*
+        version: link:../connectors
       '@hykr/contracts':
         specifier: workspace:*
         version: link:../contracts
@@ -934,6 +940,22 @@ importers:
       '@hykr/voice-worker':
         specifier: workspace:*
         version: link:../voice-worker
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.4
+        version: 26.6.4
+      vitest:
+        specifier: ^5.0.3
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(vite@8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+
+  framework/connectors:
+    dependencies:
+      '@hykr/i18n':
+        specifier: workspace:*
+        version: link:../i18n
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@types/node':
         specifier: ^26.6.4

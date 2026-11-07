@@ -11,6 +11,7 @@ export { applyCanvasIntent, useCanvas } from './canvas/store';
 export { Button } from './components/Button';
 export { ScreenTitle, SectionHeading } from './components/ScreenTitle';
 export { type AppConfig, appConfig, configure } from './config';
+export { CreditsScreen, creditsPlugin, formatCredits, toMinor } from './features/credits';
 export {
   FileField,
   FileThumbs,
@@ -23,6 +24,16 @@ export {
 } from './features/files';
 export * from './features/index';
 export { createInvalidator, liveKeysFor } from './features/live/keys';
+export {
+  addressOf,
+  currentLocation,
+  type Fix,
+  type FixAccuracy,
+  LocationField,
+  LocationUnavailable,
+  pointOf,
+  useCurrentLocation,
+} from './features/location';
 export {
   BrandMark,
   brandTokens,
@@ -104,6 +115,7 @@ export {
   useEntity,
   useEntityList,
   useEntityMutation,
+  useEntitySummary,
   useUndoableDelete,
 } from './framework/hooks';
 export { isFocused, isHovered } from './framework/hover';

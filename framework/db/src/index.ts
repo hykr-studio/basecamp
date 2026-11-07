@@ -14,10 +14,19 @@ export function createDb(url: string) {
   };
 }
 
-// Builders for an application's own tables: the `app` schema, the id column, file and money
-// columns, custom fields and shared records.
+// Builders for an application's own tables: the `app` schema, the id column, file, money and
+// place columns, custom fields and shared records.
 export { customFieldsColumn } from './columns/custom-fields.js';
 export { fileColumn, fileColumns } from './columns/files.js';
+export {
+  type AddressValue,
+  addressColumn,
+  type GeoPointValue,
+  geoIndex,
+  geoPoint,
+  pointSql,
+  readEwkbPoint,
+} from './columns/geo.js';
 export { currencyColumn, minorUnits } from './columns/money.js';
 export { sharedFromColumn } from './columns/shared.js';
 export type { Database, DbOrTx } from './database.js';

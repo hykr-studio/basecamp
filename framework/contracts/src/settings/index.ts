@@ -1,5 +1,6 @@
 export * from './approvals.js';
 export * from './branding.js';
+export * from './credits.js';
 export * from './features.js';
 export * from './files.js';
 export * from './models.js';
