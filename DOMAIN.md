@@ -159,6 +159,9 @@ module's; the framework draws, stores and sends:
   in the module's `templates`) and/or email wording.
 - **`capabilities`** names what changes what it shows; `[]` when it shows nothing restricted.
 
+A document's sends are listed in full only to people with `customers.message`; anyone else sees
+their own. A read projector for resource type `document` or `documentSend` can hide more.
+
 The sample's `orders` module ships `orders.order`, its template `order_document_v1`, and
 scripts that make and send it.
 

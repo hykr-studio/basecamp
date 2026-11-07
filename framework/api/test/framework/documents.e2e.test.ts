@@ -2,7 +2,8 @@
 // and stored as a file the document holds; reached only through the record by someone who sees at
 // least what its requester saw (another business, a hidden field: 404); sent by email with the PDF
 // attached, or on WhatsApp as a template with a document header (or a document message inside the
-// 24-hour window); the assistant's send to someone else waits for approval. The fixture's `memos`
+// 24-hour window), at most once even when two jobs run it; a document's sends shown in full only
+// to whoever sends to others; the assistant's send to someone else waits for approval. The fixture's `memos`
 // (fixture/src/features/documents). The fake engine draws (vitest.config.ts): plain text lines.
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
@@ -144,7 +145,7 @@ const sendDone = (p: Person, docId: string, sendId: string) =>
   eventually(async () => {
     const got = await getDoc(p, docId);
     const s = (got.body?.sends ?? []).find((x: { id: string }) => x.id === sendId);
-    return s && s.status !== 'queued' && s.status !== 'waiting' ? s : undefined;
+    return s && (s.status === 'sent' || s.status === 'failed') ? s : undefined;
   });
 
 /** Mailpit's messages to one address, and their attachments. */
@@ -443,9 +444,10 @@ describe('sending a document', () => {
     expect((await mailTo(staff.email)).map((m) => m.Subject)).toContain('Memo Plan');
   });
 
-  it('a send before the document is made waits, then goes', async () => {
+  it('a send before the document is made waits, then goes, once', async () => {
+    const address = `cards-${Date.now()}@test.local`;
     const asked = await render(owner, 'memos.card', plan.id);
-    const res = await send(owner, asked.body.value.id, { to: { email: 'cards@test.local' } });
+    const res = await send(owner, asked.body.value.id, { to: { email: address } });
     expect(res.status).toBe(200);
     expect(['waiting', 'queued']).toContain(res.body.value.status);
     expect(await sendDone(owner, asked.body.value.id, res.body.value.id)).toMatchObject({
@@ -453,9 +455,18 @@ describe('sending a document', () => {
       channel: 'email',
     });
     const mail = await eventually(async () =>
-      (await mailTo('cards@test.local')).find((m) => m.Subject === 'Card Plan'),
+      (await mailTo(address)).find((m) => m.Subject === 'Card Plan'),
     );
     expect((await attachments(mail.ID))[0].FileName).toBe('card-Plan.pdf');
+    // Both its jobs (asked, and made) have had their turn: one email, one send recorded.
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(await mailTo(address)).toHaveLength(1);
+    const { rows } = await pool.query(
+      `select count(*)::int as n from audit.events
+        where action = 'document.sent' and resource_id = $1 and after->>'send' = $2`,
+      [asked.body.value.id, res.body.value.id],
+    );
+    expect(rows[0].n).toBe(1);
   });
 
   it('who may send to whom: yourself always; others need customers.message; channels and recipients checked', async () => {
@@ -509,6 +520,156 @@ describe('sending a document', () => {
     const newest = await ready(owner, docs[0].id);
     const s = await sendDone(owner, newest.id, newest.sends[0]?.id ?? '');
     expect(s).toMatchObject({ status: 'sent', channel: 'email', to: { userId: owner.id } });
+  });
+});
+
+describe('who sees a document’s sends', () => {
+  it('whoever sends to others sees every send; anyone else only their own, each projected', async () => {
+    const address = `outside-${Date.now()}@test.local`;
+    const card = await made(owner, 'memos.card', plan.id);
+    const theirs = await send(owner, card.id, { to: { email: address } });
+    await sendDone(owner, card.id, theirs.body.value.id);
+    const mine = await send(reader, card.id, { to: { self: true } });
+    expect(mine.status).toBe(200);
+    // The send's own result is projected too: its error is for owners (the fixture's projector).
+    expect(mine.body.value).not.toHaveProperty('error');
+    await sendDone(reader, card.id, mine.body.value.id);
+
+    // The reader (no customers.message) sees only the send that went to them.
+    const read = await getDoc(reader, card.id);
+    expect(read.status).toBe(200);
+    expect(read.body.sends.map((x: Json) => x.id)).toEqual([mine.body.value.id]);
+    expect(read.body.sends[0]).toMatchObject({ to: { userId: reader.id }, status: 'sent' });
+    expect(read.body.sends[0]).not.toHaveProperty('error');
+    expect(JSON.stringify(read.body)).not.toContain(address);
+
+    // Staff (customers.message) see both, projected: no error without the secret capability.
+    const staffs = await getDoc(staff, card.id);
+    expect(staffs.body.sends.map((x: Json) => x.id).sort()).toEqual(
+      [theirs.body.value.id, mine.body.value.id].sort(),
+    );
+    for (const x of staffs.body.sends) expect(x).not.toHaveProperty('error');
+    // The owner sees both, with their errors.
+    const owners = await getDoc(owner, card.id);
+    expect(owners.body.sends).toHaveLength(2);
+    expect(owners.body.sends.find((x: Json) => x.id === theirs.body.value.id)).toMatchObject({
+      to: { email: address },
+      error: null,
+    });
+  });
+});
+
+describe('a send leaves at most once', () => {
+  type Sender = { send(id: string, t: { by: string; lastTry: boolean }): Promise<string> };
+  let sender: Sender;
+  let card: Json;
+  beforeAll(async () => {
+    const { DocumentSender } = await import('../../dist/features/documents/sender.js');
+    sender = provider<Sender>(DocumentSender);
+    card = await made(owner, 'memos.card', plan.id);
+  });
+
+  /** A send row with no job: the test runs the sender itself. */
+  async function sendRow(documentId: string, recipient: object, extra: Json = {}) {
+    const cols = Object.keys(extra);
+    const names = cols.map((c) => `, ${c}`).join('');
+    const params = cols.map((_, i) => `, $${i + 5}`).join('');
+    const { rows } = await pool.query(
+      `insert into app.document_sends (tenant_id, document_id, recipient, requested_by${names})
+       values ($1, $2, $3, $4${params}) returning id`,
+      [tenantId, documentId, JSON.stringify(recipient), owner.id, ...Object.values(extra)],
+    );
+    return rows[0].id as string;
+  }
+  const row = async (id: string) =>
+    (await pool.query('select * from app.document_sends where id = $1', [id])).rows[0];
+
+  it('two jobs at once on one queued send: one claims and emails it, the other does nothing', async () => {
+    const address = `twice-${Date.now()}@test.local`;
+    const id = await sendRow(card.id, { email: address });
+    const outcomes = await Promise.all([
+      sender.send(id, { by: 'job-a', lastTry: false }),
+      sender.send(id, { by: 'job-b', lastTry: false }),
+    ]);
+    expect(outcomes.filter((o) => o === 'sent by email')).toHaveLength(1);
+    expect(outcomes.find((o) => o !== 'sent by email')).toMatch(
+      /^(claimed by another job|already sent)$/,
+    );
+    await eventually(async () => ((await mailTo(address)).length ? true : undefined));
+    await new Promise((r) => setTimeout(r, 500));
+    expect(await mailTo(address)).toHaveLength(1);
+    expect(await row(id)).toMatchObject({ status: 'sent', channel: 'email', address });
+    // A later try finds it sent.
+    expect(await sender.send(id, { by: 'job-a', lastTry: true })).toBe('already sent');
+  });
+
+  it('two jobs at once on one WhatsApp send: one upload, one message', async () => {
+    const number = phone();
+    const ravi = await seedContact(tenantId, 'Ravi Once', number);
+    const before = uploads.length;
+    const id = await sendRow(ownerCopy.id, { customerId: ravi.customerId });
+    const outcomes = await Promise.all([
+      sender.send(id, { by: 'job-a', lastTry: false }),
+      sender.send(id, { by: 'job-b', lastTry: false }),
+    ]);
+    expect(outcomes.filter((o) => o === 'sent by whatsapp')).toHaveLength(1);
+    await eventually(() => (toNumber(number).length ? true : undefined));
+    await new Promise((r) => setTimeout(r, 500));
+    expect(toNumber(number)).toHaveLength(1);
+    expect(uploads.length - before).toBe(1);
+  });
+
+  it('an error before anything left lets the claim go; on the last try the send fails', async () => {
+    const { rows } = await pool.query(
+      `insert into app.documents (tenant_id, name, resource_type, resource_id, version, status, data, seen_as, file_name, requested_by)
+       values ($1, 'memos.card', 'memo', $2, 98, 'ready', $3, $4, 'no-file.pdf', $5) returning id`,
+      [
+        tenantId,
+        plan.id,
+        JSON.stringify({ business: { id: tenantId, name: 'x', timeZone: 'UTC' }, value: {} }),
+        JSON.stringify({ roles: ['owner'], capabilities: [] }),
+        owner.id,
+      ],
+    );
+    const id = await sendRow(rows[0].id, { email: `nofile-${Date.now()}@test.local` });
+    await expect(sender.send(id, { by: 'job-a', lastTry: false })).rejects.toThrow(
+      'The document has no file',
+    );
+    expect(await row(id)).toMatchObject({ status: 'queued', claimed_by: null });
+    expect(await sender.send(id, { by: 'job-a', lastTry: true })).toBe(
+      'failed: The document has no file',
+    );
+    expect(await row(id)).toMatchObject({ status: 'failed', error: 'The document has no file' });
+  });
+
+  it('a send left sending: another job leaves it; the job that claimed it never sends it again', async () => {
+    const address = `stopped-${Date.now()}@test.local`;
+    const claim = { status: 'sending', claimed_by: 'job-x', claimed_at: new Date() };
+    // Stopped part way with nothing recorded: failed, interrupted, and nothing sent.
+    const stopped = await sendRow(card.id, { email: address }, claim);
+    expect(await sender.send(stopped, { by: 'job-y', lastTry: true })).toBe(
+      'claimed by another job',
+    );
+    expect((await row(stopped)).status).toBe('sending');
+    expect(await sender.send(stopped, { by: 'job-x', lastTry: false })).toBe('failed: interrupted');
+    // It left (its outcome was written) but was not finished: recorded as sent, not sent again.
+    const left = await sendRow(
+      card.id,
+      { email: address },
+      { ...claim, channel: 'email', address },
+    );
+    expect(await sender.send(left, { by: 'job-x', lastTry: false })).toBe('sent by email');
+    expect(await row(left)).toMatchObject({ status: 'sent', address });
+    // A claim gone stale: any job finishes it.
+    const stale = await sendRow(
+      card.id,
+      { email: address },
+      { ...claim, claimed_at: new Date(Date.now() - 10 * 60_000) },
+    );
+    expect(await sender.send(stale, { by: 'job-y', lastTry: false })).toBe('failed: interrupted');
+    expect(await mailTo(address)).toHaveLength(0);
+    const failed = (await audit(card.id)).filter((a) => a.action === 'document.send_failed');
+    expect(failed.length).toBeGreaterThanOrEqual(2);
   });
 });
 

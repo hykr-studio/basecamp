@@ -1197,7 +1197,12 @@ export const OrderDocument = defineDocument<Data>({
   the default). The worker tries the document's channels in order: WhatsApp (the PDF uploaded as
   media, then the template with a document header, approved in the reader's language or
   English; inside the 24-hour window without one, a document message), then email with the PDF
-  attached. A send asked before the document is made waits for it.
+  attached. A send asked before the document is made waits for it. Each send leaves at most
+  once: the job that claims it (`sending`) delivers it; a try that stopped part way ends it
+  `failed` with `interrupted` rather than send it twice.
+- **Who sees the sends.** `GET /api/documents/:id` shows every send only to people with
+  `customers.message`; anyone else sees the sends they asked for or that went to them. Each one
+  passes the read projectors as resource type `documentSend`.
 - **Events** `document.requested`, `document.rendered`, `document.failed`,
   `document.send_requested`, `document.sent` and `document.send_failed` carry ids and status,
   never the data a document shows.
@@ -1765,6 +1770,7 @@ These are not built. Each has a workaround for now.
 | Notifications that carry a document | The dispatcher sends no files. Send a document with `document.send` (a subscriber can call it as the person). |
 | A WhatsApp document's later failure | A send is `sent` once WhatsApp has it; its message's own status shows a later failure, and no email follows. |
 | Other scripts in documents (Tamil, Kannada, right to left) | Only the Noto Latin, Devanagari and Telugu fonts are bundled. |
+| A document send left `sending` for good | A send's job claims it before delivering, so it leaves at most once. If every try of that job stopped part way (the worker died each time), the row stays `sending`; nothing sweeps it. Send the document again. |
 | A file on two records, versioned files | One file belongs to one record field. Upload the file again for a second record. |
 | Storage quotas, malware scanning | Not built. Keep `FILES_MAX_BYTES` and each field's `maxBytes` small. |
 | Files of a deleted business or of rows deleted outside the write path | Their rows go with the business (cascade) or stay attached; their objects stay in the bucket. |
