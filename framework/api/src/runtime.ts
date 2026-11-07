@@ -8,8 +8,12 @@ import {
   mergeContributions,
 } from '@hykr/contracts';
 import type { MigrationSet } from '@hykr/db';
-import type { Labels } from '@hykr/i18n';
-import { createNotificationCatalog, type NotificationCatalog } from '@hykr/notifications';
+import { type Labels, overridePhrases, type PhraseOverrides } from '@hykr/i18n';
+import {
+  createNotificationCatalog,
+  type NotificationCatalog,
+  type NotificationOverride,
+} from '@hykr/notifications';
 import { createUiRegistry, type Registry } from '@hykr/ui-registry';
 import type { ModuleDef } from './module.js';
 import { crossProblems, tableProblems } from './module-checks.js';
@@ -55,6 +59,15 @@ export interface ServerDefinition {
    * or makes them a party member (a participant somewhere).
    */
   signUp?: { createBusiness?: boolean };
+  /**
+   * The application's own words for what the framework says and sends (A11): framework phrases
+   * (`phrases`, installed when the process starts serving it) and rewordings of declared
+   * notifications (`overrideNotification`). A business may word them again in its settings.
+   */
+  wording?: {
+    phrases?: PhraseOverrides;
+    notifications?: readonly NotificationOverride[];
+  };
 }
 
 /** An application as the server runs it: its definition, built into the framework's parts. */
@@ -106,6 +119,7 @@ export function defineServer(definition: ServerDefinition): Basecamp {
   const notifications = collect(problems, () =>
     createNotificationCatalog(
       ...modules.map((m) => ({ templates: m.templates, notifications: m.notifications })),
+      { overrides: definition.wording?.notifications },
     ),
   );
   problems.push(...tableProblems(modules, definition.tablePrefix));
@@ -149,5 +163,6 @@ export function setRuntime(app: Basecamp) {
   if (current === app) return;
   if (current) throw new Error('Another application is already registered');
   installContributions(app.contributions);
+  if (app.definition.wording?.phrases) overridePhrases(app.definition.wording.phrases);
   current = app;
 }

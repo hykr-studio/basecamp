@@ -1,10 +1,12 @@
 import {
   AssistantActivity,
+  BrandMark,
   Button,
   DecisionScrollView,
   dayBounds,
   LoadError,
   listRow,
+  OverdueList,
   ScreenTitle,
   SectionHeading,
   space,
@@ -12,6 +14,7 @@ import {
   TryPrompt,
   todayLocal,
   useApprovals,
+  useBranding,
   useEntityList,
   useScreenContext,
   WaitingForYou,
@@ -21,6 +24,7 @@ import { type ReactNode, useState } from 'react';
 import { Text, View } from 'react-native';
 import { MeetingRow, needsClosing as toClose } from '@/modules/meetings';
 import { TodoRow } from '@/modules/todos';
+import { settings } from '@/settings';
 
 /** Below this width the sections stack; above it, what the assistant did sits beside the day. */
 const TWO_COLUMNS = 720;
@@ -53,6 +57,16 @@ function Quiet({
       </View>
     </View>
   );
+}
+
+/**
+ * The business's logo and name (its branding settings, white label) over its day. Nothing when
+ * it has neither: the product's name is already in the shell.
+ */
+function Business() {
+  const brand = useBranding();
+  if (!brand?.name && !brand?.logoUrl) return null;
+  return <BrandMark fallback={settings.title} />;
 }
 
 /**
@@ -170,12 +184,16 @@ export function Today() {
   return (
     <DecisionScrollView contentContainerStyle={styles.content}>
       <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={{ gap: space.xl }}>
-        <ScreenTitle title="Today" subtitle={date} />
+        <View style={{ gap: space.sm }}>
+          <Business />
+          <ScreenTitle title="Today" subtitle={date} />
+        </View>
         {wide ? (
           // Reading order matches what you see: the day on the left, the assistant beside it.
           <View style={{ flexDirection: 'row', gap: space.xxl, alignItems: 'flex-start' }}>
             <View style={{ flex: 3, minWidth: 0, gap: space.xl }}>
               <WaitingForYou place="Today" />
+              <OverdueList />
               {today}
               {needsClosing}
               {due}
@@ -185,6 +203,7 @@ export function Today() {
         ) : (
           <>
             <WaitingForYou place="Today" />
+            <OverdueList />
             {activity}
             {today}
             {needsClosing}

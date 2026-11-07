@@ -327,6 +327,7 @@ describe('personal data contributors', () => {
     const db = server.app?.get(DB, { strict: false });
     const subject = { kind: 'user' as const, userId: ana.id };
     expect(await api.exportPersonalData({ subject, tenantId, db })).toEqual({
+      documents: [],
       files: [],
       jobs: [],
       // The framework's parties feature: Ana is no party's member.

@@ -8,6 +8,7 @@ import { SendTemplateSpec } from './notify.js';
 import { SavedPageSpec } from './page.js';
 
 export * from './backoffice.js';
+export * from './document.js';
 export * from './file.js';
 export * from './handoff.js';
 export * from './job.js';
@@ -18,3 +19,4 @@ export * from './parties.js';
 
 export const platformEntities = { pages: SavedPageSpec } as const;
 export const platformCommands: readonly CommandSpec[] = [SendTemplateSpec, RequestHumanSpec];
+export * from './settings.js';

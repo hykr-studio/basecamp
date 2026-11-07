@@ -1,6 +1,16 @@
 /** The orders module's tables, named after the module. */
 import type { TaxLine } from '@hykr/contracts';
-import { app, currencyColumn, customerColumn, id, minorUnits, tenantColumn, user } from '@hykr/db';
+import {
+  app,
+  currencyColumn,
+  customerColumn,
+  id,
+  minorUnits,
+  revisionColumns,
+  tenantColumn,
+  user,
+  versionColumn,
+} from '@hykr/db';
 import {
   type AnyPgColumn,
   foreignKey,
@@ -33,12 +43,21 @@ export const orders = app.table(
       .notNull()
       .references(() => user.id),
     customerId: customerColumn(),
-    /** From the orders series: gapless per business, never reused (orders are cancelled). */
+    /**
+     * From the orders series: gapless per business, never reused (orders are cancelled). A
+     * revision is its first revision's number with "-v<n>".
+     */
     number: text('number').notNull(),
     title: text('title').notNull(),
-    status: text('status', { enum: ['open', 'cancelled'] })
+    /** Its state (contracts ORDER_STATES): only its transitions move it. */
+    status: text('status', {
+      enum: ['draft', 'submitted', 'approved', 'fulfilled', 'cancelled', 'superseded', 'expired'],
+    })
       .notNull()
-      .default('open'),
+      .default('draft'),
+    cancelReason: text('cancel_reason'),
+    version: versionColumn(),
+    ...revisionColumns(),
     currency: currencyColumn(),
     subtotal: minorUnits('subtotal').notNull().default(0),
     taxTotal: minorUnits('tax_total').notNull().default(0),

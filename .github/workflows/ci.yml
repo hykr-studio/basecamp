@@ -54,6 +54,8 @@ jobs:
       MAILPIT_URL: http://localhost:8025
       # Files in memory: no object store in CI (the S3 driver's own test skips without MinIO).
       STORAGE_DRIVER: memory
+      # Documents by the fake engine (plain text lines); the PDF engine's own tests run it directly.
+      DOCUMENTS_ENGINE: fake
       # turbo passes every variable to the test tasks (turbo.json), so a new variable needs a
       # line here only when its default is wrong for CI.
 

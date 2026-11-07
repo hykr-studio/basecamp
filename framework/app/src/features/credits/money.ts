@@ -1,34 +1,35 @@
 // Credits are whole minor units of the deployment's currency: shown and typed in major units.
+// The currency's exponent and its words come from the framework's money helpers, as for every
+// other amount: nothing here rounds or assumes a currency.
+import { toMinor } from '@hykr/contracts';
+import { type Lang, moneyText } from '@hykr/i18n';
 
-/** How many minor units make one major unit of this currency (100 for most, 1 for some). */
-export function minorPerMajor(currency: string): number {
-  try {
-    const digits = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions()
-      .maximumFractionDigits;
-    return 10 ** (digits ?? 2);
-  } catch {
-    return 1;
-  }
-}
-
-/** An amount of credits as money in the reader's language: 12345 XXX minor → "XXX 123.45". */
-export function formatCredits(minor: number, currency: string | null | undefined, locale = 'en') {
+/** An amount of credits as money in the reader's language: 12345 EUR minor → "€123.45". */
+export function formatCredits(
+  minor: number,
+  currency: string | null | undefined,
+  lang: Lang = 'en',
+): string {
   if (!currency) return String(minor);
   try {
-    return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(
-      minor / minorPerMajor(currency),
-    );
+    return moneyText({ minor, currency }, lang);
   } catch {
     return `${currency} ${minor}`;
   }
 }
 
-/** What a person typed ("12.5") as whole minor units, or undefined when it is not an amount. */
-export function toMinor(typed: string, currency: string): number | undefined {
-  const value = Number(typed.replace(/[\s,]/g, ''));
-  if (!Number.isFinite(value) || value <= 0) return undefined;
-  const minor = Math.round(value * minorPerMajor(currency));
-  return minor >= 1 ? minor : undefined;
+/**
+ * What a person typed ("12.5", "1,000") as whole minor units, or undefined when it is not a
+ * positive amount of this currency (more decimals than the currency has are refused, not
+ * rounded).
+ */
+export function parseCredits(typed: string, currency: string): number | undefined {
+  try {
+    const minor = toMinor(typed.replace(/[\s,]/g, ''), currency);
+    return minor >= 1 ? minor : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** A meter's quantity in its own words: voice seconds as minutes, the rest as counted. */

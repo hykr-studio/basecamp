@@ -11,7 +11,7 @@ import {
 } from '@hykr/contracts';
 import { type Access, accessFor, rowAllowed } from '@hykr/policy';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { type Column, getTableColumns, type Table } from 'drizzle-orm';
+import { type Column, getTableColumns, is, SQL, type Table } from 'drizzle-orm';
 import { deny, RuleDenied } from '../authorize.js';
 import type { Conn, Tx } from '../tokens.js';
 import type { Touched } from '../write/pipeline.js';
@@ -65,6 +65,10 @@ const links = new Map<string, ChildLink>();
 
 /** The link of a child entity, by its name; undefined for any other entity. */
 export const childLinkOf = (name: string): ChildLink | undefined => links.get(name);
+
+/** The child entities whose parent is this entity, by the parent's name. */
+export const childLinksOf = (parentName: string): ChildLink[] =>
+  [...links.values()].filter((l) => l.parent.name === parentName);
 
 /** A child entity: an entity whose rows are written through their parent, a whole tree at once. */
 export interface ChildEntityDef<S extends EntitySpec = EntitySpec, T extends Table = Table>
@@ -221,6 +225,12 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
         error: 'not_found',
         message: `No such ${parentDef.spec.label}`,
       });
+    // The parent's plugins may refuse a write to its children (a frozen record's lines).
+    const target = { spec: parentDef.spec, table: parentDef.table };
+    for (const x of parentDef.plugins()) {
+      const r = x.childWrite?.(row, target);
+      if (r?.decision === 'deny') throw new RuleDenied(r);
+    }
     return row;
   }
 
@@ -396,7 +406,10 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
     return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
   };
 
-  /** Would this patch change the stored row? Compared as the columns it would write. */
+  /**
+   * Would this patch change the stored row? Compared as the columns it would write. A value a
+   * plugin computes in SQL from the row as it is then (a custom fields merge) counts as a change.
+   */
   function changes(p: Principal, row: Values, patch: Values): boolean {
     const parsed = spec.schemas.update.parse(patch) as Values;
     let values = columnValues(parsed);
@@ -410,7 +423,7 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
     for (const key of [trait.nest, trait.position])
       if (key && key in parsed) values[key] = parsed[key];
     return Object.entries(values).some(
-      ([k, v]) => columns[k] && v !== undefined && !same(v, row[k]),
+      ([k, v]) => columns[k] && v !== undefined && (is(v, SQL) || !same(v, row[k])),
     );
   }
 

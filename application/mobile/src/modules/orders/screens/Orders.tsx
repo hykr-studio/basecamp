@@ -1,3 +1,4 @@
+import { ORDER_STATES, OrderSpec } from '@application/domain/modules/orders/contracts';
 import {
   EmptyState,
   InlineView,
@@ -5,11 +6,13 @@ import {
   OpenRow,
   ScreenTitle,
   SectionHeading,
+  StateBadge,
   space,
   styles,
   useEntityList,
   useMoneyText,
   useScreenContext,
+  useT,
 } from '@hykr/app';
 import { router } from 'expo-router';
 import { FlatList, Text, View } from 'react-native';
@@ -18,21 +21,25 @@ import { FlatList, Text, View } from 'react-native';
  * Live totals: summaries of the orders computed by the server for whoever looks (the same
  * scope as the list), shown as kpi.row tiles. Never numbers typed in by anyone.
  */
-const BY_STATUS = {
+const byStatus = (pick: ReturnType<typeof useT>['pick']) => ({
   entity: 'orders',
   query: { groupBy: ['status'], sum: ['total'] },
-  labels: { open: 'Open', cancelled: 'Cancelled' },
-};
+  // Each tile is named after its state, in the reader's language.
+  labels: Object.fromEntries(
+    Object.entries(ORDER_STATES.states).map(([name, s]) => [name, s.label ? pick(s.label) : name]),
+  ),
+});
 const BY_MONTH = {
   entity: 'orders',
   query: { groupBy: ['createdAt:month'], sum: ['total'], sort: '-key', limit: 4 },
 };
 
 function Totals() {
+  const { pick } = useT();
   return (
     <View style={{ gap: space.sm, marginBottom: space.md }}>
       <SectionHeading>By status</SectionHeading>
-      <InlineView view="kpi.row" props={{ of: BY_STATUS }} />
+      <InlineView view="kpi.row" props={{ of: byStatus(pick) }} />
       <SectionHeading>By month</SectionHeading>
       <InlineView view="kpi.row" props={{ of: BY_MONTH }} />
     </View>
@@ -64,10 +71,10 @@ export function Orders() {
             <Text style={styles.text}>{item.title}</Text>
             <Text style={styles.text}>{money(item.total)}</Text>
           </View>
-          <Text style={styles.muted}>
-            {item.number}
-            {item.status === 'cancelled' ? ' · cancelled' : ''}
-          </Text>
+          <View style={styles.row}>
+            <Text style={styles.muted}>{item.number}</Text>
+            <StateBadge spec={OrderSpec} row={item} />
+          </View>
         </OpenRow>
       )}
       ListEmptyComponent={

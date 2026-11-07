@@ -4,8 +4,10 @@ import { OrderItemSpec, OrderSpec, SupplierRole } from '../contracts/index.js';
 import { orderItems, orders } from '../db/schema.js';
 
 /**
- * Orders: written only by order.save and order.cancel, never deleted (a number, once given,
- * stays taken), with the domain's usual access, and read by the organisation that supplies one.
+ * Orders: written only by order.save (a draft), their transitions (order.transition) and
+ * order.revise, never deleted (a number, once given, stays taken), with the domain's usual
+ * access, and read by the organisation that supplies one. The states and versioned traits do
+ * the rest: a submitted order is frozen, a stale save is 409.
  */
 export const Order = defineEntity(OrderSpec, {
   table: orders,
@@ -20,12 +22,12 @@ export const Order = defineEntity(OrderSpec, {
             'An order is cancelled, never deleted: its number stays taken',
           )
         : null,
-    (_p, action, _row, input, ctx) => {
+    (_p, _action, _row, input, ctx) => {
       if (ctx.via === 'order.save' && input?.status === undefined) return null;
-      if (ctx.via === 'order.cancel' && action === 'update') return null;
+      if (ctx.via === 'order.transition' || ctx.via === 'order.revise') return null;
       return deny(
         'orders_saved_whole',
-        'An order changes only by saving it whole, or cancelling it',
+        'An order changes only by saving it whole, by its transitions, or by a revision',
       );
     },
   ],

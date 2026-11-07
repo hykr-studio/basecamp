@@ -4,6 +4,7 @@ import { CommandHandler, EventBus, QueryHandler } from '@nestjs/cqrs';
 import { z } from 'zod';
 import { summarize } from '../query/aggregate.js';
 import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
+import { checkPins, type Pins, pinsOf, versionNote } from '../versions/pins.js';
 import { registerOp } from '../write/approvals.js';
 import { runWrite, type WriteCtx, type WriteOp } from '../write/pipeline.js';
 import type { AnyEntityDef } from './define-entity.js';
@@ -11,14 +12,21 @@ import { registerEntityDef } from './registry.js';
 
 type Row = Record<string, unknown> & { id: string };
 
-/** The write op for one CRUD action: the same shape a hand-written command builds. */
+/**
+ * The write op for one CRUD action: the same shape a hand-written command builds. An update or
+ * delete pins the record it loads (its plugins' `onPark`, a version) in its `args`, which a park
+ * stores: the approved replay gets them back and refuses (409) if the record moved on since.
+ */
 export function entityOp(
   def: AnyEntityDef,
   action: WriteAction,
-  args: { id?: string } | null,
+  args: { id?: string; pins?: Pins } | null,
 ): WriteOp<Record<string, unknown>, Row | null, Row> {
   const { spec, repo } = def;
   const id = args?.id;
+  // On a replay, what the request pinned; otherwise what load pins now (read when it parks).
+  const pinned = args?.pins;
+  let pins = pinned;
   const schema =
     action === 'create'
       ? spec.schemas.create
@@ -43,12 +51,25 @@ export function entityOp(
     resourceType: def.name,
     resourceId: (_input, loaded) => loaded?.id ?? null,
     input: schema as z.ZodType<Record<string, unknown>>,
-    args: id ? { id } : undefined,
+    get args() {
+      return id ? { id, ...(pins ? { pins } : {}) } : undefined;
+    },
     approval: def.spec.approval[action],
-    load: id ? (tx, p) => repo.get(tx, p, id) as Promise<Row> : undefined,
+    load: id
+      ? async (tx, p) => {
+          const row = (await repo.get(tx, p, id)) as Row;
+          if (pinned) checkPins([{ def, row }], pinned);
+          else pins = pinsOf([{ def, row }]);
+          return row;
+        }
+      : undefined,
     authorize: (p, loaded, input) =>
       def.decide(p, action, loaded, action === 'delete' ? null : input),
-    summarize: (input, loaded) => def.summarize(action, action === 'delete' ? null : input, loaded),
+    summarize: (input, loaded) => {
+      const said = def.summarize(action, action === 'delete' ? null : input, loaded);
+      const version = versionNote(def, loaded);
+      return version ? `${said} (${version})` : said;
+    },
     async run({ tx, principal, input, loaded }) {
       const row = (
         action === 'create'

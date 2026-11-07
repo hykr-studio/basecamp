@@ -1,14 +1,25 @@
-import { FrameworkCapabilities, HistoryEntry, type Principal } from '@hykr/contracts';
+import {
+  FrameworkCapabilities,
+  HistoryEntry,
+  isFrozen,
+  type Principal,
+  RecordVersion,
+  revisionFields,
+  statesOf,
+  versionedOf,
+  versionField,
+} from '@hykr/contracts';
 import {
   CurrentPrincipal,
   entityDef,
   HumanOnlyGuard,
   PrincipalGuard,
   projectRead,
+  seriesIds,
 } from '@hykr/core';
 import { type Database, events } from '@hykr/db';
 import { can } from '@hykr/policy';
-import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Inject, NotFoundException, Query, UseGuards } from '@nestjs/common';
 import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 import { and, asc, desc, eq, gt, inArray, or } from 'drizzle-orm';
 import { createZodDto } from 'nestjs-zod';
@@ -32,6 +43,28 @@ class HistoryQuery extends createZodDto(
       message: 'resourceType and resourceId go together',
     }),
 ) {}
+
+class VersionsQuery extends createZodDto(
+  z.object({ resourceType: z.enum(entityNames), resourceId: z.uuid() }),
+) {}
+
+/** A line that moved a record's state: the state field before and after. */
+function moved(
+  resourceType: string,
+  before: unknown,
+  after: unknown,
+): { from: string | null; to: string } | null {
+  const def = entityDef(resourceType);
+  const trait = def ? statesOf(def.spec) : undefined;
+  if (!trait || !after || typeof after !== 'object') return null;
+  const to = (after as Record<string, unknown>)[trait.field];
+  const from =
+    before && typeof before === 'object'
+      ? (before as Record<string, unknown>)[trait.field]
+      : undefined;
+  if (typeof to !== 'string' || from === to) return null;
+  return { from: typeof from === 'string' ? from : null, to };
+}
 
 /** The record's name as it was written, for a line in a feed ("Site review"). */
 function titleOf(before: unknown, after: unknown): string | null {
@@ -62,6 +95,42 @@ function seenBy(p: Principal, resourceType: string, row: unknown): unknown {
 @UseGuards(PrincipalGuard, HumanOnlyGuard)
 export class HistoryController {
   constructor(@Inject(DB) private readonly db: Database) {}
+
+  /**
+   * The revisions of a versioned record's series, oldest first: each one the person may read,
+   * as the entity reads it for them (another business's record, or one they cannot read, is a
+   * 404, and so are revisions they cannot read left out).
+   */
+  @Get('versions')
+  async versions(
+    @CurrentPrincipal() p: Principal,
+    @Query() q: VersionsQuery,
+  ): Promise<RecordVersion[]> {
+    const def = entityDef(q.resourceType);
+    const trait = def ? versionedOf(def.spec) : undefined;
+    if (!def || !trait)
+      throw new NotFoundException({ error: 'not_found', message: 'No versions of that' });
+    const row = (await def.repo.get(this.db, p, q.resourceId)) as Record<string, unknown>;
+    const rev = revisionFields(trait);
+    const states = statesOf(def.spec);
+    const out: RecordVersion[] = [];
+    for (const id of await seriesIds(this.db, def, row)) {
+      const r = (await def.repo.find(this.db, p, id)) as Record<string, unknown> | undefined;
+      if (!r) continue;
+      out.push(
+        RecordVersion.parse({
+          id,
+          revision: rev ? Number(r[rev.number] ?? 1) : 1,
+          version: Number(r[versionField(trait)] ?? 1),
+          frozen: isFrozen(trait, r),
+          state: states ? String(r[states.field] ?? '') || null : null,
+          current: id === q.resourceId,
+          record: def.toRead(r as never, p),
+        }),
+      );
+    }
+    return out;
+  }
 
   @Get()
   async list(@CurrentPrincipal() p: Principal, @Query() q: HistoryQuery): Promise<HistoryEntry[]> {
@@ -133,6 +202,7 @@ export class HistoryController {
         resourceId: r.resourceId,
         title:
           titleOf(r.before, r.after) ?? (r.resourceId ? titles.get(r.resourceId) : null) ?? null,
+        transition: moved(r.resourceType, r.before, r.after),
       }),
     );
   }

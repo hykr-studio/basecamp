@@ -14,8 +14,9 @@ export function createDb(url: string) {
   };
 }
 
-// Builders for an application's own tables: the `app` schema, the id column, file, money and
-// place columns.
+// Builders for an application's own tables: the `app` schema, the id column, file, money, place
+// and version columns, custom fields and shared records.
+export { customFieldsColumn } from './columns/custom-fields.js';
 export { fileColumn, fileColumns } from './columns/files.js';
 export {
   type AddressValue,
@@ -27,6 +28,8 @@ export {
   readEwkbPoint,
 } from './columns/geo.js';
 export { currencyColumn, minorUnits } from './columns/money.js';
+export { sharedFromColumn } from './columns/shared.js';
+export { revisionColumns, versionColumn } from './columns/versions.js';
 export type { Database, DbOrTx } from './database.js';
 export {
   frameworkMigrations,

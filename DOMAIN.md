@@ -39,10 +39,10 @@ and registers it.
 | Contracts | `contracts/` (isomorphic) | Its `entitySpec`s and `commandSpec`s, and `<name>Spec = moduleSpec({ name, dependsOn, entities, commands })` from `@hykr/contracts`, entities keyed by plural. A field that keeps files is a `FileRef` or `fileRefs(max)`, listed in the spec's `files` trait with what it accepts |
 | Database | `db/schema.ts` | Drizzle tables in the `app` schema (`app`, `id`, `tenantColumn()`, `customerColumn()`, `user`, `tableRef` from `@hykr/db`), named after the module (`orders`, `orders_lines`), each with `id`, `tenantColumn()`, an owner column, `customerColumn()` (when customers have rows), `createdBy`, `createdAt`, `updatedAt`. A file field's column is `fileColumn(<field>)` or `fileColumns(<field>)` |
 | API | `server/` | A Nest module with one `defineEntity` / `defineCommand` per spec (`entityController` / `entityHandlers` / `commandController`); who sees what in `access` (see below). `server/public.ts`: what other modules may call |
-| Notifications | `notifications/` (isomorphic) | Its templates (`defineTemplate`) and notifications (`defineNotification`) |
+| Notifications | `notifications/` (isomorphic) | Its templates (`defineTemplate`) and notifications (`defineNotification`), among them what an SLA breach (`<entity>.sla.breached`) says to whom |
 | Views | `views/` (isomorphic) | `<name>Views = { name, views, screens }`, declared with `defineView` / `defineScreen` |
 | Assistant | `agent/` | An `AgentModule` (`@hykr/agents/script`): its rules, the scripted model's scripts, eval cases (and spoken `voiceEvalCases`) and setup |
-| Bundle | `index.ts` (server only) | `<name> = defineModule({ ...<name>Spec, server, views, screens, templates, notifications, agent, tables })` from `@hykr/api` |
+| Bundle | `index.ts` (server only) | `<name> = defineModule({ ...<name>Spec, server, views, screens, templates, notifications, agent, tables, contributes })` from `@hykr/api`; `contributes.featureFlags` lists the module's flags (`defineFeatureFlag`) |
 
 Around the modules, the application keeps:
 
@@ -147,6 +147,34 @@ it can be undone) is the application's: the sample declares `read`, `internal`, 
 writes to `internal` with a level rule. Thresholds and approvers per amount band are each
 business's settings (`approvals`).
 
+## What a business sets up for itself
+
+The framework's `settings` feature (developer guide, section 5.18) gives every business its own
+setup, changed by people with `settings.manage` (owners and admins) through the write path:
+
+- **Feature flags.** A module declares each flag and what it gates (modules, entities, commands,
+  tools, app destinations) with `defineFeatureFlag`; a business has it on only when its settings
+  say so. Off, its routes and writes answer 404, its tools leave the assistant and the app hides
+  it. `managedBy: 'tenant'` lets the business switch it; otherwise only the platform does.
+- **Custom fields.** An entity with the `customFields` trait and a `custom` column takes the
+  fields a business defines (`/api/custom-fields`: text, number, yes/no, date, one of a list),
+  checked on every write and filterable in lists. A required field binds the entity's own create
+  and any write that sets custom values, not a command that makes the record without any.
+- **White label.** Its name, logo and colours (`branding`), and its own web addresses, trusted once
+  verified by a DNS TXT record. The settings plugin applies the colours; a screen shows the logo
+  and name with `<BrandMark>` (the sample's Today does), since the shell still shows the product's
+  title.
+- **Shared records.** An entity defined with `defineSharedEntity` (trait `shared`) shows every
+  business the rows of the platform's business (`PLATFORM_TENANT_ID`), read-only, and a business
+  overrides one with its own copy. What is shared is the application's data.
+- **Wording.** The application rewords framework phrases and notifications in `defineServer({
+  wording })` instead of declaring them again; a business words phrases and notification emails
+  in its `wording` settings.
+
+The sample's to-dos take custom fields (a business adds its `priority`; the to-dos screen sets it
+in its add form and each row's editor with `<CustomFieldInputs>`), and "clear done to-dos"
+(`todo.clearDone`) sits behind the flag `todos.clear-done`, which the business switches itself.
+
 ## Money, numbers and lines
 
 The framework has no currency, number format or tax rule of its own; a module declares them
@@ -176,14 +204,58 @@ The framework has no currency, number format or tax rule of its own; a module de
   the assistant a `summarize-<plural>` tool. `kpi.row` tiles with `of` are computed from a
   summary for whoever looks; the sample's orders screen shows totals by status and by month.
 
+## Documents (PDFs)
+
+A module declares each document of its records with `defineDocument` (`@hykr/api`), contributed
+as `documents` (developer guide, section 5.19). The template and every word in it are the
+module's; the framework draws, stores and sends:
+
+- **`load`** reads what the document shows, as the person who asks (the record and its
+  children arrive projected for them, so a field they do not see is not in it). It is stored
+  with each version.
+- **`render`** lays it out (headings, fields, a table of lines, totals, a header and footer) in
+  the language asked for, with `ctx.money`, `ctx.date` and `ctx.label`.
+- **`send`** says how it goes out: a WhatsApp template with `header: { type: 'document' }` (also
+  in the module's `templates`) and/or email wording.
+- **`capabilities`** names what changes what it shows; `[]` when it shows nothing restricted.
+
+A document's sends are listed in full only to people with `customers.message`; anyone else sees
+their own. A read projector for resource type `document` or `documentSend` can hide more.
+
+The sample's `orders` module ships `orders.order`, its template `order_document_v1`, and
+scripts that make and send it.
+
+## States, deadlines and versions
+
+The framework has no workflow of its own either; a module declares it on the spec (the
+sample's `orders` module does, developer guide 5.20):
+
+- **States** (`traits.states`): the state field, the initial state, the states with their
+  labels, the transitions (from, to, who may ask, a capability, required fields, a guard, the
+  approval and its level, the event) and the SLAs. Only a transition moves a record
+  (`POST /api/transitions/<plural>/:id/<name>`, the `transition-<plural>` tool, `transition()`
+  in a command); entity rules see `via: '<entity>.transition'`.
+- **SLAs** run while a record is in a state. Their names (`orders.decision`), durations and
+  escalations (capabilities whose holders are told, a transition the server runs) are the module's; what a breach
+  says is the module's notification on `<entity>.sla.breached`. A business's `businessHours`
+  and `sla` settings decide open hours, and override a duration or switch one off.
+- **Versions** (`traits.versioned`, `versionColumn()`): a write against an old version is 409,
+  an approval is pinned to the version it was asked on, and `frozenWhen` names the states in
+  which a record (and its lines) no longer changes. **Revisions** (`revisionColumns()`,
+  `reviseWithChildren` in the module's own command) copy a record and its lines as v2.
+
+A state column can also get a CHECK in the module's `sql/post` hook (the sample's
+`orders-states.sql`); keep it in step with the states.
+
 ## What a module adds for WhatsApp: templates and notifications
 
 Outside a customer's 24-hour window WhatsApp delivers only approved templates, so everything a
 module sends on its own initiative is a template, declared in code:
 
 - **`defineTemplate`:** a versioned name (`meeting_reminder_v1`), a category, named parameters
-  with an example each, the body in every language, at most three quick replies. An approved
-  template is never edited: changing the words fails `templates:sync` with "bump the version".
+  with an example each, the body in every language, at most three quick replies, and a
+  document header for a template that carries a PDF. An approved template is never edited:
+  changing the words fails `templates:sync` with "bump the version".
 - **`defineNotification`:** what reaches whom, and when. `schedule: { on, at, cancelOn }`
   follows the entity events (`meeting.created`, `meeting.deleted`) and the module's own: a
   command's event implements `NamedEvent` (`eventName`, `row`) to be one. `to` names the
@@ -246,6 +318,11 @@ From the contracts declaration alone:
   service reports back by signed callback or is polled, and its result files are kept on the job
   and reached through the record it is about. `<JobProgress>` and `useJob` in the app (developer
   guide, section 5.17). The fixture's `drawings` shows one; the sample has none yet.
+- Documents (`/api/documents`, `app.documents`): a module's PDFs made in the worker from data
+  read as the person who asked (pdfkit, HarfBuzz and the Noto fonts for English, Hindi and
+  Telugu), stored as files the document holds, reached through their record, and sent by
+  WhatsApp or email (`document.render`, `document.send`, the tools `render-document`,
+  `send-document`, `get-document`, `list-documents`, and `<RecordDocuments>` in the app).
 - Threads (one saved conversation per person, shared by every channel), voice sessions
   (`/api/voice/*`, LiveKit, the voice worker), and the framework's phrases in `@hykr/i18n`.
 - Businesses, memberships and customers (`/api/me`), and the scope engine behind `access`.
@@ -279,6 +356,10 @@ From the contracts declaration alone:
   (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
   (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
   sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+- Each business's setup: feature flags, custom field definitions (`app.custom_fields`), branding
+  and verified web addresses (`app.tenant_domains`), shared records and wording (`/api/settings`,
+  `/api/features`, `/api/custom-fields`, the back office's Settings screen, `settingsPlugin` in the
+  app).
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

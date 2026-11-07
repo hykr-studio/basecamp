@@ -3,6 +3,7 @@
 
 export { approvalsFeature } from './approvals/index.js';
 export { creditsFeature } from './credits/index.js';
+export { documentsFeature } from './documents/index.js';
 export { eventsFeature } from './events/index.js';
 export { filesFeature } from './files/index.js';
 export { integrationsFeature } from './integrations/index.js';
@@ -13,3 +14,7 @@ export { modelsFeature } from './models/index.js';
 export { moneyFeature } from './money/index.js';
 export { partiesFeature } from './parties/index.js';
 export { pushFeature } from './push/index.js';
+export { settingsFeature } from './settings/index.js';
+export { slaFeature } from './sla/index.js';
+export { statesFeature } from './states/index.js';
+export { versionsFeature } from './versions/index.js';

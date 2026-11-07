@@ -41,6 +41,8 @@ export const config = {
     /** HMAC key for X-Hub-Signature-256 on webhooks (whaloc's WHALOC_APP_SECRET). */
     appSecret: env.WA_APP_SECRET ?? '',
     verifyToken: env.WA_VERIFY_TOKEN ?? '',
+    /** The Meta app's id: templates with a DOCUMENT header are created with a sample file. */
+    appId: env.WA_APP_ID || undefined,
     /** Sends per second per number, below Meta's default throughput. */
     sendRatePerSec: Number(env.WA_SEND_RATE_PER_SEC ?? 60),
   },

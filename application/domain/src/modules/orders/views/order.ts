@@ -1,14 +1,20 @@
-import { type Labels, moneyText, pick, spokenMoney } from '@hykr/i18n';
+import { stateLabel } from '@hykr/contracts';
+import { type Labels, type Lang, moneyText, pick, spokenMoney } from '@hykr/i18n';
 import { action, defineView, spokenList, type ViewLabels } from '@hykr/ui-registry';
 import { z } from 'zod';
-import { OrderSpec, OrderView } from '../contracts/index.js';
+import { ORDER_STATES, OrderSpec, OrderView } from '../contracts/index.js';
 
 const open = action<OrderView>({ screen: 'order.detail', params: (o) => ({ id: o.id }) });
 
-const STATUS: Record<OrderView['status'], Labels> = {
-  open: { en: 'open', hi: 'खुला', te: 'తెరిచి ఉంది' },
-  cancelled: { en: 'cancelled', hi: 'रद्द', te: 'రద్దు చేయబడింది' },
-};
+/** "(submitted)", or nothing for a draft. A revision says which: "v2". */
+const status = (o: OrderView, lang: Lang) =>
+  [
+    o.revision > 1 ? `v${o.revision}` : '',
+    o.status === 'draft' ? '' : stateLabel(ORDER_STATES, o.status, lang).toLowerCase(),
+  ]
+    .filter(Boolean)
+    .join(', ');
+const after = (o: OrderView, lang: Lang) => (status(o, lang) ? ` (${status(o, lang)})` : '');
 const WORDS = {
   lines: { en: 'Lines', hi: 'लाइनें', te: 'లైన్లు' },
   subtotal: { en: 'Subtotal', hi: 'उप-योग', te: 'ఉప మొత్తం' },
@@ -28,7 +34,8 @@ const labels = {
 
 export const OrderCardView = defineView({
   name: 'order.card',
-  description: 'One order: its number, title, status, tax and total, and a way to open it.',
+  description:
+    'One order: its number, title, state and revision, tax and total, and a way to open it.',
   surfaces: ['inline', 'canvas', 'text', 'speech'],
   props: z.object({ id: z.string(), item: OrderView }),
   source: { entity: OrderSpec, into: 'item', by: 'id' },
@@ -36,7 +43,7 @@ export const OrderCardView = defineView({
   labels: { noun },
   text: (p, ctx) =>
     [
-      `${p.item.number} · ${p.item.title}${p.item.status === 'open' ? '' : ` (${pick(STATUS[p.item.status], ctx.lang)})`}`,
+      `${p.item.number} · ${p.item.title}${after(p.item, ctx.lang)}`,
       `${pick(WORDS.lines, ctx.lang)}: ${p.item.lineCount}`,
       `${pick(WORDS.subtotal, ctx.lang)}: ${moneyText(p.item.subtotal, ctx.lang)}`,
       ...p.item.taxLines.map((t) => `${t.label ?? t.code}: ${moneyText(t.amount, ctx.lang)}`),
@@ -58,8 +65,7 @@ export const OrderListView = defineView({
       ? [
           p.title,
           ...p.items.map(
-            (o) =>
-              `• ${o.number} ${o.title}: ${moneyText(o.total, ctx.lang)}${o.status === 'open' ? '' : ` (${pick(STATUS[o.status], ctx.lang)})`}`,
+            (o) => `• ${o.number} ${o.title}: ${moneyText(o.total, ctx.lang)}${after(o, ctx.lang)}`,
           ),
         ]
           .filter(Boolean)

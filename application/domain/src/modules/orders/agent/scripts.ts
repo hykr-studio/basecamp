@@ -5,13 +5,30 @@ import { moneyText } from '@hykr/i18n';
  * The scripted model's knowledge of the orders module (tests, CI and demos without a key):
  *   order <title>: <qty> <item> at <price> [+<rate>%], …     list-orders → save-order (waits)
  *   list orders                                               list-orders
- *   cancel order <number>                                     list-orders → cancel-order (waits)
+ *   submit|approve|cancel order <number>                      list-orders → transition-orders
+ *   revise order <number>                                     list-orders → revise-order (waits)
  *   orders by status / order totals by month                  summarize-orders (kpi.row tiles)
+ *   pdf of order <number>                                     list-orders → render-document
+ *   send order <number> to me                                 … → render-document → send-document
+ *   email order <number> to <address>                         … → send-document (waits)
+ * A PDF is made in the turn's language.
  * Prices are decimals in the business's currency; a rate is the line's tax percentage.
  */
 const first = (text: string) => text.split('\n')[0]?.trim() ?? '';
 const ORDER = /^order\s+(.+?):\s*(.+)$/i;
-const CANCEL = /^cancel order\s+(\S+)$/i;
+const PDF = /^pdf of order\s+(\S+)$/i;
+const SEND = /^(?:send order\s+(\S+)\s+to me|email order\s+(\S+)\s+to\s+(\S+@\S+))$/i;
+const MOVE = /^(submit|approve|cancel) order\s+(\S+)$/i;
+const REVISE = /^revise order\s+(\S+)$/i;
+const DID = { submit: 'Submitted', approve: 'Approved', cancel: 'Cancelled' } as const;
+
+/** No order by that number: never an invented id. */
+const noSuchOrder = (turn: Parameters<typeof sayIn>[0], number: string) =>
+  sayIn(turn, {
+    en: `There is no order ${number}.`,
+    hi: `ऑर्डर ${number} नहीं मिला।`,
+    te: `ఆర్డర్ ${number} లేదు.`,
+  });
 const ITEM = /^(\d+)\s+(.+?)\s+at\s+(\d+(?:\.\d{1,3})?)(?:\s*\+\s*(\d+(?:\.\d{1,2})?)%)?$/i;
 
 type Line = { title: string; quantity: number; unitPrice: string; taxRateBp?: number };
@@ -83,24 +100,41 @@ export const ordersScripts = [
     },
   }),
   defineScript({
-    name: 'cancel-order',
-    match: (text) => CANCEL.exec(first(text))?.[1],
-    step: (number, turn) => {
-      const cancelled = turn.result('cancel-order');
-      if (cancelled) return [say(written(cancelled, () => `Cancelled order ${number}.`, turn))];
+    name: 'move-order',
+    match: (text) => {
+      const m = MOVE.exec(first(text));
+      return m ? { move: m[1].toLowerCase() as keyof typeof DID, number: m[2] } : undefined;
+    },
+    step: ({ move, number }, turn) => {
+      const moved = turn.result('transition-orders');
+      if (moved) return [say(written(moved, () => `${DID[move]} order ${number}.`, turn))];
       const found = turn.result('list-orders');
       if (!found) return [call('list-orders', { number })];
       const [order] = items(found) as unknown as { id: string }[];
-      // Never an invented id: no such order, no cancel.
-      if (!order)
+      if (!order) return [noSuchOrder(turn, number)];
+      return [call('transition-orders', { id: order.id, transition: move })];
+    },
+  }),
+  defineScript({
+    name: 'revise-order',
+    match: (text) => REVISE.exec(first(text))?.[1],
+    step: (number, turn) => {
+      const revised = turn.result('revise-order');
+      if (revised)
         return [
-          sayIn(turn, {
-            en: `There is no order ${number}.`,
-            hi: `ऑर्डर ${number} नहीं मिला।`,
-            te: `ఆర్డర్ ${number} లేదు.`,
-          }),
+          say(
+            written(
+              revised,
+              (v) => `Order ${(v as unknown as Saved).order.number} is a new draft of ${number}.`,
+              turn,
+            ),
+          ),
         ];
-      return [call('cancel-order', { orderId: order.id })];
+      const found = turn.result('list-orders');
+      if (!found) return [call('list-orders', { number })];
+      const [order] = items(found) as unknown as { id: string }[];
+      if (!order) return [noSuchOrder(turn, number)];
+      return [call('revise-order', { orderId: order.id })];
     },
   }),
   defineScript({
@@ -124,6 +158,55 @@ export const ordersScripts = [
           hi: `कुल ${n} ऑर्डर; जोड़ ऊपर है।`,
           te: `మొత్తం ${n} ఆర్డర్లు; మొత్తాలు పైన ఉన్నాయి.`,
         }),
+      ];
+    },
+  }),
+  defineScript({
+    name: 'order-pdf',
+    match: (text) => PDF.exec(first(text))?.[1],
+    step: (number, turn) => {
+      const found = turn.result('list-orders');
+      if (!found) return [call('list-orders', { number })];
+      const [order] = items(found) as unknown as { id: string }[];
+      if (!order) return [noSuchOrder(turn, number)];
+      const made = turn.result('render-document');
+      if (!made)
+        return [
+          call('render-document', { document: 'orders.order', id: order.id, lang: turn.lang }),
+        ];
+      return [
+        say(written(made, (v) => `Making ${(v as unknown as { name: string }).name}.`, turn)),
+      ];
+    },
+  }),
+  defineScript({
+    name: 'order-send',
+    match: (text) => {
+      const m = SEND.exec(first(text));
+      if (!m) return undefined;
+      return m[1] ? { number: m[1] } : { number: m[2], email: m[3] };
+    },
+    step: ({ number, email }: { number: string; email?: string }, turn) => {
+      const found = turn.result('list-orders');
+      if (!found) return [call('list-orders', { number })];
+      const [order] = items(found) as unknown as { id: string }[];
+      if (!order) return [noSuchOrder(turn, number)];
+      const made = turn.result('render-document');
+      if (!made)
+        return [
+          call('render-document', { document: 'orders.order', id: order.id, lang: turn.lang }),
+        ];
+      const sent = turn.result('send-document');
+      const doc = (made.result as { value?: { id: string } }).value;
+      if (!sent && doc)
+        return [
+          call('send-document', {
+            documentId: doc.id,
+            ...(email ? { to: { email }, channel: 'email' } : { to: { self: true } }),
+          }),
+        ];
+      return [
+        say(written(sent ?? made, () => `Sending order ${number} to ${email ?? 'you'}.`, turn)),
       ];
     },
   }),

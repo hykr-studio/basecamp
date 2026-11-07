@@ -13,6 +13,7 @@ import {
   RequestMeta,
   type RequestMetaValue,
   runWrite,
+  TenantConfigService,
   type WriteOp,
 } from '@hykr/core';
 import { businessesOf, type Database, memberships } from '@hykr/db';
@@ -29,6 +30,7 @@ import {
 import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 import { and, eq } from 'drizzle-orm';
 import { createZodDto } from 'nestjs-zod';
+import { flagsOn } from '../../features/settings/gates.js';
 import { DB } from '../../infra/db.module.js';
 
 class SetDefaultDto extends createZodDto(SetDefaultBusinessInput) {}
@@ -98,7 +100,10 @@ const setDefault = (): WriteOp<SetDefaultBusinessInput, MembershipRow, string> =
 @OptionalAuth()
 @UseGuards(PrincipalGuard, HumanOnlyGuard)
 export class MeController {
-  constructor(@Inject(DB) private readonly db: Database) {}
+  constructor(
+    @Inject(DB) private readonly db: Database,
+    private readonly config: TenantConfigService,
+  ) {}
 
   @Get()
   async me(@CurrentPrincipal() p: Principal): Promise<Me> {
@@ -107,6 +112,16 @@ export class MeController {
       ...b,
       roles: b.as === 'participant' ? participant : b.roles,
     }));
+    // The declared feature flags that are on here (A11): everything else is off. Settings that
+    // do not parse switch every flag off (fail closed) but still answer, so a business whose
+    // other section is broken keeps its roles and capabilities and can repair it (A4). No
+    // business, no flags.
+    const features = p.tenantId
+      ? await this.config.get(p.tenantId).then(
+          ({ settings }) => flagsOn(settings),
+          () => [],
+        )
+      : [];
     return {
       userId: p.actor.id,
       tenantId: p.tenantId ?? null,
@@ -115,6 +130,7 @@ export class MeController {
       customerId: p.customerId ?? null,
       as: p.tenantId ? (p.standing ?? 'member') : null,
       businesses,
+      features,
     };
   }
 

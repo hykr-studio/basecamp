@@ -4,3 +4,5 @@ export { grantsCleanup, holdsGrant, recordGrantKind } from './grants.js';
 export { moneyPlugin } from './money.js';
 export { parentPlugin } from './parent.js';
 export { participantGrantKind, participates, participationsCleanup } from './participants.js';
+export { statesPlugin } from './states.js';
+export { versionedPlugin } from './versioned.js';

@@ -125,6 +125,8 @@ export const Me = z.object({
   as: BusinessStanding.nullable(),
   /** Every business they are in, as a member or a participant. Send `x-tenant-id` to switch. */
   businesses: z.array(Business),
+  /** The declared feature flags that are on in this business (`featureFlags`): off otherwise. */
+  features: z.array(z.string()),
 });
 export type Me = z.infer<typeof Me>;
 
