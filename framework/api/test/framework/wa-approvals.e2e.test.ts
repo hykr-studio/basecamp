@@ -28,7 +28,10 @@ type Sent = {
   type?: string;
   text?: { body: string };
   template?: { name: string; components?: ({ type: string } & Partial<Button>)[] };
-  interactive?: { action: { buttons?: { reply: { id: string; title: string } }[] } };
+  interactive?: {
+    body?: { text?: string };
+    action: { buttons?: { reply: { id: string; title: string } }[] };
+  };
 };
 const sent: Sent[] = [];
 const toNumber = (n: string) => sent.filter((s) => s.to === n && s.type);
@@ -253,5 +256,38 @@ describe('approvals on WhatsApp', () => {
     expect(
       toNumber(address).some((s) => JSON.stringify(s.interactive ?? '').includes('apr:')),
     ).toBe(false);
+  });
+
+  it('the run goes on where it came from: on WhatsApp, once decided (A7)', async () => {
+    // Ana's own request, decided with the button: the assistant's run goes on in her chat.
+    await ana.call('POST', '/api/tasks', { title: 'Order paint' });
+    await say(anaPhone, 'delete Order paint');
+    const buttons = await eventually(() =>
+      toNumber(anaPhone).find(
+        (s) =>
+          s.interactive?.body?.text?.includes('Order paint') &&
+          s.interactive?.action.buttons?.some((b) => b.reply.id.startsWith('apr:')),
+      ),
+    );
+    await tap(anaPhone, buttons.interactive?.action.buttons?.[0].reply.id ?? '');
+    await heard(anaPhone, /Done: Delete "Order paint"/);
+    await heard(anaPhone, /That was approved and is done: Delete "Order paint"/);
+
+    // A customer's request, decided by the business in the app: the customer hears it go on.
+    const address = phone();
+    const customer = await seedContact(tenantId, 'Leela', address);
+    await asAssistant(`contact:${customer.contactId}`)('POST', '/api/tasks', {
+      title: 'Return tiles',
+    });
+    await say(address, 'delete Return tiles');
+    await heard(address, /asked the team/);
+    const { rows } = await pool.query(
+      `select id from app.approvals where requester_contact_id = $1 and status = 'pending'`,
+      [customer.contactId],
+    );
+    expect(rows).toHaveLength(1);
+    const rejected = await ana.call('POST', `/api/approvals/${rows[0].id}/reject`);
+    expect(rejected.body.status).toBe('rejected');
+    await heard(address, /That was rejected, so nothing changed: Delete "Return tiles"/);
   });
 });
