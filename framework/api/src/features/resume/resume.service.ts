@@ -45,6 +45,9 @@ const INTERRUPTED = '(The reply was interrupted.)';
 
 const DECIDED = new Set(['approved', 'rejected', 'expired', 'failed']);
 
+/** Reads of the stored run after a resume, 100 ms apart, before the next resume may start. */
+const SNAPSHOT_TRIES = 50;
+
 /** How long one resume may hold its run (a resume runs at most 8 model steps). */
 const LOCK_MS = 10 * 60_000;
 
@@ -268,6 +271,9 @@ export class ResumeService implements OnApplicationShutdown {
         out.totalUsage,
         out.finishReason,
       ]);
+      // The next decision of this run (waiting for the lock) must find the run as this one left
+      // it: Mastra may still be writing the snapshot when the stream ends.
+      await this.stored(runId, row.id);
     } catch (e) {
       log.warn(`run=${runId} resume failed: ${e instanceof Error ? e.message : e}`);
       await this.say(p, thread, runId, lang, { reply: INTERRUPTED, results: [] }).catch(() => {});
@@ -301,6 +307,16 @@ export class ResumeService implements OnApplicationShutdown {
       `run=${runId} resumed after approval=${row.id} (${row.status}) tools=[${outcome.toolCalls.join(',')}] ${Date.now() - started}ms`,
     );
     return 'resumed';
+  }
+
+  /** Wait (a few seconds at most) until the stored run no longer waits for this approval. */
+  private async stored(runId: string, approvalId: string) {
+    const agents = runtime().agents;
+    for (let i = 0; i < SNAPSHOT_TRIES; i++) {
+      if (!(await agents.findSuspension({ runId, approvalId }))) return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    log.warn(`run=${runId}: the stored run still waits for approval=${approvalId} after resuming`);
   }
 
   /** Why this suspension must not be resumed for this approval, or null. Fails closed. */

@@ -54,8 +54,17 @@ type Output = MastraModelOutput<any>;
 
 type Usage = { inputTokens?: number; outputTokens?: number; totalTokens?: number };
 
-/** What one stream of a run carried: its parked calls, tool results, words and steps' usage. */
-type Seen = { parked: SuspendedCall[]; results: Chunk[]; text: string; usage: Usage };
+/**
+ * What one stream of a run carried: its parked calls, tool results, words and steps' usage, and
+ * whether it ended with a `finish` or an `error` chunk.
+ */
+type Seen = {
+  parked: SuspendedCall[];
+  results: Chunk[];
+  text: string;
+  usage: Usage;
+  ended?: 'finish' | 'error';
+};
 
 const add = (a: number | undefined, b: number | undefined) =>
   a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
@@ -70,6 +79,10 @@ const add = (a: number | undefined, b: number | undefined) =>
  * the run's start. They are taken from this stream alone instead: what the run did and said
  * after the decision, and what its model calls used since (the step that parked included: the
  * turn that parked did not count it).
+ *
+ * `finishReason` is 'suspended' too for a stream that ended with neither a finish nor an error:
+ * a resumed call whose run still waits for another call of the same step (Mastra marks a stream
+ * suspended only when it sees a call suspend, and rejects the reason otherwise).
  */
 export function parkedView<O extends Output>(
   output: O,
@@ -84,6 +97,7 @@ export function parkedView<O extends Output>(
       if (call) s.parked.push(call);
       else if (chunk.type === 'tool-result') s.results.push(chunk);
       else if (chunk.type === 'text-delta') s.text += String(chunk.payload?.text ?? '');
+      else if (chunk.type === 'finish' || chunk.type === 'error') s.ended = chunk.type;
       else if (chunk.type === 'step-finish') {
         const u = (chunk.payload?.output as { usage?: Usage } | undefined)?.usage;
         if (u)
@@ -95,7 +109,7 @@ export function parkedView<O extends Output>(
       }
     }
     return s;
-  })().catch(() => ({ parked: [], results: [], text: '', usage: {} }));
+  })().catch((): Seen => ({ parked: [], results: [], text: '', usage: {}, ended: 'error' }));
   const fullStream = () => {
     let last: Chunk | undefined;
     const calls: SuspendedCall[] = [];
@@ -150,6 +164,15 @@ export function parkedView<O extends Output>(
     return [...(opts.resumed ? s.results : done), ...parkedResults(s, output.runId)];
   };
   const totalUsage = async () => (opts.resumed ? (await seen).usage : output.totalUsage);
+  const finishReason = async () => {
+    try {
+      return await output.finishReason;
+    } catch (e) {
+      const s = await seen;
+      if (!s.ended) return 'suspended';
+      throw e;
+    }
+  };
   const getFullOutput = async () => {
     const [full, s] = await Promise.all([output.getFullOutput(), seen]);
     if (!s.parked.length && !opts.resumed) return full;
@@ -189,6 +212,7 @@ export function parkedView<O extends Output>(
       if (prop === 'text') return text();
       if (prop === 'toolResults') return toolResults();
       if (prop === 'totalUsage') return totalUsage();
+      if (prop === 'finishReason') return finishReason();
       if (prop === 'getFullOutput') return getFullOutput;
       const value = Reflect.get(target, prop, target);
       return typeof value === 'function' ? value.bind(target) : value;
