@@ -12,6 +12,7 @@ export {
   type Uploader,
   uploadedBy,
 } from './files.service.js';
+export { type FileHolder, fileHolders } from './holders.js';
 export { fileLine, sizeText } from './lines.js';
 export { bytesFit, type Sniffed, sniff } from './sniff.js';
 export { SPEECH, type Speech } from './speech.js';

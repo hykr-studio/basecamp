@@ -23,6 +23,7 @@ export {
   useFileUpload,
 } from './features/files';
 export * from './features/index';
+export { JobProgress, useCancelJob, useJob, useJobs } from './features/jobs';
 export { createInvalidator, liveKeysFor } from './features/live/keys';
 export {
   addressOf,
