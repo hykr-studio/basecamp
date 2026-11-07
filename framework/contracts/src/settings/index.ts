@@ -8,6 +8,7 @@ export * from './memory.js';
 export * from './models.js';
 export * from './money.js';
 export * from './parties.js';
+export * from './privacy.js';
 export * from './roles.js';
 export * from './sections.js';
 export * from './sla.js';

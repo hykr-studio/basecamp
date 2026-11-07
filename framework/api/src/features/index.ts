@@ -18,6 +18,7 @@ export { memoryFeature } from './memory/index.js';
 export { modelsFeature } from './models/index.js';
 export { moneyFeature } from './money/index.js';
 export { partiesFeature } from './parties/index.js';
+export { privacyFeature } from './privacy/index.js';
 export { pushFeature } from './push/index.js';
 export { resumeFeature } from './resume/index.js';
 export { settingsFeature } from './settings/index.js';

@@ -14,6 +14,7 @@ export * from './module.js';
 export * from './money.js';
 export * from './numbering.js';
 export * from './present.js';
+export * from './privacy.js';
 export * from './read-tools.js';
 export * from './registry.js';
 export * from './shared.js';

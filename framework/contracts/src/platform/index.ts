@@ -22,6 +22,7 @@ export * from './memory.js';
 export * from './notify.js';
 export * from './page.js';
 export * from './parties.js';
+export * from './privacy.js';
 
 export const platformEntities = {
   pages: SavedPageSpec,

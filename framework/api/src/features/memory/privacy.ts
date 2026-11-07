@@ -1,4 +1,5 @@
 import { subjectKey } from '@hykr/contracts';
+import type { Tx } from '@hykr/core';
 import { memories, memoryIndex } from '@hykr/db';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { ErasureContributor, ExportContributor } from '../../hooks.js';
@@ -35,6 +36,29 @@ export const EraseMemory: ErasureContributor = {
     return { count: said.length + written.length };
   },
 };
+
+/**
+ * These records were erased or blanked for personal data (B18): their vectors go, so recall
+ * cannot find them by what they said. A record written again is indexed again.
+ */
+export async function forgetRecords(
+  tx: Tx,
+  a: { tenantId: string; resourceType: string; ids: readonly string[] },
+): Promise<number> {
+  if (!a.ids.length) return 0;
+  const gone = await tx
+    .delete(memoryIndex)
+    .where(
+      and(
+        eq(memoryIndex.tenantId, a.tenantId),
+        eq(memoryIndex.kind, 'record'),
+        eq(memoryIndex.sourceType, a.resourceType),
+        inArray(memoryIndex.sourceId, [...a.ids]),
+      ),
+    )
+    .returning({ id: memoryIndex.id });
+  return gone.length;
+}
 
 /**
  * The business memories a person wrote (no kind when there are none). Vectors are derived from

@@ -1,10 +1,11 @@
 import type { ChannelAdapter } from '@hykr/channels';
-import { type Database, schema, writeAudit } from '@hykr/db';
+import { type Database, schema } from '@hykr/db';
 import { langOf, t } from '@hykr/i18n';
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import type { ErasureContributor } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
-import { eraseWithContributors } from '../../privacy/contributors.js';
 import { ContactsService } from '../contacts.service.js';
 import { WHATSAPP } from '../whatsapp/adapter.provider.js';
 
@@ -21,37 +22,41 @@ const {
 } = schema;
 const log = new Logger('Erasure');
 
-/**
- * "Delete my data" (DPDP). Everything that ties the business to this number goes, in one
- * transaction: the contact (and with it consents, messages, handoffs and its own thread), the
- * raw webhook payloads from it on every one of the business's numbers, link codes and their
- * sends, the requests it left waiting for approval, and, for a person with an account, the
- * WhatsApp side of their thread. A customer record stays only as an anonymous business record
- * (their bookings remain the business's); a linked person's account keeps theirs. Audit rows
- * stay and never held the number. Every erasure contributor (a feature's own records about
- * them) runs in the same transaction, and its count goes on the audit row. They are told once it
- * is done.
- */
-@Injectable()
-export class ErasureService {
-  constructor(
-    @Inject(DB) private readonly db: Database,
-    @Inject(WHATSAPP) private readonly wa: ChannelAdapter,
-    private readonly contacts: ContactsService,
-  ) {}
+/** What a customer record no account holds is called once its contact is forgotten. */
+const ERASED_CUSTOMER = 'Erased customer';
 
-  async erase(contactId: string) {
-    const contact = await this.contacts.byId(contactId);
-    if (!contact) return;
+/**
+ * What the WhatsApp channel keeps about a contact besides the contact row: the raw webhook
+ * payloads from its number on every one of the business's numbers, the requests it left waiting
+ * for approval, link codes and sends made to the number before it was a contact, and, for a
+ * number linked to an account, the WhatsApp side of that person's thread. A customer record no
+ * account holds is anonymised (the business's bookings stay its own). The contact row itself
+ * (with its consents, messages, handoffs and own thread) goes last, after every other
+ * contributor, in the privacy feature's erasure. Audit rows stay and never held the number.
+ */
+export const channelErasure: ErasureContributor = {
+  name: 'channel',
+  async erase({ subject, tenantId, tx }) {
+    if (subject.kind !== 'contact') return { count: 0 };
+    const [contact] = await tx
+      .select()
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.id, subject.contactId),
+          tenantId ? eq(contacts.tenantId, tenantId) : undefined,
+        ),
+      );
+    if (!contact) return { count: 0 };
     const businessNumbers = (
-      await this.db
+      await tx
         .select({ id: numbers.phoneNumberId })
         .from(numbers)
         .where(eq(numbers.tenantId, contact.tenantId))
     ).map((n) => n.id);
-
-    await this.db.transaction(async (tx) => {
-      if (businessNumbers.length)
+    let n = 0;
+    if (businessNumbers.length)
+      n += (
         await tx
           .delete(inboundEvents)
           .where(
@@ -59,14 +64,25 @@ export class ErasureService {
               eq(inboundEvents.from, contact.address),
               inArray(inboundEvents.phoneNumberId, businessNumbers),
             ),
-          );
-      await tx.delete(approvals).where(eq(approvals.requesterContactId, contact.id));
+          )
+          .returning({ id: inboundEvents.id })
+      ).length;
+    n += (
+      await tx
+        .delete(approvals)
+        .where(eq(approvals.requesterContactId, contact.id))
+        .returning({ id: approvals.id })
+    ).length;
+    n += (
       await tx
         .delete(linkCodes)
         .where(
           and(eq(linkCodes.tenantId, contact.tenantId), eq(linkCodes.address, contact.address)),
-        );
-      // Sends before they were a contact (a link code) carry the number in their body.
+        )
+        .returning({ id: linkCodes.id })
+    ).length;
+    // Sends before they were a contact (a link code) carry the number in their body.
+    n += (
       await tx
         .delete(messages)
         .where(
@@ -75,56 +91,106 @@ export class ErasureService {
             isNull(messages.contactId),
             sql`${messages.body}->>'to' = ${contact.address}`,
           ),
-        );
-      if (contact.userId) {
-        // Their account stays; what they said on WhatsApp goes from their shared thread.
-        const theirs = tx
-          .select({ id: threads.id })
-          .from(threads)
-          .where(and(eq(threads.tenantId, contact.tenantId), eq(threads.ownerId, contact.userId)));
+        )
+        .returning({ id: messages.id })
+    ).length;
+    if (contact.userId) {
+      // Their account stays; what they said on WhatsApp goes from their shared thread.
+      const theirs = tx
+        .select({ id: threads.id })
+        .from(threads)
+        .where(and(eq(threads.tenantId, contact.tenantId), eq(threads.ownerId, contact.userId)));
+      n += (
         await tx
           .delete(threadMessages)
           .where(
             and(inArray(threadMessages.threadId, theirs), eq(threadMessages.channel, 'whatsapp')),
-          );
-      } else if (contact.customerId) {
+          )
+          .returning({ id: threadMessages.id })
+      ).length;
+    } else if (contact.customerId) {
+      n += (
         await tx
           .update(customers)
-          .set({ displayName: 'Erased customer' })
-          .where(eq(customers.id, contact.customerId));
-      }
-      // What features hold about them, before the contact row their rows may point at.
-      const contributed = await eraseWithContributors({
-        subject: { kind: 'contact', contactId: contact.id },
-        tenantId: contact.tenantId,
-        tx,
-      });
-      // Consents, messages, handoffs and the contact's own thread go with it (cascade).
-      await tx.delete(contacts).where(eq(contacts.id, contact.id));
-      await writeAudit(tx, {
-        action: 'channel.contact.erased',
-        resourceType: 'contact',
-        resourceId: contact.id,
-        actorKind: 'contact',
-        actorId: contact.id,
-        tenantId: contact.tenantId,
-        channel: 'whatsapp',
-        reason: 'The person asked to delete their data',
-        ...(Object.keys(contributed).length ? { after: { contributors: contributed } } : {}),
-      });
-    });
+          .set({ displayName: ERASED_CUSTOMER })
+          .where(eq(customers.id, contact.customerId))
+          .returning({ id: customers.id })
+      ).length;
+    }
+    return { count: n };
+  },
+};
 
-    // Done, then said: a failed erasure is retried, never confirmed.
-    const from = businessNumbers[0];
-    if (from)
-      await this.wa
-        .send(from, {
-          kind: 'text',
-          to: contact.address,
-          text: t(langOf(contact.locale), 'channel.erased'),
-        })
-        .catch((e) =>
-          log.warn(`could not confirm the erasure: ${e instanceof Error ? e.message : e}`),
-        );
+/** What a confirmation needs, read before the contact is gone. */
+export interface ErasedContact {
+  tenantId: string;
+  address: string;
+  locale: string;
+}
+
+/** What the privacy feature does for a WhatsApp "delete my data" (features/privacy). */
+export interface PrivacyIntake {
+  /**
+   * File the contact's erasure (intake `whatsapp`) and carry it out now, unless the business
+   * reviews erasures first ('waiting'). 'gone': there is no such contact any more.
+   */
+  eraseContact(a: {
+    tenantId: string;
+    contactId: string;
+  }): Promise<{ status: 'completed' | 'waiting' | 'gone' }>;
+}
+
+/** Its token: the privacy feature provides it; the channel asks for it when it needs it. */
+export const PRIVACY_INTAKE = Symbol('PRIVACY_INTAKE');
+
+/**
+ * "Delete my data" on WhatsApp (DPDP). The contact's request is filed with the privacy feature
+ * and carried out there and then, in one transaction, unless the business reviews erasures
+ * first; then the person is told it is done, or that it was received. A request carried out
+ * later is confirmed when it is (`confirm`). A failed erasure is retried, never confirmed.
+ */
+@Injectable()
+export class ErasureService {
+  constructor(
+    @Inject(DB) private readonly db: Database,
+    @Inject(WHATSAPP) private readonly wa: ChannelAdapter,
+    private readonly contacts: ContactsService,
+    private readonly ref: ModuleRef,
+  ) {}
+
+  async erase(contactId: string) {
+    const contact = await this.contacts.byId(contactId);
+    if (!contact) return;
+    const privacy = this.ref.get<PrivacyIntake>(PRIVACY_INTAKE, { strict: false });
+    const snapshot: ErasedContact = {
+      tenantId: contact.tenantId,
+      address: contact.address,
+      locale: contact.locale,
+    };
+    const done = await privacy.eraseContact({ tenantId: contact.tenantId, contactId });
+    if (done.status === 'gone') return;
+    await this.say(
+      snapshot,
+      done.status === 'completed' ? 'channel.erased' : 'privacy.erasureReceived',
+    );
+  }
+
+  /** Tell a forgotten contact it is done. */
+  confirm(contact: ErasedContact) {
+    return this.say(contact, 'channel.erased');
+  }
+
+  private async say(contact: ErasedContact, key: 'channel.erased' | 'privacy.erasureReceived') {
+    const [from] = await this.db
+      .select({ id: numbers.phoneNumberId })
+      .from(numbers)
+      .where(eq(numbers.tenantId, contact.tenantId))
+      .limit(1);
+    if (!from) return;
+    await this.wa
+      .send(from.id, { kind: 'text', to: contact.address, text: t(langOf(contact.locale), key) })
+      .catch((e) =>
+        log.warn(`could not confirm the erasure: ${e instanceof Error ? e.message : e}`),
+      );
   }
 }
