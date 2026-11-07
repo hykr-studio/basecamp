@@ -49,7 +49,6 @@ import {
   type CallHandler,
   ConflictException,
   type ExecutionContext,
-  HttpException,
   Inject,
   Injectable,
   Logger,
@@ -58,7 +57,7 @@ import {
 } from '@nestjs/common';
 import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { Response } from 'express';
-import { type Observable, tap } from 'rxjs';
+import type { Observable } from 'rxjs';
 import { z } from 'zod';
 import type { ActingOperator } from './operators.js';
 
@@ -578,26 +577,20 @@ export class SupportLogInterceptor implements NestInterceptor {
     const req = http.getRequest<ApiRequest>();
     const behalf = req.principal?.onBehalfOf;
     if (behalf?.kind !== 'support') return next.handle();
-    // Once per request, even for a stream that emits many times.
-    let logged = false;
-    const record = (status: number) => {
-      if (logged) return;
-      logged = true;
+    // Once the answer has gone (or the caller left), with the status it went with: a stream's
+    // too, and a refusal's.
+    const res = http.getResponse<Response>();
+    res.once('close', () =>
       this.write(this.options.db, {
         grantId: behalf.grantId,
         tenantId: req.principal?.tenantId ?? '',
         actorKind: req.principal?.actor.kind ?? 'user',
         method: req.method,
         path: req.path.slice(0, 500),
-        status,
-      });
-    };
-    return next.handle().pipe(
-      tap({
-        next: () => record(http.getResponse<Response>().statusCode),
-        error: (e: unknown) => record(e instanceof HttpException ? e.getStatus() : 500),
+        status: res.statusCode,
       }),
     );
+    return next.handle();
   }
 
   private write(db: Database, row: typeof supportLog.$inferInsert) {

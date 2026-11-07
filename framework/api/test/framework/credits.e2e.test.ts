@@ -256,7 +256,8 @@ describe('the operator', () => {
     expect(res.body.status).toBe('done');
     const { rows } = await pool.query(
       `select action, actor_kind, actor_id, on_behalf_of, before, after from audit.events
-       where tenant_id = $1 and action in ('credits.plan.set', 'tenant.update') order by at`,
+       where tenant_id = $1 and action in ('credits.plan.set', 'tenant.update')
+       order by at, action desc`,
       [tenant[lee.name]],
     );
     // The operator's system job, on behalf of the operator.

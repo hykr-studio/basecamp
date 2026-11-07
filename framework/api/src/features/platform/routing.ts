@@ -251,6 +251,15 @@ export class PlatformRoutingService {
     const published: object[] = [];
     try {
       const saved = await this.db.transaction(async (tx) => {
+        // One delivery of a request at a time: a second caller waits, then finds it routed.
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${`platform.route:${req.source}:${req.ref}`}, 0))`,
+        );
+        const [again] = await tx
+          .select()
+          .from(routedRequests)
+          .where(and(eq(routedRequests.source, req.source), eq(routedRequests.ref, req.ref)));
+        if (again?.status === 'routed') return again;
         const requestId = randomUUID();
         const runId = randomUUID();
         const principal = (customerId?: string) =>

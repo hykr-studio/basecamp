@@ -349,16 +349,21 @@ describe('the system principal', () => {
     });
   });
 
-  it("another business's row is not found, and it cannot create rows (no owner)", async () => {
+  it("another business's row is not found; a row it creates is the default owner's", async () => {
     const task = (await ana.call('POST', '/api/tasks', { title: 'Not theirs' })).body.value;
     const elsewhere = systemPrincipal({ tenantId: strangerTenant, job: 'fixture.sweeper' });
     await expect(
       write(elsewhere, entityOp(Task, 'update', { id: task.id }), { title: 'Taken' }),
     ).rejects.toMatchObject({ status: 404 });
+    // B19: the server's own work makes rows, owned by the business's default owner.
     const mine = systemPrincipal({ tenantId, job: 'fixture.sweeper' });
-    await expect(
-      write(mine, entityOp(Task, 'create', null), { title: 'Nobody owns this' }),
-    ).rejects.toMatchObject({ status: 403 });
+    const title = `The sweeper made this ${randomUUID()}`;
+    await write(mine, entityOp(Task, 'create', null), { title });
+    const { rows } = await pool.query(
+      'select owner_id, tenant_id from app.fixture_tasks where title = $1',
+      [title],
+    );
+    expect(rows).toEqual([{ owner_id: ana.id, tenant_id: tenantId }]);
   });
 
   it('only server code makes one: its options are checked, and no header makes one', async () => {
