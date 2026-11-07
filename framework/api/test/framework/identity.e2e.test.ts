@@ -93,6 +93,7 @@ describe('roles and capabilities', () => {
         'credits.view',
         'customers.message',
         'fixture.reports',
+        'imports.run',
         'integrations.manage',
         'marketing.approve',
         'members.manage',
