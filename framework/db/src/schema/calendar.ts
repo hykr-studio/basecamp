@@ -109,7 +109,7 @@ export const calendarInvites = app.table(
     sequence: integer('sequence').notNull().default(0),
     /** 'REQUEST' | 'CANCEL'. */
     method: text('method').notNull().default('REQUEST'),
-    /** 'queued' | 'sending' | 'sent' | 'failed'. */
+    /** 'queued' | 'sending' | 'sent' | 'failed'. One send at a time (an advisory lock). */
     status: text('status').notNull().default('queued'),
     lang: text('lang').notNull().default('en'),
     /** Who asked: the record is read as them for every version. */
@@ -119,7 +119,6 @@ export const calendarInvites = app.table(
     sentHash: text('sent_hash'),
     error: text('error'),
     sentAt: at('sent_at'),
-    leaseUntil: at('lease_until'),
     createdAt: at('created_at').defaultNow().notNull(),
     updatedAt: at('updated_at').defaultNow().notNull(),
   },

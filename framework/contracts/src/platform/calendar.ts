@@ -65,14 +65,18 @@ export type BusyTimes = z.infer<typeof BusyTimes>;
 export const FreeTimes = z.object({
   connected: z.boolean(),
   slots: z.array(TimeInterval),
-  /** The zone `hours` were read in: the business's. */
+  /** The zone the hours were read in: the business's. */
   timeZone: z.string(),
 });
 export type FreeTimes = z.infer<typeof FreeTimes>;
 
-const LocalTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'a time like 09:00');
+const LocalTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'a time of day, HH:MM');
 
-/** GET /api/calendar/free: slots of `minutes` between `from` and `to` (at most 31 days). */
+/**
+ * GET /api/calendar/free: slots of `minutes` between `from` and `to` (at most 31 days), inside
+ * `hoursFrom` to `hoursTo` when given, else inside the business's open hours and off its
+ * holidays (its `businessHours` settings; none set: any hour).
+ */
 export const FreeTimeQuery = z.object({
   from: z.iso.datetime({ offset: true }).describe('Look from (ISO date-time)'),
   to: z.iso.datetime({ offset: true }).describe('Look until (ISO date-time), at most 31 days on'),
@@ -90,9 +94,11 @@ export const FreeTimeQuery = z.object({
     .optional()
     .describe('Minutes between starts'),
   hoursFrom: LocalTime.optional().describe(
-    "Earliest local start, like 09:00 (the business's zone)",
+    "Earliest local start, HH:MM in the business's zone. Leave out for the business's open hours",
   ),
-  hoursTo: LocalTime.optional().describe('Latest local end, like 18:00'),
+  hoursTo: LocalTime.optional().describe(
+    "Latest local end, HH:MM. Leave out for the business's open hours",
+  ),
   userId: z
     .string()
     .min(1)

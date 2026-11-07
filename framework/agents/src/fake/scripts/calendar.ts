@@ -1,5 +1,6 @@
 // Calendars and calls:
-//   when am I free tomorrow for 60 minutes      find-free-time (the person's connected calendar)
+//   when am I free tomorrow for 60 minutes      find-free-time (the person's connected calendar,
+//                                               inside the business's own open hours)
 //   invite a@b.c to <entity> <id>               send-calendar-invite (to anyone else: approval)
 //   log a call on <entity> <id>: <notes>        log-call (completed, outbound)
 //   call +<number>                              dial-call (always waits for approval)
@@ -9,7 +10,7 @@ import { defineScriptSet } from '../script-set.js';
 const ENTITY = '([a-zA-Z][a-zA-Z0-9]*)';
 const ID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 
-/** "09:00" in the person's zone. */
+/** A time of day (HH:MM) in the person's zone. */
 const clock = (iso: string, zone: string) =>
   new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: zone });
 
@@ -39,8 +40,6 @@ export const calendarScripts = defineScriptSet({
               from: (day === 'today' && from < new Date() ? new Date() : from).toISOString(),
               to: to.toISOString(),
               minutes,
-              hoursFrom: '09:00',
-              hoursTo: '18:00',
               limit: 5,
             }),
           ];

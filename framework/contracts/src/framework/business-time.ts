@@ -141,6 +141,38 @@ export function addBusinessTime(
   return new Date(start.getTime() + ms);
 }
 
+/**
+ * The open time between two moments, as spans of instants in order: one span where the business
+ * stays open across a boundary (a day open to 24:00 and the next from 00:00). With no week and
+ * no holidays, the whole window.
+ */
+export function openSpansBetween(
+  start: Date,
+  end: Date,
+  hours: OpenHours | undefined,
+  timeZone: string,
+): { start: number; end: number }[] {
+  const a0 = start.getTime();
+  const b0 = end.getTime();
+  if (b0 <= a0) return [];
+  if (everyHour(hours)) return [{ start: a0, end: b0 }];
+  const h = hours as OpenHours;
+  const out: { start: number; end: number }[] = [];
+  let day = localDay(a0, timeZone);
+  for (let i = 0; i < MAX_DAYS; i++, day = nextDay(day)) {
+    for (const [from, to] of openSpans(day, h, timeZone)) {
+      const a = Math.max(from, a0);
+      const b = Math.min(to, b0);
+      if (b <= a) continue;
+      const last = out[out.length - 1];
+      if (last && a <= last.end) last.end = Math.max(last.end, b);
+      else out.push({ start: a, end: b });
+    }
+    if (instantOf(nextDay(day), 0, timeZone) >= b0) break;
+  }
+  return out;
+}
+
 /** How much open time lies between two moments (0 when `end` is not after `start`). */
 export function businessTimeBetween(
   start: Date,

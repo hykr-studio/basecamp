@@ -3,11 +3,6 @@
 // environment when it loads.
 
 export {
-  type MentionContext,
-  type MentionKind,
-  mentionKinds,
-} from './features/comments/mention-kinds.js';
-export {
   contentOf,
   type EventContent,
   googleSettings,
@@ -25,6 +20,11 @@ export {
   reachableCall,
   telephonyProviders,
 } from './features/calls/public.js';
+export {
+  type MentionContext,
+  type MentionKind,
+  mentionKinds,
+} from './features/comments/mention-kinds.js';
 export {
   BUY_CREDITS,
   type CreditPurchaseProvider,

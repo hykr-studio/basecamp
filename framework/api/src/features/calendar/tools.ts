@@ -15,7 +15,7 @@ export const calendarTools: ToolContribution = {
     'find-free-time': createTool({
       id: 'find-free-time',
       description:
-        "Free slots in the user's connected calendar (or, if they may, a colleague's): give the window, how long each slot is, and optionally working hours. Busy times come from the calendar; nothing about other events is shown. Says connected: false when no calendar is connected.",
+        "Free slots in the user's connected calendar (or, if they may, a colleague's): give the window and how long each slot is. Slots keep to the business's open hours unless you give hours. Busy times come from the calendar; nothing about other events is shown. Says connected: false when no calendar is connected.",
       inputSchema: FreeTimeQuery,
       execute: async (query, ctx) =>
         safely('find-free-time', ctx, kit, () => kit.clientFor(ctx).calendar.free(query)),

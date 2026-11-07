@@ -4,10 +4,18 @@ import {
   CallsCapabilities,
   type Principal,
 } from '@hykr/contracts';
-import { entityDef } from '@hykr/core';
+import { entityDef, runWrite, systemPrincipal } from '@hykr/core';
 import { callLogs, type Database } from '@hykr/db';
 import { can, subjectOf } from '@hykr/policy';
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  type OnModuleInit,
+} from '@nestjs/common';
+import { EventBus } from '@nestjs/cqrs';
 import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
 import type { Jobs } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
@@ -16,6 +24,8 @@ import { openConnection } from '../integrations/credentials.js';
 import {
   aboutOf,
   type CallRow,
+  callDialOutcome,
+  type DialOutcome,
   presentCall,
   providerFor,
   reachableCall,
@@ -35,6 +45,7 @@ export class CallsService implements OnModuleInit {
   constructor(
     @Inject(DB) private readonly db: Database,
     @Inject(JOBS) private readonly jobs: Jobs,
+    @Inject(EventBus) private readonly events: EventBus,
   ) {}
 
   onModuleInit() {
@@ -105,61 +116,76 @@ export class CallsService implements OnModuleInit {
   }
 
   /**
-   * In the worker: ask the call's provider to connect it, once. What it answers (or why it
-   * refused) is written on the call.
+   * In the worker: ask the call's provider to connect it, once. Each step (taken, placed,
+   * failed) is a write as the business's system principal: audited on the call, with its
+   * `call.updated` stored.
    */
   async dial(callId: string): Promise<string> {
-    const [claimed] = await this.db
-      .update(callLogs)
-      .set({ status: 'ringing', updatedAt: new Date() })
-      .where(and(eq(callLogs.id, callId), eq(callLogs.status, 'requested')))
-      .returning();
-    if (!claimed) return 'not requested';
+    const [call] = await this.db.select().from(callLogs).where(eq(callLogs.id, callId));
+    if (call?.status !== 'requested') return 'not requested';
+    const outcome = (input: Omit<DialOutcome, 'callId'>) =>
+      this.outcome(call.tenantId, { callId, ...input });
+    try {
+      // Taken once: a second job for the same call is refused here.
+      if ((await outcome({ step: 'started' })) !== 'done') return 'held';
+    } catch (e) {
+      if (e instanceof ForbiddenException || e instanceof NotFoundException) return 'not requested';
+      throw e;
+    }
     const fail = async (error: string) => {
-      await this.db
-        .update(callLogs)
-        .set({ status: 'failed', error: error.slice(0, 500), updatedAt: new Date() })
-        .where(eq(callLogs.id, callId));
+      await outcome({ step: 'failed', error: error.slice(0, 500) });
       return 'failed';
     };
-    const provider = claimed.provider ? telephonyProviders.get(claimed.provider) : undefined;
-    if (!provider || !claimed.toNumber) return fail('The provider is gone');
+    const provider = call.provider ? telephonyProviders.get(call.provider) : undefined;
+    if (!provider || !call.toNumber) return fail('The provider is gone');
     let credentials: unknown;
     if (provider.connector) {
-      const found = await providerFor(this.db, claimed.tenantId);
+      const found = await providerFor(this.db, call.tenantId);
       if (found?.provider.name !== provider.name || !found.connectionId)
         return fail('The business has no connection for this provider');
-      const opened = await openConnection(this.db, claimed.tenantId, found.connectionId);
+      const opened = await openConnection(this.db, call.tenantId, found.connectionId);
       if (!opened) return fail('The connection’s credentials do not open');
       credentials = opened.credentials;
     }
+    let out: Awaited<ReturnType<typeof provider.dial>>;
     try {
-      const out = await provider.dial(
+      out = await provider.dial(
         {
           callId,
-          to: claimed.toNumber,
-          ...(claimed.fromNumber ? { from: claimed.fromNumber } : {}),
-          ...(claimed.resourceType && claimed.resourceId && entityDef(claimed.resourceType)
-            ? { record: { entity: claimed.resourceType, id: claimed.resourceId } }
+          to: call.toNumber,
+          ...(call.fromNumber ? { from: call.fromNumber } : {}),
+          ...(call.resourceType && call.resourceId && entityDef(call.resourceType)
+            ? { record: { entity: call.resourceType, id: call.resourceId } }
             : {}),
         },
         { credentials },
       );
-      await this.db
-        .update(callLogs)
-        .set({
-          externalId: out.externalId,
-          status: out.status ?? 'ringing',
-          startedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(callLogs.id, callId));
-      return 'dialled';
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       log.warn(`dialling ${callId} through ${provider.name}: ${message}`);
       // Never dial twice: a refusal or a lost answer ends the call as failed.
       return fail(message);
     }
+    await outcome({
+      step: 'placed',
+      externalId: out.externalId,
+      ...(out.status ? { status: out.status } : {}),
+    });
+    return 'dialled';
+  }
+
+  /** One step of a dial, written through the write path; its events published after commit. */
+  private async outcome(tenantId: string, input: DialOutcome): Promise<string> {
+    const out = await runWrite(
+      this.db,
+      {
+        principal: systemPrincipal({ tenantId, job: 'calls.dial' }),
+        requestId: `calls.dial:${input.callId}:${input.step}`,
+      },
+      callDialOutcome(),
+      input,
+    );
+    for (const event of out.events) this.events.publish(event);
+    return out.result.status;
   }
 }

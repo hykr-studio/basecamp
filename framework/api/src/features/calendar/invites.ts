@@ -1,6 +1,7 @@
 // Invites by email (iTIP over email, RFC 6047): `calendar.invite` records whom to invite to a
 // record; the worker emails each an .ics read as the person who asked, and follows the record:
 // a change sends an update (SEQUENCE + 1), a deletion a cancellation (decisions B17, 14 to 17).
+// One send at a time per invite, each outcome audited and stored as an event (33 and 34).
 
 import { icsCalendar } from '@hykr/connectors';
 import {
@@ -10,19 +11,29 @@ import {
   parseTenantSettings,
   SendInviteSpec,
 } from '@hykr/contracts';
-import { allow, type Conn, defineCommand, deny, needsApproval, toJson } from '@hykr/core';
-import { calendarInvites, type Database, memberships, tenants, user } from '@hykr/db';
+import {
+  allow,
+  type Conn,
+  defineCommand,
+  deny,
+  needsApproval,
+  recordEvents,
+  systemPrincipal,
+  toJson,
+} from '@hykr/core';
+import { calendarInvites, type Database, memberships, tenants, user, writeAudit } from '@hykr/db';
 import { type Lang, t, whenText } from '@hykr/i18n';
 import { can, subjectOf } from '@hykr/policy';
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { and, eq, isNotNull, lt, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { MailerService } from '../../channels/notify/mailer.service.js';
 import { config } from '../../config.js';
 import type { Jobs, ServerContext } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
 import { JOBS } from '../../queues/define.js';
 import { serverContext } from '../../queues/jobs.service.js';
+import { inviteLock, withLock } from './lock.js';
 import { CalendarEvent } from './ops.js';
 import { memberPrincipal } from './principal.js';
 import { contentOf, type EventContent, hashOf, schedulable, uidOf } from './schedulable.js';
@@ -36,9 +47,6 @@ export type InviteJob =
 
 type InviteRow = typeof calendarInvites.$inferSelect;
 type Values = Record<string, unknown>;
-
-/** A claim older than this is stale (its job died): another job may send it. */
-const LEASE_MS = 5 * 60_000;
 
 export const inviteInfoOf = (r: InviteRow): InviteInfo => ({
   id: r.id,
@@ -172,7 +180,6 @@ export const SendInvite = defineCommand(SendInviteSpec, {
             requestedBy,
             status: 'queued',
             error: null,
-            leaseUntil: null,
             updatedAt: new Date(),
           },
         })
@@ -202,6 +209,10 @@ export const SendInvite = defineCommand(SendInviteSpec, {
 
 /** What an invite showed last: enough to cancel it after the record is gone. */
 type Sent = EventContent;
+
+/** Whether the record now says something else than the invite that went. */
+const changedSince = (row: InviteRow, content: EventContent | null) =>
+  content ? row.method === 'CANCEL' || hashOf(content) !== row.sentHash : row.method === 'REQUEST';
 
 /** The sender address in `SMTP_FROM` ("Name <a@b>" or "a@b"). */
 function fromAddress(): string {
@@ -240,7 +251,7 @@ export class InvitesService {
   run(job: InviteJob, lastTry: boolean): Promise<string> {
     return job.kind === 'send'
       ? this.send(job.inviteId, lastTry)
-      : this.follow(job.tenantId, job.entity, job.id);
+      : this.follow(job.tenantId, job.entity, job.id, lastTry);
   }
 
   /** A record's invites, for whoever reads it: in full with `customers.message`, else their own. */
@@ -290,12 +301,14 @@ export class InvitesService {
   }
 
   /**
-   * After any change to a record: each invite that went out and now says something else is sent
-   * again (an update, or a cancellation when the record is gone or off calendars).
+   * After any change to a record: each invite that went out and now says something else goes
+   * again (an update, or a cancellation when the record is gone or off calendars), sent by this
+   * job, in turn with every other send of the same invite. One still queued is left to its own
+   * job, which reads the record when it runs. A send that fails fails the job, which retries.
    */
-  async follow(tenantId: string, entity: string, id: string): Promise<string> {
+  async follow(tenantId: string, entity: string, id: string, lastTry = true): Promise<string> {
     const rows = await this.db
-      .select()
+      .select({ id: calendarInvites.id })
       .from(calendarInvites)
       .where(
         and(
@@ -303,45 +316,78 @@ export class InvitesService {
           eq(calendarInvites.resourceType, entity),
           eq(calendarInvites.resourceId, id),
           isNotNull(calendarInvites.sentAt),
-          eq(calendarInvites.status, 'sent'),
         ),
       );
-    let queued = 0;
-    for (const row of rows) {
-      const content = await this.contentNow(row);
-      const changed = content
-        ? row.method === 'CANCEL' || hashOf(content) !== row.sentHash
-        : row.method === 'REQUEST';
-      if (!changed) continue;
-      const [claimed] = await this.db
-        .update(calendarInvites)
-        .set({ status: 'queued', updatedAt: new Date() })
-        .where(and(eq(calendarInvites.id, row.id), eq(calendarInvites.status, 'sent')))
-        .returning({ id: calendarInvites.id });
-      if (!claimed) continue;
-      await this.queueSend(row.id, `${row.sequence + 1}`);
-      queued++;
+    let sent = 0;
+    let failure: unknown;
+    for (const { id: inviteId } of rows) {
+      try {
+        if (await withLock(this.db, inviteLock(inviteId), () => this.followOne(inviteId, lastTry)))
+          sent++;
+      } catch (e) {
+        failure ??= e;
+      }
     }
-    return `${queued} updates`;
+    if (failure) throw failure;
+    return `${sent} updates`;
   }
 
-  /** One invite: the record as it is now, emailed as a request, an update or a cancellation. */
-  async send(inviteId: string, lastTry: boolean): Promise<string> {
+  /** One invite, under its lock: sent again if the record now says something else. */
+  private async followOne(inviteId: string, lastTry: boolean): Promise<boolean> {
     const [row] = await this.db
-      .update(calendarInvites)
-      .set({ status: 'sending', leaseUntil: new Date(Date.now() + LEASE_MS) })
-      .where(
-        and(
-          eq(calendarInvites.id, inviteId),
-          or(
-            eq(calendarInvites.status, 'queued'),
-            and(eq(calendarInvites.status, 'sending'), lt(calendarInvites.leaseUntil, new Date())),
-          ),
-        ),
-      )
-      .returning();
-    if (!row) return 'not queued';
+      .select()
+      .from(calendarInvites)
+      .where(eq(calendarInvites.id, inviteId));
+    // Queued: its own job sends what the record says when it runs. ('sending' here was left by
+    // a job that died: what went last is what counts.)
+    if (!row?.sentAt || row.status === 'queued') return false;
     const content = await this.contentNow(row);
+    if (!changedSince(row, content)) return false;
+    const [claimed] = await this.db
+      .update(calendarInvites)
+      .set({ status: 'sending', updatedAt: new Date() })
+      .where(and(eq(calendarInvites.id, row.id), eq(calendarInvites.status, row.status)))
+      .returning();
+    // Queued for a new invite meanwhile: that job sends it.
+    if (!claimed) return false;
+    // A retry ends as failed (the next change tries again), never queued with no job to send it.
+    await this.deliver(claimed, content, lastTry, 'failed');
+    return true;
+  }
+
+  /**
+   * An invite someone asked for: the record as it is now, emailed as a request, an update or a
+   * cancellation, in turn with every other send of the same invite.
+   */
+  send(inviteId: string, lastTry: boolean): Promise<string> {
+    return withLock(this.db, inviteLock(inviteId), async () => {
+      // Under the lock, a row still 'sending' was left by a job that died: this one sends it.
+      const [row] = await this.db
+        .update(calendarInvites)
+        .set({ status: 'sending', updatedAt: new Date() })
+        .where(
+          and(
+            eq(calendarInvites.id, inviteId),
+            inArray(calendarInvites.status, ['queued', 'sending']),
+          ),
+        )
+        .returning();
+      if (!row) return 'not queued';
+      return this.deliver(row, await this.contentNow(row), lastTry, 'queued');
+    });
+  }
+
+  /**
+   * The email an invite needs now: the record (a request; an update when something went before
+   * and this differs), or a cancellation of what went when the record is gone. A failure that
+   * will be retried leaves the row as `retryAs` and throws.
+   */
+  private async deliver(
+    row: InviteRow,
+    content: EventContent | null,
+    lastTry: boolean,
+    retryAs: 'queued' | 'failed',
+  ): Promise<string> {
     const sent = row.sent as Sent | null;
     let method: 'REQUEST' | 'CANCEL';
     let sequence = row.sequence;
@@ -349,15 +395,17 @@ export class InvitesService {
     if (content) {
       method = 'REQUEST';
       // Something went before and this says something else: an update.
-      if (row.sentAt && (row.method === 'CANCEL' || row.sentHash !== hashOf(content)))
-        sequence += 1;
+      if (row.sentAt && changedSince(row, content)) sequence += 1;
       showing = content;
     } else if (row.sentAt && row.method === 'REQUEST' && sent) {
       method = 'CANCEL';
       sequence += 1;
       showing = sent;
     } else {
-      await this.close(row.id, { status: 'failed', error: 'The record is gone or has no time' });
+      await this.finish(row, {
+        status: 'failed',
+        error: 'The record is gone or has no time',
+      });
       return 'nothing to send';
     }
     try {
@@ -366,13 +414,16 @@ export class InvitesService {
       const error = (e instanceof Error ? e.message : String(e)).slice(0, 500);
       log.warn(`invite ${row.id}: ${error}`);
       if (lastTry) {
-        await this.close(row.id, { status: 'failed', error });
+        await this.finish(row, { status: 'failed', error }, { method, sequence });
         return 'failed';
       }
-      await this.close(row.id, { status: 'queued', error });
+      await this.db
+        .update(calendarInvites)
+        .set({ status: retryAs, error, updatedAt: new Date() })
+        .where(and(eq(calendarInvites.id, row.id), eq(calendarInvites.status, 'sending')));
       throw e;
     }
-    await this.close(row.id, {
+    await this.finish(row, {
       status: 'sent',
       error: null,
       method,
@@ -384,11 +435,67 @@ export class InvitesService {
     return method === 'CANCEL' ? 'cancelled' : sequence ? 'updated' : 'sent';
   }
 
-  private async close(id: string, set: Partial<InviteRow>) {
-    await this.db
-      .update(calendarInvites)
-      .set({ ...set, leaseUntil: null, updatedAt: new Date() })
-      .where(eq(calendarInvites.id, id));
+  /**
+   * A send's outcome, with its audit row and its stored event, in one transaction. An invite
+   * asked for again while this one went stays queued, for its own job.
+   */
+  private async finish(
+    row: InviteRow,
+    set: Partial<InviteRow> & { status: 'sent' | 'failed' },
+    tried?: { method: 'REQUEST' | 'CANCEL'; sequence: number },
+  ) {
+    const method = set.method ?? tried?.method ?? row.method;
+    const sequence = set.sequence ?? tried?.sequence ?? row.sequence;
+    const name =
+      set.status === 'failed'
+        ? 'calendar.invite_failed'
+        : method === 'CANCEL'
+          ? 'calendar.invite_cancelled'
+          : 'calendar.invite_sent';
+    const job = 'calendar.invites';
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(calendarInvites)
+        .set({
+          ...set,
+          status: sql`case when ${calendarInvites.status} = 'queued' then 'queued' else ${set.status} end`,
+          updatedAt: new Date(),
+        })
+        .where(eq(calendarInvites.id, row.id));
+      await writeAudit(tx, {
+        action: name,
+        resourceType: 'calendarInvite',
+        resourceId: row.id,
+        actorKind: 'system',
+        actorId: job,
+        tenantId: row.tenantId,
+        channel: 'background',
+        after: {
+          record: { entity: row.resourceType, id: row.resourceId },
+          to: row.email,
+          method,
+          sequence,
+          ...(set.error ? { error: set.error } : {}),
+        },
+      });
+      await recordEvents(tx, {
+        principal: systemPrincipal({ tenantId: row.tenantId, job }),
+        events: [
+          new CalendarEvent(
+            name,
+            {
+              id: row.id,
+              tenantId: row.tenantId,
+              entity: row.resourceType,
+              recordId: row.resourceId,
+              method,
+              sequence,
+            },
+            'calendarInvite',
+          ),
+        ],
+      });
+    });
   }
 
   private async email(

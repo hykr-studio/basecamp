@@ -7,6 +7,7 @@
  *     schedulable: { title: 'title', startsAt: 'startsAt', endsAt: 'endsAt', location: 'address' },
  *   },
  */
+import { type OpenHours, openSpansBetween } from './business-time.js';
 import type { EntitySpec } from './spec.js';
 
 declare module './traits.js' {
@@ -71,9 +72,15 @@ export interface FreeSlotOptions {
   minutes: number;
   /** Minutes between slot starts. Default: `minutes`. */
   stepMinutes?: number;
-  /** Only slots that start and end inside these local hours ('09:00' to '18:00'). */
+  /** Only slots that start and end inside these local hours (each HH:MM). */
   hours?: { from: string; to: string };
-  /** The zone `hours` and slot alignment are in (IANA). Default UTC. */
+  /**
+   * Only slots wholly inside this open time: a business's week of open intervals and its
+   * holidays (`openHoursOf` of its `businessHours` settings), in `timeZone`. No week: every
+   * hour of every day but a holiday.
+   */
+  open?: OpenHours;
+  /** The zone `hours`, `open` and slot alignment are in (IANA). Default UTC. */
   timeZone?: string;
   /** Mondays to Sundays as 1 to 7: only these local days. Default every day. */
   days?: readonly number[];
@@ -84,7 +91,7 @@ export interface FreeSlotOptions {
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const minutesOf = (hhmm: string) => {
   const m = HHMM.exec(hhmm);
-  if (!m) throw new Error(`"${hhmm}" is not a time like 09:00`);
+  if (!m) throw new Error(`"${hhmm}" is not a time of day (HH:MM)`);
   return Number(m[1]) * 60 + Number(m[2]);
 };
 
@@ -129,7 +136,7 @@ const MINUTE = 60_000;
 
 /**
  * The free slots in a window, given busy intervals: each `minutes` long, starting on the local
- * step grid, overlapping nothing busy, and inside the local hours and days when given.
+ * step grid, overlapping nothing busy, and inside the local hours, days and open time when given.
  */
 export function freeSlots(busy: readonly Interval[], o: FreeSlotOptions): Interval[] {
   const from = Date.parse(o.from);
@@ -147,6 +154,10 @@ export function freeSlots(busy: readonly Interval[], o: FreeSlotOptions): Interv
     .filter((b) => Number.isFinite(b.start) && b.end > b.start)
     .sort((a, b) => a.start - b.start);
 
+  // The open time, once for the window: a slot must lie wholly inside one span of it.
+  const spans = o.open ? openSpansBetween(new Date(from), new Date(to), o.open, zone) : null;
+  let span = 0;
+
   const out: Interval[] = [];
   // The first start on the grid, in local time.
   const offset0 = zoneOffsetMinutes(from, zone) * MINUTE;
@@ -163,6 +174,12 @@ export function freeSlots(busy: readonly Interval[], o: FreeSlotOptions): Interv
     if (o.days) {
       const weekday = ((new Date(dayStart).getUTCDay() + 6) % 7) + 1;
       if (!o.days.includes(weekday)) continue;
+    }
+    if (spans) {
+      // Slots end later and later: a span that ends before this one does can hold no more.
+      while (span < spans.length && spans[span].end < end) span++;
+      if (span >= spans.length) break;
+      if (spans[span].start > start) continue;
     }
     if (blocked.some((b) => b.start < end && b.end > start)) continue;
     out.push({ start: new Date(start).toISOString(), end: new Date(end).toISOString() });

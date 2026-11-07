@@ -8,6 +8,7 @@ process.env.GOOGLE_CALENDAR_TRANSPORT = 'fake';
 import { createHmac, randomUUID } from 'node:crypto';
 import { fakeGoogle } from '@hykr/connectors/google-calendar';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { MailerService } from '../../dist/channels/notify/mailer.service.js';
 import {
   addMember,
   asAssistant,
@@ -267,6 +268,57 @@ describe('records in calendars', () => {
     );
     expect(rows[0].n).toBe(0);
   });
+
+  const linksOf = async (id: string) =>
+    (
+      await pool.query(
+        'select count(*)::int as n from app.calendar_event_links where resource_id = $1',
+        [id],
+      )
+    ).rows[0].n as number;
+  const saves = (text: string) => (r: { method: string; body?: string }) =>
+    r.method === 'PUT' && (r.body ?? '').includes(text);
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("takes turns per record: a slow save never brings back a record that's gone", async () => {
+    const title = `Short-lived ${Date.now()}`;
+    // Its first save waits in Google while the record is deleted.
+    google.delayNext(saves(title), 1500);
+    const id = await createAppointment(owner, { title });
+    await eventually(() => google.requests.some(saves(title)));
+    expect((await inBusiness(owner)('DELETE', `/api/appointments/${id}`)).status).toBe(200);
+    await eventually(() => eventFor(owner.email, id)?.status === 'cancelled');
+    await eventually(async () => (await linksOf(id)) === 0);
+    await pause(1000);
+    expect(eventFor(owner.email, id)?.status).toBe('cancelled');
+    expect(await linksOf(id)).toBe(0);
+  });
+
+  it('takes turns per record: a slow save never overwrites a later change', async () => {
+    const id = await createAppointment(owner, { title: `Twice ${Date.now()}` });
+    await eventually(() => eventFor(owner.email, id));
+    const first = hoursAhead(60);
+    const second = hoursAhead(70);
+    // The first move's save waits in Google; the second move comes meanwhile.
+    google.delayNext(saves(first), 1500);
+    await inBusiness(owner)('PATCH', `/api/appointments/${id}`, {
+      startsAt: first,
+      endsAt: hoursAhead(61),
+    });
+    await eventually(() => google.requests.some(saves(first)));
+    await inBusiness(owner)('PATCH', `/api/appointments/${id}`, {
+      startsAt: second,
+      endsAt: hoursAhead(71),
+    });
+    await eventually(() => eventFor(owner.email, id)?.start?.dateTime === second);
+    await pause(2000);
+    expect(eventFor(owner.email, id)?.start?.dateTime).toBe(second);
+    const { rows } = await pool.query(
+      'select sent_starts_at from app.calendar_event_links where resource_id = $1',
+      [id],
+    );
+    expect(new Date(rows[0].sent_starts_at).toISOString()).toBe(second);
+  });
 });
 
 describe('changes made in Google', () => {
@@ -375,6 +427,37 @@ describe('busy and free time', () => {
     expect(free.body.timeZone).toBe('UTC');
   });
 
+  it("keeps to the business's open hours and holidays, unless hours are asked for", async () => {
+    // Ten days on, where no test put anything in the calendar.
+    const day = new Date(Date.now() + 240 * HOUR).toISOString().slice(0, 10);
+    const next = new Date(Date.parse(`${day}T00:00:00Z`) + 24 * HOUR).toISOString();
+    const q = (extra = '') =>
+      `/api/calendar/free?from=${day}T00:00:00Z&to=${encodeURIComponent(next)}&minutes=60${extra}`;
+    const starts = async (extra = '') =>
+      (await owner.call('GET', q(extra))).body.slots.map((s: { start: string }) =>
+        s.start.slice(11, 16),
+      );
+    const intervals = [
+      { from: '10:00', to: '12:00' },
+      { from: '14:00', to: '15:00' },
+    ];
+    const week = Object.fromEntries(
+      ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].map((d) => [d, intervals]),
+    );
+    try {
+      await setTenantSettings(tenantId, { businessHours: { week, holidays: [] } });
+      expect(await starts()).toEqual(['10:00', '11:00', '14:00']);
+      // Hours asked for are the answer's, open or not.
+      expect(await starts('&hoursFrom=16:00&hoursTo=18:00')).toEqual(['16:00', '17:00']);
+      await setTenantSettings(tenantId, { businessHours: { week, holidays: [day] } });
+      expect(await starts()).toEqual([]);
+    } finally {
+      await setTenantSettings(tenantId, { businessHours: null });
+    }
+    // No hours of its own: any hour.
+    expect((await starts()).slice(0, 3)).toEqual(['00:00', '01:00', '02:00']);
+  });
+
   it("another member's time needs the capability; the assistant reads its person's", async () => {
     const q = `from=${encodeURIComponent(from())}&to=${encodeURIComponent(to())}&minutes=30&userId=${owner.id}`;
     expect((await inBusiness(staff)('GET', `/api/calendar/free?${q}`)).status).toBe(403);
@@ -449,6 +532,66 @@ describe('invites', () => {
     );
     expect(unfolded(cancel.raw)).toContain('METHOD:CANCEL');
     expect(unfolded(cancel.raw)).toContain('SEQUENCE:2');
+    // Each send to the guest is audited on the invite, as the system, and stored as an event.
+    const sends = await eventually(async () => {
+      const { rows } = await pool.query(
+        `select action, actor_kind, channel, after from audit.events
+          where resource_type = 'calendarInvite' and action like 'calendar.invite\\_%'
+            and after->'record'->>'id' = $1 order by at, id`,
+        [id],
+      );
+      return rows.length === 3 ? rows : undefined;
+    });
+    expect(sends.map((r) => [r.action, r.after.sequence, r.after.to])).toEqual([
+      ['calendar.invite_sent', 0, guest],
+      ['calendar.invite_sent', 1, guest],
+      ['calendar.invite_cancelled', 2, guest],
+    ]);
+    expect(sends.every((r) => r.actor_kind === 'system' && r.channel === 'background')).toBe(true);
+    expect(await storedEvents('calendar.invite_cancelled', id)).toHaveLength(1);
+  });
+
+  it('a change while an update is on its way goes out after it', async () => {
+    const to = `race-${Date.now()}@example.test`;
+    const appt = await createAppointment(owner, { title: 'Moved twice' });
+    await inBusiness(owner)('POST', '/api/calendar/invites', {
+      entity: 'appointment',
+      id: appt,
+      to: [{ email: to }],
+    });
+    const statusOf = async () =>
+      (await pool.query('select status from app.calendar_invites where resource_id = $1', [appt]))
+        .rows[0]?.status as string | undefined;
+    await eventually(async () => (await statusOf()) === 'sent');
+    // Every email now takes a while: the second move lands while the first update is sent.
+    const mailer = server.app?.get(MailerService, { strict: false }) as MailerService;
+    const send = mailer.send.bind(mailer);
+    mailer.send = async (...args: Parameters<MailerService['send']>) => {
+      await new Promise((r) => setTimeout(r, 1500));
+      return send(...args);
+    };
+    const first = hoursAhead(80);
+    const second = hoursAhead(90);
+    const icsTime = (iso: string) => iso.replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+    try {
+      await inBusiness(owner)('PATCH', `/api/appointments/${appt}`, {
+        startsAt: first,
+        endsAt: hoursAhead(81),
+      });
+      await eventually(async () => (await statusOf()) === 'sending');
+      await inBusiness(owner)('PATCH', `/api/appointments/${appt}`, {
+        startsAt: second,
+        endsAt: hoursAhead(91),
+      });
+      const last = await eventually(
+        async () =>
+          (await mailTo(to)).find((m) => unfolded(m.raw).includes(`DTSTART:${icsTime(second)}`)),
+        15_000,
+      );
+      expect(unfolded(last.raw)).toContain('SEQUENCE:2');
+    } finally {
+      mailer.send = send;
+    }
   });
 
   it('shows only what the person who invites may see', async () => {
@@ -637,12 +780,37 @@ describe('calls', () => {
       return c.body.status === 'ringing' && c.body.provider ? c.body : undefined;
     });
     expect(ringing.provider).toBe('fixture-phone');
-    const asked = dialled.find((d) => d.request.callId === id);
-    expect(asked?.request).toMatchObject({
+    const asked = await eventually(() => dialled.find((d) => d.request.callId === id));
+    expect(asked.request).toMatchObject({
       to: '+14155550124',
       record: { entity: 'appointment', id: appt },
     });
-    expect(asked?.credentials).toEqual({ secret });
+    expect(asked.credentials).toEqual({ secret });
+    // Each step of the dial is a write as the system: audited on the call, with call.updated.
+    const steps = await eventually(async () => {
+      const { rows } = await pool.query(
+        `select actor_kind, channel, after from audit.events
+          where action = 'call.update' and resource_id = $1 order by at, id`,
+        [id],
+      );
+      return rows.length === 2 ? rows : undefined;
+    });
+    expect(steps.map((r) => [r.actor_kind, r.channel, r.after.status])).toEqual([
+      ['system', 'background', 'ringing'],
+      ['system', 'background', 'ringing'],
+    ]);
+    // Taken (no start yet), then placed: started now.
+    expect([steps[0].after.startedAt, typeof steps[1].after.startedAt]).toEqual([null, 'string']);
+    const { rows: outcomes } = await pool.query(
+      "select count(*)::int as n from audit.events where action = 'call.dial_outcome' and resource_id = $1",
+      [id],
+    );
+    expect(outcomes[0].n).toBe(2);
+    const { rows: stored } = await pool.query(
+      "select count(*)::int as n from app.domain_events where name = 'call.updated' and row->>'id' = $1",
+      [id],
+    );
+    expect(stored[0].n).toBe(2);
 
     const body = JSON.stringify({
       type: 'call.status',
@@ -680,6 +848,15 @@ describe('calls', () => {
       return c.body.status === 'failed' ? c.body : undefined;
     });
     expect(failed.error).toContain('refused');
+    const why = await eventually(async () => {
+      const { rows } = await pool.query(
+        "select actor_kind, after from audit.events where action = 'call.update' and resource_id = $1 and after->>'status' = 'failed'",
+        [id],
+      );
+      return rows[0];
+    });
+    expect(why.actor_kind).toBe('system');
+    expect(why.after.error).toContain('refused');
     const assistant = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
     const parked = await assistant('POST', '/api/calls/dial', { to: '+14155550125' });
     expect(parked.body.status).toBe('needs_approval');

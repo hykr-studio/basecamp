@@ -115,6 +115,21 @@ describe('the Calendar API', () => {
     await expect(api.upsertEvent('primary', { ...event, id: 'Not-Base32' })).rejects.toThrow();
   });
 
+  it('answers a delayed request late; only the next one that matches', async () => {
+    const { google, api, email } = await connected();
+    google.delayNext((r) => r.method === 'PUT', 200);
+    const started = Date.now();
+    const slow = api.upsertEvent('primary', event);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(google.event(email, event.id)).toBeUndefined();
+    await slow;
+    expect(Date.now() - started).toBeGreaterThanOrEqual(190);
+    expect(google.event(email, event.id)?.summary).toBe('Plan');
+    const quick = Date.now();
+    await api.upsertEvent('primary', { ...event, summary: 'Again' });
+    expect(Date.now() - quick).toBeLessThan(150);
+  });
+
   it('lists changes after a sync token, deleted events included, and starts over after a 410', async () => {
     const { google, api, email } = await connected();
     await api.upsertEvent('primary', event);

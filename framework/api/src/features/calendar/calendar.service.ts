@@ -21,6 +21,7 @@ import {
   FreeTimeQuery,
   type FreeTimes,
   freeSlots,
+  openHoursOf,
   type Principal,
   parseTenantSettings,
 } from '@hykr/contracts';
@@ -371,7 +372,11 @@ export class CalendarService implements OnModuleInit {
       .select({ settings: tenants.settings })
       .from(tenants)
       .where(eq(tenants.id, p.tenantId ?? ''));
-    const timeZone = parseTenantSettings(t?.settings ?? {}).timeZone;
+    const settings = parseTenantSettings(t?.settings ?? {});
+    const timeZone = settings.timeZone;
+    // Hours asked for are the answer's; otherwise the business's own open hours and holidays
+    // (none set: every hour). The framework assumes no working day of its own.
+    const asked = !!(q.hoursFrom || q.hoursTo);
     return {
       connected: busy.connected,
       timeZone,
@@ -381,9 +386,9 @@ export class CalendarService implements OnModuleInit {
         stepMinutes: q.step,
         timeZone,
         limit: q.limit ?? 20,
-        ...(q.hoursFrom || q.hoursTo
+        ...(asked
           ? { hours: { from: q.hoursFrom ?? '00:00', to: q.hoursTo ?? '23:59' } }
-          : {}),
+          : { open: openHoursOf(settings.businessHours) }),
       }),
     };
   }

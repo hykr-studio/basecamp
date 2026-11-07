@@ -33,6 +33,7 @@ import { DB } from '../../infra/db.module.js';
 import { JOBS } from '../../queues/define.js';
 import { serverContext } from '../../queues/jobs.service.js';
 import { openConnection } from '../integrations/credentials.js';
+import { recordLock, withLock } from './lock.js';
 import { CalendarEvent } from './ops.js';
 import { memberPrincipal } from './principal.js';
 import {
@@ -128,17 +129,36 @@ export class CalendarSyncService implements OnApplicationBootstrap {
 
   /**
    * One record, in every calendar it belongs in or is in now: upserted where it belongs and the
-   * person may read it, deleted elsewhere.
+   * person may read it, deleted elsewhere. One job at a time per record: each reads the record as
+   * it is when its turn comes, so the last change's job leaves every calendar as the record is.
    */
-  async syncRecord(tenantId: string, entity: string, id: string): Promise<string> {
+  syncRecord(tenantId: string, entity: string, id: string): Promise<string> {
     const s = schedulable(entity);
     const google = googleSettings();
-    if (!s || !google) return 'nothing to do';
+    if (!s || !google) return Promise.resolve('nothing to do');
+    return withLock(this.db, recordLock(tenantId, s.def.name, id), () =>
+      this.syncLocked(google, s, tenantId, id),
+    );
+  }
+
+  /** The record's row in its business, or undefined when it is gone. */
+  private async rowOf(s: Schedulable, tenantId: string, id: string) {
     const columns = getTableColumns(s.def.table) as Record<string, PgColumn>;
     const [row] = (await this.db
       .select()
       .from(s.def.table)
       .where(and(eq(columns.id, id), eq(columns.tenantId, tenantId)))) as Values[];
+    return row;
+  }
+
+  private async syncLocked(
+    google: GoogleSettings,
+    s: Schedulable,
+    tenantId: string,
+    id: string,
+  ): Promise<string> {
+    const entity = s.def.name;
+    const row = await this.rowOf(s, tenantId, id);
     const people = row ? peopleOf(s, row) : [];
     const links = await this.db
       .select()
@@ -221,23 +241,32 @@ export class CalendarSyncService implements OnApplicationBootstrap {
         syncedAt: new Date(),
         updatedAt: new Date(),
       };
-      await this.db
-        .insert(calendarEventLinks)
-        .values({
-          tenantId: conn.tenantId,
-          connectionId: conn.id,
-          resourceType: s.def.name,
-          resourceId: id,
-          ...values,
-        })
-        .onConflictDoUpdate({
-          target: [
-            calendarEventLinks.connectionId,
-            calendarEventLinks.resourceType,
-            calendarEventLinks.resourceId,
-          ],
-          set: values,
-        });
+      try {
+        await this.db
+          .insert(calendarEventLinks)
+          .values({
+            tenantId: conn.tenantId,
+            connectionId: conn.id,
+            resourceType: s.def.name,
+            resourceId: id,
+            ...values,
+          })
+          .onConflictDoUpdate({
+            target: [
+              calendarEventLinks.connectionId,
+              calendarEventLinks.resourceType,
+              calendarEventLinks.resourceId,
+            ],
+            set: values,
+          });
+      } catch (e) {
+        if (!isForeignKeyViolation(e)) throw e;
+        // Disconnected while Google answered: take the event back out, as the disconnect does.
+        await api
+          .deleteEvent(conn.calendarId, externalId)
+          .catch((err) => log.warn(`removing event ${externalId}: ${messageOf(err)}`));
+        return false;
+      }
       await this.synced(conn);
       return true;
     }
@@ -328,18 +357,28 @@ export class CalendarSyncService implements OnApplicationBootstrap {
         )
         .orderBy(starts ? starts : desc(columns.id))
         .limit(BACKFILL_MAX)) as { id: string }[];
-      const links = await this.db
-        .select()
-        .from(calendarEventLinks)
-        .where(
-          and(
-            eq(calendarEventLinks.connectionId, conn.id),
-            eq(calendarEventLinks.resourceType, s.def.name),
-          ),
-        );
       for (const { id } of ids) {
-        const link = links.find((l) => l.resourceId === id);
-        if (await this.syncOne(google, s, conn, id, true, link)) n++;
+        // In turn with the record's own jobs, and as the record is by then.
+        const sent = await withLock(
+          this.db,
+          recordLock(conn.tenantId, s.def.name, id),
+          async () => {
+            const row = await this.rowOf(s, conn.tenantId, id);
+            const [link] = await this.db
+              .select()
+              .from(calendarEventLinks)
+              .where(
+                and(
+                  eq(calendarEventLinks.connectionId, conn.id),
+                  eq(calendarEventLinks.resourceType, s.def.name),
+                  eq(calendarEventLinks.resourceId, id),
+                ),
+              );
+            const belongs = !!row && peopleOf(s, row).includes(conn.userId);
+            return this.syncOne(google, s, conn, id, belongs, link);
+          },
+        );
+        if (sent) n++;
       }
     }
     return n;
@@ -457,20 +496,42 @@ export class CalendarSyncService implements OnApplicationBootstrap {
     return `${noted} changes noted`;
   }
 
-  /** One changed event: ours, moved or deleted by the person? Stored as an event if so. */
+  /**
+   * One changed event: ours, moved or deleted by the person? Stored as an event if so. In turn
+   * with the record's sync jobs, so our own change that Google reports is never taken for theirs.
+   */
   private async noteChange(conn: ConnectionRow, item: GoogleEvent): Promise<boolean> {
     const mark = item.extendedProperties?.private;
     if (mark?.basecamp !== '1' || mark.tenant !== conn.tenantId) return false;
-    const [link] = await this.db
-      .select()
-      .from(calendarEventLinks)
-      .where(
-        and(
-          eq(calendarEventLinks.connectionId, conn.id),
-          eq(calendarEventLinks.externalId, item.id),
-        ),
-      );
-    if (link?.status !== 'synced') return false;
+    const linkOf = async () => {
+      const [found] = await this.db
+        .select()
+        .from(calendarEventLinks)
+        .where(
+          and(
+            eq(calendarEventLinks.connectionId, conn.id),
+            eq(calendarEventLinks.externalId, item.id),
+          ),
+        );
+      return found;
+    };
+    const first = await linkOf();
+    if (first?.status !== 'synced') return false;
+    return withLock(
+      this.db,
+      recordLock(first.tenantId, first.resourceType, first.resourceId),
+      async () => {
+        const link = await linkOf();
+        return link?.status === 'synced' ? this.noteLinked(conn, item, link) : false;
+      },
+    );
+  }
+
+  private async noteLinked(
+    conn: ConnectionRow,
+    item: GoogleEvent,
+    link: LinkRow,
+  ): Promise<boolean> {
     const change = (extra: Partial<CalendarEventChange>): CalendarEventChange => ({
       id: link.id,
       tenantId: link.tenantId,
@@ -556,9 +617,10 @@ export class CalendarSyncService implements OnApplicationBootstrap {
     const quietly = (what: string) => (e: unknown) => log.warn(`${what}: ${messageOf(e)}`);
     for (const link of left.links)
       if (link.status === 'synced')
-        await api
-          .deleteEvent(left.row.calendarId, link.externalId)
-          .catch(quietly(`removing event ${link.externalId}`));
+        // After any sync of the record still running: it may have just sent the event again.
+        await withLock(this.db, recordLock(link.tenantId, link.resourceType, link.resourceId), () =>
+          api.deleteEvent(left.row.calendarId, link.externalId),
+        ).catch(quietly(`removing event ${link.externalId}`));
     if (left.row.channelId && left.row.channelResourceId)
       await api
         .stopChannel({ id: left.row.channelId, resourceId: left.row.channelResourceId })
@@ -569,6 +631,12 @@ export class CalendarSyncService implements OnApplicationBootstrap {
     }).catch(quietly('revoking the grant'));
   }
 }
+
+/** Postgres refused a row whose parent is gone (23503). */
+const isForeignKeyViolation = (e: unknown) => {
+  const cause = (e as { cause?: { code?: string }; code?: string }) ?? {};
+  return cause.code === '23503' || cause.cause?.code === '23503';
+};
 
 /** A Google time as an ISO instant, or null for an all-day date. */
 function timeOf(t: GoogleEvent['start']): string | null {

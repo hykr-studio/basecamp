@@ -408,9 +408,98 @@ export function callProviderUpdate(): WriteOp<ProviderUpdate, CallRow | undefine
   };
 }
 
+/* ── A dial's outcome ─────────────────────────────────────────────────────── */
+
+export const DialOutcomeInput = z.strictObject({
+  callId: z.uuid(),
+  /**
+   * started: the worker takes a requested call to dial it (once); placed: the provider took
+   * it; failed: it could not be placed.
+   */
+  step: z.enum(['started', 'placed', 'failed']),
+  /** placed: the provider's id for the call, and where it is now. */
+  externalId: z.string().min(1).max(200).optional(),
+  status: Status.optional(),
+  /** failed: why. */
+  error: z.string().min(1).max(500).optional(),
+});
+export type DialOutcome = z.infer<typeof DialOutcomeInput>;
+
+const OPEN = ['requested', 'ringing'];
+
+/**
+ * call.dial_outcome: what became of a dial, written by the worker as the business's system
+ * principal, so the call's history shows it was placed (or why not) and `call.updated` is
+ * stored with it. `started` takes a requested call once: any other status is refused, so a call
+ * is never dialled twice. A provider's update that came first is never undone.
+ */
+export function callDialOutcome(): WriteOp<DialOutcome, CallRow, CallRow> {
+  return {
+    name: 'call.dial_outcome',
+    kind: 'command',
+    // The framework's own bookkeeping of a dial the person asked for: no level parks it.
+    system: true,
+    resourceType: 'call',
+    resourceId: (input) => input.callId,
+    input: DialOutcomeInput,
+    load: async (tx, p, input) => {
+      const [row] = await tx
+        .select()
+        .from(callLogs)
+        .where(and(eq(callLogs.id, input.callId), eq(callLogs.tenantId, p.tenantId ?? '')))
+        .for('update');
+      if (!row) throw notFound('call');
+      return row;
+    },
+    authorize: (p, call, input) => {
+      if (p.actor.kind !== 'system')
+        return deny('dialler_only', 'Only the server records how a dial went');
+      if (input.step === 'started' && call.status !== 'requested')
+        return deny('not_requested', 'This call is not waiting to be dialled');
+      return allow('dial_outcome', 'The server records how the dial it was asked for went');
+    },
+    summarize: (input) => `Dial ${input.step}: call ${input.callId}`,
+    run: async ({ tx, input, loaded: call }) => {
+      const set =
+        input.step === 'started'
+          ? { status: 'ringing' }
+          : input.step === 'placed'
+            ? {
+                ...(input.externalId ? { externalId: input.externalId } : {}),
+                startedAt: call.startedAt ?? new Date(),
+                ...(call.status === 'ringing' ? { status: input.status ?? 'ringing' } : {}),
+              }
+            : {
+                error: input.error ?? 'The call could not be placed',
+                ...(OPEN.includes(call.status) ? { status: 'failed' } : {}),
+              };
+      const [row] = await tx
+        .update(callLogs)
+        .set({ ...set, updatedAt: new Date() })
+        .where(eq(callLogs.id, call.id))
+        .returning();
+      return {
+        value: row,
+        touched: [
+          {
+            type: 'call',
+            id: row.id,
+            change: 'updated',
+            before: callInfoOf(call),
+            after: callInfoOf(row),
+          },
+        ],
+        events: [eventOf('call.updated', row)],
+      };
+    },
+    present: (row) => callInfoOf(row),
+  };
+}
+
 const CALL_OPS = {};
 
 /** Registered once, so a parked provider update (a write hook may park one) replays. */
 export function registerCallOps() {
   registerOp('call.provider_update', () => callProviderUpdate(), CALL_OPS);
+  registerOp('call.dial_outcome', () => callDialOutcome(), CALL_OPS);
 }

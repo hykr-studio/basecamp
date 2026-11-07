@@ -69,6 +69,11 @@ export interface FakeGoogle {
   requests: GoogleRequest[];
   /** The next request that matches answers this instead. */
   failNext(match: (req: GoogleRequest) => boolean, status: number, body?: unknown): void;
+  /**
+   * The next request that matches is answered this many milliseconds late, from the calendar as
+   * it is then: a slow Google, for tests of jobs that overlap.
+   */
+  delayNext(match: (req: GoogleRequest) => boolean, ms: number): void;
   /** Every access token expires now: the next call needs a refresh. */
   expireAccessTokens(): void;
   /** Sync tokens issued so far stop working (410), as when Google drops them. */
@@ -99,6 +104,7 @@ export function createFakeGoogle(endpoints: GoogleEndpoints = GOOGLE_ENDPOINTS):
   const revoked: string[] = [];
   const channels = new Map<string, FakeChannel>();
   const failures: { match: (r: GoogleRequest) => boolean; status: number; body: unknown }[] = [];
+  const delays: { match: (r: GoogleRequest) => boolean; ms: number }[] = [];
   const requests: GoogleRequest[] = [];
 
   const calendarOf = (email: string, calendarId = 'primary') => {
@@ -262,6 +268,11 @@ export function createFakeGoogle(endpoints: GoogleEndpoints = GOOGLE_ENDPOINTS):
 
   const transport: GoogleTransport = async (req) => {
     requests.push(structuredClone(req));
+    const slow = delays.findIndex((d) => d.match(req));
+    if (slow >= 0) {
+      const [d] = delays.splice(slow, 1);
+      await new Promise((resolve) => setTimeout(resolve, d.ms));
+    }
     const failing = failures.findIndex((f) => f.match(req));
     if (failing >= 0) {
       const [f] = failures.splice(failing, 1);
@@ -356,6 +367,9 @@ export function createFakeGoogle(endpoints: GoogleEndpoints = GOOGLE_ENDPOINTS):
     failNext(match, status, body) {
       failures.push({ match, status, body });
     },
+    delayNext(match, ms) {
+      delays.push({ match, ms });
+    },
     expireAccessTokens() {
       for (const grant of access.values()) grant.expiresAt = 0;
     },
@@ -371,6 +385,7 @@ export function createFakeGoogle(endpoints: GoogleEndpoints = GOOGLE_ENDPOINTS):
       revoked.length = 0;
       channels.clear();
       failures.length = 0;
+      delays.length = 0;
       requests.length = 0;
     },
   };
