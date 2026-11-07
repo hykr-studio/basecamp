@@ -23,6 +23,7 @@ Node 24 (`.nvmrc`), pnpm 12 (pinned in `packageManager`), Docker.
 pnpm install && cp application/.env.example .env   # .env lives at the repo ROOT
 # Set BETTER_AUTH_SECRET, AGENT_API_KEY, VOICE_AGENT_KEY (must differ from AGENT_API_KEY),
 # APPROVAL_SECRET, SECRETS_KEY (each >= 32 chars: openssl rand -hex 32). Offline: MODEL_MODE=fake VOICE_MODE=fake
+# Optional: CREDITS_CONFIG (prices and plans), OPERATOR_API_KEY (>= 32 chars, the credits operator)
 pnpm build            # everything; the basecamp CLI, API and tests all run from dist/
 pnpm infra:up         # Postgres/PostGIS, Redis, MinIO, Mailpit, pgAdmin, LiveKit, whaloc (WhatsApp emulator)
 pnpm db:migrate       # framework migrations first, then the application's

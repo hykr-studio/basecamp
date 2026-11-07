@@ -1,7 +1,8 @@
 # The domain is replaceable
 
 Basecamp, the agentic development stack for full-stack applications, ships with a sample
-application: meetings, notes, to-dos and orders, as four modules. The framework (the API pipeline with
+application: meetings, notes, to-dos and orders, as four modules, plus `account`, which words the
+credits alerts. The framework (the API pipeline with
 its rules, approvals and audit; the assistant with its tools, surfaces, canvas and WhatsApp;
 saved pages; the app shell) lives in `framework/` and is published as `@hykr/*` packages. The
 application lives in `application/`. The framework never imports the application; the
@@ -235,6 +236,12 @@ From the contracts declaration alone:
   OpenRouter in development) and each business's model policy (`GET /api/models`,
   `PUT /api/models/policy`), which picks every turn's model and fails closed (developer guide,
   section 7.5). The application only configures them in `.env`.
+- Credits and caps: every business's assistant tokens and tool calls, WhatsApp messages and
+  voice seconds metered and priced, a per-period allowance and a prepaid wallet, an alert and a
+  pause as caps fill, an operator's override, and buying credits through a purchase provider
+  (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
+  (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
+  sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

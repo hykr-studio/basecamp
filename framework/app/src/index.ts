@@ -11,6 +11,7 @@ export { applyCanvasIntent, useCanvas } from './canvas/store';
 export { Button } from './components/Button';
 export { ScreenTitle, SectionHeading } from './components/ScreenTitle';
 export { type AppConfig, appConfig, configure } from './config';
+export { CreditsScreen, creditsPlugin, formatCredits, toMinor } from './features/credits';
 export {
   FileField,
   FileThumbs,

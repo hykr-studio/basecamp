@@ -4,6 +4,8 @@ import {
   type ChatResponse,
   type ChatStreamRequest,
   type CommandSpec,
+  type CreditPurchase,
+  type CreditsStatus,
   type EntitySpec,
   type FileInfo,
   type FileTarget,
@@ -11,6 +13,7 @@ import {
   type HandoffThread,
   type HistoryEntry,
   type Inbox,
+  type LedgerEntry,
   type ListInput,
   type Me,
   type Page,
@@ -363,6 +366,28 @@ export function createApiClient(opts: ApiClientOptions) {
       session: (input: Partial<VoiceSessionRequest> = {}) =>
         call<VoiceSessionResponse>('POST', '/api/voice/session', input),
       end: (input: VoiceSessionEnd) => call<null>('POST', '/api/voice/end', input),
+    },
+    /** The business's credits (people only): status for its team, the rest for its managers. */
+    credits: {
+      status: () => call<CreditsStatus>('GET', '/api/credits'),
+      ledger: (before?: string) =>
+        call<{ items: LedgerEntry[]; next: string | null }>(
+          'GET',
+          `/api/credits/ledger${before ? `?before=${encodeURIComponent(before)}` : ''}`,
+        ),
+      /** Buy credits: the answer carries the checkout, or waits for an approval. */
+      buy: (amount: number, provider?: string, key = newKey()) =>
+        call<WriteResult<CreditPurchase>>(
+          'POST',
+          '/api/credits/purchases',
+          { amount, ...(provider ? { provider } : {}) },
+          key,
+        ),
+      purchase: (id: string) =>
+        call<CreditPurchase>('GET', `/api/credits/purchases/${encodeURIComponent(id)}`),
+      /** The business's own alert threshold, in per cent. */
+      setAlertAt: (alertAt: number, key = newKey()) =>
+        call<WriteResult<{ alertAt: number }>>('PUT', '/api/credits/alerts', { alertAt }, key),
     },
     /** The person's conversations, kept on the server so every channel shares them (people only). */
     threads: {
