@@ -18,7 +18,7 @@ import { Loading } from '../../framework/Loading';
 import { useT } from '../../framework/lang';
 import { useToast } from '../../framework/Toast';
 import { colors, styles } from '../../theme';
-import { formatCredits, meterQuantity, toMinor } from './money';
+import { formatCredits, meterQuantity, parseCredits } from './money';
 
 /** A bar for how much of a cap is used: warning past the alert, danger at the pause. */
 function UsedBar({
@@ -85,7 +85,7 @@ function Buy({ currency }: { currency: string }) {
   const toast = useToast();
   const client = useQueryClient();
   const [typed, setTyped] = useState('');
-  const amount = toMinor(typed, currency);
+  const amount = parseCredits(typed, currency);
   const buy = useMutation({
     mutationFn: (minor: number) => api.credits.buy(minor),
     onSuccess: async (result) => {
