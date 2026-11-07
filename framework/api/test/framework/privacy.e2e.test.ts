@@ -223,6 +223,10 @@ describe('a copy of my data', () => {
       note: 'By email',
     });
     expect((await finished(carol, byTeam.body.value.id)).status).toBe('completed');
+    // The team's note is the team's.
+    expect(
+      (await call(dee, 'GET', `/api/privacy/requests/${byTeam.body.value.id}`)).body,
+    ).toMatchObject({ status: 'completed', note: null });
   });
 
   it("never erases the business's default owner", async () => {

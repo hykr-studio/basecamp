@@ -55,8 +55,11 @@ export class PrivacyController {
     this.db = options.db;
   }
 
+  /** The team's note is the team's: its person reads the request without it. */
   private out(p: Principal, row: typeof privacyRequests.$inferSelect): PrivacyRequest {
-    return projectRead(PRIVACY_REQUEST, requestOut(row), p) as PrivacyRequest;
+    const value = requestOut(row);
+    const shown = can(p, PrivacyManageCapability) ? value : { ...value, note: null };
+    return projectRead(PRIVACY_REQUEST, shown, p) as PrivacyRequest;
   }
 
   @Get('requests')
