@@ -4,6 +4,8 @@ import {
   type ChatResponse,
   type ChatStreamRequest,
   type CommandSpec,
+  type CreditPurchase,
+  type CreditsStatus,
   type EntitySpec,
   type FileInfo,
   type FileTarget,
@@ -11,6 +13,7 @@ import {
   type HandoffThread,
   type HistoryEntry,
   type Inbox,
+  type LedgerEntry,
   type ListInput,
   type Me,
   type Page,
@@ -22,6 +25,8 @@ import {
   type RegisterPushToken,
   type SlaListInput,
   type SlaTimer,
+  type Summary,
+  type SummaryInput,
   type TemplateStatus,
   type Thread,
   type ThreadMessage,
@@ -116,6 +121,8 @@ export type EntityClient<S extends EntitySpec> = {
     key?: string,
   ): Promise<WriteResult<z.infer<S['schemas']['read']>>>;
   remove(id: string, key?: string): Promise<WriteResult<null>>;
+  /** Counts and totals (GET /api/<plural>/summary): the list's filters, groupBy, sum, avg… */
+  summary(query?: SummaryInput): Promise<Summary>;
 };
 
 export function createApiClient(opts: ApiClientOptions) {
@@ -181,11 +188,17 @@ export function createApiClient(opts: ApiClientOptions) {
     for await (const m of liveMessages(textOf(res.body))) onMessage(m);
   }
 
+  /** An entity's summary by its plural ('orders'), for views that name it (kpi.row's `of`). */
+  function summary(plural: string, query: SummaryInput = {}): Promise<Summary> {
+    return call('GET', `/api/${encodeURIComponent(plural)}/summary${toQueryString(query)}`);
+  }
+
   function entity<S extends EntitySpec>(spec: S): EntityClient<S> {
     const base = `/api/${spec.plural}`;
     const one = (id: string) => `${base}/${encodeURIComponent(id)}`;
     return {
       list: (query) => call('GET', `${base}${toQueryString(query)}`),
+      summary: (query) => summary(spec.plural, query),
       get: (id) => call('GET', one(id)),
       create: (input, key = newKey()) => call('POST', base, input, key),
       update: (id, patch, key = newKey()) => call('PATCH', one(id), patch, key),
@@ -264,6 +277,7 @@ export function createApiClient(opts: ApiClientOptions) {
 
   return {
     entity,
+    summary,
     command,
     /** Files: uploads, and files reached through the records they are on. */
     files,
@@ -400,6 +414,28 @@ export function createApiClient(opts: ApiClientOptions) {
       session: (input: Partial<VoiceSessionRequest> = {}) =>
         call<VoiceSessionResponse>('POST', '/api/voice/session', input),
       end: (input: VoiceSessionEnd) => call<null>('POST', '/api/voice/end', input),
+    },
+    /** The business's credits (people only): status for its team, the rest for its managers. */
+    credits: {
+      status: () => call<CreditsStatus>('GET', '/api/credits'),
+      ledger: (before?: string) =>
+        call<{ items: LedgerEntry[]; next: string | null }>(
+          'GET',
+          `/api/credits/ledger${before ? `?before=${encodeURIComponent(before)}` : ''}`,
+        ),
+      /** Buy credits: the answer carries the checkout, or waits for an approval. */
+      buy: (amount: number, provider?: string, key = newKey()) =>
+        call<WriteResult<CreditPurchase>>(
+          'POST',
+          '/api/credits/purchases',
+          { amount, ...(provider ? { provider } : {}) },
+          key,
+        ),
+      purchase: (id: string) =>
+        call<CreditPurchase>('GET', `/api/credits/purchases/${encodeURIComponent(id)}`),
+      /** The business's own alert threshold, in per cent. */
+      setAlertAt: (alertAt: number, key = newKey()) =>
+        call<WriteResult<{ alertAt: number }>>('PUT', '/api/credits/alerts', { alertAt }, key),
     },
     /** The person's conversations, kept on the server so every channel shares them (people only). */
     threads: {

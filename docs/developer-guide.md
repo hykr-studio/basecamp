@@ -650,6 +650,8 @@ Operators by type:
 | `boolean` | `eq`, `ne` |
 | `text` | `eq`, `ne`, `in`, `contains` |
 | `date`, `number` | `eq`, `ne`, `in`, `lt`, `lte`, `gt`, `gte` |
+| `money` | the same, in minor units (section 5.13) |
+| `geo` | `near` (`{ lat, lng, radiusM }`), `within` (`{ south, west, north, east }`) (section 5.15) |
 
 The same filter in its two forms:
 
@@ -663,7 +665,7 @@ JSON:  { done: false, dueOn: { lte: '2026-10-31' }, sort: '-dueOn', limit: 20 }
 - `count: true` adds `total`.
 - Unknown fields or operators are a 400. That is on purpose.
 
-Field types are a registry. A feature adds one in two halves, each in its own file: the grammar in contracts, declared on `ListFieldTypes` (and new operators on `ListFilterOps`) and defined with `defineListFieldType({ name, ops, value, opValue? })`, which every process (server, tools, apps) loads; and the SQL in the server, `listFieldSql` (contributed as `listFieldSql`), `{ name, where({ table, field, column, op, value }) }`. A field of an undefined type fails when its schema is built, and one without SQL fails its request. Neither filters nothing.
+Field types are a registry. A feature adds one in two halves, each in its own file: the grammar in contracts, declared on `ListFieldTypes` (and new operators on `ListFilterOps`) and defined with `defineListFieldType({ name, ops, value, opValue?, summary? })`, which every process (server, tools, apps) loads; and the SQL in the server, `listFieldSql` (contributed as `listFieldSql`), `{ name, where({ table, field, column, op, value }), order? }`. `order({ field, column, dir, filters })` is how a field of the type sorts when it is in `sortable` (a point: by distance to its `near` point); it returns `{ expr, at(value) }`, where `expr` is never null so cursors neither skip nor repeat rows. `summary` says what the type's fields do in a summary (section 5.16). A field of an undefined type fails when its schema is built, and one without SQL fails its request. Neither filters nothing. `toQueryString` sends an operator whose value is an object (`near`) as JSON, which the type reads back.
 
 The response is `{ items, nextCursor, total? }`. Pagination is keyset: pass `nextCursor` back as `cursor`. A cursor from a different sort is a 400 `cursor_sort_mismatch`. Sorting on a nullable column works only for dates, timestamps and numbers. A nullable text or enum column in `sortable` passes load-time checks, then throws `Sorting on nullable ... is not supported` (`framework/core/src/query/list-grammar.ts`) on the first request that sorts by it, which the client sees as a 500. Keep such columns `notNull()` or out of `sortable`.
 
@@ -788,7 +790,9 @@ A business adjusts this in its settings, section `approvals` (`@hykr/contracts`)
 A decision that names a level nobody declared ranks above every level and always parks. Without any
 levels, everything works as before: decisions without a level, and `needsApproval` parks as it did.
 The sample declares `read`, `internal`, `external` and `irreversible` in
-`application/domain/src/server/approval-levels.ts`; the to-dos module maps its writes to `internal`.
+`application/domain/src/server/approval-levels.ts`; the to-dos module maps its writes to `internal`,
+and the orders module names `irreversible` on its own decision for an order above the business's limit
+(`orders/server/policy.ts`), with the order's total as the amount and `orders.approve` as the decider.
 
 #### 5.8.2 Undo
 
@@ -818,8 +822,8 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `readProjectors`, `listFieldSql`, `levelRules`, `identityProviders` and `numberSeries`
   (section 5.13) in `@hykr/core`; `toolContributions` in `@hykr/core/tools`;
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
-  `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `connectors` and
-  `connectorHandlers` in `@hykr/api`.
+  `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `connectors`,
+  `connectorHandlers`, `meters` and `creditPurchaseProviders` in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -1147,7 +1151,68 @@ contributes: {
 
 The fixture's `framework/api/test/fixture/src/features/integrations/` uses each part.
 
-### 5.15 States, SLAs, versions and revisions
+### 5.15 Places: points, addresses and geofences
+
+Records can have a place on the map (`docs/decisions/B13B14.md`). The sample's meetings keep one
+and take check-ins there.
+
+- **Columns.** `geoPoint('location')` (`@hykr/db`) is a PostGIS `geography` column read and
+  written as `GeoPoint = { lat, lng }` (`@hykr/contracts`, WGS84 degrees). Index it with
+  `geoIndex('<table>_location_gist', t.location)`. `addressColumn('address')` is a jsonb
+  `Address` (`line1`, `line2?`, `locality?`, `region?`, `postalCode?`, `country?` as ISO
+  3166-1 alpha-2); `addressText(a)` puts it on one line. PostGIS is created by
+  `framework/db/sql/pre/10-postgis.sql` when it is missing (a role that may not create it gets
+  Postgres's error; `init.sql` creates it for Compose).
+- **Lists.** List the point as `location: 'geo'` in `filterable`: `location[near]=lat,lng,metres`
+  (`ST_DWithin`) and `location[within]=south,west,north,east` (a box; one across the antimeridian
+  is refused). With `location` in `sortable`, `sort=location` is nearest first to the `near`
+  point (`-location` farthest first); without a `near` filter it is a 400 `sort_needs_near`.
+- **Geofences.** `withinMeters(tx, at, center, radiusM)` → `{ inside, distanceM }` and
+  `metersBetween(tx, a, b)` (`@hykr/core`) measure with PostGIS on the spheroid, as `near` does.
+  Measure in a command's `load` and decide in `authorize` (the sample's `meeting.check-in`:
+  `no_place`, `imprecise_location`, `outside_geofence`). `distanceMeters(a, b)` (contracts) is a
+  sphere's distance for showing, never for deciding.
+- **The app.** `currentLocation({ accuracy })` asks for permission and returns
+  `{ point, accuracyM, at }`; `addressOf(point)` and `pointOf(text)` use the phone's geocoder
+  (none on the web); `useCurrentLocation()` and `<LocationField>` ("Use my location", the address
+  found, clear) are in `@hykr/app`. Add the `expo-location` plugin to `app.json` and rebuild the
+  dev client. A position is what the device says: keep its accuracy, and refuse a fix less precise
+  than your radius.
+
+### 5.16 Summaries: counts and totals
+
+Every entity whose list has a route has a summary (`docs/decisions/B13B14.md`):
+
+```text
+GET /api/orders/summary?status=submitted&groupBy=createdAt:month&sum=total&sort=-key&limit=4
+{ groups: [{ key: { createdAt: '2026-11', currency: 'INR' }, count: 3, sum: { total: { minor, currency } } }],
+  totals: [{ key: { currency: 'INR' }, count: 3, sum: { total: … } }], more: false }
+```
+
+- **Grammar** (`summaryInputSchema`, `summaryQuerySchema` in contracts): the list's filters and
+  `q`, `groupBy` (at most two; a date needs a period, `createdAt:day|week|month|quarter|year`),
+  `sum`, `avg`, `min`, `max` (lists of fields, at most six measures), `sort` (`count`, `key` or
+  `sum:total`; `-` for descending) and `limit` (groups, default 50, at most 200). The count is
+  always there. What a field can do comes from its list field type: `enum`, `id`, `boolean` and
+  `text` group by value, `date` by period, `number` and `money` are measured. Only filterable
+  fields are summarized.
+- **Results.** Money is summed per currency (the currency joins each key, and `totals` has one
+  bucket per currency), an average of money is whole minor units, rounded half up. Periods are
+  in the business's time zone (`timeZone` setting); a week is keyed by its Monday. No rows: one
+  zero bucket with the measures `null`. `more` says groups were cut at `limit`.
+- **Scope and hiding.** A summary covers exactly the rows the list would for the reader (the
+  list's own WHERE). A field the reader cannot see (removed by a plugin's `project` or a read
+  projector) in a filter, a group or a measure is a 403 `field_hidden`. The route follows the
+  list's `expose`.
+- **Clients.** `api.entity(spec).summary(q)` and `api.summary(plural, q)` (`@hykr/api-client`);
+  `useEntitySummary(plural, q)` (`@hykr/app`), refreshed with the entity's lists.
+- **Tiles.** `kpi.row` takes `of: { entity: '<plural>', query, labels? }` instead of `items`:
+  its tiles are computed from the summary wherever it is shown (the chat, a saved page,
+  WhatsApp text and speech), with the reader's session, so a saved page never keeps numbers. The
+  registry checks `of` against the entity's summary grammar. A view of your own can be filled with
+  a summary: `source: { entity, into, by: 'summary' }`.
+
+### 5.17 States, SLAs, versions and revisions
 
 A record's life is declared on its spec; the framework enforces it on every write
 (`docs/decisions/B6B4.md`). Which states exist, who may move a record, how long it may wait and
@@ -1315,6 +1380,8 @@ capabilities, with the roles that hold them by default (its features add their o
 | `channels.manage` | owner, admin | Setting the business's WhatsApp number |
 | `queues.admin` | owner, admin | Bull Board |
 | `models.manage` | owner, admin | Setting the business's model policy, and seeing what models cost (section 7.5) |
+| `credits.view` | owner, admin, ops, staff | Whether the business is paused, and how much of each cap it used (section 7.6) |
+| `credits.manage` | owner, admin | Credit amounts, the ledger, buying credits, the alert threshold (section 7.6) |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -1342,7 +1409,7 @@ You do not write tools for entities or commands. `toolsFor` in `framework/core/s
 
 | Spec | Tools |
 |---|---|
-| Entity, action exposed `'all'` | `list-<plural>`, `get-<name>`, `create-<name>`, `update-<name>`, `delete-<name>` |
+| Entity, action exposed `'all'` | `list-<plural>` and `summarize-<plural>` (counts and totals, shown as `kpi.row` tiles), `get-<name>`, `create-<name>`, `update-<name>`, `delete-<name>` |
 | Command with `tool` and `expose: 'all'` | `spec.tool` |
 | Profile `app` only | `canvas-open`, `canvas-compose`, `canvas-patch` |
 
@@ -1493,6 +1560,59 @@ The deployment configures its models; each business chooses among them (`docs/de
 - **Evals per model.** `basecamp eval --live --model <ref>` runs the evals on one registered model,
   before a business allows it.
 
+### 7.6 Credits and caps
+
+Every business's use of what costs money is metered, priced and, when its plan says so, capped
+(`docs/decisions/A3.md`). A credit is one minor unit of the deployment's credits currency.
+
+- **Meters.** `tokens` (a turn's input and output, the model as variant), `tool_calls` (one per
+  tool a turn called), `messages` (a WhatsApp message the provider accepted, its template's
+  category as variant) and `voice_seconds` (a reported voice session). Each use is a row in
+  `app.usage_events`, added to its period's counter (`app.usage_counters`). A feature or module adds
+  a meter with `defineMeter({ name, unit, per })` (contributed as `meters`) and records with
+  `CreditsService.record({ tenantId, meter, quantity, source, ref })`; `ref` makes a retried
+  report count once. Turns without a business (Studio) are not metered.
+- **Prices** come from `CREDITS_CONFIG` (JSON): `currency`, `prices` by `<meter>` or
+  `<meter>.<variant>` in credits per pricing unit (tokens per million, voice per minute),
+  `markupPercent` on a model's own `MODEL_PROVIDERS` price (used when no `tokens` price is set and
+  the currencies match), and `defaults`, the plan every business starts on. Malformed JSON stops
+  the start. Unset, uses are metered at no cost and nothing is capped.
+- **The plan** is the settings section `credits`: `enforce`, `allowance` (credits per period),
+  `period` (`day`, `week`, `month` in the business's time zone), `alertAt` (80) and `pauseAt`
+  (100), per-meter `limits`, `prices` and `pauseMessages` (message categories a paused business
+  does not send), each over the deployment's defaults. Only the operator writes it; the business
+  sets only its `alertAt` (`PUT /api/credits/alerts`, `credits.manage`).
+- **Budget and wallet.** On credits, a period's spending uses the allowance first, then the
+  prepaid wallet (`app.credit_wallets`, every change a row in `app.credit_ledger`). Used per cent is
+  spent over spent plus what is left. At `alertAt` of a cap (the budget or a meter's limit) the
+  named event `credits.threshold` (`{ cap, level: 'alert' | 'pause', usedPercent, recipients }`,
+  recipients holding `credits.manage`) is stored in the outbox and published, once per period and
+  level; the application's notification words it. At `pauseAt` the business is paused.
+- **What a pause refuses** (402, rules `credits_exhausted`, `usage_limit_reached`,
+  `credits_suspended`): assistant turns and back-office drafts (the `credits` turn hook), new voice
+  sessions (and a session's `maxSeconds` is cut to what is left), and outbound messages of a
+  category in `pauseMessages` (recorded as failed, never sent). Replies, codes, approvals, handoffs
+  and staff messages always go. A paused business's WhatsApp customer is handed to the team.
+  One action may overshoot the cap; the wallet goes below zero by that much.
+- **The operator** holds `OPERATOR_API_KEY` (header `x-operator-key`; without it the routes are
+  404): `GET /api/credits/operator/:tenantId` (full status) and `/ledger`, `PUT …/settings` (the
+  plan), `PUT …/override` (`{ override: { mode: 'run' | 'pause', until?, reason } }` or `null`) and
+  `POST …/grants` (`{ amount, note }`). Each write runs through `runWrite` as
+  `systemPrincipal({ tenantId, job: 'credits.operator' })`, audited in that business.
+- **People.** `GET /api/credits` (`credits.view`: owner, admin, ops, staff) says whether the
+  business is paused and how much of each cap is used; amounts, `GET /api/credits/ledger`,
+  `GET /api/credits/usage` and purchases need `credits.manage` (owner, admin). People only.
+- **Buying credits.** `POST /api/credits/purchases { amount, provider? }` goes through `runWrite`
+  (a write hook may park it) and records the purchase; its `CreditPurchaseProvider` (contributed
+  as `creditPurchaseProviders`, a payment connector's) starts it and returns a checkout URL or the
+  outcome. The connector's confirmation calls `CreditsService.settlePurchase(id, { status, ref })`,
+  which tops the wallet up once. No provider ships with the framework: without one, 503.
+- **In the app.** List `creditsPlugin` in `<AppShell plugins>`: a `/credits` screen (usage, the
+  pause, the balance, buying, the history) and its destination for people with `credits.view`.
+- **In tests.** The scripted model reports usage (a token per four characters of prompt and
+  reply), so a test can price turns. The fixture's `features/credits/` shows a purchase provider,
+  an alert notification and a write hook that parks a large purchase.
+
 ---
 
 ## 8. Channels, notifications and voice
@@ -1572,7 +1692,7 @@ Either way the send is part of the write, so a rollback sends nothing. The outbo
 
 ### 8.3 Voice
 
-Voice is a framework channel. The worker (`@hykr/voice-worker`, started by `basecamp dev` or `basecamp start voice`) calls `/api/chat` as a relay for the person in the call. Surfaces are forced to `['inline', 'canvas', 'speech']`. A feature needs only:
+Voice is a framework channel. The worker (`@hykr/voice-worker`, started by `basecamp dev` or `basecamp start voice`) calls `/api/chat` as a relay for the person in the call. Each person has a daily limit (`VOICE_DAILY_MINUTES`), and each business's reported seconds count against its credits and its `voice_seconds` limit (section 7.6). Surfaces are forced to `['inline', 'canvas', 'speech']`. A feature needs only:
 
 - `speak` on its views.
 - `labels` with `noun` and `empty` on spoken lists.
@@ -1618,10 +1738,10 @@ On an entity, set `expose: { delete: 'human' }`. On a command, set `expose: 'hum
 Add an entity `rule` that returns `deny(rule, reason)`. It runs on every path, including inside commands. Use `ctx.via` to allow a path only through one command.
 
 **…give a record stages (draft, submitted, approved) and a deadline on one?**
-Declare `traits.states` with its transitions and SLAs, and the SLA's breach notification on `<entity>.sla.breached`; freeze the stages that are final with `traits.versioned.frozenWhen`. Section 5.15.
+Declare `traits.states` with its transitions and SLAs, and the SLA's breach notification on `<entity>.sla.breached`; freeze the stages that are final with `traits.versioned.frozenWhen`. Section 5.17.
 
 **…stop two people overwriting each other's edit?**
-Give the entity `traits.versioned` and a `versionColumn()`, put `version` in its update schema, and send the version you read: an older one answers 409. Section 5.15.
+Give the entity `traits.versioned` and a `versionColumn()`, put `version` in its update schema, and send the version you read: an older one answers 409. Section 5.17.
 
 **…let ops and admins see the whole business?**
 Give the entity `access` with `'tenant'` for those roles, like `BUSINESS_ACCESS`.
@@ -1763,7 +1883,7 @@ These are not built. Each has a workaround for now.
 | Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `pdfkit` with `harfbuzzjs` and the Noto fonts, `@mastra/memory` (in `@hykr/agents`), the React Query persister (in `@hykr/app`), and `expo-location` (in the mobile app). Each feature that uses one adds its code. Their Expo config plugins are not in `app.json` yet: add the plugin with the feature, then rebuild the dev client (the image picker's is in, for files, and `expo-notifications`', for push). Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `pdfkit` with `harfbuzzjs` and the Noto fonts, `@mastra/memory` (in `@hykr/agents`) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. An inbound webhook's handler that creates a row fails with `no_access` until then. |
 | Integration screens | Endpoints, connections and the delivery log have an HTTP API only (`/api/integrations/*`): no app or back-office screen, and no typed `@hykr/api-client` methods. |
@@ -1789,13 +1909,23 @@ These are not built. Each has a workaround for now.
 | A per-field approval pin | A parked write fails on approval when the record's version changed at all, even for a field it does not touch. |
 | Revisions without copying | A revision is a copy (its own id). There is no snapshot of one record in place. |
 | Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
-| Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. |
+| Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates of an undoable write wait with its events until the window closes. |
 | Deciders and per-business roles | `Recipient { capability }` finds the people to ask through the registered roles only. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
 | A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
 | Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |
+| Credits operators | One shared `OPERATOR_API_KEY` stands in for platform operators (B19): no named operators, no screen. Use the operator routes (section 7.6) with the key. |
+| Buying credits | No purchase provider ships: register a `CreditPurchaseProvider` from a payment connector and call `CreditsService.settlePurchase` from its verified webhook. |
+| Credits mid-turn | A turn, a voice session or a message is checked before it starts; one may take a business past its cap. Tool calls are not refused in the middle of a turn. |
+| Metering everything | The guardrail's model calls, embeddings, WhatsApp voice-note transcription and voice sessions whose worker never reported an end are not metered. Call `CreditsService.record` from the feature. |
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
+| Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |
+| A summary's view of hiding | The field check reads one record of the reader's scope through `toRead` and assumes a projector hides a field on every record alike. A projector that hides a field on some records only lets a summary over it through. |
+| A summary's scope without a recorder | `listWhere` reads the list's WHERE by running `repo.list` against a connection that records it (`define-entity.ts` gets a `repo.where` when it is next opened). |
+| Server geocoding, polygons, tracking | Addresses are typed or found by the phone's geocoder; `within` is a box, not a shape; a check-in is one point in time. |
+| Erasing check-in locations | A check-in keeps the person's point until its record is deleted; retention and erasure come with privacy (B18). |
+| A point column narrowed to points | `geoPoint` is plain `geography` (drizzle-kit quotes `geography(Point,4326)` as one name). Write it only through the column (`pointSql`); a read throws on anything but a point. |
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |

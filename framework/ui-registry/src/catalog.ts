@@ -1,4 +1,4 @@
-import { assertNoProblems, PLATFORM_MODULE } from '@hykr/contracts';
+import { assertNoProblems, type EntitySpec, PLATFORM_MODULE } from '@hykr/contracts';
 import type { Lang } from '@hykr/i18n';
 import type { ScreenDef, ViewDef } from './define-view.js';
 import { platformScreens, platformViews } from './platform/index.js';
@@ -16,6 +16,8 @@ export interface UiPart {
   name?: string;
   views?: readonly ViewDef[];
   screens?: readonly ScreenDef[];
+  /** Its entities (a module's, keyed by plural): views that name an entity are checked against them. */
+  entities?: Readonly<Record<string, EntitySpec>>;
 }
 
 /**
@@ -43,9 +45,11 @@ export function createUiRegistry(...parts: readonly (UiPart | undefined)[]) {
       }
   }
   assertNoProblems(problems);
+  const given = parts.filter((p): p is UiPart => p?.entities !== undefined);
   return createRegistry({
     views: all.flatMap((p) => p.views ?? []),
     screens: all.flatMap((p) => p.screens ?? []),
+    entities: given.length ? given.flatMap((p) => Object.values(p.entities ?? {})) : undefined,
     moduleOf: (name) => owners.get(`view:${name}`) ?? owners.get(`screen:${name}`),
   });
 }

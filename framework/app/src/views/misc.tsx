@@ -1,7 +1,14 @@
-import type { ApprovalCardView, KpiRowView, PageListView } from '@hykr/ui-registry';
+import type { EntitySpec } from '@hykr/contracts';
+import {
+  type ApprovalCardView,
+  type KpiRowView,
+  type KpiSource,
+  kpiTiles,
+  type PageListView,
+} from '@hykr/ui-registry';
 import type { ViewProps } from '@hykr/ui-registry/react';
 import { useContext } from 'react';
-import { Pressable, View } from 'react-native';
+import { ActivityIndicator, Pressable, View } from 'react-native';
 import { Text } from '../components/ui/text';
 import {
   ApprovalItem,
@@ -10,7 +17,10 @@ import {
   useApprovalStatus,
   useDecisionPlace,
 } from '../framework/ApprovalCard';
+import { errorMessage, useEntitySummary } from '../framework/hooks';
 import { Icon } from '../framework/Icon';
+import { useLang } from '../framework/lang';
+import { getCatalog } from '../runtime';
 import { colors } from '../theme';
 import { OpenRow, Rows, ViewCard } from './parts';
 
@@ -75,7 +85,9 @@ export function ApprovalCardComponent({ approvalId, summary }: ViewProps<typeof 
   );
 }
 
-export function KpiRowComponent({ items }: ViewProps<typeof KpiRowView>) {
+type KpiTile = { label: string; value: number | string; hint?: string };
+
+function KpiTiles({ items }: { items: readonly KpiTile[] }) {
   return (
     <View className="flex-row flex-wrap gap-2">
       {items.map((k) => (
@@ -92,6 +104,27 @@ export function KpiRowComponent({ items }: ViewProps<typeof KpiRowView>) {
       ))}
     </View>
   );
+}
+
+/** Tiles from a summary, fetched now with the person's session: never numbers someone typed. */
+function KpiOf({ of }: { of: KpiSource }) {
+  const summary = useEntitySummary(of.entity, of.query);
+  const { lang } = useLang();
+  if (summary.error)
+    return <Text variant="error">Couldn't load this: {errorMessage(summary.error)}</Text>;
+  if (!summary.data)
+    return (
+      <View className="flex-row items-center gap-2 py-2">
+        <ActivityIndicator size="small" color={colors.muted} />
+      </View>
+    );
+  const spec = (getCatalog().entities as Record<string, EntitySpec>)[of.entity];
+  return <KpiTiles items={kpiTiles(summary.data, of, { spec, lang })} />;
+}
+
+export function KpiRowComponent({ items, of }: ViewProps<typeof KpiRowView>) {
+  if (of) return <KpiOf of={of} />;
+  return <KpiTiles items={items ?? []} />;
 }
 
 /** The person's saved pages (page.list); each opens beside the chat. */

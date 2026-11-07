@@ -26,4 +26,14 @@ export const evalCases: EvalCase[] = [
     input: 'list orders',
     expect: { must: ['list-orders'], mustNot: ['save-order', 'transition-orders', 'revise-order'] },
   },
+  {
+    why: 'totals orders by status with the summary tool, never by adding up a list',
+    input: 'orders by status',
+    expect: { must: ['summarize-orders'], mustNot: ['list-orders', 'save-order'] },
+  },
+  {
+    why: 'totals orders by month',
+    input: 'order totals by month',
+    expect: { must: ['summarize-orders'], mustNot: ['save-order', 'transition-orders'] },
+  },
 ];

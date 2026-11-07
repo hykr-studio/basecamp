@@ -1,7 +1,9 @@
 import { commandSpec } from '@hykr/contracts';
 import {
+  CheckInInput,
   CloseMeetingInput,
   CloseMeetingResult,
+  MeetingCheckInView,
   RescheduleMeetingInput,
   RescheduleMeetingResult,
 } from './meeting.js';
@@ -34,4 +36,17 @@ export const RescheduleMeetingSpec = commandSpec({
   view: { name: 'meeting.card', id: (input) => input.meetingId },
   verb: { do: 'move', did: 'moved' },
   touches: ['meeting', 'todo'],
+});
+
+export const CheckInSpec = commandSpec({
+  name: 'meeting.check-in',
+  description:
+    "Check in at a meeting where you are: only within the meeting's radius of its place, with a precise enough position.",
+  input: CheckInInput,
+  output: MeetingCheckInView,
+  http: { method: 'POST', path: '/api/meetings/:meetingId/check-in' },
+  // People only, with their device's position: no tool.
+  expose: 'human',
+  verb: { do: 'check in at', did: 'checked in at' },
+  touches: ['meetingCheckIn'],
 });

@@ -195,7 +195,7 @@ export const handoffs = channel.table(
       .notNull()
       .default('open'),
     takenBy: text('taken_by'),
-    /** customer_asked, agent_failed, staff_took, agent_tool. */
+    /** customer_asked, agent_failed, staff_took, agent_tool, assistant_paused. */
     reason: text('reason').notNull(),
     /** What staff resolved, when they hand it back (the assistant reads it next). */
     resolution: text('resolution'),

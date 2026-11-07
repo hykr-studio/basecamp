@@ -23,6 +23,7 @@ Node 24 (`.nvmrc`), pnpm 12 (pinned in `packageManager`), Docker.
 pnpm install && cp application/.env.example .env   # .env lives at the repo ROOT
 # Set BETTER_AUTH_SECRET, AGENT_API_KEY, VOICE_AGENT_KEY (must differ from AGENT_API_KEY),
 # APPROVAL_SECRET, SECRETS_KEY (each >= 32 chars: openssl rand -hex 32). Offline: MODEL_MODE=fake VOICE_MODE=fake
+# Optional: CREDITS_CONFIG (prices and plans), OPERATOR_API_KEY (>= 32 chars, the credits operator)
 pnpm build            # everything; the basecamp CLI, API and tests all run from dist/
 pnpm infra:up         # Postgres/PostGIS, Redis, MinIO, Mailpit, pgAdmin, LiveKit, whaloc (WhatsApp emulator)
 pnpm db:migrate       # framework migrations first, then the application's
@@ -162,7 +163,8 @@ Each module (`application/domain/src/modules/<name>/`) declares its contracts in
 - the server: `defineEntity(Spec, { table, owner, customer, access, rules })` and
   `defineCommand(...)` in the module's `server/`, wired with
   `entityController` / `entityHandlers` / `commandController` into the module's Nest module;
-- the agent tools: `list-*`, `get-*`, `create-*`, `update-*`, `delete-*`, plus one per command;
+- the agent tools: `list-*`, `summarize-*`, `get-*`, `create-*`, `update-*`, `delete-*`, plus one
+  per command (`summarize-*` is `GET /api/<plural>/summary`: counts and totals under the list's scope);
 - the typed client (`@hykr/api-client`, built at runtime from the spec, nothing to codegen) and the app hooks
   (`useEntityList`, `useEntity`, `useEntityMutation`, `useCommand` in `framework/app/src/framework/hooks.ts`);
 - the views (`defineView` / `defineScreen` in the module's `views/`), bound to React components in

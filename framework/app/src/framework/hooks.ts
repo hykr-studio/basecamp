@@ -5,6 +5,8 @@ import type {
   EntitySpec,
   ListInput,
   ModuleSpec,
+  Summary,
+  SummaryInput,
   WriteResult,
 } from '@hykr/contracts';
 import {
@@ -117,6 +119,21 @@ export function useEntityList<N extends EntityName>(name: N, query: ListInput = 
     loading: q.isLoading,
     error: q.error,
   };
+}
+
+/**
+ * Counts and totals of an entity's records (GET /api/<plural>/summary), with the person's
+ * session. Keyed under the entity, so its writes, the assistant's and live events refresh it
+ * like its lists. Takes any plural: views name entities by plural (kpi.row's `of`).
+ */
+export function useEntitySummary(
+  name: EntityName | (string & {}),
+  query: SummaryInput = {},
+): UseQueryResult<Summary> {
+  return useQuery({
+    queryKey: [name, 'summary', query],
+    queryFn: () => api.summary(name, query),
+  });
 }
 
 export function useEntity<N extends EntityName>(

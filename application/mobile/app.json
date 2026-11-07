@@ -44,6 +44,15 @@
           "cameraPermission": "Take photos to keep on your records.",
           "microphonePermission": false
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Check in where you are, and find records near you.",
+          "locationAlwaysAndWhenInUsePermission": false,
+          "locationAlwaysPermission": false,
+          "motionUsagePermission": false
+        }
       ]
     ],
     "scheme": "agenticstack"

@@ -1,7 +1,8 @@
 # The domain is replaceable
 
 Basecamp, the agentic development stack for full-stack applications, ships with a sample
-application: meetings, notes, to-dos and orders, as four modules. The framework (the API pipeline with
+application: meetings, notes, to-dos and orders, as four modules, plus `account`, which words the
+credits alerts. The framework (the API pipeline with
 its rules, approvals and audit; the assistant with its tools, surfaces, canvas and WhatsApp;
 saved pages; the app shell) lives in `framework/` and is published as `@hykr/*` packages. The
 application lives in `application/`. The framework never imports the application; the
@@ -144,10 +145,21 @@ The framework has no currency, number format or tax rule of its own; a module de
   in a tree of any depth, reached exactly when the parent is, and saved whole by a command
   (`children.replace`) as one write, one approval and one audit statement.
 
+## Places and totals
+
+- **Places** (developer guide 5.15): a `geoPoint()` column (PostGIS) and an `addressColumn()`,
+  the `geo` list type (`near`, `within`, nearest-first sort), and `withinMeters` for a geofence a
+  command checks. The radius, and what a check-in means, are the module's: the sample's meetings
+  take a check-in within their `CHECK_IN_RADIUS_M`.
+- **Totals** (developer guide 5.16): every listed entity has `GET /api/<plural>/summary` (counts,
+  sums, averages, lowest and highest, grouped by up to two fields) under its list's scope, and
+  the assistant a `summarize-<plural>` tool. `kpi.row` tiles with `of` are computed from a
+  summary for whoever looks; the sample's orders screen shows totals by status and by month.
+
 ## States, deadlines and versions
 
 The framework has no workflow of its own either; a module declares it on the spec (the
-sample's `orders` module does, developer guide 5.15):
+sample's `orders` module does, developer guide 5.17):
 
 - **States** (`traits.states`): the state field, the initial state, the states with their
   labels, the transitions (from, to, who may ask, a capability, required fields, a guard, the
@@ -211,8 +223,9 @@ From the contracts declaration alone:
 
 - REST routes with the list grammar (filters, search, sort, keyset pages), validation and
   OpenAPI shapes.
-- Agent tools (`list-*`, `get-*`, `create-*`, `update-*`, `delete-*`, one per command), with
-  approvals where the spec asks for them.
+- Agent tools (`list-*`, `summarize-*`, `get-*`, `create-*`, `update-*`, `delete-*`, one per
+  command), with approvals where the spec asks for them.
+- `GET /api/<plural>/summary`: counts and totals under the list's scope and filters.
 - The app's data hooks (`useEntityList`, `useEntity`, mutations, commands) and
   query-cache refresh after the assistant writes (commands declare `touches`).
 - History for every entity (`GET /api/history`), approval cards and history lines worded from
@@ -257,6 +270,12 @@ From the contracts declaration alone:
   OpenRouter in development) and each business's model policy (`GET /api/models`,
   `PUT /api/models/policy`), which picks every turn's model and fails closed (developer guide,
   section 7.5). The application only configures them in `.env`.
+- Credits and caps: every business's assistant tokens and tool calls, WhatsApp messages and
+  voice seconds metered and priced, a per-period allowance and a prepaid wallet, an alert and a
+  pause as caps fill, an operator's override, and buying credits through a purchase provider
+  (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
+  (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
+  sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

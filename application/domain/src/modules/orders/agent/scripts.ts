@@ -1,4 +1,4 @@
-import { call, defineScript, items, say, sayIn, written } from '@hykr/agents/script';
+import { call, defineScript, items, type Outcome, say, sayIn, written } from '@hykr/agents/script';
 import { moneyText } from '@hykr/i18n';
 
 /**
@@ -7,6 +7,7 @@ import { moneyText } from '@hykr/i18n';
  *   list orders                                               list-orders
  *   submit|approve|cancel order <number>                      list-orders → transition-orders
  *   revise order <number>                                     list-orders → revise-order (waits)
+ *   orders by status / order totals by month                  summarize-orders (kpi.row tiles)
  * Prices are decimals in the business's currency; a rate is the line's tax percentage.
  */
 const first = (text: string) => text.split('\n')[0]?.trim() ?? '';
@@ -44,6 +45,24 @@ function parse(text: string): { title: string; lines: Line[] } | undefined {
 }
 
 type Saved = { order: { number: string; total: { minor: number; currency: string } } };
+
+/** The summaries the scripted model asks for: the tiles show them, computed for the reader. */
+const SUMMARIES: Record<string, Record<string, unknown>> = {
+  'orders by status': { groupBy: ['status'], sum: ['total'] },
+  'order totals by month': {
+    groupBy: ['createdAt:month'],
+    sum: ['total'],
+    sort: '-key',
+    limit: 4,
+  },
+};
+
+/** How many orders a summary counted (its totals are one bucket per currency). */
+const counted = (o: Outcome) =>
+  ((o.result as { totals?: { count: number }[] } | undefined)?.totals ?? []).reduce(
+    (n, t) => n + t.count,
+    0,
+  );
 
 export const ordersScripts = [
   defineScript({
@@ -110,6 +129,30 @@ export const ordersScripts = [
       const [order] = items(found) as unknown as { id: string }[];
       if (!order) return [noSuchOrder(turn, number)];
       return [call('revise-order', { orderId: order.id })];
+    },
+  }),
+  defineScript({
+    name: 'summarize-orders',
+    match: (text) => SUMMARIES[first(text).toLowerCase()],
+    step: (query, turn) => {
+      const r = turn.result('summarize-orders');
+      if (!r) return [call('summarize-orders', query)];
+      if (!r.ok)
+        return [
+          sayIn(turn, {
+            en: "I couldn't total your orders.",
+            hi: 'मैं आपके ऑर्डर का जोड़ नहीं निकाल सका।',
+            te: 'మీ ఆర్డర్ల మొత్తం లెక్కించలేకపోయాను.',
+          }),
+        ];
+      const n = counted(r);
+      return [
+        sayIn(turn, {
+          en: `${n} ${n === 1 ? 'order' : 'orders'} in all; the totals are above.`,
+          hi: `कुल ${n} ऑर्डर; जोड़ ऊपर है।`,
+          te: `మొత్తం ${n} ఆర్డర్లు; మొత్తాలు పైన ఉన్నాయి.`,
+        }),
+      ];
     },
   }),
   defineScript({

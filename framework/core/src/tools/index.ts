@@ -1,6 +1,7 @@
 export { canvasTools } from './canvas-tools.js';
 export { type ToolContribution, toolContributions } from './contributions.js';
 export { canvasOf, type Resolved, resolvePresent, surfacesOf } from './present.js';
+export { summaryTools } from './summary-tools.js';
 export {
   type ClientFor,
   commandTools,
