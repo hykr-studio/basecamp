@@ -3,6 +3,7 @@ import {
   applyTax,
   buildTree,
   CurrencyMismatch,
+  isFrozen,
   type Money,
   mulDiv,
   resolveMoneyInput,
@@ -21,7 +22,13 @@ import {
   tenantOf,
 } from '@hykr/core';
 import { moneyText } from '@hykr/i18n';
-import { type SaveOrderInput, type SaveOrderItem, SaveOrderSpec } from '../contracts/index.js';
+import { ConflictException } from '@nestjs/common';
+import {
+  ORDER_VERSIONS,
+  type SaveOrderInput,
+  type SaveOrderItem,
+  SaveOrderSpec,
+} from '../contracts/index.js';
 import { Order, OrderItem } from './order.entity.js';
 import { saveDecision } from './policy.js';
 import { OrderSeries } from './series.js';
@@ -130,18 +137,31 @@ type Loaded = {
 
 /**
  * Save a whole order in one write: a new order takes the next number of the orders series (in
- * run, so a save that waits for approval takes none until it runs); then its items are made
- * exactly the tree sent (kept, changed, moved, added, removed) and its totals stored.
+ * run, so a save that waits for approval takes none until it runs) and starts as a draft; then
+ * its items are made exactly the tree sent (kept, changed, moved, added, removed) and its totals
+ * stored. Only a draft changes: a submitted order is frozen (revise it). A save sent with the
+ * version it read is refused (409) when the order changed since, and a save waiting for
+ * approval is pinned to the version it was asked on.
  */
 export const SaveOrder = defineCommand(SaveOrderSpec, {
   resource: { type: 'order', id: (input) => input.orderId ?? null },
-  load: async (tx, p, input): Promise<Loaded> => ({
-    order: input.orderId ? await Order.repo.get(tx, p, input.orderId) : null,
-    money: await tenantMoney(tx, tenantOf(p)),
-  }),
+  load: async (tx, p, input): Promise<Loaded> => {
+    const order = input.orderId ? await Order.repo.get(tx, p, input.orderId) : null;
+    // Sent with the version it read: an order changed since is not saved over (409).
+    if (order && input.version !== undefined && input.version !== order.version)
+      throw new ConflictException({
+        error: 'stale',
+        message: `This order changed since it was read (version ${input.version} then, ${order.version} now). Load it again.`,
+      });
+    return { order, money: await tenantMoney(tx, tenantOf(p)) };
+  },
+  pin: (loaded) => (loaded.order ? [{ def: Order, row: loaded.order }] : []),
   authorize: (p, loaded, input) => {
-    if (loaded.order?.status === 'cancelled')
-      return deny('order_cancelled', 'This order is cancelled');
+    if (loaded.order && isFrozen(ORDER_VERSIONS, loaded.order))
+      return deny(
+        'record_frozen',
+        `This order is ${loaded.order.status}: it can't be changed${loaded.order.status === 'submitted' ? '. Revise it to make a new version' : ''}`,
+      );
     const currency = currencyOf(input, loaded);
     if (typeof currency !== 'string') return currency;
     const priced = price(input, currency);
@@ -171,7 +191,7 @@ export const SaveOrder = defineCommand(SaveOrderSpec, {
         tx,
         principal,
         loaded.order,
-        { title: input.title, ...totals },
+        { title: input.title, ...totals, ...(input.version ? { version: input.version } : {}) },
         via,
       );
     } else {

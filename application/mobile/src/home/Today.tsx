@@ -6,6 +6,7 @@ import {
   dayBounds,
   LoadError,
   listRow,
+  OverdueList,
   ScreenTitle,
   SectionHeading,
   space,
@@ -192,6 +193,7 @@ export function Today() {
           <View style={{ flexDirection: 'row', gap: space.xxl, alignItems: 'flex-start' }}>
             <View style={{ flex: 3, minWidth: 0, gap: space.xl }}>
               <WaitingForYou place="Today" />
+              <OverdueList />
               {today}
               {needsClosing}
               {due}
@@ -201,6 +203,7 @@ export function Today() {
         ) : (
           <>
             <WaitingForYou place="Today" />
+            <OverdueList />
             {activity}
             {today}
             {needsClosing}

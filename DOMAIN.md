@@ -39,7 +39,7 @@ and registers it.
 | Contracts | `contracts/` (isomorphic) | Its `entitySpec`s and `commandSpec`s, and `<name>Spec = moduleSpec({ name, dependsOn, entities, commands })` from `@hykr/contracts`, entities keyed by plural. A field that keeps files is a `FileRef` or `fileRefs(max)`, listed in the spec's `files` trait with what it accepts |
 | Database | `db/schema.ts` | Drizzle tables in the `app` schema (`app`, `id`, `tenantColumn()`, `customerColumn()`, `user`, `tableRef` from `@hykr/db`), named after the module (`orders`, `orders_lines`), each with `id`, `tenantColumn()`, an owner column, `customerColumn()` (when customers have rows), `createdBy`, `createdAt`, `updatedAt`. A file field's column is `fileColumn(<field>)` or `fileColumns(<field>)` |
 | API | `server/` | A Nest module with one `defineEntity` / `defineCommand` per spec (`entityController` / `entityHandlers` / `commandController`); who sees what in `access` (see below). `server/public.ts`: what other modules may call |
-| Notifications | `notifications/` (isomorphic) | Its templates (`defineTemplate`) and notifications (`defineNotification`) |
+| Notifications | `notifications/` (isomorphic) | Its templates (`defineTemplate`) and notifications (`defineNotification`), among them what an SLA breach (`<entity>.sla.breached`) says to whom |
 | Views | `views/` (isomorphic) | `<name>Views = { name, views, screens }`, declared with `defineView` / `defineScreen` |
 | Assistant | `agent/` | An `AgentModule` (`@hykr/agents/script`): its rules, the scripted model's scripts, eval cases (and spoken `voiceEvalCases`) and setup |
 | Bundle | `index.ts` (server only) | `<name> = defineModule({ ...<name>Spec, server, views, screens, templates, notifications, agent, tables, contributes })` from `@hykr/api`; `contributes.featureFlags` lists the module's flags (`defineFeatureFlag`) |
@@ -213,6 +213,28 @@ their own. A read projector for resource type `document` or `documentSend` can h
 
 The sample's `orders` module ships `orders.order`, its template `order_document_v1`, and
 scripts that make and send it.
+
+## States, deadlines and versions
+
+The framework has no workflow of its own either; a module declares it on the spec (the
+sample's `orders` module does, developer guide 5.20):
+
+- **States** (`traits.states`): the state field, the initial state, the states with their
+  labels, the transitions (from, to, who may ask, a capability, required fields, a guard, the
+  approval and its level, the event) and the SLAs. Only a transition moves a record
+  (`POST /api/transitions/<plural>/:id/<name>`, the `transition-<plural>` tool, `transition()`
+  in a command); entity rules see `via: '<entity>.transition'`.
+- **SLAs** run while a record is in a state. Their names (`orders.decision`), durations and
+  escalations (capabilities whose holders are told, a transition the server runs) are the module's; what a breach
+  says is the module's notification on `<entity>.sla.breached`. A business's `businessHours`
+  and `sla` settings decide open hours, and override a duration or switch one off.
+- **Versions** (`traits.versioned`, `versionColumn()`): a write against an old version is 409,
+  an approval is pinned to the version it was asked on, and `frozenWhen` names the states in
+  which a record (and its lines) no longer changes. **Revisions** (`revisionColumns()`,
+  `reviseWithChildren` in the module's own command) copy a record and its lines as v2.
+
+A state column can also get a CHECK in the module's `sql/post` hook (the sample's
+`orders-states.sql`); keep it in step with the states.
 
 ## What a module adds for WhatsApp: templates and notifications
 

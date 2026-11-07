@@ -16,6 +16,7 @@ export {
   type ChildRepository,
   type ChildrenResult,
   childLinkOf,
+  childLinksOf,
   defineChildEntity,
   insertMany,
 } from './entity/children.js';
@@ -60,6 +61,7 @@ export {
   projectRead,
   type ReadProjector,
   readProjectors,
+  type StaleRefusal,
   type WriteHook,
   type WriteHookArgs,
   writeHooks,
@@ -116,9 +118,11 @@ export {
 } from './query/field-sql.js';
 export { metersBetween, withinMeters } from './query/geo.js';
 export { buildListSql, decodeCursor, encodeCursor } from './query/list-grammar.js';
+export * from './states/index.js';
 export { type SystemPrincipalOptions, systemPrincipal } from './system.js';
 export { TenantConfigService, type TenantInfo } from './tenants/tenant-config.service.js';
 export { type AgentKey, CORE_OPTIONS, type Conn, type CoreOptions, type Tx } from './tokens.js';
+export * from './versions/index.js';
 export {
   ApprovalEvent,
   ApprovalService,
