@@ -21,6 +21,7 @@ export * from './parties.js';
 export * from './push.js';
 export * from './roles.js';
 export * from './settings.js';
+export * from './share-links.js';
 export * from './sla.js';
 export * from './tenancy.js';
 export * from './undo.js';

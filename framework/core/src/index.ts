@@ -84,6 +84,14 @@ export {
   type RouteScope,
 } from './http/principal.js';
 export { PrincipalResolver, type Standing } from './http/resolver.js';
+export {
+  ShareGateOpen,
+  ShareGuard,
+  type ShareLinkRow,
+  type ShareRequest,
+  shareHash,
+  shareOf,
+} from './http/share.guard.js';
 export { UndoController } from './http/undo.controller.js';
 export { nextNumber, numberSeries, type TakenNumber } from './money/numbering.js';
 export {

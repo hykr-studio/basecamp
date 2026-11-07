@@ -2,6 +2,7 @@ import { type DynamicModule, Global, Module } from '@nestjs/common';
 import { ApprovalsController } from './http/approvals.controller.js';
 import { HumanOnlyGuard, PrincipalGuard } from './http/principal.js';
 import { PrincipalResolver } from './http/resolver.js';
+import { ShareGuard } from './http/share.guard.js';
 import { UndoController } from './http/undo.controller.js';
 import { setDefaultCurrency } from './money/tenant-money.js';
 import { TenantConfigService } from './tenants/tenant-config.service.js';
@@ -30,6 +31,7 @@ export class CoreModule {
         PrincipalResolver,
         PrincipalGuard,
         HumanOnlyGuard,
+        ShareGuard,
         ApprovalService,
         UndoService,
         TenantConfigService,
@@ -39,6 +41,7 @@ export class CoreModule {
         PrincipalResolver,
         PrincipalGuard,
         HumanOnlyGuard,
+        ShareGuard,
         ApprovalService,
         UndoService,
         TenantConfigService,

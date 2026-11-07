@@ -10,5 +10,6 @@ export * from './money.js';
 export * from './parties.js';
 export * from './roles.js';
 export * from './sections.js';
+export * from './shares.js';
 export * from './sla.js';
 export * from './wording.js';
