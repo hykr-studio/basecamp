@@ -807,6 +807,48 @@ events, so subscribers never see the write. It refuses when the row changed sinc
 `undo_window_closed`) and the second time (409 `already_undone`); another person's or business's
 undo is a 404. A command can be undone only when its `touched` rows carry `before` and `after`.
 
+#### 5.8.3 Durable runs: the assistant waits, then goes on
+
+When a write the assistant makes parks, its run is suspended, not ended (`docs/decisions/A7.md`):
+
+1. The tool gets `needs_approval` from the API. `safely` (`@hykr/core/tools`, which every generated
+   tool uses) calls Mastra's `suspend()` with a `ParkedCall`: the approval's id and summary, what the
+   tool shows while it waits (its approval card), and how to rebuild the turn (whom it acts for, the
+   business, channel, language, time zone, surfaces, the record on screen). Mastra stores the run in
+   its `mastra` schema under the turn's run id, which is also the approval's `run_id`.
+2. The turn still answers as a parked one (`durableAgent` in `@hykr/agents`, used by `agentFor`): the
+   parked call is a tool result with its card, and the reply ends with "I've asked for your
+   approval: …" (the framework's line, in the turn's language). The chat, WhatsApp's buttons and
+   voice are unchanged.
+3. The decision (app, WhatsApp button, or the expiry sweeper) stores `approval.decided`. The
+   `resume.approvals` subscriber puts it on the `agent-resume` queue. `ResumeService` finds the run,
+   checks the business, the requester, that they still belong, and the thread, passes the turn hooks
+   (`TurnInfo.kind` `'resume'`: credits and the model policy apply), and resumes it.
+4. The tool does not call the API again (the approval's replay already wrote, or nothing did). It
+   answers `{ ok: true, result: { status: 'approved' | 'rejected' | 'expired', approval } }`, or a
+   refusal for `failed`. The model says what happened and carries on with the rest of the request,
+   under the same run id, so every follow-on write is audited under it.
+5. The continuation is a new assistant message in the person's thread. The app reloads its
+   conversation on the live event `thread.continued`; a run from WhatsApp sends it to the same
+   number while the 24-hour window is open.
+
+In a script for the scripted model, `decided(outcome)` says how a resumed call was decided, and
+`written(outcome, done, turn)` already says the framework's line for each decision:
+
+```ts
+// application/domain/src/modules/meetings/agent/scripts.ts
+const r = turn.result('close-meeting');
+if (r && decided(r) === 'approved') {
+  const todos = turn.result('list-todos');
+  if (!todos) return [call('list-todos', { meetingId, done: false })]; // the run goes on
+  return [say(`Closed ${name}. ${plural(items(todos).length, 'to-do')} to follow up.`)];
+}
+if (r) return [say(written(r, () => `Closed ${name}.`, turn))]; // rejected, expired
+```
+
+A tool contributed outside `tool-factory.ts` suspends too when it calls `safely`. One that calls the
+API itself returns the parked result and its run ends there, as before.
+
 ### 5.9 Extension points: traits, contributions and settings sections
 
 Shared behaviour plugs in without editing the framework's central files. There are three seams, and
@@ -877,13 +919,14 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   runs on the shared `events` queue; `queue` adds the envelope to your own queue. The envelope has
   the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
   (F3) before it leaves the server. The in-process `EventBus` is not relayed.
-- **Turn hooks.** Every chat turn and back-office draft passes `turnHooks` in `ChatService`
-  (`gateTurn`): first a check that the deployment has a model (503 `model_not_configured`), then the
-  hooks, then the business's model policy chooses the turn's model (section 7.5). `before` returns
-  `{ refuse: { rule, reason, status?, say? } }` or `{ context?, model?, withoutTools? }`; a refusal is
-  `TurnRefused` (403 unless given, nothing saved; on WhatsApp the person hears `say`). A hook's
-  `model` is a ref (`<provider>/<model>`) that the policy checks like any other. `after` sees the
-  reply, the tools called, the token usage and `turn.model`, the model the turn ran on.
+- **Turn hooks.** Every chat turn, back-office draft and resumed run (`kind: 'resume'`, section
+  5.8.3) passes `turnHooks` (`gateTurn`): first a check that the deployment has a model (503
+  `model_not_configured`), then the hooks, then the business's model policy chooses the turn's model
+  (section 7.5). `before` returns `{ refuse: { rule, reason, status?, say? } }` or
+  `{ context?, model?, withoutTools? }`; a refusal is `TurnRefused` (403 unless given, nothing saved;
+  on WhatsApp the person hears `say`). A hook's `model` is a ref (`<provider>/<model>`) that the
+  policy checks like any other. `after` sees the reply, the tools called, the token usage and
+  `turn.model`, the model the turn ran on.
 - **The agent per turn.** The model (the one the policy chose, `model` in the request context; the
   scripted one in fake mode), the guardrail (on the same model), the tools (generated, plus
   `toolContributions`, minus `withoutTools`) and the instructions (plus the hooks' context lines, as
@@ -904,7 +947,8 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
 - **Live updates.** `GET /api/live` (server-sent events, people only) sends `{ name, type, id }` for
   each committed event about a record the person may read now: an entity's record through its scoped
   read (as `GET`), any other type through a contributed `liveResources` check (`approval` is the
-  framework's). The `live.relay` subscriber publishes events on Redis per business, ids only. A record
+  framework's, and `thread` from the `resume` feature: only the thread's owner). The `live.relay`
+  subscriber publishes events on Redis per business, ids only. A record
   that is gone reaches only streams already told about it and the person who changed it. The app's
   `livePlugin()` invalidates the matching queries, and everything after a reconnect.
 - **Inbound hooks.** Each WhatsApp message the code did not answer itself (buttons, keywords) passes
@@ -1409,7 +1453,9 @@ defineScript({
 
 The first script that matches runs, and earlier modules' scripts come first. `defineServer` runs every module's eval inputs through all the modules' scripts and refuses to boot when another module's script would take one (`todos`'s `add` would take `add order 5` from an `orders` module listed after it). Give each module verbs of its own.
 
-Helpers you will use, all from `@hykr/agents/script`: `call`, `say`, `sayIn(turn, { en, hi, te })`, `verbs(...)`, `items(outcome)`, `written(...)`.
+Helpers you will use, all from `@hykr/agents/script`: `call`, `say`, `sayIn(turn, { en, hi, te })`, `verbs(...)`, `items(outcome)`, `written(...)`, `decided(outcome)`.
+
+A write that waits for approval suspends the run: the script's next step runs when the request is decided, with the tool's result saying `approved`, `rejected` or `expired` (section 5.8.3). The steps before the park are still in `turn.steps`.
 
 The framework's own scripts (saved pages, handoff, the failing turn) run before the domain's. Each feature keeps them in `framework/agents/src/fake/scripts/<feature>.ts` as `defineScriptSet({ name, order, scripts })`, with one line in `scripts/index.ts`. The first script that matches runs, so `order` places the set: pages 100, handoff 200, testing 900. A set or script name used twice throws. A new framework tool gets its script there.
 
@@ -1841,6 +1887,7 @@ These are not built. Each has a workaround for now.
 | Bulk writes for plain entities | Only children of a parent are inserted in bulk (`children.insert`/`replace`); `insertMany` for any other entity is one insert per row. There is no bulk update. |
 | Line-level tools | The assistant saves a whole tree in one call (the sample's `save-order`); there are no tools to add or move one line. |
 | Several currencies in one record | A record and its children have one currency, and there are no exchange rates. |
+| Durable runs | A run waits only for approvals (no questions, timers or webhooks). A run outside a chat thread (none yet) is not resumed. A decision after WhatsApp's 24-hour window sends nothing there (the app shows it), and a request a continuation parks again is approved in the app, not with buttons. A resume a turn hook refuses (credits) runs no model and is not tried again. If the person keeps chatting meanwhile, the resumed run does not see those messages. A run parked before a deploy goes on under the new instructions and tools. A run whose resume never comes keeps the parked step's tokens unmetered. |
 | Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
 | Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates of an undoable write wait with its events until the window closes. |
 | Deciders and per-business roles | `Recipient { capability }` finds the people to ask through the registered roles only. |

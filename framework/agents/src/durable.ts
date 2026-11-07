@@ -116,6 +116,18 @@ export function parkedView<O extends Output>(
           controller.enqueue({ type: 'text-start', ...base, payload: { id } });
           controller.enqueue({ type: 'text-delta', ...base, payload: { id, text } });
           controller.enqueue({ type: 'text-end', ...base, payload: { id } });
+          // A suspended stream ends without one; the client sees this turn end like any other.
+          if (last?.type !== 'finish')
+            controller.enqueue({
+              type: 'finish',
+              ...base,
+              payload: {
+                stepResult: { reason: 'stop' },
+                output: { usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } },
+                metadata: {},
+                messages: { all: [], user: [], nonUser: [] },
+              },
+            });
         },
       }),
     );
@@ -141,8 +153,31 @@ export function parkedView<O extends Output>(
   const getFullOutput = async () => {
     const [full, s] = await Promise.all([output.getFullOutput(), seen]);
     if (!s.parked.length && !opts.resumed) return full;
+    // What scorers read (`returnScorerData`, the evals): the waiting line as the reply too.
+    const scoring = full.scoringData as { output?: unknown[] } | undefined;
+    const said =
+      s.parked.length && Array.isArray(scoring?.output)
+        ? {
+            scoringData: {
+              ...scoring,
+              output: [
+                ...scoring.output,
+                {
+                  id: `parked-${s.parked[0].toolCallId}`,
+                  role: 'assistant',
+                  createdAt: new Date(),
+                  content: {
+                    format: 2,
+                    parts: [{ type: 'text', text: waitingText('', s.parked, voice) }],
+                  },
+                },
+              ],
+            },
+          }
+        : {};
     return {
       ...full,
+      ...said,
       text: await text(),
       toolResults: await toolResults(),
       ...(opts.resumed ? { totalUsage: s.usage } : {}),

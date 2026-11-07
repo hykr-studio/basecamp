@@ -215,6 +215,34 @@ describe('a run that waits for an approval', () => {
     ).toMatchObject({ runId: run.runId });
   });
 
+  it("the app's stream shows the parked call's card and the waiting line, and ends", async () => {
+    await task(ana, 'Streamed one');
+    const res = await ana.stream('tidy Streamed one');
+    expect(res.status).toBe(200);
+    const types = res.events.map((e) => e.type);
+    const output = res.events.find(
+      (e) => e.type === 'tool-output-available' && JSON.stringify(e).includes('needs_approval'),
+    ) as { output: { present?: { view?: string } } } | undefined;
+    expect(output?.output.present?.view).toBe('approval.card');
+    const said = res.events
+      .filter((e) => e.type === 'text-delta')
+      .map((e) => (e as { delta?: string }).delta)
+      .join('');
+    expect(said).toContain('I\'ve asked for your approval: Delete "Streamed one"');
+    expect(types.at(-1)).toBe('finish');
+    // The thread keeps the same: the card's part and the line.
+    const runId = res.headers.get('x-run-id') ?? '';
+    const saved = (await messages(ana, await threadOf(ana))).filter(
+      (m) => m.metadata.runId === runId,
+    );
+    expect(saved).toHaveLength(1);
+    expect(saved[0].parts.map((p) => p.type)).toEqual([
+      'tool-list-tasks',
+      'tool-delete-task',
+      'text',
+    ]);
+  });
+
   it('another person never reads the thread it went on in', async () => {
     const threadId = await threadOf(ana);
     expect((await bob.call('GET', `/api/threads/${threadId}/messages`)).status).toBe(404);

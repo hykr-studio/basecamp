@@ -4,6 +4,7 @@ import { Mastra } from '@mastra/core/mastra';
 import { RequestContext } from '@mastra/core/request-context';
 import { InMemoryStore } from '@mastra/core/storage';
 import { createTool } from '@mastra/core/tools';
+import { extractAgentResponseMessages } from '@mastra/evals/scorers/utils';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { durableAgent, findSuspension, resumeSuspension } from './durable.js';
@@ -125,7 +126,8 @@ describe('a durable run', () => {
     expect(await output.finishReason).toBe('suspended');
     expect(types).toContain('tool-result');
     expect(types).not.toContain('tool-call-suspended');
-    expect(types.slice(-3)).toEqual(['text-start', 'text-delta', 'text-end']);
+    // The waiting line, then the end of the turn (a suspended stream has none of its own).
+    expect(types.slice(-4)).toEqual(['text-start', 'text-delta', 'text-end', 'finish']);
     expect(text).toBe(
       "I've asked for your approval: Tidy 1. Nothing changes until you approve it.",
     );
@@ -148,6 +150,16 @@ describe('a durable run', () => {
       surfaces: ['text'],
     });
     expect(await findSuspension(mastra, agents, { runId, approvalId: 'ap-9' })).toBeUndefined();
+  });
+
+  it('scorers (the evals) read the waiting line as the reply', async () => {
+    const { agents } = setup();
+    const out = await durableAgent(agents.tester).generate('tidy 1', {
+      requestContext: contextFor(`run${Date.now()}s`),
+      returnScorerData: true,
+    });
+    const reply = extractAgentResponseMessages(out.scoringData?.output ?? []).join('\n');
+    expect(reply).toContain("I've asked for your approval: Tidy 1.");
   });
 
   it('resumes with the decision: the write is not asked again, the plan goes on', async () => {

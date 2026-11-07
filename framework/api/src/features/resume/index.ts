@@ -19,8 +19,8 @@ const DECIDED = new Set(['approved', 'rejected', 'expired', 'failed']);
 export const AgentResumeQueue = defineQueue<DomainEventEnvelope, string>({
   name: 'agent-resume',
   concurrency: 4,
-  attempts: 4,
-  backoffMs: 1000,
+  attempts: 6,
+  backoffMs: 2000,
   process: (job, ctx) => ctx.get(ResumeService).onDecided(DomainEventEnvelope.parse(job.data)),
 });
 
@@ -40,8 +40,9 @@ export const ResumeOnDecision = defineSubscriber({
     );
   },
   queue: AgentResumeQueue.name,
-  attempts: 4,
-  backoffMs: 1000,
+  // Up to about a minute for the turn that parked to save its reply (RunNotSaved), then it stops.
+  attempts: 6,
+  backoffMs: 2000,
 });
 
 /** A thread's live events (a run went on in it) reach its owner only. */
