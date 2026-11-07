@@ -867,7 +867,7 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   `roleOverrides` and `roleDefaults`, and `approvalLevels` (section 5.8.1) in `@hykr/contracts`;
   `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql`, `levelRules`, `grantKinds`,
   `identityProviders` and `numberSeries` (section 5.13) in `@hykr/core`; `toolContributions` in
-  `@hykr/core/tools`;
+  `@hykr/core/tools`; `documents` (section 5.19),
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `fileHolders`
   (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
@@ -1424,6 +1424,68 @@ does not change a business's setup.
   select field, and honours the business-managed flag `todos.clear-done`. Tests: `framework/api/test/framework/settings{,.e2e}.test.ts` on the fixture's
   `features/settings/`, and `application/api/test/domain/todo-settings.e2e.test.ts`.
 
+### 5.19 Documents (PDFs)
+
+A module turns a record into a PDF by declaring a document (`docs/decisions/B2.md`). The
+framework draws it in the worker, stores it as a file and sends it; the template, its words
+and its languages are the module's.
+
+```ts
+// a module's server/document.ts, contributed in its index.ts: contributes: { documents: [OrderDocument] }
+export const OrderDocument = defineDocument<Data>({
+  name: 'orders.order',                 // <owner>.<kind>
+  label: { en: 'Order', hi: 'ऑर्डर', te: 'ఆర్డర్' },
+  entity: 'order',                      // the record it is about
+  capabilities: [],                     // what changes what it shows ([]: nothing restricted)
+  load: async ({ record, children }) => ({ order: record, items: await children(OrderItem) }),
+  render: (data, ctx) => ({ title, header, footer: { right: 'Page {page} of {pages}' }, blocks: [ … ] }),
+  fileName: (data) => data.order.number,
+  send: { whatsapp: { template: OrderDocumentTemplate, params }, email: { subject, body } },
+});
+```
+
+- **Asking for one** is a command: `POST /api/documents { document, id, lang? }`
+  (`document.render`, tool `render-document`). `load` runs in its transaction as the person: the
+  record (and `ctx.read`, `ctx.children`) arrive through the scoped repositories, projected for
+  them, so a hidden field never reaches a PDF. Its result is stored on the new version (1, 2, …)
+  and the stored event `document.requested` sends it to the worker's `documents.render` queue.
+  Nothing re-reads live rows: version N shows what was true when it was asked for.
+- **The layout** `render` returns: `heading`, `text`, `fields` (label and value, one or two
+  columns), `table` (weighted columns, rows of kind `line`, `group` or `subtotal` with an
+  indent; its header repeats on each page), `totals`, `spacer`, `rule`, `pageBreak`, plus a
+  header and footer on every page (`{page}`, `{pages}`). `ctx.label`, `ctx.money` and `ctx.date`
+  (the business's time zone) write in the document's language. It is checked when asked, so a
+  template's mistake fails the request.
+- **The engine** (`DOCUMENTS_ENGINE`): `pdf` is pdfkit with HarfBuzz shaping and the Noto fonts
+  (Latin, Devanagari, Telugu; regular and bold). A line may mix scripts: each run is set in its
+  own font. `fake` writes the layout's lines as plain text in a small PDF: both Vitest configs
+  and CI use it, and tests search the bytes. Production refuses it.
+- **Stored and reached.** The PDF is a server file held by the document (`FilesService.storeBytes`),
+  served only by `GET /api/documents/:id` (with its sends, and a short-lived URL for people).
+  Whoever reaches the record reaches its documents, if they see at least what the requester saw:
+  every role and capability the requester held, or only the definition's `capabilities`. Other
+  businesses, and readers who see less, get 404. `GET /api/documents?entity=&id=` lists a
+  record's; `GET /api/documents/kinds?entity=` names the kinds.
+- **Sending** is a command too: `POST /api/documents/:documentId/send { to, channel? }`
+  (`document.send`, tool `send-document`). `to` is `{ self: true }`, a `customerId`, a
+  `contactId`, a member's `userId` or an `email`. To yourself: allowed. To others:
+  `customers.message`, and the assistant's send waits for approval (`authorize.send` replaces
+  the default). The worker tries the document's channels in order: WhatsApp (the PDF uploaded as
+  media, then the template with a document header, approved in the reader's language or
+  English; inside the 24-hour window without one, a document message), then email with the PDF
+  attached. A send asked before the document is made waits for it. Each send leaves at most
+  once: the job that claims it (`sending`) delivers it; a try that stopped part way ends it
+  `failed` with `interrupted` rather than send it twice.
+- **Who sees the sends.** `GET /api/documents/:id` shows every send only to people with
+  `customers.message`; anyone else sees the sends they asked for or that went to them. Each one
+  passes the read projectors as resource type `documentSend`.
+- **Events** `document.requested`, `document.rendered`, `document.failed`,
+  `document.send_requested`, `document.sent` and `document.send_failed` carry ids and status,
+  never the data a document shows.
+- **In the app** `<RecordDocuments entity id />` (`@hykr/app`) makes each kind, lists every
+  version with its state, opens one with a fresh link and sends it to the person; the hooks
+  are `useDocuments`, `useDocumentKinds`, `useDocument`, `useRenderDocument`, `useSendDocument`.
+
 ---
 
 ## 6. Principals and policy
@@ -1887,6 +1949,10 @@ pnpm templates:check    # passes once every template a notification uses is appr
 
 Never edit an approved template's words. `templates:sync` fails with "bump the version". Make `_v2` instead.
 
+A template that carries a PDF has `header: { type: 'document' }`; the documents feature fills it
+when it sends (section 5.19). With `WA_APP_ID` set, `templates:sync` creates it with a sample PDF,
+as Meta's review asks.
+
 The usual way to send is an event plus `schedule` or `send.on`. `NotifyService.notify(def, row, tx)` (`framework/api/src/channels/notify/notify.service.ts`) is an instance method inside `@hykr/api`, not an export; a `defineCommand` `run` gets only `{ tx, principal, input, loaded, via }` and has no service to call. To send from inside a command, insert into the outbox with the command's transaction, as `framework/api/src/channels/notify/send-template.command.ts` does (`schema` from `@hykr/db`):
 
 ```ts
@@ -1933,6 +1999,9 @@ Add it to the read, create and update schemas. Add the column to the table. Run 
 
 **…keep photos or documents on a record?**
 Give it a file field (`fileRefs()` or `FileRef`, a `files` trait, a `fileColumns()` column) and use `<FileField>` in its form. Section 5.12.
+
+**…make a PDF of a record and send it?**
+Declare it with `defineDocument` in the module's `server/` (what it reads, how it lays out, how it is named and sent), contribute it as `documents`, add its WhatsApp template (with `header: { type: 'document' }`) to the module's templates, and show `<RecordDocuments entity id />` on the record's screen. Section 5.19; the sample's `orders/server/document.ts`.
 
 **…add an entity?**
 Follow section 5.
@@ -2087,7 +2156,12 @@ These are not built. Each has a workaround for now.
 | Seed data | Create data through the API or the app. Maestro's demo assumes data exists. |
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
 | Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
-| Sending media (WhatsApp documents, email attachments) | Not built (B2). Send a link to the record instead. |
+| Images in documents (a logo, a signature, photos) | The layout has no image block. Put the business's name in the header. |
+| A Chromium engine, digital signatures, PDF/A | Documents are drawn by pdfkit only, unsigned; their SHA-256 is kept. |
+| Notifications that carry a document | The dispatcher sends no files. Send a document with `document.send` (a subscriber can call it as the person). |
+| A WhatsApp document's later failure | A send is `sent` once WhatsApp has it; its message's own status shows a later failure, and no email follows. |
+| Other scripts in documents (Tamil, Kannada, right to left) | Only the Noto Latin, Devanagari and Telugu fonts are bundled. |
+| A document send left `sending` for good | A send's job claims it before delivering, so it leaves at most once. If every try of that job stopped part way (the worker died each time), the row stays `sending`; nothing sweeps it. Send the document again. |
 | A file on two records, versioned files | One file belongs to one record field. Upload the file again for a second record. |
 | Storage quotas, malware scanning | Not built. Keep `FILES_MAX_BYTES` and each field's `maxBytes` small. |
 | Files of a deleted business or of rows deleted outside the write path | Their rows go with the business (cascade) or stay attached; their objects stay in the bucket. |
@@ -2099,7 +2173,7 @@ These are not built. Each has a workaround for now.
 | Every job of a business | `GET /api/jobs` lists a record's jobs or the caller's own; there is no operations view. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `pdfkit` with `harfbuzzjs` and the Noto fonts, `@mastra/memory` (in `@hykr/agents`) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `@mastra/memory` (in `@hykr/agents`) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. An inbound webhook's handler that creates a row fails with `no_access` until then. |
 | Integration screens | Endpoints, connections and the delivery log have an HTTP API only (`/api/integrations/*`): no app or back-office screen, and no typed `@hykr/api-client` methods. |
