@@ -2158,10 +2158,12 @@ traits: { offline: {}, versioned: {} },        // offline: { writes: ['create', 
   view's actions hand a write on a marked spec to the outbox: it is stored first (SQLite on iOS
   and Android, IndexedDB on the web, memory where neither works), then sent with a key fixed when
   it was queued, its business (`x-tenant-id` as captured) and, for a versioned entity, the
-  version it was based on. Online, the screen gets the server's answer as before (a refusal is
-  an error, and nothing is kept). Without a network the write resolves `{ status: 'queued' }`
-  and waits; a queued update shows in the cached lists at once (`writeEntity`, `writeCommand`
-  for code outside the hooks).
+  version it was based on: the freshest cached copy of the record (the highest version among the
+  lists and gets that hold it, `cachedRecord`). Online, the screen gets the server's answer as
+  before (a refusal is an error, and nothing is kept), and the record it returns replaces every
+  cached copy (`cacheWritten`), so the next write is based on its new version. Without a network
+  the write resolves `{ status: 'queued' }` and waits; a queued update shows in the cached lists
+  at once (`writeEntity`, `writeCommand` for code outside the hooks).
 - **Syncing.** First in, first out, on reconnect and with back-off. A network failure keeps the
   item; a 5xx or 429 is tried 5 times; a 401 pauses until the person signs in again; a refusal
   (400, 403, 404, 409) keeps the item with the server's reason and the next one goes on. A write
@@ -2171,7 +2173,9 @@ traits: { offline: {}, versioned: {} },        // offline: { writes: ['create', 
 - **Reads offline.** The query cache is kept per person and business (7 days by default, only
   answers that succeeded) and removed at sign-out; queries pause offline (`EntityList.offline`).
   The shell opens on the last signed-in person when the session cannot be checked for want of a
-  network, and checks again when it is back.
+  network, and checks again when it is back. Whenever the person shown changes (a refused
+  re-check shows the sign-in screen, or the server knows someone else), the query client is
+  cleared first, so nothing the last person read reaches the next one or is kept under their name.
 - **On screen.** The plugin's strip (`AppPlugin.Banner`) says when the device is offline or
   changes wait, and links to `/offline` (`OfflineScreen`: each change, its state, Try again or
   Discard). `usePendingWrites(plural, actions?)` and `<PendingWriteRow>` list a screen's own (the
