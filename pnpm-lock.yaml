@@ -209,6 +209,9 @@ importers:
       '@hykr/api-client':
         specifier: workspace:*
         version: link:../../framework/api-client
+      '@hykr/connectors':
+        specifier: workspace:*
+        version: link:../../framework/connectors
       '@hykr/contracts':
         specifier: workspace:*
         version: link:../../framework/contracts
@@ -309,6 +312,9 @@ importers:
       '@hykr/api':
         specifier: workspace:*
         version: link:../../framework/api
+      '@hykr/connectors':
+        specifier: workspace:*
+        version: link:../../framework/connectors
       '@hykr/contracts':
         specifier: workspace:*
         version: link:../../framework/contracts

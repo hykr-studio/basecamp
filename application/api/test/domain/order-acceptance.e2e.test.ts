@@ -1,7 +1,8 @@
 // The orders module's acceptance (OrderAcceptance, B8 and H5): an order its customer asked for is
 // submitted and approved, its PDF made, and the customer accepts exactly that PDF with a one-time
 // code to their email. The order moves to `accepted` in the same write, frozen (no save, no
-// revise); its evidence holds the PDF's hash and the order's version then. The PDF is accepted once, and no later PDF of it either. A submitted order
+// revise), and is placed (order.placed, with its lines); its evidence holds the PDF's hash and the
+// order's version then. The PDF is accepted once, and no later PDF of it either. A submitted order
 // cannot be accepted. Nobody outside the business reaches it.
 import {
   addMember,
@@ -192,13 +193,16 @@ describe("an order's acceptance by its customer", () => {
     const revise = await owner.call('POST', `/api/orders/${order.id}/revise`, {});
     expect(revise.status).toBe(403);
     expect(revise.body.rule).toBe('order_revise_submitted');
-    // The write stored the move's event with the acceptance.
+    // The write stored its events together: the acceptance, the move and the placed order.
     const { rows: stored } = await pool.query(
       `select name, actor_kind, actor_id from app.domain_events
-        where resource_id = $1 and name = 'order.accept'`,
+        where resource_id = $1 and name in ('order.accept', 'order.placed') order by name`,
       [order.id],
     );
-    expect(stored).toEqual([{ name: 'order.accept', actor_kind: 'user', actor_id: customer.id }]);
+    expect(stored).toEqual([
+      { name: 'order.accept', actor_kind: 'user', actor_id: customer.id },
+      { name: 'order.placed', actor_kind: 'user', actor_id: customer.id },
+    ]);
     // The history shows the order's move, by the customer who accepted it.
     const { rows: audited } = await pool.query(
       `select action, outcome, actor_id, before->>'status' as before, after->>'status' as after

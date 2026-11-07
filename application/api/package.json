@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@hykr/api-client": "workspace:*",
+    "@hykr/connectors": "workspace:*",
     "@hykr/contracts": "workspace:*",
     "@hykr/tsconfig": "workspace:*",
     "@hykr/voice-worker": "workspace:*",

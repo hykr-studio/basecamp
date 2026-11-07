@@ -68,6 +68,12 @@ export const OrderView = z.object({
   taxLines: z.array(TaxLine),
   /** How many priced lines it has (groups not counted). */
   lineCount: z.number().int(),
+  /**
+   * Its groups and lines, in tree order: only on its `order.placed` event, so an outside system
+   * gets the whole order in one delivery (each line's cost hidden without orders.cost.read).
+   * Reads list them with /api/orderItems.
+   */
+  items: z.array(OrderItemView).optional(),
   createdBy: CreatedBy,
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
