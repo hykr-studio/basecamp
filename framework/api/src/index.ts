@@ -100,7 +100,20 @@ export {
   type StorageDriver,
   StorageUnavailable,
   type Uploader,
+  type UploadTarget,
+  uploadTargets,
 } from './features/files/public.js';
+export {
+  failureText,
+  type ImportFileOptions,
+  ImportJob,
+  type ImportOutcome,
+  type ImportsConfig,
+  importFile,
+  importSummary,
+  importsConfig,
+  StartImport,
+} from './features/imports/public.js';
 export { IntegrationsCapability } from './features/integrations/capability.js';
 export { openConnection } from './features/integrations/credentials.js';
 export {
@@ -222,6 +235,7 @@ export {
 export {
   migrate,
   runEval,
+  runImport,
   runTemplates,
   startApi,
   startStudio,

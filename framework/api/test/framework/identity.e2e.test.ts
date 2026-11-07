@@ -96,6 +96,7 @@ describe('roles and capabilities', () => {
         'customers.message',
         'data.export',
         'fixture.reports',
+        'imports.run',
         'integrations.manage',
         'marketing.approve',
         'members.manage',
