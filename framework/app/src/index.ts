@@ -124,6 +124,7 @@ export { type Chip, FilterChips, SearchBox } from './framework/FilterChips';
 export { History } from './framework/History';
 export {
   type CatalogOf,
+  cachedRecord,
   type EntityList,
   type EntityMutations,
   type EntityName,
@@ -140,6 +141,8 @@ export {
   useEntityMutation,
   useEntitySummary,
   useUndoableDelete,
+  writeCommand,
+  writeEntity,
 } from './framework/hooks';
 export { isFocused, isHovered } from './framework/hover';
 export { Icon, type IconName } from './framework/Icon';
@@ -160,6 +163,14 @@ export { useUndo } from './framework/undo';
 export { type Verb, verbOf } from './framework/verbs';
 export { WaitingForYou } from './framework/WaitingForYou';
 export { inApp, webHref } from './framework/web-link';
+export {
+  isQueued,
+  type PendingError,
+  type PendingOp,
+  type PendingState,
+  type PendingWrite,
+  type QueuedWrite,
+} from './framework/write-queue';
 export { cn } from './lib/utils';
 export {
   type AppRuntime,

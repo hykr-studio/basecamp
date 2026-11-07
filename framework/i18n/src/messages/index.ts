@@ -12,6 +12,7 @@ export { creditsMessages } from './credits.js';
 export { documentMessages } from './documents.js';
 export { exportMessages } from './export.js';
 export { mcpMessages } from './mcp.js';
+export { offlineMessages } from './offline.js';
 export { privacyMessages } from './privacy.js';
 export { runMessages } from './runs.js';
 export { shareMessages } from './share.js';

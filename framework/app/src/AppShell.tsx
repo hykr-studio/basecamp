@@ -3,10 +3,10 @@ import {
   SchibstedGrotesk_700Bold,
   useFonts,
 } from '@expo-google-fonts/schibsted-grotesk';
-import { ApiError } from '@hykr/api-client';
+import { ApiError, isNetworkError } from '@hykr/api-client';
 import type { Catalog } from '@hykr/contracts';
 import type { Registry } from '@hykr/ui-registry';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { router, Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { type ReactNode, useEffect, useState } from 'react';
@@ -44,6 +44,7 @@ import { bindAll, composeApp, type ModuleList, matchRoute } from './framework/co
 import { isFocused, isHovered } from './framework/hover';
 import { Icon } from './framework/Icon';
 import { LangProvider } from './framework/lang';
+import { forgetSession, lastSession, rememberSession } from './framework/last-session';
 import { SignedIn, useNavFilters, wrapProviders } from './framework/plugins';
 import { ToastProvider } from './framework/Toast';
 import { inApp, webHref } from './framework/web-link';
@@ -172,6 +173,33 @@ function standaloneRoute(path: string) {
   return matchRoute(
     getApp().routes.filter((r) => r.public && r.standalone),
     path,
+  );
+}
+
+/** The plugins' strips above the screen (offline, changes waiting to sync), in plugin order. */
+function Banners() {
+  const banners = getApp().plugins.filter((p) => p.Banner);
+  if (!banners.length) return null;
+  return (
+    <>
+      {banners.map((p) => {
+        const Banner = p.Banner as NonNullable<typeof p.Banner>;
+        return <Banner key={p.name} />;
+      })}
+    </>
+  );
+}
+
+/** The plugins' sign-out steps (forget what they kept on the device), each on its own. */
+async function signOutPlugins(user: SessionUser) {
+  await Promise.all(
+    getApp().plugins.map(async (p) => {
+      try {
+        await p.onSignOut?.(user);
+      } catch (e) {
+        console.error(`App plugin "${p.name}" failed at sign-out:`, e);
+      }
+    }),
   );
 }
 
@@ -342,6 +370,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
               alignSelf: 'center',
             }}
           >
+            <Banners />
             <ApprovalCard />
           </View>
           {stack}
@@ -380,6 +409,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
             />
           )}
         </View>
+        <Banners />
         <View style={{ flex: 1 }} role="main" id="main">
           {stack}
           {/* A canvas intent opens as a sheet over the screen, between the top bar and the
@@ -458,10 +488,38 @@ export function AppShell(props: AppShellProps) {
   // undefined while the session loads, null when signed out.
   const [user, setUser] = useState<SessionUser | null | undefined>(undefined);
   useEffect(() => {
-    auth
-      .me()
-      .then(setUser)
-      .catch(() => setUser(null));
+    let stopped = false;
+    // Opened without a network: on the last person signed in here, until the network is back
+    // and the session can be checked (decisions B12).
+    let unchecked = false;
+    const check = () =>
+      auth
+        .me()
+        .then((u) => {
+          if (stopped) return;
+          unchecked = false;
+          if (u) rememberSession(u);
+          else forgetSession();
+          setUser(u);
+        })
+        .catch((e) => {
+          if (stopped) return;
+          if (isNetworkError(e)) {
+            unchecked = true;
+            setUser((now) => (now === undefined ? lastSession() : now));
+            return;
+          }
+          forgetSession();
+          setUser(null);
+        });
+    void check();
+    const unsubscribe = onlineManager.subscribe((online) => {
+      if (online && unchecked) void check();
+    });
+    return () => {
+      stopped = true;
+      unsubscribe();
+    };
   }, []);
   const standalone = standaloneRoute(usePathname());
   const Standalone = standalone?.route.screen;
@@ -490,7 +548,12 @@ export function AppShell(props: AppShellProps) {
                 <PublicRoute
                   fallback={
                     <View style={styles.screen}>
-                      <SignIn onSignedIn={setUser} />
+                      <SignIn
+                        onSignedIn={(u) => {
+                          rememberSession(u);
+                          setUser(u);
+                        }}
+                      />
                     </View>
                   }
                 />
@@ -502,10 +565,13 @@ export function AppShell(props: AppShellProps) {
                     <Shell
                       user={user}
                       onSignOut={() => {
-                        auth.signOut().finally(() => {
-                          queryClient.clear();
-                          setUser(null);
-                        });
+                        signOutPlugins(user)
+                          .then(() => auth.signOut())
+                          .finally(() => {
+                            forgetSession();
+                            queryClient.clear();
+                            setUser(null);
+                          });
                       }}
                     />
                   </SignedIn>
