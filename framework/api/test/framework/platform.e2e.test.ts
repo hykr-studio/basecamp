@@ -815,11 +815,17 @@ describe('usage across businesses', () => {
       }),
     ]);
     expect(res.body.totals).toEqual([{ meter: 'tokens', quantity: 2000, cost: 50 }]);
-    const all = (
-      await usher.call('GET', `/api/platform/usage?from=${day(-1)}&to=${day(1)}&limit=200`)
+    // B by id: the report pages by business id, so no one page need hold B.
+    const onlyB = (
+      await usher.call('GET', `/api/platform/usage?from=${day(-1)}&to=${day(1)}&tenantId=${B}`)
     ).body;
-    const b = all.tenants.find((t: { tenantId: string }) => t.tenantId === B);
-    expect(b).toMatchObject({ meters: [{ meter: 'tokens', quantity: 50, cost: 5 }], wallet: null });
+    expect(onlyB.tenants).toEqual([
+      expect.objectContaining({
+        tenantId: B,
+        meters: [{ meter: 'tokens', quantity: 50, cost: 5 }],
+        wallet: null,
+      }),
+    ]);
     // A range in the past has none of it.
     const old = (
       await usher.call('GET', `/api/platform/usage?from=2020-01-01&to=2020-02-01&tenantId=${A}`)
