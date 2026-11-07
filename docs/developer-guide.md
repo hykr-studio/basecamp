@@ -1667,6 +1667,7 @@ capabilities, with the roles that hold them by default (its features add their o
 | `models.manage` | owner, admin | Setting the business's model policy, and seeing what models cost (section 7.5) |
 | `credits.view` | owner, admin, ops, staff | Whether the business is paused, and how much of each cap it used (section 7.6) |
 | `credits.manage` | owner, admin | Credit amounts, the ledger, buying credits, the alert threshold (section 7.6) |
+| `data.export` | owner | Exporting the business's data, and keeping one's export archives (section 5.21) |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -2105,6 +2106,9 @@ Give it `{ grant: 'granted' }` in the entity's `access`, and its children `{ gra
 
 **…hide a field (cost, margin) from some roles?**
 `traits: { fieldPolicy: { cost: '<module>.cost.read' } }` on the spec, with the capability defined by the module (section 6.4).
+
+**…put data no entity serves (a module's own table) in a business's export?**
+Contribute a `dataExportSources` entry, `{ name, rows(ctx) }`, that yields only what `ctx.principal` may read. Let admins export too: give them `data.export` (`roleOverrides`, or a role's `capabilities`). Section 5.21.
 
 ---
 
