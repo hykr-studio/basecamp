@@ -178,7 +178,9 @@ setup, changed by people with `settings.manage` (owners and admins) through the 
   title.
 - **Shared records.** An entity defined with `defineSharedEntity` (trait `shared`) shows every
   business the rows of the platform's business (`PLATFORM_TENANT_ID`), read-only, and a business
-  overrides one with its own copy. What is shared is the application's data.
+  overrides one with its own copy. What is shared is the application's data. Name
+  `'shared.publish': 'tenant'` in its access to let the platform's operators maintain those rows,
+  and `shared: { publishers: 'operators' }` to let only them.
 - **Wording.** The application rewords framework phrases and notifications in `defineServer({
   wording })` instead of declaring them again; a business words phrases and notification emails
   in its `wording` settings.
@@ -388,6 +390,13 @@ From the contracts declaration alone:
   and verified web addresses (`app.tenant_domains`), shared records and wording (`/api/settings`,
   `/api/features`, `/api/custom-fields`, the back office's Settings screen, `settingsPlugin` in the
   app).
+- The platform's operators above the businesses (developer guide, section 6.6): named operators
+  (`basecamp operator add <email>`), businesses made for a person, support access each business
+  consents to (time-boxed, logged, audited on behalf of the operator), platform scope for shared
+  records, a usage report across businesses, and the back office's Operator and Support screens.
+  The application adds what is its own: which business takes an inbound request (an
+  `inboundRouters` entry: the framework holds no routing rule), operator capabilities of its own,
+  and capabilities support must never hold (`supportWithheld`).
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

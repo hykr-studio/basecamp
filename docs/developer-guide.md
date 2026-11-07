@@ -257,7 +257,7 @@ Things that will trip you up:
 | API | http://localhost:3000 | `GET /health`; `GET /me` shows the principal the API sees for you |
 | Mobile app (web) | http://localhost:8081 | The product |
 | Back office | http://localhost:8082 | Staff inbox for WhatsApp handoffs |
-| Bull Board | http://localhost:3000/admin/queues | Queues. Sign in to the app first, with a role that has `queues.admin` (owner or admin). Not mounted in production. |
+| Bull Board | http://localhost:3000/admin/queues | Queues of every business. Sign in to the app first as a platform operator holding `platform.queues` (`pnpm --dir application exec basecamp operator add <email>`, section 6.6). Not mounted in production. |
 | whaloc | http://localhost:8080 | WhatsApp Cloud API emulator with a chat UI |
 | Mailpit | http://localhost:8025 | Email sent by notifications |
 | pgAdmin | http://localhost:5050 | `admin@example.com` / `admin`; server `app` (host `postgres`, user `app`) is preregistered |
@@ -1372,7 +1372,8 @@ does not change a business's setup.
   - the app hides its destinations (`settingsPlugin`, by the item's `module` or href); `useFeature(key)`
     hides anything else.
   A flag that names a module, entity, command or tool the application does not have stops the start.
-  `managedBy: 'platform'` (the default) is switched only from server code
+  `managedBy: 'platform'` (the default) is switched by the platform's operators
+  (`PUT /api/platform/tenants/:id/features/:key`, section 6.6) or from server code
   (`FeatureFlagsService.set(tenantId, key, on)`, as the system principal); `managedBy: 'tenant'` by
   the business: `PUT /api/features/:key { on }`. `GET /api/features` lists every flag and its
   state; `GET /api/me` and `GET /api/settings` list the ones that are on.
@@ -1683,8 +1684,9 @@ read `req.agent.relay`.
 **The system principal.** Background work (a sweeper, a timer, an inbound webhook's job) writes
 through `runWrite` as `systemPrincipal({ tenantId, job, capabilities? })` from `@hykr/core`. It reaches
 every row of its one business, still passes entity rules and approval rules, and is audited as actor
-`system` with channel `background`. Only server code makes one; no header does. It cannot create an
-entity row (no owner) or park (nobody to ask) yet.
+`system` with channel `background`. Only server code makes one; no header does. A row it creates is
+owned by the business's default owner, for the customer `systemPrincipal({ customerId })` names
+(when the table has a customer column). It cannot park (nobody to ask) yet.
 
 Read `p` in your rules with the helpers in `@hykr/policy`: `subjectOf(p)`, `userIdOf(p)`, `subjectKeyOf(p)`.
 
@@ -1766,7 +1768,6 @@ capabilities, with the roles that hold them by default (its features add their o
 | `customers.message` | owner, admin, ops, staff | `notify.send`: a template to a customer |
 | `history.all` | admin, ops | The whole business's history |
 | `channels.manage` | owner, admin | Setting the business's WhatsApp number |
-| `queues.admin` | owner, admin | Bull Board (not grantable: a business cannot give it) |
 | `members.read` | owner, admin, ops, staff | The member list and the business's roles |
 | `members.manage` | owner, admin | Invitations, members' roles, the business's roles |
 | `records.grant` | owner, admin, ops | Giving a member access to one record (`granted`) |
@@ -1777,6 +1778,8 @@ capabilities, with the roles that hold them by default (its features add their o
 | `memory.write` | owner, admin, ops, staff | Adding to the business's memory, and changing your own |
 | `memory.manage` | owner, admin | Changing or deleting anyone's memories |
 | `data.export` | owner | Exporting the business's data, and keeping one's export archives (section 5.22) |
+| `support.consent` | owner | Letting the platform's operators in: support access requests, consent, ending it (section 6.6) |
+| `shared.publish` | none | Held only by an operator at platform scope (not grantable, section 6.6) |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -1898,6 +1901,89 @@ kinds of participant exist and what each may do is the application's.
 - **Application data.** KYC details, agreed rates and the like are the application's tables (or
   files) keyed by the party id (`parties.id` in `@hykr/db`). The framework stores a party's kind,
   name and customer only.
+
+### 6.6 The platform: operators above the businesses
+
+The people who run a deployment are its **operators** (`features/platform`,
+`framework/db/src/schema/platform.ts`, `docs/decisions/B19.md`). An operator is a signed-in person
+listed in `app.platform_operators` with operator capabilities (`platform.*`), never a role in a
+business. The first one comes from the command line, `pnpm --dir application exec basecamp operator
+add <email> [--capabilities a,b]` (every capability by default; `operator remove`, `operator list`);
+after that, operators holding `platform.operators` add and disable others (`/api/platform/operators`,
+never themselves). `GET /api/platform/me` tells anyone signed in whether they are one. Operator
+routes refuse the assistant and a page's WebMCP tools (403 `humans_only`).
+
+| Capability | Opens |
+|---|---|
+| `platform.tenants` | `GET/POST /api/platform/tenants`, `GET/PATCH …/:id`, `PUT …/:id/features/:key` |
+| `platform.support` | Asking a business for support access, and using it (`/api/platform/support`) |
+| `platform.usage` | `GET /api/platform/usage`: every business's meters and wallet over a range |
+| `platform.routing` | `GET /api/platform/routing`: what happened to routed requests |
+| `platform.credits` | A business's credits (section 7.6) |
+| `platform.queues` | Bull Board |
+| `platform.shared` | Platform scope: publishing the shared records |
+| `platform.operators` | The operators |
+
+An application adds its own (`defineOperatorCapability`, contributed as `operatorCapabilities`)
+and guards its routes with `@UseGuards(OperatorGuard) @OperatorCan(cap)`. An operator's action in a
+business runs through `runWrite` as `operatorPrincipal(tenantId, job, operator)`: the system job,
+audited there with `on_behalf_of = operator:<id>`.
+
+- **Making a business.** `POST /api/platform/tenants { name, owner: { email } }` makes one for a
+  person who has an account: they own it (default owner, the creator's roles), and it is their
+  default only if they had none. It is audited in the new business (`tenant.provision`) and
+  stores the event `tenant.provisioned` (`{ id, name, ownerId, operatorId }`): subscribe to it to
+  set a new business up. An application whose businesses operators make sets
+  `signUp: { createBusiness: false }` (section 6.5).
+- **Support access.** An operator asks one business: `POST /api/platform/support { tenantId,
+  reason, roles, capabilities?, access?: 'read' | 'write', minutes }`. Nothing is reached until a
+  person there holding `support.consent` (the owner, by default) consents:
+  `GET /api/support-access`, `POST …/:id/consent { minutes?, access? }` (shorter, or read only),
+  `…/decline`, `…/revoke`; the operator ends it with `DELETE /api/platform/support/:id`. While it
+  lasts, the operator sends `x-tenant-id` and stands there as `support` (`/api/me`'s `as`): the
+  roles named decide which rows, only the capabilities named are held (never the framework's that
+  change who reaches the business, such as `members.manage`, nor any an application lists as
+  `supportWithheld`), read-only access answers GET only (403 `support_read_only`), it never decides
+  an approval (403 `support_cannot_decide`), and it ends at once when revoked, ended, expired or
+  the operator is disabled. Every write is audited as the operator with `on_behalf_of =
+  support:<grant>`; every request, reads included, is logged for the business
+  (`GET /api/support-access/:id/activity`). A business says whether operators may ask, and for how
+  long at most, in its `support` settings (`PUT /api/support-access/settings`).
+- **Platform scope.** An operator holding `platform.shared` who asks for the platform's business
+  (`PLATFORM_TENANT_ID`, section 5.18) without being its member works there with the capability
+  `shared.publish` only. A shared entity lets operators maintain its rows by naming it in its
+  access (`{ 'shared.publish': 'tenant' }`), and `traits: { shared: { publishers: 'operators' } }`
+  keeps its platform rows written only at platform scope (403 `platform_scope_only` for the
+  platform business's members, on every path).
+- **Routing inbound requests.** The application decides which business takes a request no
+  business owns yet; the framework holds no rule:
+
+  ```ts
+  export const ByArea = defineInboundRouter({
+    name: 'by-area',
+    route: async (req, ctx) => ({ tenantId: await areaOwner(ctx.db, req.text) }), // or null
+    deliver: async (req, target) => {
+      const who = await target.contact(); // the sender, as that business's customer
+      const made = await target.write(entityOp(LeadDef, 'create', null), { title: req.text },
+        { customerId: who?.customerId });
+      return { resourceType: 'lead', resourceId: made.id };
+    },
+  });
+  defineServer({ ..., contributes: { inboundRouters: [ByArea] } });
+  ```
+
+  Messages to the platform's own business (a WhatsApp number it claimed) are routed; any server
+  code (a connector's webhook handler, a form) calls `PlatformRoutingService.route({ source, ref,
+  from?, text?, data? })`. `deliver` runs in one transaction as the system principal
+  `platform.route` in the chosen business; a request is routed once per `(source, ref)`; a routed
+  WhatsApp message is not answered by the platform's assistant, an unrouted one is.
+- **Usage.** `GET /api/platform/usage?from&to&tenantId&after&limit` sums each business's meters
+  (quantities and credits as recorded) and its wallet's top-ups, grants and debits over UTC days
+  (the current month by default, a year at most). No plan or price is read.
+- **The back office.** An operator signs in even without a business: the Operator screen
+  (`OperatorScreen`, route `/operator`) has businesses, support access ("Work here" sends the
+  business's id until "Stop"), usage, routed requests and operators. A business's people get the
+  Support access screen (`SupportAccessScreen`, route `/support`).
 
 ## 7. The assistant and how it shows things
 
@@ -2094,11 +2180,11 @@ Every business's use of what costs money is metered, priced and, when its plan s
   category in `pauseMessages` (recorded as failed, never sent). Replies, codes, approvals, handoffs
   and staff messages always go. A paused business's WhatsApp customer is handed to the team.
   One action may overshoot the cap; the wallet goes below zero by that much.
-- **The operator** holds `OPERATOR_API_KEY` (header `x-operator-key`; without it the routes are
-  404): `GET /api/credits/operator/:tenantId` (full status) and `/ledger`, `PUT …/settings` (the
+- **The operator** is a platform operator holding `platform.credits` (section 6.6), signed in:
+  `GET /api/credits/operator/:tenantId` (full status) and `/ledger`, `PUT …/settings` (the
   plan), `PUT …/override` (`{ override: { mode: 'run' | 'pause', until?, reason } }` or `null`) and
-  `POST …/grants` (`{ amount, note }`). Each write runs through `runWrite` as
-  `systemPrincipal({ tenantId, job: 'credits.operator' })`, audited in that business.
+  `POST …/grants` (`{ amount, note }`). Each write runs through `runWrite` as the system job
+  `credits.operator` on behalf of the operator, audited in that business (`on_behalf_of`).
 - **People.** `GET /api/credits` (`credits.view`: owner, admin, ops, staff) says whether the
   business is paused and how much of each cap is used; amounts, `GET /api/credits/ledger`,
   `GET /api/credits/usage` and purchases need `credits.manage` (owner, admin). People only.
@@ -2477,7 +2563,13 @@ These are not built. Each has a workaround for now.
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
 | Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.7) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
-| System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. An inbound webhook's handler that creates a row fails with `no_access` until then. |
+| System writes that park | `systemPrincipal()` creates (owned by the business's default owner), updates and deletes rows of its business, but cannot park (nobody decides). Maintenance jobs still write their audit rows directly. |
+| Impersonation, break-glass access | An operator works in a business only through support access it consented to, as themselves. There is no acting as one of its people, and no access without consent. |
+| Operators inviting a business's owner | `POST /api/platform/tenants` makes a business for someone who has an account. An owner without one signs up first. A business made at sign-up announces no `tenant.provisioned`. |
+| Routing rules, keeping unrouted requests | The framework asks the application's `inboundRouters`; it keeps what happened to a request (`app.platform_routed`), not what it said. An operator cannot assign an unrouted request by hand. |
+| Suspending a business, plans and prices | Operators make, rename and switch flags of a business, and set its credits (section 7.6). Nothing suspends or deletes one; billing is the application's. |
+| Bull Board in production | It is mounted outside production only, for operators holding `platform.queues`. |
+| Support capabilities an application withholds | The framework withholds its own access-changing capabilities from support access; an application lists its own as `supportWithheld`, or support may hold them when a business consents. |
 | Integration screens | Endpoints, connections and the delivery log have an HTTP API only (`/api/integrations/*`): no app or back-office screen, and no typed `@hykr/api-client` methods. |
 | Webhooks for approvals and other non-entity records | Only entity events are sent (their read schema projects them). |
 | Webhook delivery order, auto-pause, alerts | Deliveries of one record can arrive out of order; an endpoint that keeps failing is not paused and nobody is told. |
@@ -2517,7 +2609,6 @@ These are not built. Each has a workaround for now.
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
 | A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
 | Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |
-| Credits operators | One shared `OPERATOR_API_KEY` stands in for platform operators (B19): no named operators, no screen. Use the operator routes (section 7.6) with the key. |
 | Buying credits | No purchase provider ships: register a `CreditPurchaseProvider` from a payment connector and call `CreditsService.settlePurchase` from its verified webhook. |
 | Credits mid-turn | A turn, a voice session or a message is checked before it starts; one may take a business past its cap. Tool calls are not refused in the middle of a turn. |
 | Metering everything | The guardrail's model calls, embeddings, WhatsApp voice-note transcription and voice sessions whose worker never reported an end are not metered. Call `CreditsService.record` from the feature. |
@@ -2550,7 +2641,6 @@ These are not built. Each has a workaround for now.
 | Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
 | A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
 | Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |
-| Platform-managed flags from a screen | `managedBy: 'platform'` flags are switched with `FeatureFlagsService.set` in server code; no operator screen or route exists yet. |
 | Custom domains end to end | Verification, CORS, Better Auth's origin check and `GET /api/branding/public` work, and the back office's sign-in shows a verified domain's branding. The app's sign-in (`framework/app/src/screens/SignIn.tsx`, rendered by `AppShell`) does not call `api.settings.publicBranding(window.location.origin)` yet, so the app on a business's domain signs in under the product's name and colours. Sessions and cookies are not per domain, and TLS certificates are issued outside the framework. |
 | The business's brand in the app shell | The settings plugin applies a business's colours, but `AppShell` (a hot file: B9, then B12) still prints the product's `app.title` and `tagline` in the rail and the phone's top bar. Its next owner replaces them with `<BrandMark fallback={app.title}>` (or adds an `AppPlugin` header slot the settings plugin fills) and has the sign-in ask for the domain's public branding. Until then a screen shows the logo and name itself (the sample's Today). |
 | A logo upload | `branding.logoUrl` is an https URL; there is no upload for it yet. |
