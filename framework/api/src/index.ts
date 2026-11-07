@@ -2,7 +2,6 @@
 // starts the API, the queue worker or the templates CLI with it. Nothing exported here reads the
 // environment when it loads.
 
-export * from './features/agents/public.js';
 export {
   type AcceptanceDef,
   AcceptanceEvidenceCapability,
@@ -19,6 +18,7 @@ export {
   esignProviders,
   evidenceHash,
 } from './features/acceptance/public.js';
+export * from './features/agents/public.js';
 export {
   contentOf,
   type EventContent,
