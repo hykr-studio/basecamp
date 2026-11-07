@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { defineNotification } from './define-notification.js';
 import { contentHash, defineTemplate, toTemplateSpec } from './define-template.js';
-import { CommentMentionNotification, createNotificationCatalog } from './index.js';
+import {
+  CommentMentionNotification,
+  createNotificationCatalog,
+  overrideNotification,
+} from './index.js';
 
 const { notifications, templates } = createNotificationCatalog();
 
@@ -151,9 +155,11 @@ describe('an approval request', () => {
       approverUserId: null,
       approverCapability: null,
       approverChannels: null,
+      minAssurance: null,
       requesterContactId: null,
       ...fields,
     }) as never;
+  const reader = { lang: 'en' as const, timeZone: 'UTC', appUrl: 'https://app.example' };
 
   it("goes to a capability's holders, never to the requester", () => {
     const a = row({ approverCapability: 'approvals.decide' });
@@ -167,10 +173,70 @@ describe('an approval request', () => {
     expect(request?.to(a)).toEqual([{ userId: 'u-named' }]);
   });
 
-  it('not when the requester decides it, nor when it is decided in the app only', () => {
+  it('not when the requester decides it; an app-only request still goes', () => {
     expect(request?.when?.(row({ approverUserId: 'u-asked' }))).toBe(false);
     expect(
       request?.when?.(row({ approverCapability: 'approvals.decide', approverChannels: ['app'] })),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it('by push, WhatsApp, then email, and always into the inbox', () => {
+    expect(request?.channels).toEqual(['push', 'whatsapp', 'email']);
+    expect(request?.also).toEqual(['inapp']);
+  });
+
+  it('on WhatsApp only where it may be decided there, on a number alone', () => {
+    const gate = request?.channelWhen?.whatsapp;
+    expect(gate?.(row({}))).toBe(true);
+    expect(gate?.(row({ approverChannels: ['app', 'whatsapp'] }))).toBe(true);
+    expect(gate?.(row({ approverChannels: ['app'] }))).toBe(false);
+    expect(gate?.(row({ minAssurance: 'whatsapp_number' }))).toBe(true);
+    expect(gate?.(row({ minAssurance: 'session' }))).toBe(false);
+    expect(gate?.(row({ minAssurance: 'otp' }))).toBe(false);
+  });
+
+  it('every channel opens /approvals/<id>', () => {
+    const a = row({ approverCapability: 'approvals.decide' });
+    expect(request?.push?.url?.(a)).toBe('/approvals/a1');
+    expect(request?.push?.title(a, reader)).toBe('Waiting for your approval');
+    expect(request?.push?.body(a, reader)).toBe('Pay the supplier');
+    expect(request?.inapp?.url?.(a)).toBe('/approvals/a1');
+    expect(request?.email?.subject(a, reader)).toBe('Waiting for your approval: Pay the supplier');
+    expect(request?.email?.body(a, reader)).toContain('https://app.example/approvals/a1');
+    expect(request?.email?.body(a, { ...reader, lang: 'hi' })).toContain(
+      'https://app.example/approvals/a1',
+    );
+  });
+});
+
+describe('channels a notification goes by as well, and channels it skips', () => {
+  const base = {
+    key: 'thing.done',
+    topic: 'service' as const,
+    to: () => [{ userId: 'u1' }],
+    dedupe: (r: { id: string }) => r.id,
+    inapp: { title: () => 't', body: () => 'b' },
+    email: { subject: () => 's', body: () => 'b' },
+  };
+
+  it('also: its content is required, and a channel is named once', () => {
+    expect(() => defineNotification({ ...base, channels: ['email'], also: ['push'] })).toThrow(
+      /push is a channel but has no title/,
+    );
+    expect(() => defineNotification({ ...base, channels: ['email'], also: ['email'] })).toThrow(
+      /named twice/,
+    );
+    expect(defineNotification({ ...base, channels: ['email'], also: ['inapp'] }).also).toEqual([
+      'inapp',
+    ]);
+  });
+
+  it('an override changes the chain and what it goes by as well', () => {
+    const { notifications: changed } = createNotificationCatalog({
+      overrides: [overrideNotification('approval.request', { channels: ['email'], also: [] })],
+    });
+    const def = changed.find((n) => n.key === 'approval.request');
+    expect(def?.channels).toEqual(['email']);
+    expect(def?.also).toEqual([]);
   });
 });
