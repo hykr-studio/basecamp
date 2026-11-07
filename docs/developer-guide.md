@@ -2068,7 +2068,10 @@ export const BriefForm = definePublicForm({
   target's links; `POST /api/shares/:id/revoke` (its maker, or `shares.manage`). A link always
   ends: `shares.defaultDays` (7) unless asked, at most `shares.maxDays` (90) or the declaration's
   `maxDays`. Deleting a record revokes its links in the same write. Every write is audited
-  (`share.create`, `share.revoke`).
+  (`share.create`, `share.revoke`). A link made through the platform keeps its standing
+  (`onBehalfOf`, `support:<grantId>`). It never outlives that support access: it ends with it at
+  the latest, it is revoked when the access is, and it opens nothing (410 `link_revoked`) while
+  that standing is not in force (section 6.6).
 - **Recipients.** `to: { contactId } | { customerId } | { email } | { recordCustomer: true }`
   (the record's own customer, when it has one). It is where the link's code goes, and who the
   guest is: a contact recipient is the guest's subject, and its customer record the guest's.
@@ -2348,7 +2351,12 @@ give it rows in an entity's `access` and capabilities here.
 role (the framework's or another module's) or replaces its whole capability set. `roleDefaults:
 [{ name: 'creator' | 'contact', roles }]` names the roles the framework hands out: to whoever creates a
 business (`owner` by default; sign-up and `ensureDefaultTenant`) and to a WhatsApp contact without an
-account (`customer`). A capability with `grantable: false` is given only by code.
+account (`customer`). A capability with `grantable: false` is given only by code. One with
+`supportable: true` may be held by a platform operator's support access when a business consents
+(section 6.6). The default is false. Say true only for reading, or for writing the business's own
+records: never for what changes who reaches the business, lets its data leave, or acts after the
+access ends. Of the table above, `backoffice.use`, `customers.message`, `history.all`,
+`members.read`, `credits.view`, `memory.*` and `acceptances.evidence` are supportable.
 
 **A business's own roles.** Each business shapes its roles from the registered capabilities, without a
 deploy, in its `roles` settings section: `defined` (roles it made: name, label, capabilities) and `edits`
@@ -2489,15 +2497,18 @@ audited there with `on_behalf_of = operator:<id>`.
   `GET /api/support-access`, `POST …/:id/consent { minutes?, access? }` (shorter, or read only),
   `…/decline`, `…/revoke`; the operator ends it with `DELETE /api/platform/support/:id`. While it
   lasts, the operator sends `x-tenant-id` and stands there as `support` (`/api/me`'s `as`): the
-  roles named decide which rows, only the capabilities named are held (never the framework's that
-  change who reaches the business, such as `members.manage`, nor any an application lists as
-  `supportWithheld`), read-only access answers GET only (403 `support_read_only`), it never decides
+  roles named decide which rows, only the capabilities named are held, and only those declared
+  `supportable: true` (section 6.4; 400 `capability_withheld` otherwise, and never one an
+  application lists as `supportWithheld`), read-only access answers GET only (403
+  `support_read_only`), it never decides
   an approval (403 `support_cannot_decide`), and it ends at once when revoked, ended, expired or
   the operator is disabled. Every write is audited as the operator with `on_behalf_of =
   support:<grant>`; every request, reads included and refusals too (a write a guard refused under
   read-only access is logged with its 403), is logged for the business
   (`GET /api/support-access/:id/activity`). A business says whether operators may ask, and for how
-  long at most, in its `support` settings (`PUT /api/support-access/settings`).
+  long at most, in its `support` settings (`PUT /api/support-access/settings`). Nothing made under
+  it outlasts it: a standing provider's `stillStands` says whether the standing a thing was made
+  under is still in force, and a share link made under support reaches nothing once it is not.
 - **Platform scope.** An operator holding `platform.shared` who asks for the platform's business
   (`PLATFORM_TENANT_ID`, section 5.18) without being its member works there with the capability
   `shared.publish` only. A shared entity lets operators maintain its rows by naming it in its
@@ -3189,7 +3200,7 @@ These are not built. Each has a workaround for now.
 | Suspending a business, plans and prices | Operators make, rename and switch flags of a business, and set its credits (section 7.6). Nothing suspends or deletes one; billing is the application's. |
 | Bull Board in production | It is mounted outside production only, for operators holding `platform.queues`. |
 | Support in history and events | `audit.events.on_behalf_of` marks support and operator writes, but the history screen does not label them, and stored events carry only the actor. Read a grant's activity (`GET /api/support-access/:id/activity`) or the audit. |
-| Support capabilities an application withholds | The framework withholds its own access-changing capabilities from support access; an application lists its own as `supportWithheld`, or support may hold them when a business consents. |
+| Support access and capabilities | Support access holds only capabilities declared `supportable: true` where they are defined (an application's own included); an application keeps a framework one from it with `supportWithheld`. Links made under support before this rule have no `on_behalf_of` and last until they expire. |
 | Integration screens | Endpoints, connections and the delivery log have an HTTP API only (`/api/integrations/*`): no app or back-office screen, and no typed `@hykr/api-client` methods. |
 | Webhooks for approvals and other non-entity records | Only entity events are sent (their read schema projects them). |
 | Webhook delivery order, auto-pause, alerts | Deliveries of one record can arrive out of order; an endpoint that keeps failing is not paused and nobody is told. |
