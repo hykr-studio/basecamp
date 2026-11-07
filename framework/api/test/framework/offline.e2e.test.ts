@@ -74,6 +74,36 @@ describe('client-chosen ids', () => {
     expect((await stranger.call('GET', `/api/jots/${id}`)).status).toBe(404);
   });
 
+  it("a deleted record's id stays used: a new record never inherits what the old one left", async () => {
+    const id = randomUUID();
+    expect((await create(owner, { id, title: 'Owner private jot' })).status).toBe(201);
+    const said = await owner.call(
+      'POST',
+      '/api/comments',
+      { entity: 'jot', recordId: id, body: 'Owner-only remark' },
+      { 'idempotency-key': key() },
+    );
+    expect(said.body.status).toBe('done');
+    const comments = () =>
+      staff.call('GET', `/api/comments?entity=jot&id=${id}`, undefined, inTenant());
+    // Staff read only their own jots: not this one, nor its comments.
+    expect((await comments()).status).toBe(404);
+    const gone = await owner.call('DELETE', `/api/jots/${id}`, undefined, {
+      'idempotency-key': key(),
+    });
+    expect(gone.status).toBe(200);
+    // The comment outlives its record; the id is refused, so nobody takes it over.
+    const again = await create(staff, { id, title: 'Staff jot, same id' }, key(), inTenant());
+    expect(again.status).toBe(409);
+    expect(again.body.error).toBe('id_taken');
+    expect((await comments()).status).toBe(404);
+    // The same answer for its maker and for another business: the id is spent.
+    const back = await create(owner, { id, title: 'Back again' });
+    expect(back.status).toBe(409);
+    expect(back.body).toEqual(again.body);
+    expect((await create(stranger, { id, title: 'Theirs' })).body).toEqual(again.body);
+  });
+
   it('two creates of one id at the same moment make one record', async () => {
     const id = randomUUID();
     const both = await Promise.all([

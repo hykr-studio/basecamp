@@ -8,7 +8,7 @@ import type {
   WriteAction,
 } from '@hykr/contracts';
 import { ClientId, listInputSchema, parksFor, takesClientIds } from '@hykr/contracts';
-import { defaultOwnerOf } from '@hykr/db';
+import { events as auditEvents, defaultOwnerOf } from '@hykr/db';
 import {
   type Access,
   accessFor,
@@ -353,8 +353,12 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
   /**
    * The id a person chose for a new record (B12): only for an entity that takes client ids, only
    * a UUID, only from a person (the assistant, a guest and the server's own work never choose
-   * one), and never one already used, in any business (409 `id_taken`, the same for everyone).
-   * Undefined when none was sent: the database makes one.
+   * one), and never one this entity has ever used, in any business (409 `id_taken`, the same for
+   * everyone). A deleted record's id stays used: comments, call logs, acceptances and other rows
+   * keyed by (type, id) outlive it, and a new record under its id would inherit them. A committed
+   * audit row naming the id says it was used; a parked create's (`needs_approval`) does not, so
+   * its approved replay still makes the record. Undefined when none was sent: the database makes
+   * one.
    */
   async function clientIdOf(tx: Tx, p: Principal, input: Values): Promise<string | undefined> {
     if (!takesClientIds(spec) || input.id === undefined || input.id === null) return undefined;
@@ -375,6 +379,18 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       .where(eq(idCol, parsed.data))
       .limit(1);
     if (used) throw idTaken();
+    const [once] = await tx
+      .select({ id: auditEvents.id })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.resourceType, spec.name),
+          eq(auditEvents.resourceId, parsed.data),
+          eq(auditEvents.outcome, 'committed'),
+        ),
+      )
+      .limit(1);
+    if (once) throw idTaken();
     return parsed.data;
   }
 

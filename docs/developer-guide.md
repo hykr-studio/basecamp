@@ -2139,7 +2139,9 @@ traits: { offline: {}, versioned: {} },        // offline: { writes: ['create', 
   record made offline has its id before it syncs and later writes can name it. The framework adds
   `id` to the create input (`createInputOf(spec)`); the spec's schemas, the assistant's tools and
   MCP stay without it. Only a person's request may choose one (400 `client_id_people_only`); an
-  id already used anywhere is 409 `id_taken`, the same for everyone. Without the trait an `id` in
+  id the entity has ever used, in any business, is 409 `id_taken`, the same for everyone. That
+  includes a deleted record's id (a committed audit row names it): its comments, call logs and
+  acceptances outlive it, and a new record must not inherit them. Without the trait an `id` in
   the body is dropped. A parked create names its id as the approval's `resourceId`, and the
   approved replay makes the record with it.
 - **`If-Match`.** `PATCH` and `DELETE /api/<plural>/:id` take `If-Match: "<version>"` (also
