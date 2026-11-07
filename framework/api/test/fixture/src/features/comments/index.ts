@@ -1,8 +1,15 @@
 // Comments and the in-app inbox (B16) as an application extends them: a subscriber that hears
-// each `comment.mentioned` (the agents' @-mention trigger), a mention kind of its own, and a
-// notification that leaves an item in the inbox. Only the comments e2e test boots `commentsApp`.
+// each `comment.mentioned` (the agents' @-mention trigger), a mention kind of its own, a level
+// rule on comments (added and edited alike) and a notification that leaves an item in the inbox.
+// Only the comments e2e test boots `commentsApp`.
 import { defineModule, defineServer, defineSubscriber, type MentionKind } from '@hykr/api';
-import { type DomainEventEnvelope, moduleSpec } from '@hykr/contracts';
+import {
+  commentWriteOf,
+  type DomainEventEnvelope,
+  defineApprovalLevel,
+  moduleSpec,
+} from '@hykr/contracts';
+import { atLevel, defineLevelRule } from '@hykr/core';
 import { defineNotification, type Row } from '@hykr/notifications';
 import { fixture } from '../../index.js';
 
@@ -25,6 +32,27 @@ export const HelperMentions: MentionKind = {
   suggest: async ({ q }) =>
     'helper'.startsWith(q.toLowerCase()) ? [{ id: 'helper1', label: 'Helper 1' }] : [],
 };
+
+/**
+ * Reaches a helper, someone outside the business: waits when the assistant does it, and a
+ * business may make it always wait (settings `approvals.levels.fixture_helpers.parks`).
+ */
+export const HelpersLevel = defineApprovalLevel({
+  name: 'fixture_helpers',
+  rank: 2,
+  label: { en: 'Helpers', hi: 'Helpers', te: 'Helpers' },
+  policy: { parks: (p) => p.actor.kind !== 'user' },
+});
+
+/** A comment that names a helper, added or edited, is at the helpers' level. */
+export const HelperCommentLevels = defineLevelRule({
+  name: 'fixture.helper-comments',
+  on: ['comment.add', 'comment.edit'],
+  decide: (a) =>
+    commentWriteOf(a)?.mentions.some((m) => m.kind === 'helper')
+      ? atLevel(HelpersLevel.name, 'names_a_helper', 'A helper is told')
+      : null,
+});
 
 type TaskRow = Row & { title: string; ownerId: string };
 
@@ -50,9 +78,14 @@ export const commentingModule = defineModule({
   notifications: [TaskInboxed],
 });
 
-/** The fixture, with the subscriber, the mention kind and the notification above. */
+/** The fixture, with the subscriber, the mention kind, the level and the notification above. */
 export const commentsApp = defineServer({
   ...fixture.definition,
   modules: [...fixture.definition.modules, commentingModule],
-  contributes: { subscribers: [MentionHeard], mentionKinds: [HelperMentions] },
+  contributes: {
+    subscribers: [MentionHeard],
+    mentionKinds: [HelperMentions],
+    approvalLevels: [HelpersLevel],
+    levelRules: [HelperCommentLevels],
+  },
 });

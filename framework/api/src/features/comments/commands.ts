@@ -9,10 +9,12 @@ import {
   type CommandSpec,
   type Comment,
   CommentCapabilities,
+  type CommentWrite,
   commentExcerpt,
   type DecisionDetails,
   EditCommentSpec,
   type Mention,
+  type Principal,
   parksFor,
   RemoveCommentSpec,
 } from '@hykr/contracts';
@@ -111,7 +113,10 @@ function parkDetails(rule: ApprovalRule | undefined): DecisionDetails | undefine
   return Object.keys(out).length ? out : undefined;
 }
 
+/** What a comment command loads: at least the record the comment is on. */
 type OnRecord = { parent: Parent };
+/** An add's or an edit's: also the comment it would write, what level rules read (`commentWriteOf`). */
+type Writes = OnRecord & { write: CommentWrite };
 
 /**
  * A command about a comment whose own audit row and approval name the record the comment is on:
@@ -147,10 +152,38 @@ function onRecord<S extends CommandSpec, L extends OnRecord, V>(
   };
 }
 
+/**
+ * Does the entity's trait park this comment? An add and an edit are checked alike, with the action
+ * `comment`, the comment as it would be and the record as the writer reads it: an edit publishes
+ * new text, so a rule that parks a comment parks every edit of it too.
+ */
+function parkedByTrait(p: Principal, parent: Parent, write: CommentWrite) {
+  const rule = parent.policy?.approval;
+  const input: Record<string, unknown> = {
+    entity: write.on.entity,
+    recordId: write.on.id,
+    body: write.body,
+    internal: write.internal,
+    anchor: write.anchor,
+  };
+  if (write.commentId) input.commentId = write.commentId;
+  const row = parent.def.toRead(parent.row, p) as Record<string, unknown>;
+  if (!parksFor(rule, p, { action: 'comment', input, row })) return null;
+  const who = p.actor.kind === 'agent' ? 'assistant' : 'requester';
+  const label = parent.def.spec.label;
+  return needsApproval(
+    'comment_needs_approval',
+    write.action === 'edit'
+      ? `Edits by the ${who} to comments on this ${label} need approval`
+      : `Comments by the ${who} on this ${label} need approval`,
+    parkDetails(rule),
+  );
+}
+
 /** The value as the writer reads it (the read projectors, as `comment`). */
 const present = (value: Comment) => value;
 
-type AddLoaded = OnRecord & {
+type AddLoaded = Writes & {
   body: string;
   mentions: Mention[];
   refused: boolean;
@@ -177,8 +210,19 @@ export const AddComment = onRecord(AddCommentSpec, {
           message: `That anchor does not fit a ${parent.def.spec.label}`,
         });
     }
-    const resolved = await svc.mentions(tx, p, parent, input.body, input.internal ?? false);
-    return { parent, ...resolved, author: { id: authorId, name: await svc.nameOf(tx, authorId) } };
+    const internal = input.internal ?? false;
+    const resolved = await svc.mentions(tx, p, parent, input.body, internal);
+    const write: CommentWrite = {
+      action: 'add',
+      on: parent.on,
+      body: resolved.body,
+      mentions: resolved.mentions,
+      internal,
+      anchor: input.anchor ?? null,
+      commentId: null,
+    };
+    const author = { id: authorId, name: await svc.nameOf(tx, authorId) };
+    return { parent, write, ...resolved, author };
   },
   authorize: (p, loaded, input) => {
     const { parent } = loaded;
@@ -191,16 +235,10 @@ export const AddComment = onRecord(AddCommentSpec, {
         'mention_not_allowed',
         'Someone you mentioned cannot see this here. Remove the mention, or let them see it first.',
       );
-    const rule = parent.policy.approval;
-    const at = parent.def.toRead(parent.row, p) as Record<string, unknown>;
-    if (parksFor(rule, p, { action: 'comment', input: { ...input }, row: at })) {
-      return needsApproval(
-        'comment_needs_approval',
-        `Comments by the ${p.actor.kind === 'agent' ? 'assistant' : 'requester'} on this ${label} need approval`,
-        parkDetails(rule),
-      );
-    }
-    return allow('comment_on_readable', 'Comments on a record they can read');
+    return (
+      parkedByTrait(p, parent, loaded.write) ??
+      allow('comment_on_readable', 'Comments on a record they can read')
+    );
   },
   summarize: (_input, loaded) =>
     `Comment on ${loaded.parent.def.spec.label}: "${commentExcerpt(loaded.body, 120)}"`,
@@ -233,7 +271,7 @@ export const AddComment = onRecord(AddCommentSpec, {
   present,
 });
 
-type EditLoaded = OnRecord & {
+type EditLoaded = Writes & {
   comment: CommentRow;
   body: string;
   mentions: Mention[];
@@ -252,20 +290,37 @@ export const EditComment = onRecord(EditCommentSpec, {
       id: comment.resourceId,
     });
     const resolved = await svc.mentions(tx, p, parent, input.body, comment.internal);
+    const write: CommentWrite = {
+      action: 'edit',
+      on: parent.on,
+      body: resolved.body,
+      mentions: resolved.mentions,
+      internal: comment.internal,
+      anchor: (comment.anchor as Record<string, unknown> | null) ?? null,
+      commentId: comment.id,
+    };
     const author = { id: comment.authorId, name: await svc.nameOf(tx, comment.authorId) };
-    return { parent, comment, ...resolved, author };
+    return { parent, write, comment, ...resolved, author };
   },
+  // The same gates as an add: the new text reaches the same readers. The level rules see it too
+  // (`commentWriteOf`), so a rule on `comment.add` lists `comment.edit` as well.
   authorize: (p, loaded) => {
+    const { parent } = loaded;
     if (!loaded.comment.authorId || loaded.comment.authorId !== userIdOf(p))
       return deny('not_author', 'Only its author edits a comment');
+    if (!parent.policy) return deny('comments_off', `A ${parent.def.spec.label} takes no comments`);
     if (loaded.refused)
       return deny(
         'mention_not_allowed',
         'Someone you mentioned cannot see this here. Remove the mention, or let them see it first.',
       );
-    return allow('author_edits', 'The author edits their comment');
+    return (
+      parkedByTrait(p, parent, loaded.write) ??
+      allow('author_edits', 'The author edits their comment')
+    );
   },
-  summarize: (_input, loaded) => `Edit a comment on ${loaded.parent.def.spec.label}`,
+  summarize: (_input, loaded) =>
+    `Edit a comment on ${loaded.parent.def.spec.label}: "${commentExcerpt(loaded.body, 120)}"`,
   run: async ({ tx, principal, loaded }) => {
     const before = loaded.comment;
     const [row] = await tx

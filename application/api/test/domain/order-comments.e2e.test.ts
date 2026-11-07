@@ -2,9 +2,19 @@
 // reaches the person's in-app inbox (the framework's notification) and, with no phone
 // registered, their email (the module's push-then-email notification). A comment a customer
 // could read is at the application's `external` level, so the assistant's waits for the person;
-// a team-only one does not.
+// a team-only one does not. A business that makes `external` always wait parks people's comments
+// and every edit of them.
 
-import { addMember, asAssistant, boot, eventually, me, Person, shutdown } from '@hykr/api/testing';
+import {
+  addMember,
+  asAssistant,
+  boot,
+  eventually,
+  me,
+  Person,
+  pool,
+  shutdown,
+} from '@hykr/api/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { server as application } from '../../dist/server.js';
 
@@ -108,5 +118,57 @@ describe('comments on an order', () => {
       `/api/history?resourceType=order&resourceId=${orderId}`,
     );
     expect(history.body.map((e: { action: string }) => e.action)).toContain('comment.add');
+  });
+
+  it('a business that makes `external` wait parks a comment, and every edit of it', async () => {
+    // A write reads the business's settings in its own transaction.
+    const approvals = (value: object) =>
+      pool.query(
+        `update app.tenants set settings = jsonb_set(settings, '{approvals}', $2::jsonb) where id = $1`,
+        [tenantId, JSON.stringify(value)],
+      );
+    const comment = (body: string, internal = false) =>
+      admin.call(
+        'POST',
+        '/api/comments',
+        { entity: 'order', recordId: orderId, body, internal },
+        inTenant(),
+      );
+    const edit = (id: string, body: string) =>
+      admin.call('PATCH', `/api/comments/${id}`, { body }, inTenant());
+    const approve = (id: string) =>
+      admin.call('POST', `/api/approvals/${id}/approve`, undefined, inTenant());
+    await approvals({ levels: { external: { parks: true } } });
+    try {
+      const parked = await comment('Fitting is on Tuesday.');
+      expect(parked.body).toMatchObject({
+        status: 'needs_approval',
+        approval: { resourceType: 'order', resourceId: orderId, level: { name: 'external' } },
+      });
+      expect((await approve(parked.body.approval.id)).body).toMatchObject({ status: 'approved' });
+      const list = await admin.call(
+        'GET',
+        `/api/comments?entity=order&id=${orderId}`,
+        undefined,
+        inTenant(),
+      );
+      const approved = list.body.items.find(
+        (c: { body: string }) => c.body === 'Fitting is on Tuesday.',
+      );
+      // Its new text, and a new mention, wait as the comment did.
+      const changed = await edit(approved.id, `Fitting moved, @[Owner](user:${owner.id})`);
+      expect(changed.body).toMatchObject({
+        status: 'needs_approval',
+        approval: { resourceType: 'order', resourceId: orderId, level: { name: 'external' } },
+      });
+      // A team-only note stays inside: it and its edits run at once.
+      const note = await comment('Check stock first.', true);
+      expect(note.body).toMatchObject({ status: 'done' });
+      expect((await edit(note.body.value.id, 'Stock checked.')).body).toMatchObject({
+        status: 'done',
+      });
+    } finally {
+      await approvals({});
+    }
   });
 });

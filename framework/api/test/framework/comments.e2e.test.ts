@@ -1,8 +1,9 @@
 // Comments and @-mentions (B16): comments on any record a person can read, reached only through
 // that record; mentions checked against who may read it, told through the in-app inbox and the
-// durable `comment.mentioned` event; the assistant's comments parked by the entity's rule; live
-// announcements to the record's readers; erasure and export. The real write path, outbox,
-// relay, queues and Redis, in one process (inline).
+// durable `comment.mentioned` event; the assistant's and customers' comments parked by the
+// entity's rule, and comments naming a helper by the application's level rule, edits as much as
+// adds; live announcements to the record's readers; erasure and export. The real write path,
+// outbox, relay, queues and Redis, in one process (inline).
 import { type LiveMessage, liveMessages, textOf } from '@hykr/api-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -50,6 +51,28 @@ async function addCustomer(person: Person) {
      values ($1, $2, '{customer}', $3, false)
      on conflict (tenant_id, user_id) do update set roles = excluded.roles, customer_id = excluded.customer_id`,
     [tenantId, person.id, rows[0].id],
+  );
+}
+
+const edit = (who: Person, id: string, body: string) =>
+  who.call('PATCH', `/api/comments/${id}`, { body }, inA);
+const approve = (who: Person, id: string) =>
+  who.call('POST', `/api/approvals/${id}/approve`, undefined, inA);
+/** The targets named in `comment.mentioned` events about one comment, in order. */
+const mentionedIn = async (commentId: string) =>
+  (
+    await pool.query(
+      `select row->'target'->>'id' as who from app.domain_events
+       where name = 'comment.mentioned' and resource_id = $1 order by occurred_at`,
+      [commentId],
+    )
+  ).rows.map((r) => r.who);
+
+/** This business's approval settings, replaced (a write reads them in its own transaction). */
+async function approvalsSettings(approvals: object) {
+  await pool.query(
+    `update app.tenants set settings = jsonb_set(settings, '{approvals}', $2::jsonb) where id = $1`,
+    [tenantId, JSON.stringify(approvals)],
   );
 }
 
@@ -464,6 +487,96 @@ describe('the assistant', () => {
     expect(offered.body.reply).toContain('Olga Talk');
     const refused = await ravi.chat(`comments on task ${taskId}`);
     expect(refused.body.reply).toContain('No such task');
+  });
+});
+
+describe('an edit passes the same gates as an add', () => {
+  it("a customer's comment waits for the business, and so does every edit of it", async () => {
+    const parked = await add(cleo, 'Can the colour be lighter?', {}, cleoTaskId);
+    expect(parked.body).toMatchObject({
+      status: 'needs_approval',
+      approval: { resourceType: 'task', resourceId: cleoTaskId },
+    });
+    expect((await approve(ana, parked.body.approval.id)).body).toMatchObject({
+      status: 'approved',
+    });
+    const mine = (await list(cleo, cleoTaskId)).body.items.find(
+      (c: { body: string }) => c.body === 'Can the colour be lighter?',
+    );
+    expect(mine).toMatchObject({ author: { id: cleo.id }, can: { edit: true } });
+
+    // The approved text cannot be swapped for another, nor name someone new, without approval.
+    const changed = await edit(cleo, mine.id, `Call me instead ${token(olga)}`);
+    expect(changed.status).toBe(200);
+    expect(changed.body).toMatchObject({
+      status: 'needs_approval',
+      approval: { resourceType: 'task', resourceId: cleoTaskId },
+    });
+    expect(await audit('comment.edit', cleoTaskId)).toContainEqual(
+      expect.objectContaining({
+        outcome: 'needs_approval',
+        rule: 'comment_needs_approval',
+        actor_kind: 'user',
+      }),
+    );
+    const waiting = (await list(cleo, cleoTaskId)).body.items.find(
+      (c: { id: string }) => c.id === mine.id,
+    );
+    expect(waiting).toMatchObject({ body: 'Can the colour be lighter?', editedAt: null });
+    expect(await mentionedIn(mine.id)).toEqual([]);
+
+    // Approved, the edit runs as Cleo, and Olga is told then.
+    expect((await approve(ana, changed.body.approval.id)).body).toMatchObject({
+      status: 'approved',
+    });
+    const edited = (await list(cleo, cleoTaskId)).body.items.find(
+      (c: { id: string }) => c.id === mine.id,
+    );
+    expect(edited.body).toBe(`Call me instead @[Olga Talk](user:${olga.id})`);
+    expect(edited.editedAt).not.toBeNull();
+    expect(await mentionedIn(mine.id)).toEqual([olga.id]);
+  });
+
+  it("a level rule decides edits too: a business that makes the helpers' level wait", async () => {
+    await approvalsSettings({ levels: { fixture_helpers: { parks: true } } });
+    try {
+      // Naming a helper is at the application's helpers level, which this business makes wait.
+      const parked = await add(ana, 'Ask @[x](helper:helper3)');
+      expect(parked.body).toMatchObject({
+        status: 'needs_approval',
+        approval: { resourceType: 'task', level: { name: 'fixture_helpers' } },
+      });
+      expect((await approve(ana, parked.body.approval.id)).body).toMatchObject({
+        status: 'approved',
+      });
+      const asked = (await list(ana)).body.items.find(
+        (c: { body: string }) => c.body === 'Ask @[Helper 3](helper:helper3)',
+      );
+      expect(asked).toBeDefined();
+      const again = await edit(ana, asked.id, 'Ask @[x](helper:helper3) by Friday');
+      expect(again.body).toMatchObject({
+        status: 'needs_approval',
+        approval: { level: { name: 'fixture_helpers' } },
+      });
+      // The edit's input has only the new text: the rule reads the comment it would write.
+      const plain = await add(ana, 'No helpers here');
+      expect(plain.body.status).toBe('done');
+      const naming = await edit(ana, plain.body.value.id, 'Now @[x](helper:helper4)');
+      expect(naming.body).toMatchObject({ status: 'needs_approval' });
+      expect(await audit('comment.edit', taskId)).toContainEqual(
+        expect.objectContaining({ outcome: 'needs_approval', actor_kind: 'user' }),
+      );
+      expect(await mentionedIn(plain.body.value.id)).toEqual([]);
+    } finally {
+      await approvalsSettings({});
+    }
+    // The level's own policy: a person's edit runs at once.
+    const plainNow = (await list(ana)).body.items.find(
+      (c: { body: string }) => c.body === 'No helpers here',
+    );
+    const runs = await edit(ana, plainNow.id, 'Now @[x](helper:helper4)');
+    expect(runs.body).toMatchObject({ status: 'done' });
+    expect(await mentionedIn(plainNow.id)).toEqual(['helper4']);
   });
 });
 

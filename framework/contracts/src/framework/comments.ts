@@ -17,9 +17,9 @@ declare module './traits.js' {
 /** How an entity's records take comments. */
 export interface CommentsPolicy {
   /**
-   * When an added comment waits for approval, checked with the action `comment`, the input
-   * (body, internal, anchor) and the record. Its object form also says who decides. Default:
-   * never.
+   * When a comment waits for approval, added or edited alike (an edit publishes new text), checked
+   * with the action `comment`, the input (entity, recordId, body, internal, anchor; an edit's also
+   * has `commentId`) and the record. Its object form also says who decides. Default: never.
    */
   approval?: ApprovalRule;
   /**
@@ -33,6 +33,37 @@ export interface CommentsPolicy {
 export function commentsPolicyOf(spec: Pick<EntitySpec, 'traits'>): CommentsPolicy | null {
   const trait = spec.traits?.comments;
   return trait === false ? null : (trait ?? {});
+}
+
+/**
+ * The comment a `comment.add` or `comment.edit` would write, as a level rule sees it: the same
+ * shape for both, so one rule decides a comment and every later edit of it.
+ */
+export interface CommentWrite {
+  action: 'add' | 'edit';
+  /** The record it is on. */
+  on: { entity: string; id: string };
+  /** The text it would have, with the names the server knows in its tokens. */
+  body: string;
+  /** Who it would name, all of them (not only the new ones). */
+  mentions: MentionWithLabel[];
+  internal: boolean;
+  anchor: Record<string, unknown> | null;
+  /** The comment, for an edit; null for an add. */
+  commentId: string | null;
+}
+
+/**
+ * The comment a write would make, for a level rule on `comment.add` and `comment.edit`: null for
+ * any other operation. Use it instead of `input`, which an edit only has the new text in:
+ *
+ *   defineLevelRule({ name: 'app.comments', on: ['comment.add', 'comment.edit'],
+ *     decide: (a) => { const c = commentWriteOf(a); return c && !c.internal ? atLevel(...) : null } })
+ */
+export function commentWriteOf(a: { op: { name: string }; loaded: unknown }): CommentWrite | null {
+  if (a.op.name !== 'comment.add' && a.op.name !== 'comment.edit') return null;
+  const write = (a.loaded as { write?: CommentWrite } | null | undefined)?.write;
+  return write && typeof write === 'object' ? write : null;
 }
 
 /* ── Mention tokens ────────────────────────────────────────────────────────── */
