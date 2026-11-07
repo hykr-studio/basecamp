@@ -119,6 +119,12 @@ export {
 } from './features/jobs/public.js';
 export { type LiveResource, liveResources } from './features/live/resources.js';
 export {
+  anyRole,
+  backfillAll,
+  MemoryIndexer,
+  RecallService,
+} from './features/memory/index.js';
+export {
   ModelPolicyChanged,
   ModelPolicyService,
   ModelRefused,

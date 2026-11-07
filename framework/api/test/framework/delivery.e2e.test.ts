@@ -311,10 +311,14 @@ describe('personal data contributors', () => {
       `select after from audit.events where action = 'channel.contact.erased' and resource_id = $1`,
       [contactId],
     );
-    // The framework's own (files, jobs, push) run too: a contact has no files, no jobs and no
-    // devices.
+    // The framework's own (files, jobs, memory, push) run too: a contact has no files, no jobs, no
+    // memories and no devices.
     expect(rows).toEqual([
-      { after: { contributors: { files: 0, jobs: 0, push: 0, 'fixture.runtime.erase': 1 } } },
+      {
+        after: {
+          contributors: { files: 0, jobs: 0, memory: 0, push: 0, 'fixture.runtime.erase': 1 },
+        },
+      },
     ]);
   });
 
