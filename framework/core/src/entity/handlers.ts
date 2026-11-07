@@ -7,6 +7,7 @@ import {
   type Principal,
   parseIfMatch,
   type Summary,
+  takesClientIds,
   versionedOf,
   type WriteAction,
 } from '@hykr/contracts';
@@ -99,7 +100,10 @@ export function entityOp(
     resourceType: def.name,
     // A create names the id it makes when the client chose one (B12), so a parked create does too.
     resourceId: (input, loaded) =>
-      loaded?.id ?? (action === 'create' && typeof input.id === 'string' ? input.id : null),
+      loaded?.id ??
+      (action === 'create' && takesClientIds(spec) && typeof input.id === 'string'
+        ? input.id
+        : null),
     input: schema as z.ZodType<Record<string, unknown>>,
     get args() {
       return id ? { id, ...(pins ? { pins } : {}), ...(ifMatch ? { ifMatch } : {}) } : undefined;
