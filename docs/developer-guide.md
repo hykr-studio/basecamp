@@ -784,7 +784,9 @@ A business adjusts this in its settings, section `approvals` (`@hykr/contracts`)
 A decision that names a level nobody declared ranks above every level and always parks. Without any
 levels, everything works as before: decisions without a level, and `needsApproval` parks as it did.
 The sample declares `read`, `internal`, `external` and `irreversible` in
-`application/domain/src/server/approval-levels.ts`; the to-dos module maps its writes to `internal`.
+`application/domain/src/server/approval-levels.ts`; the to-dos module maps its writes to `internal`,
+and the orders module names `irreversible` on its own decision for an order above the business's limit
+(`orders/server/policy.ts`), with the order's total as the amount and `orders.approve` as the decider.
 
 #### 5.8.2 Undo
 
@@ -1651,7 +1653,7 @@ These are not built. Each has a workaround for now.
 | Line-level tools | The assistant saves a whole tree in one call (the sample's `save-order`); there are no tools to add or move one line. |
 | Several currencies in one record | A record and its children have one currency, and there are no exchange rates. |
 | Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
-| Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. |
+| Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates of an undoable write wait with its events until the window closes. |
 | Deciders and per-business roles | `Recipient { capability }` finds the people to ask through the registered roles only. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
 | A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
