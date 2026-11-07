@@ -37,6 +37,7 @@ import {
   type DocumentRow,
   eventRowOf,
   infoOf,
+  projectSend,
   reachable,
   seenAsOf,
   sendInfoOf,
@@ -339,5 +340,5 @@ export const SendDocument = defineCommand(SendDocumentSpec, {
       ],
     };
   },
-  present: (row, p) => projectRead('documentSend', sendInfoOf(row) as unknown as Values, p),
+  present: (row, p) => projectSend(sendInfoOf(row), p),
 });

@@ -1,8 +1,9 @@
 // The documents feature in use (B2): a `memos` module with a field only owners see (a read
-// projector by capability), a role that reads memos and nothing else, three documents of a memo
-// (one that counts every role and capability of its requester, one that names the capability
-// that matters, one that hides nothing), a WhatsApp template with a document header, scripts for
-// the assistant, and the server the documents e2e test boots (`documentsApp`).
+// projector by capability; another hides a send's error), a role that reads memos and nothing
+// else, three documents of a memo (one that counts every role and capability of its requester,
+// one that names the capability that matters, one that hides nothing), a WhatsApp template with a
+// document header, scripts for the assistant, and the server the documents e2e test boots
+// (`documentsApp`).
 import { call, defineScript, items, say, written } from '@hykr/agents/script';
 import { defineDocument, defineModule, defineServer } from '@hykr/api';
 import {
@@ -92,6 +93,16 @@ export const secretHidden: ReadProjector = {
   project: (type, value, p) => {
     if (type !== 'memo' || can(p, SecretRead)) return value;
     const { secret: _hidden, ...rest } = value;
+    return rest;
+  },
+};
+
+/** A document send's error is for whoever reads secret lines (the API projects every send). */
+export const sendErrorHidden: ReadProjector = {
+  name: 'fixture.documents.send-error',
+  project: (type, value, p) => {
+    if (type !== 'documentSend' || can(p, SecretRead)) return value;
+    const { error: _hidden, ...rest } = value;
     return rest;
   },
 };
@@ -249,7 +260,7 @@ export const memosModule = defineModule({
 export const documentsContributions: Partial<Contributions> = {
   roles: [Reader],
   capabilities: [SecretRead],
-  readProjectors: [secretHidden],
+  readProjectors: [secretHidden, sendErrorHidden],
   documents: [MemoDocument, MemoSheet, MemoCard],
 };
 

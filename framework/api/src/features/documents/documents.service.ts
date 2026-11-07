@@ -28,8 +28,10 @@ import {
   type DocumentRow,
   eventRowOf,
   infoOf,
+  projectSend,
   reachable,
   reaches,
+  seesSend,
   sendInfoOf,
 } from './access.js';
 import { layoutOf, type Snapshot } from './commands.js';
@@ -45,7 +47,7 @@ export const SEND_QUEUE = 'documents.send';
 /**
  * BullMQ job ids (no ':'): one per document to draw; per send, one when it is asked for and one
  * when its document is made (a waiting send's first job has finished, and BullMQ keeps finished
- * jobs: the same id would add nothing).
+ * jobs: the same id would add nothing). Both may run: only the one that claims the send delivers.
  */
 export const renderJobId = (id: string) => `render-${id}`;
 export const sendJobId = (id: string, when: 'asked' | 'made' = 'asked') => `send-${when}-${id}`;
@@ -109,7 +111,10 @@ export class DocumentsService implements OnApplicationBootstrap {
     ) as unknown as DocumentInfo;
   }
 
-  /** One document, with its sends and (for people, once made) a short-lived URL. */
+  /**
+   * One document, with the sends p may see (each projected) and, for people once made, a
+   * short-lived URL.
+   */
   async get(p: Principal, id: string): Promise<DocumentInfo> {
     const { row } = await reachable(this.db, p, id);
     const sends = await this.db
@@ -120,9 +125,15 @@ export class DocumentsService implements OnApplicationBootstrap {
       .orderBy(desc(documentSends.createdAt));
     const info: DocumentInfo = {
       ...this.project(infoOf(row), p),
-      sends: sends.map((s) =>
-        sendInfoOf(s.send, s.send.channel === 'whatsapp' ? s.messageStatus : null),
-      ),
+      // Every send for whoever sends to others; anyone else sees their own (decisions B2, 27).
+      sends: sends
+        .filter((s) => seesSend(p, s.send))
+        .map((s) =>
+          projectSend(
+            sendInfoOf(s.send, s.send.channel === 'whatsapp' ? s.messageStatus : null),
+            p,
+          ),
+        ),
     };
     if (row.status !== 'ready' || !row.fileId || p.actor.kind === 'agent') return info;
     const [file] = await this.db.select().from(files).where(eq(files.id, row.fileId));

@@ -1,6 +1,12 @@
-import type { DocumentInfo, DocumentSendInfo, Principal } from '@hykr/contracts';
-import { type Conn, entityDef } from '@hykr/core';
+import {
+  type DocumentInfo,
+  type DocumentSendInfo,
+  FrameworkCapabilities,
+  type Principal,
+} from '@hykr/contracts';
+import { type Conn, entityDef, projectRead } from '@hykr/core';
 import { documentSends, documents } from '@hykr/db';
+import { can, subjectOf } from '@hykr/policy';
 import { NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { type DocumentDef, documents as documentDefs } from './define.js';
@@ -108,6 +114,28 @@ export function sendInfoOf(
     createdAt: row.createdAt.toISOString(),
     sentAt: row.sentAt?.toISOString() ?? null,
   };
+}
+
+/** A send as p may see it: the read projectors, resource type 'documentSend'. */
+export const projectSend = (info: DocumentSendInfo, p: Principal): DocumentSendInfo =>
+  projectRead(
+    'documentSend',
+    info as unknown as Record<string, unknown>,
+    p,
+  ) as unknown as DocumentSendInfo;
+
+/**
+ * May p see this send of a document they reach? Whoever sends documents to others
+ * (customers.message) sees every send; anyone else only the ones they asked for or that went to
+ * them: their user, their contact, or the customer record they are.
+ */
+export function seesSend(p: Principal, row: DocumentSendRow): boolean {
+  if (can(p, FrameworkCapabilities.messageCustomers)) return true;
+  const to = row.recipient;
+  const s = subjectOf(p);
+  if (s?.kind === 'user' && (row.requestedBy === s.userId || to.userId === s.userId)) return true;
+  if (s?.kind === 'contact' && to.contactId === s.contactId) return true;
+  return !!p.customerId && to.customerId === p.customerId;
 }
 
 /**
