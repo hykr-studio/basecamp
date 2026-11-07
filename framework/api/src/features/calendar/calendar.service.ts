@@ -237,6 +237,16 @@ export class CalendarService implements OnModuleInit {
           'This calendar sign-in was started in another business, so nothing was connected. Start again here.',
       });
     const tenantId = signIn.tenantId;
+    let codeVerifier: string;
+    try {
+      codeVerifier = verifierOf(signIn);
+    } catch {
+      // Sealed with a key this server no longer has.
+      throw refused(
+        'calendar_sign_in_invalid',
+        'This calendar sign-in cannot be finished: start again',
+      );
+    }
     let tokens: Awaited<ReturnType<typeof exchangeCode>>;
     try {
       tokens = await exchangeCode(google.transport, {
@@ -245,7 +255,7 @@ export class CalendarService implements OnModuleInit {
         endpoints: google.endpoints,
         redirectUri: google.redirectUri,
         code: input.code,
-        codeVerifier: verifierOf(signIn),
+        codeVerifier,
       });
     } catch (e) {
       log.warn(`Google refused the code: ${e instanceof Error ? e.message : e}`);
