@@ -82,6 +82,11 @@ export {
   type RequestMetaValue,
 } from './http/principal.js';
 export { PrincipalResolver, type Standing } from './http/resolver.js';
+export {
+  type OtherStanding,
+  type StandingProvider,
+  standingProviders,
+} from './http/standing.js';
 export { UndoController } from './http/undo.controller.js';
 export { nextNumber, numberSeries, type TakenNumber } from './money/numbering.js';
 export {

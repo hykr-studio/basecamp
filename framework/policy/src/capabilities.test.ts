@@ -51,7 +51,6 @@ describe('the framework roles and capabilities', () => {
       'members.read',
       'parties.manage',
       'parties.read',
-      'queues.admin',
       'records.grant',
       'settings.manage',
     ]);
@@ -67,7 +66,6 @@ describe('the framework roles and capabilities', () => {
       'members.read',
       'parties.manage',
       'parties.read',
-      'queues.admin',
       'records.grant',
       'settings.manage',
     ]);
@@ -138,7 +136,7 @@ describe('can', () => {
     const ops = person({ roles: ['ops'], capabilities: capabilitiesOf(['ops']) });
     expect(can(ops, 'history.all')).toBe(true);
     expect(can(ops, FrameworkCapabilities.wholeHistory)).toBe(true);
-    expect(can(ops, 'queues.admin')).toBe(false);
+    expect(can(ops, 'members.manage')).toBe(false);
     // Roles alone, without what the server worked out, allow nothing.
     expect(can(person({ roles: ['ops'] }), 'history.all')).toBe(false);
   });

@@ -5,8 +5,13 @@ import { z } from 'zod';
 
 declare module './traits.js' {
   interface EntityTraits {
-    /** Every business reads the platform's rows of it, and may override one with its own. */
-    shared?: Record<string, never>;
+    /**
+     * Every business reads the platform's rows of it, and may override one with its own.
+     * `publishers`: who writes the platform's rows: the platform business's `members` (with the
+     * entity's access, the default) and its operators at platform scope, or `operators` only
+     * (B19: an operator holding `platform.shared`, or the server's own work).
+     */
+    shared?: { publishers?: 'members' | 'operators' };
   }
 }
 

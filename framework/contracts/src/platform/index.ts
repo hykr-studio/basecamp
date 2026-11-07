@@ -19,6 +19,7 @@ export * from './job.js';
 export * from './members.js';
 export * from './memory.js';
 export * from './notify.js';
+export * from './operators.js';
 export * from './page.js';
 export * from './parties.js';
 

@@ -5,6 +5,7 @@ import {
   type AuthorizeResult,
   approverOf,
   type DecisionDetails,
+  onBehalfOfKey,
   type Principal,
   rankOf,
   type TenantConfig,
@@ -112,6 +113,8 @@ export function auditCtx(
     channel: p.channel ?? null,
     requestId: ctx.requestId,
     approvedBy: p.approvedBy ?? null,
+    // Through the platform: an operator's action, or an operator's support access.
+    onBehalfOf: onBehalfOfKey(p.onBehalfOf),
     rule: result.rule,
     reason: result.reason,
   };

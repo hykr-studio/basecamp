@@ -38,6 +38,13 @@ beforeAll(() => {
   capabilities.register(
     defineCapability({ name: 'unit.cost.read', label: label('See cost'), roles: ['owner'] }),
     defineCapability({ name: 'unit.all.read', label: label('Every record') }),
+    // Only code gives it (the owner, here): a business may not.
+    defineCapability({
+      name: 'unit.code.only',
+      label: label('Code only'),
+      roles: ['owner'],
+      grantable: false,
+    }),
   );
   roles.register(
     defineRole({ name: 'unit_buyer', label: label('Buyer'), capabilities: ['unit.cost.read'] }),
@@ -83,16 +90,16 @@ describe("a business's own roles and edits", () => {
         {
           name: 'site_lead',
           label: { en: 'Site lead' },
-          capabilities: ['unit.all.read', 'queues.admin'],
+          capabilities: ['unit.all.read', 'unit.code.only'],
         },
         // Shadowed: the application declares this name, so code wins.
         { name: 'unit_buyer', label: { en: 'Mine' }, capabilities: [] },
       ],
       edits: {
-        owner: { capabilities: ['backoffice.use', 'queues.admin'] },
+        owner: { capabilities: ['backoffice.use', 'unit.code.only'] },
         unit_buyer: {
           label: { en: 'Purchaser' },
-          capabilities: ['unit.cost.read', 'queues.admin'],
+          capabilities: ['unit.cost.read', 'unit.code.only'],
         },
       },
     },
@@ -101,14 +108,14 @@ describe("a business's own roles and edits", () => {
   it('resolves names to roles and capabilities, edits first', () => {
     expect(standingIn(['site_lead', 'wizard'], settings)).toEqual({
       roles: ['site_lead'],
-      // queues.admin is not grantable: a business cannot add it.
+      // unit.code.only is not grantable: a business cannot add it.
       capabilities: ['unit.all.read'],
       unknown: ['wizard'],
     });
-    // The owner keeps queues.admin (code gave it), and loses the rest by the edit.
+    // The owner keeps unit.code.only (code gave it), and loses the rest by the edit.
     expect(standingIn(['owner'], settings).capabilities).toEqual([
       'backoffice.use',
-      'queues.admin',
+      'unit.code.only',
     ]);
     expect(standingIn(['unit_buyer'], settings).capabilities).toEqual(['unit.cost.read']);
     const views = rolesOfBusiness(settings);
@@ -123,8 +130,8 @@ describe("a business's own roles and edits", () => {
 
   it('says why a business may not give a capability', () => {
     expect(capabilityProblem(['unit.all.read'])).toBeNull();
-    expect(capabilityProblem(['queues.admin'])).toContain('cannot be given by a business');
-    expect(capabilityProblem(['queues.admin'], ['queues.admin'])).toBeNull();
+    expect(capabilityProblem(['unit.code.only'])).toContain('cannot be given by a business');
+    expect(capabilityProblem(['unit.code.only'], ['unit.code.only'])).toBeNull();
     expect(capabilityProblem(['nope.nothing'])).toContain('is not a capability');
   });
 
