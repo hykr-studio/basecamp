@@ -1,5 +1,7 @@
 import {
   type AcceptedInvite,
+  type AddCommentInput,
+  AddCommentSpec,
   type AddedPartyMember,
   type AddGrantInput,
   type AddParticipantInput,
@@ -11,6 +13,8 @@ import {
   type ChatStreamRequest,
   type ClientSettings,
   type CommandSpec,
+  type Comment,
+  type CommentPage,
   type CreatedInvite,
   type CreateInviteInput,
   type CreatePartyInput,
@@ -21,6 +25,7 @@ import {
   type DocumentInfo,
   type DocumentKindInfo,
   type DocumentRecipient,
+  EditCommentSpec,
   type EditPartyInput,
   type EditRoleInput,
   type EntitySpec,
@@ -31,6 +36,7 @@ import {
   type HandoffThread,
   type HistoryEntry,
   type Inbox,
+  type InboxPage,
   type Invite,
   type JobInfo,
   type LedgerEntry,
@@ -38,6 +44,7 @@ import {
   type ListJobsQuery,
   type Me,
   type Member,
+  type MentionablePage,
   type Page,
   type ParticipantRoleView,
   type Participation,
@@ -54,6 +61,7 @@ import {
   type RecordGrant,
   type RecordVersion,
   type RegisterPushToken,
+  RemoveCommentSpec,
   type RenderDocumentInput,
   RenderDocumentSpec,
   type RoleView,
@@ -246,7 +254,7 @@ export function createApiClient(opts: ApiClientOptions) {
   function command<S extends CommandSpec>(
     spec: S,
     input: z.input<S['input']>,
-    key = newKey(),
+    key: string = newKey(),
   ): Promise<WriteResult<z.infer<S['output']>>> {
     const values = { ...(input as Record<string, unknown>) };
     let path = spec.http.path;
@@ -256,6 +264,41 @@ export function createApiClient(opts: ApiClientOptions) {
     }
     return call(spec.http.method, path, values, key);
   }
+
+  /** `?a=1&b=x` from the values that are set. */
+  const query = (values: Record<string, string | number | boolean | undefined>) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(values)) if (v !== undefined) params.set(k, String(v));
+    const qs = params.toString();
+    return qs ? `?${qs}` : '';
+  };
+
+  /** Comments on records: reached only through a record the caller can read. */
+  const comments = {
+    /** One record's comments, newest first (`nextCursor` for older ones). */
+    list: (q: { entity: string; id: string; cursor?: string; limit?: number }) =>
+      call<CommentPage>('GET', `/api/comments${query(q)}`),
+    /** Who a comment on this record may name, for a word typed after @. */
+    mentionable: (q: { entity: string; id: string; q?: string; internal?: boolean }) =>
+      call<MentionablePage>('GET', `/api/comments/mentionable${query(q)}`),
+    /** A comment on a record (it may wait for approval: see the result's status). */
+    add: (input: AddCommentInput, key?: string) => command(AddCommentSpec, input, key),
+    /** Your comment's new text. */
+    edit: (commentId: string, body: string, key?: string) =>
+      command(EditCommentSpec, { commentId, body }, key) as Promise<WriteResult<Comment>>,
+    /** Your comment, or any with comments.moderate. */
+    remove: (commentId: string, key?: string) => command(RemoveCommentSpec, { commentId }, key),
+  };
+
+  /** The signed-in person's in-app inbox, in their business (people only). */
+  const inbox = {
+    list: (q: { unread?: boolean; cursor?: string; limit?: number } = {}) =>
+      call<InboxPage>('GET', `/api/inbox${query(q)}`),
+    /** These items are read. */
+    read: (ids: readonly string[]) => call<null>('POST', '/api/inbox/read', { ids }),
+    /** Everything is read. */
+    readAll: () => call<null>('POST', '/api/inbox/read', { all: true }),
+  };
 
   /** A URL the API gave relative to itself (a local store's), made absolute. */
   const absolute = (url: string) => (url.startsWith('/') ? `${opts.baseUrl}${url}` : url);
@@ -366,6 +409,10 @@ export function createApiClient(opts: ApiClientOptions) {
     jobs,
     /** Documents (PDFs) of records: make, read, send. */
     documents,
+    /** Comments and @-mentions on records. */
+    comments,
+    /** The signed-in person's in-app inbox. */
+    inbox,
     /**
      * Who is signed in, in which business (as a member or a participant), with which roles, and
      * every business they are in. Send `x-tenant-id` (the client's `headers`) to work in another.

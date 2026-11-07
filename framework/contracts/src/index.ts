@@ -5,6 +5,7 @@ export * from './channel-rules.js';
 export * from './chat.js';
 export * from './framework/index.js';
 export * from './parties.js';
+export * from './platform/inbox.js';
 export * from './platform/index.js';
 export * from './platform/live.js';
 export * from './platform/push.js';

@@ -3,6 +3,7 @@ import {
   AppShell,
   businessesPlugin,
   creditsPlugin,
+  inboxPlugin,
   livePlugin,
   pushPlugin,
   settingsPlugin,
@@ -26,9 +27,10 @@ const config = {
  * they work in, or joins one with an invitation code), the business's flags, branding and
  * phrases, live updates (other people's changes show without a reload), push notifications (the
  * to-do reminder goes to the phone first), WebMCP (each screen's read tools, the modules'
- * `webmcp`, offered to the browser's agent where the browser supports it) and the business's
- * credits (usage, the pause, buying more: `/credits`). The switcher goes first: switching starts
- * everything after it again in the other business.
+ * `webmcp`, offered to the browser's agent where the browser supports it), the business's
+ * credits (usage, the pause, buying more: `/credits`) and the in-app inbox (mentions in
+ * comments). The switcher goes first: switching starts everything after it again in the other
+ * business.
  */
 const plugins = [
   businessesPlugin,
@@ -37,6 +39,7 @@ const plugins = [
   pushPlugin({ androidChannel: 'Reminders' }),
   webMcpPlugin(),
   creditsPlugin,
+  inboxPlugin(),
 ];
 
 export default function RootLayout() {

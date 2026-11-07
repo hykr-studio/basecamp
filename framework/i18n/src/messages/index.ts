@@ -4,6 +4,7 @@ export { approvalMessages } from './approvals.js';
 export { assistantMessages } from './assistant.js';
 export { businessesMessages } from './businesses.js';
 export { channelMessages } from './channels.js';
+export { commentMessages } from './comments.js';
 export { creditsMessages } from './credits.js';
 export { documentMessages } from './documents.js';
 export { summaryMessages } from './summary.js';
