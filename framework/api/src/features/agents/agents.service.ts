@@ -23,6 +23,7 @@ import {
 } from '@hykr/contracts';
 import {
   type AgentIdentity,
+  type Conn,
   entityDef,
   eventFor,
   type IdentityRequest,
@@ -272,13 +273,20 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
    * many open runs, or twice for one dedupe key. Returns the run's id, or null.
    */
   async start(a: RunStart): Promise<string | null> {
+    const id = await this.record(this.db, a);
+    if (id) await this.enqueue(id);
+    return id;
+  }
+
+  /** Record a queued run (the checks of `start`) without queueing it: in a transaction. */
+  private async record(conn: Conn, a: RunStart): Promise<string | null> {
     const depth = a.depth ?? 0;
     if (a.agent.status !== 'active') return null;
     if (depth > MAX_DEPTH) {
       log.warn(`agent=${a.agent.id}: depth ${depth} is past ${MAX_DEPTH}; not started`);
       return null;
     }
-    const [{ open }] = await this.db
+    const [{ open }] = await conn
       .select({ open: sql<number>`count(*)::int` })
       .from(agentRuns)
       .where(
@@ -288,7 +296,7 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
       log.warn(`agent=${a.agent.id}: ${open} runs open; not started (${a.kind})`);
       return null;
     }
-    const [row] = await this.db
+    const [row] = await conn
       .insert(agentRuns)
       .values({
         tenantId: a.agent.tenantId,
@@ -304,9 +312,7 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
       })
       .onConflictDoNothing()
       .returning({ id: agentRuns.id });
-    if (!row) return null;
-    await this.enqueue(row.id);
-    return row.id;
+    return row?.id ?? null;
   }
 
   /** Put a queued run on the queue (once: the job id is the run's). */
@@ -548,8 +554,10 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
     let fired = 0;
     let checked = 0;
     for (;;) {
+      // In one transaction: the due triggers move on and their runs are recorded, so a crash
+      // loses neither; the runs are queued after it commits (and again by `recover`).
       const due = await this.db.transaction(async (tx) => {
-        const rows = await tx
+        const locked = await tx
           .select()
           .from(agentTriggers)
           .where(
@@ -561,43 +569,58 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
           .orderBy(agentTriggers.nextAt)
           .limit(20)
           .for('update', { skipLocked: true });
-        const out: { trigger: TriggerRow; dueAt: Date; zone: string }[] = [];
-        for (const t of rows) {
-          const spec = AgentTrigger.safeParse(t.spec);
-          const zone = await this.zone(t.tenantId);
-          const dueAt = t.nextAt as Date;
-          const next = spec.success ? nextDue(spec.data, zone, now) : null;
+        const owners = locked.length
+          ? await tx
+              .select()
+              .from(agents)
+              .where(
+                inArray(
+                  agents.id,
+                  locked.map((t) => t.agentId),
+                ),
+              )
+          : [];
+        const rows = locked.flatMap((trigger) => {
+          const agent = owners.find((a) => a.id === trigger.agentId);
+          return agent ? [{ trigger, agent }] : [];
+        });
+        const runs: string[] = [];
+        const conditions: { agent: AgentRow; trigger: TriggerRow; zone: string }[] = [];
+        for (const { trigger, agent } of rows) {
+          const spec = AgentTrigger.safeParse(trigger.spec);
+          const zone = await this.zone(trigger.tenantId);
+          const dueAt = trigger.nextAt as Date;
           await tx
             .update(agentTriggers)
-            .set({ nextAt: next, lastFiredAt: now })
-            .where(eq(agentTriggers.id, t.id));
-          out.push({ trigger: t, dueAt, zone });
+            .set({ nextAt: spec.success ? nextDue(spec.data, zone, now) : null, lastFiredAt: now })
+            .where(eq(agentTriggers.id, trigger.id));
+          // A paused agent's time passes without a run: it does not fire everything when resumed.
+          if (!spec.success || agent.status !== 'active') continue;
+          if (spec.data.kind === 'condition') {
+            conditions.push({ agent, trigger, zone });
+            continue;
+          }
+          const id = await this.record(tx, {
+            agent,
+            triggerId: trigger.id,
+            kind: spec.data.kind,
+            label: triggerLabel(spec.data),
+            input: { at: dueAt.toISOString() },
+            dedupe: `time:${trigger.id}:${dueAt.toISOString()}`,
+          });
+          if (id) runs.push(id);
         }
-        return out;
+        return { count: locked.length, runs, conditions };
       });
-      if (!due.length) break;
-      for (const { trigger, dueAt, zone } of due) {
-        const [agent] = await this.db.select().from(agents).where(eq(agents.id, trigger.agentId));
-        // A paused agent's time passes without a run: it does not fire everything when resumed.
-        if (agent?.status !== 'active') continue;
-        const spec = AgentTrigger.safeParse(trigger.spec);
-        if (!spec.success) continue;
-        if (spec.data.kind === 'condition') {
-          checked++;
-          fired += await this.checkCondition(agent, trigger, spec.data, now, zone);
-          continue;
-        }
-        const id = await this.start({
-          agent,
-          triggerId: trigger.id,
-          kind: spec.data.kind,
-          label: triggerLabel(spec.data),
-          input: { at: dueAt.toISOString() },
-          dedupe: `time:${trigger.id}:${dueAt.toISOString()}`,
-        });
-        if (id) fired++;
+      for (const id of due.runs) await this.enqueue(id);
+      fired += due.runs.length;
+      for (const { agent, trigger, zone } of due.conditions) {
+        const spec = AgentTrigger.parse(trigger.spec);
+        if (spec.kind !== 'condition') continue;
+        checked++;
+        fired += await this.checkCondition(agent, trigger, spec, now, zone);
       }
-      if (due.length < 20) break;
+      if (due.count < 20) break;
     }
     // Lost jobs and dead workers by the real clock: `now` may be a test's, far ahead.
     await this.recover(new Date());
