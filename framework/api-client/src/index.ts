@@ -41,6 +41,8 @@ import {
   type PublicBranding,
   type PushDevice,
   pathParams,
+  type RecallQuery,
+  type RecallResult,
   type RecordGrant,
   type RecordVersion,
   type RegisterPushToken,
@@ -621,6 +623,16 @@ export function createApiClient(opts: ApiClientOptions) {
       /** The business's own alert threshold, in per cent. */
       setAlertAt: (alertAt: number, key = newKey()) =>
         call<WriteResult<{ alertAt: number }>>('PUT', '/api/credits/alerts', { alertAt }, key),
+    },
+    /** What is remembered, by meaning: memories the caller may read now, best first. */
+    memory: {
+      recall: (q: RecallQuery) => {
+        const params = new URLSearchParams({ q: q.q });
+        if (q.about) params.set('about', q.about);
+        if (q.limit) params.set('limit', String(q.limit));
+        if (q.kinds) params.set('kinds', q.kinds);
+        return call<RecallResult>('GET', `/api/memory/recall?${params}`);
+      },
     },
     /** The person's conversations, kept on the server so every channel shares them (people only). */
     threads: {

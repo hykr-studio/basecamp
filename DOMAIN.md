@@ -126,6 +126,12 @@ capabilities for the apps. A field only some may see is declared on the spec,
 for anyone without the capability, and filtering, sorting or writing it is refused. The sample's
 to-dos module declares a `buyer` role and `todos.cost.read` this way.
 
+Records can be memory. An entity with `traits: { memory: { text, about } }` is recalled by
+meaning before the assistant's turns (and by `recall-memory`), for whoever may read it and the
+record it is `about`; the sample's notes are memory of their meeting. The business's own memory is
+the framework's `memory` entity, reached by the capabilities `memory.read`, `memory.write` and
+`memory.manage`: give your own roles those (developer guide 7.7).
+
 Approvals take an object form, `{ when, by, channels, minAssurance, level }`: who decides (the
 person it is for by default; a customer's request goes to holders of `approvals.decide`; `by`
 names a capability, a person or an amount band, never a role), and where (`channels: ['app']` for

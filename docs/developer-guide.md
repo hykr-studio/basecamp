@@ -816,7 +816,7 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
 
 - **Traits.** `entitySpec({ ..., traits: { <key>: … } })`, and the same on `commandSpec`. A feature
   declares its key on `EntityTraits` or `CommandTraits` in its own file. Its plugin then acts on the
-  specs that carry the key.
+  specs that carry the key (`memory`, section 7.7, is one).
 - **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
   Each key is a list, collected by one registry: `roles` and `capabilities` (section 6.4), with
   `roleOverrides` and `roleDefaults`, and `approvalLevels` (section 5.8.1) in `@hykr/contracts`;
@@ -1660,7 +1660,7 @@ requireCapability(p, 'orders.cost.read', { rule: 'cost_hidden' });   // or a 403
 
 The framework registers five roles (`owner`, `admin`, `ops`, `staff`, `customer`) and these
 capabilities, with the roles that hold them by default (its features add their own, such as
-`models.manage`):
+`models.manage` and the `memory.*` ones):
 
 | Capability | Roles | What it opens |
 |---|---|---|
@@ -1675,6 +1675,9 @@ capabilities, with the roles that hold them by default (its features add their o
 | `models.manage` | owner, admin | Setting the business's model policy, and seeing what models cost (section 7.5) |
 | `credits.view` | owner, admin, ops, staff | Whether the business is paused, and how much of each cap it used (section 7.6) |
 | `credits.manage` | owner, admin | Credit amounts, the ledger, buying credits, the alert threshold (section 7.6) |
+| `memory.read` | owner, admin, ops, staff | Reading the business's memory, and having it recalled (section 7.7) |
+| `memory.write` | owner, admin, ops, staff | Adding to the business's memory, and changing your own |
+| `memory.manage` | owner, admin | Changing or deleting anyone's memories |
 
 An application or module adds its own through `contributes`. A capability can name its roles, and a
 role its capabilities, so neither has to edit the other's list:
@@ -1943,6 +1946,69 @@ Every business's use of what costs money is metered, priced and, when its plan s
 - **In tests.** The scripted model reports usage (a token per four characters of prompt and
   reply), so a test can price turns. The fixture's `features/credits/` shows a purchase provider,
   an alert notification and a write hook that parks a large purchase.
+
+### 7.7 Memory and recall
+
+The assistant keeps one thread per person across channels, and remembers three more things
+(`docs/decisions/A8.md`):
+
+- **The business's memory**: the framework's `memory` entity (`/api/memories`; tools
+  `list-memories`, `create-memory`, `update-memory`, `delete-memory`; the `memory.list` view).
+  Lasting facts every member shares. Who reaches it are capabilities, not roles: `memory.read`
+  and `memory.write` (owner, admin, ops and staff by default; write means add, and change your
+  own) and `memory.manage` (owner and admin: change anyone's). Give your own roles these with
+  `defineRole({ capabilities })`. The assistant adds memory when asked ("remember that…"); its
+  changes and deletes wait for the person's approval.
+- **Records that are memory**: any entity of yours, with the `memory` trait. `text` is what recall
+  searches and shows, built from the record as the reader may see it; `about` names the record it
+  is memory of. Who recalls a record is whoever may read it (its entity's own access), and the
+  record it is about.
+
+  ```ts
+  // application/domain/src/modules/notes/contracts/note.ts
+  traits: {
+    memory: {
+      text: (n: NoteView) => [n.title, n.body?.trim()].filter(Boolean).join(': '),
+      about: (n: NoteView) => (n.meetingId ? { type: 'meeting', id: n.meetingId } : null),
+    },
+  },
+  ```
+
+- **What a person said**: their own messages (never the assistant's replies), on any channel and
+  in any of their threads, in that business only.
+
+**Recall.** Before every chat turn (not back-office drafts), the turn hook `memory.recall` embeds the
+message with the business's embedding model (section 7.5), finds the nearest memories, and loads
+each one again as the person: through its entity's scoped repository and `toRead` (hidden fields
+are gone), the `about` record the same way, and only from entities whose `get` the assistant may
+call. What survives reaches the model as context lines, which it reads as data. `GET
+/api/memory/recall?q=…&about=<type>:<id>&limit=5&kinds=record,message` and the tool
+`recall-memory` do the same on request; an `about` record the caller cannot read is a 404.
+Recall's embedding gets one try and 4 s (1.5 s on a voice turn): past that the turn runs without
+recall and the API answers 503 `recall_unavailable`, so a slow provider never holds a turn.
+
+**The index.** `app.memory_index` keeps one vector per source and no text. A write hook marks every
+touched record of a trait entity (commands included, from `touched`) in the write's transaction; the
+worker embeds them each second. It claims rows in a short transaction and calls the provider with
+none open (30 s timeout), so a write never waits for the provider; a result is kept only while the
+row still carries that run's claim (a newer write wins and the row is embedded again), and a claim
+older than two minutes is taken over. A message is indexed with the vector its turn's recall made. When a
+business's model policy changes, its vectors are made again with the new model, and a daily job
+(`memory.backfill`) finds records written before the trait. Distance is pgvector's when the database
+has the extension (`framework/db/sql/pre/memory.sql` creates it when offered), otherwise
+`app.memory_cosine` over `real[]`.
+
+**Settings.** The section `memory`: `{ recall: true, conversation: true, limit: 5, minScore: 0.3 }`.
+`recall: false` stops recall before turns (and keeping what people say); `recall-memory` still
+searches. `conversation: false` leaves people's words out everywhere. A business without an
+embedding model its policy allows gets no recall, and its turns still run.
+
+A trait's `text` sees the record as the reader may see it, so a field hidden from them is missing:
+write it to cope (`n.body?.trim()`). A trait that throws drops that record from recall.
+
+**Personal data.** "Delete my data" removes the vectors of what the person said (a deleted message
+takes its vector with it); for a person with an account, the business memories they wrote go too,
+and their export lists them.
 
 ---
 
@@ -2246,7 +2312,7 @@ These are not built. Each has a workaround for now.
 | Importing with no worker | `basecamp import` starts the job and follows it; the worker runs it. With no worker running it waits (and says so). Large JSON files through the local storage drivers (memory, fs) also pass the API's JSON body limit (`JSON_BODY_LIMIT`) on upload; S3 has no such limit. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `@mastra/memory` (in `@hykr/agents`) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
+| Packages installed but not used yet | `@mastra/mcp`, `@better-auth/oauth-provider`, `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.7) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that create or park | `systemPrincipal()` updates and deletes rows of its business, but cannot create one (a row needs an owner) or park (nobody decides). Maintenance jobs still write their audit rows directly. An inbound webhook's handler that creates a row fails with `no_access` until then. |
 | Integration screens | Endpoints, connections and the delivery log have an HTTP API only (`/api/integrations/*`): no app or back-office screen, and no typed `@hykr/api-client` methods. |
@@ -2271,6 +2337,10 @@ These are not built. Each has a workaround for now.
 | `If-Match` on HTTP writes | Send the version in the body (`version`, when the update schema has it). |
 | A per-field approval pin | A parked write fails on approval when the record's version changed at all, even for a field it does not touch. |
 | Revisions without copying | A revision is a copy (its own id). There is no snapshot of one record in place. |
+| Memory recall at scale | Recall compares every vector of one business (no approximate index), and the compose and CI images have no pgvector, so it runs on `app.memory_cosine`. Fine for thousands of memories per business; beyond that, install pgvector and add an index. |
+| Memory of the record on screen | A turn's recall does not prefer memory of the record the person is looking at. Ask with `recall-memory` and `about`. |
+| Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it, or the `memory` settings, yet. |
+| Memory timings | The indexer gives the embedding provider 30 s per batch and takes over a claim after 120 s; recall gives it 4 s per turn (1.5 s on voice). All are constants in `features/memory/` (`indexer.ts`, `recall.service.ts`), not deployment settings. |
 | Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
 | Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates of an undoable write wait with its events until the window closes. |
 | Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |

@@ -4,6 +4,7 @@ export * from './business-hours.js';
 export * from './credits.js';
 export * from './features.js';
 export * from './files.js';
+export * from './memory.js';
 export * from './models.js';
 export * from './money.js';
 export * from './roles.js';

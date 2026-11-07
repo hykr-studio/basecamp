@@ -18,7 +18,7 @@ import { Loading } from '../../framework/Loading';
 import { useT } from '../../framework/lang';
 import { useToast } from '../../framework/Toast';
 import { colors, styles } from '../../theme';
-import { formatCredits, meterQuantity, toMinor } from './money';
+import { formatCredits, meterQuantity, parseCredits } from './money';
 
 /** A bar for how much of a cap is used: warning past the alert, danger at the pause. */
 function UsedBar({
@@ -52,7 +52,7 @@ const METER_NAMES: Readonly<Record<string, MessageKey>> = {
 };
 
 function Meters({ status }: { status: CreditsStatus }) {
-  const { t } = useT();
+  const { t, lang } = useT();
   const shown = status.meters.filter((m) => m.quantity > 0 || m.limit !== undefined);
   if (!shown.length) return null;
   return (
@@ -67,7 +67,7 @@ function Meters({ status }: { status: CreditsStatus }) {
               {meterQuantity(m.meter, m.quantity)}
               {m.limit !== undefined ? ` / ${meterQuantity(m.meter, m.limit)}` : ''}
               {m.cost !== undefined && status.currency
-                ? ` · ${formatCredits(m.cost, status.currency)}`
+                ? ` · ${formatCredits(m.cost, status.currency, lang)}`
                 : ''}
             </Text>
           </View>
@@ -81,11 +81,11 @@ function Meters({ status }: { status: CreditsStatus }) {
 }
 
 function Buy({ currency }: { currency: string }) {
-  const { t } = useT();
+  const { t, lang } = useT();
   const toast = useToast();
   const client = useQueryClient();
   const [typed, setTyped] = useState('');
-  const amount = toMinor(typed, currency);
+  const amount = parseCredits(typed, currency);
   const buy = useMutation({
     mutationFn: (minor: number) => api.credits.buy(minor),
     onSuccess: async (result) => {
@@ -98,14 +98,14 @@ function Buy({ currency }: { currency: string }) {
       const purchase = result.value;
       if (purchase.status === 'open' && purchase.checkoutUrl)
         toast.show({
-          message: formatCredits(purchase.amount, currency),
+          message: formatCredits(purchase.amount, currency, lang),
           action: {
             label: t('credits.checkout'),
             onPress: () => Linking.openURL(purchase.checkoutUrl as string),
           },
           durationMs: 30_000,
         });
-      else toast.show({ message: formatCredits(purchase.amount, currency), tone: 'success' });
+      else toast.show({ message: formatCredits(purchase.amount, currency, lang), tone: 'success' });
     },
     onError: (e) => toast.show({ message: errorMessage(e), tone: 'error' }),
   });
@@ -134,7 +134,7 @@ function Buy({ currency }: { currency: string }) {
 }
 
 function Ledger({ currency }: { currency: string }) {
-  const { t } = useT();
+  const { t, lang } = useT();
   const ledger = useQuery({ queryKey: ['credits', 'ledger'], queryFn: () => api.credits.ledger() });
   const items: LedgerEntry[] = ledger.data?.items ?? [];
   if (!items.length) return null;
@@ -152,7 +152,7 @@ function Ledger({ currency }: { currency: string }) {
           </View>
           <Text style={{ color: e.amount < 0 ? colors.text : colors.success }}>
             {e.amount > 0 ? '+' : ''}
-            {formatCredits(e.amount, currency)}
+            {formatCredits(e.amount, currency, lang)}
           </Text>
         </View>
       ))}
@@ -167,7 +167,7 @@ function Ledger({ currency }: { currency: string }) {
  */
 export function CreditsScreen() {
   useScreenContext({ screen: 'credits' });
-  const { t } = useT();
+  const { t, lang } = useT();
   const status = useQuery({ queryKey: ['credits'], queryFn: () => api.credits.status() });
   const s = status.data;
   const manages = !!s && 'currency' in s;
@@ -203,17 +203,17 @@ export function CreditsScreen() {
               <View className="flex-row flex-wrap gap-x-6 gap-y-1">
                 {s.balance !== undefined && (
                   <Text>
-                    {t('credits.balance')}: {formatCredits(s.balance, s.currency)}
+                    {t('credits.balance')}: {formatCredits(s.balance, s.currency, lang)}
                   </Text>
                 )}
                 {s.allowance ? (
                   <Text>
-                    {t('credits.allowance')}: {formatCredits(s.allowance, s.currency)}
+                    {t('credits.allowance')}: {formatCredits(s.allowance, s.currency, lang)}
                   </Text>
                 ) : null}
                 {s.remaining !== undefined && (
                   <Text>
-                    {t('credits.remaining')}: {formatCredits(s.remaining, s.currency)}
+                    {t('credits.remaining')}: {formatCredits(s.remaining, s.currency, lang)}
                   </Text>
                 )}
               </View>
