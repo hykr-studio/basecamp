@@ -3,6 +3,7 @@
 // integrations feature runs, iCalendar text and the telephony provider interface. Google Calendar
 // is the subpath @hykr/connectors/google-calendar. No database, policy, Nest or queue code lives here.
 export {
+  bodyKey,
   type Connector,
   type ConnectorInbound,
   checkEvent,
@@ -35,6 +36,7 @@ export {
 export {
   type HmacConnectorOptions,
   type HmacCredentials,
+  type HmacSignedParts,
   hmacConnector,
 } from './hmac-connector.js';
 export {

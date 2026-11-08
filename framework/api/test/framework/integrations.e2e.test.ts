@@ -3,7 +3,7 @@
 // egress guard at send time, and inbound webhooks verified, stored once and handled as the
 // business's system principal. The fixture's features/integrations supplies a field policy
 // (a task's due date), a write hook, an opted-out entity, an HMAC sender and handlers.
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { signWebhook, verifyWebhook } from '@hykr/connectors';
@@ -789,8 +789,8 @@ describe('inbound webhooks', () => {
   const inboundRows = async (connectionId: string) =>
     (
       await pool.query(
-        `select id, external_id, type, status, handled, error from app.integration_inbound
-          where connection_id = $1 order by received_at`,
+        `select id, external_id, sender_id, type, status, handled, error
+           from app.integration_inbound where connection_id = $1 order by received_at`,
         [connectionId],
       )
     ).rows;
@@ -865,7 +865,12 @@ describe('inbound webhooks', () => {
   it('the log shows what came in, to people who manage integrations', async () => {
     const log = await ana.call('GET', `/api/integrations/connections/${conn.id}/inbound`);
     expect(log.status).toBe(200);
-    expect(log.body[0]).toMatchObject({ type: 'task.complete', status: 'processed' });
+    // Standard Webhooks signs its ids: the sender's id is the key, nothing else is kept.
+    expect(log.body[0]).toMatchObject({
+      type: 'task.complete',
+      status: 'processed',
+      senderId: null,
+    });
     expect((await asSam('GET', `/api/integrations/connections/${conn.id}/inbound`)).status).toBe(
       403,
     );
@@ -1008,6 +1013,94 @@ describe('inbound webhooks', () => {
       const t = await ana.call('GET', `/api/tasks/${made.id}`);
       return t.body.done ? t : undefined;
     });
+  });
+
+  it('a captured request posted again under a fresh id header is still one event', async () => {
+    // fixture-sender signs the body only; its x-fixture-event header is nobody's proof.
+    const secret = 'fixture-replay-secret-0123456789abcdef';
+    const res = await ana.call('POST', '/api/integrations/connections', {
+      connector: 'fixture-sender',
+      credentials: { secret },
+    });
+    expect(res.status).toBe(201);
+    const id = res.body.value.id as string;
+    const path = res.body.value.inboundPath as string;
+    const made = await task(ana, { title: 'Signed once' });
+    const raw = JSON.stringify({ type: 'done', taskId: made.id });
+    const signature = `sha256=${createHmac('sha256', secret).update(raw).digest('hex')}`;
+    // One genuine request, then whoever saw it sends it again under ids of their own, and as is.
+    for (const event of ['ev-1', 'ev-attacker-2', 'ev-attacker-3', 'ev-1']) {
+      const r = await post(path, raw, {
+        'x-fixture-signature': signature,
+        'x-fixture-event': event,
+      });
+      expect(r.status).toBe(200);
+    }
+    const rows = await eventually(async () => {
+      const r = await inboundRows(id);
+      return r.length === 1 && r[0].status === 'processed' ? r : undefined;
+    });
+    const key = `sha256:${createHash('sha256').update(raw).digest('hex')}`;
+    expect(rows[0]).toMatchObject({ external_id: key, sender_id: 'ev-1' });
+    const runs = handled.calls.filter(
+      (c) => c.handler === 'fixture.sender-done' && c.runId === rows[0].id,
+    );
+    expect(runs).toHaveLength(1);
+    expect(await inboundRows(id)).toHaveLength(1);
+    const log = await ana.call('GET', `/api/integrations/connections/${id}/inbound`);
+    expect(log.body).toEqual([
+      expect.objectContaining({ externalId: key, senderId: 'ev-1', status: 'processed' }),
+    ]);
+    expect((await ravi.call('GET', `/api/integrations/connections/${id}/inbound`)).status).toBe(
+      404,
+    );
+  });
+
+  it('a sender that signs its id and a timestamp: its ids are keys, a fresh id or a stale request is refused', async () => {
+    const secret = 'fixture-signed-secret-0123456789abcdef';
+    const res = await ana.call('POST', '/api/integrations/connections', {
+      connector: 'fixture-signed',
+      credentials: { secret },
+    });
+    expect(res.status).toBe(201);
+    const id = res.body.value.id as string;
+    const path = res.body.value.inboundPath as string;
+    const made = await task(ana, { title: 'Signed with its id' });
+    const raw = JSON.stringify({ type: 'done', taskId: made.id });
+    const now = () => Math.floor(Date.now() / 1000);
+    const headers = (event: string, ts = now()): Record<string, string> => ({
+      'x-fixture-event': event,
+      'x-fixture-timestamp': String(ts),
+      'x-fixture-signature': `sha256=${createHmac('sha256', secret)
+        .update(`${ts}.${event}.${raw}`)
+        .digest('hex')}`,
+    });
+    const first = headers('ev-1');
+    expect((await post(path, raw, first)).status).toBe(200);
+    // The signature covers the id: under a fresh one it is not the sender's.
+    const replay = { ...first, 'x-fixture-event': 'ev-attacker-2' };
+    expect((await post(path, raw, replay)).status).toBe(401);
+    // The sender's own redelivery, signed again a moment later: the same event.
+    expect((await post(path, raw, headers('ev-1', now() + 1))).status).toBe(200);
+    // Signed six minutes ago, or with no time at all: refused.
+    expect((await post(path, raw, headers('ev-3', now() - 360))).status).toBe(401);
+    const { 'x-fixture-timestamp': _ts, ...untimed } = headers('ev-4');
+    expect((await post(path, raw, untimed)).status).toBe(401);
+    // Another signed id is another event, even with the same body.
+    expect((await post(path, raw, headers('ev-5'))).status).toBe(200);
+    const rows = await eventually(async () => {
+      const r = await inboundRows(id);
+      return r.length === 2 && r.every((x) => x.status === 'processed') ? r : undefined;
+    });
+    expect(rows.map((r) => [r.external_id, r.sender_id])).toEqual([
+      ['ev-1', null],
+      ['ev-5', null],
+    ]);
+    const runs = handled.calls.filter(
+      (c) => c.handler === 'fixture.signed-done' && rows.some((r) => r.id === c.runId),
+    );
+    expect(runs).toHaveLength(2);
+    expect((await ana.call('GET', `/api/tasks/${made.id}`)).body).toMatchObject({ done: true });
   });
 
   it('a disabled connection takes nothing; deleting one removes its log', async () => {

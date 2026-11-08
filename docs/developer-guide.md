@@ -1199,7 +1199,14 @@ with it.
   contributed as `connectors`. A business adds a connection (`POST /api/integrations/connections
   { connector, credentials? }`; credentials are checked and sealed, generated ones returned once).
   The sender posts to `/webhooks/<connector>/<connection id>`: verified with that connection's
-  credentials, each event stored once (a redelivery is a no-op) and queued. In the worker, each
+  credentials, each event stored once (a redelivery is a no-op) and queued. An event is stored
+  under its id only when the connector says its ids are signed (`inbound.signedIds`); otherwise
+  under a hash of the signed body (`bodyKey`, `sha256:<hex>`), so a captured request posted
+  again under a fresh id is still one event. The id it came with is kept as `senderId`
+  (unverified, for the log). For a sender that signs its id and a timestamp, `hmacConnector`
+  takes `idHeader`, `timestampHeader`, `signedIds: true` and `signedContent(req, { id, timestamp
+  })` (what it signs, such as `<timestamp>.<id>.<body>`); it then refuses a fresh id under an old
+  signature and a request more than `toleranceSec` (300) from now. In the worker, each
   `connectorHandlers` entry whose `on` matches runs as `systemPrincipal({ tenantId, job:
   'integrations.<connector>', runId: <stored event id> })`:
 
@@ -1222,7 +1229,8 @@ contributes: {
   `ctx.write(op, input)` is `runWrite` with an idempotency key per event, handler and call. A
   4xx refusal (another business's record is a 404) fails the event for good; other errors retry.
   `GET /api/integrations/connections/:id/inbound` is the log. A connector whose sender posts
-  no body (Google Calendar's push notices) sets `inbound.bodyless`; its `verify` reads headers.
+  no body (Google Calendar's push notices) sets `inbound.bodyless`; its `verify` reads headers,
+  and it must set `signedIds` (there is no body to key by).
 - **Server code** that calls a sender back opens a connection's credentials with
   `openConnection(db, tenantId, id)`, and makes any request to a business-given address with
   `safeRequest(url, init, outboundPolicy())`.
@@ -3248,7 +3256,8 @@ These are not built. Each has a workaround for now.
 | Webhooks for approvals and other non-entity records | Only entity events are sent (their read schema projects them). |
 | Webhook delivery order, auto-pause, alerts | Deliveries of one record can arrive out of order; an endpoint that keeps failing is not paused and nobody is told. |
 | One inbound URL per connector | Each connection has its own URL. Routing a provider's single URL by its account id is not built (decisions B10, 20). |
-| Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
+| Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. A retention period for inbound events would also have to keep their keys: a sender that signs no timestamp can have an old request posted again, and only its stored key drops it (decisions S2). |
+| Inbound senders without signed ids | Their events are keyed by the body, so two events with byte-identical bodies are one, and a batch regrouped on retry stores its events again. Sign the ids (`signedContent`, `signedIds`) to avoid both (decisions S2). |
 | The sample's supplier reports | `orders-supplier` takes only `order.fulfilled`, for an accepted order its party supplies; a supplier's acknowledgement or dispatch has no state, and nothing answers the supplier's system. An order is placed (`order.placed`) only when its customer accepts it. |
 | OAuth connectors | Business connections store credentials as given; only the calendar's per-person Google connection has an OAuth flow and token refresh (section 5.24). |
 | Other calendars (Microsoft 365, CalDAV), a calendar other than the primary one | Only Google, into each person's primary calendar. Others subscribe to their ICS feed. |
