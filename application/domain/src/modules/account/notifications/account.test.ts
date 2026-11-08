@@ -43,6 +43,9 @@ describe('the credits alerts', () => {
     expect(
       CreditsOutNotification.email?.subject(row({ cap: 'voice_seconds', level: 'pause' }), hi),
     ).toBe('वॉइस मिनट खत्म: असिस्टेंट रुका हुआ है');
+    expect(CreditsLowNotification.whatsapp?.params(row({ cap: 'embedding_tokens' }), en).what).toBe(
+      'Memory search tokens',
+    );
     // A cap the application has no words for is named as it is.
     expect(CreditsLowNotification.whatsapp?.params(row({ cap: 'pages_rendered' }), en).what).toBe(
       'pages_rendered',

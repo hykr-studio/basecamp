@@ -18,8 +18,10 @@ import {
   TenantConfigService,
 } from '@hykr/core';
 import { threadMessages, threads } from '@hykr/db';
-import { subjectOf } from '@hykr/policy';
+import { subjectKeyOf, subjectOf } from '@hykr/policy';
 import {
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   Logger,
@@ -31,8 +33,10 @@ import { ModuleRef } from '@nestjs/core';
 import { embed } from 'ai';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { TurnGate, TurnInfo, TurnOutcome } from '../../hooks.js';
+import { UsageRefused } from '../../metering.js';
 import { ModelPolicyService, ModelRefused } from '../models/model-policy.service.js';
 import { type Candidate, keepMessage, nearest, recentMessages } from './store.js';
+import { embeddingRefusal, embeddingTokens, recordEmbedding } from './usage.js';
 
 const log = new Logger('Memory');
 const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -100,6 +104,16 @@ export interface RecallRequest {
 
 type Embedded = { model: string; vector: number[] };
 
+/** How one recall's embedding is made, and whom its use is recorded for. */
+export interface EmbedOptions {
+  /** Default RECALL_TIMEOUT_MS. */
+  timeoutMs?: number;
+  /** 'user:<id>' or 'contact:<id>'. */
+  subject?: string | null;
+  channel?: string | null;
+  runId?: string | null;
+}
+
 let service: RecallService | undefined;
 
 /**
@@ -156,32 +170,44 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * The text's vector with the business's embedding model, made within `timeoutMs` (default
-   * RECALL_TIMEOUT_MS) in one try. Throws ModelRefused when the policy refuses the model, and an
-   * error when the provider fails or does not answer in time.
+   * RECALL_TIMEOUT_MS) in one try, and its tokens recorded against the business's credits.
+   * Throws ModelRefused when the policy refuses the model, UsageRefused when the business's caps
+   * refuse embeddings now (nothing is sent), and an error when the credits cannot be checked or
+   * the provider fails or does not answer in time.
    */
-  async embed(tenantId: string, text: string, timeoutMs = RECALL_TIMEOUT_MS): Promise<Embedded> {
+  async embed(tenantId: string, text: string, opts: EmbedOptions = {}): Promise<Embedded> {
+    const timeoutMs = opts.timeoutMs ?? RECALL_TIMEOUT_MS;
     const models = this.ref.get(ModelPolicyService, { strict: false });
     const { ref, model } = await models.embeddingFor(tenantId);
+    const refused = await embeddingRefusal(tenantId, ref);
+    if (refused) throw new UsageRefused(refused);
     const timeout = AbortSignal.timeout(timeoutMs);
+    let made: Awaited<ReturnType<typeof embed>>;
     try {
-      const { embedding } = await embed({
-        model,
-        value: text,
-        maxRetries: 0,
-        abortSignal: timeout,
-      });
-      return { model: ref, vector: embedding };
+      made = await embed({ model, value: text, maxRetries: 0, abortSignal: timeout });
     } catch (e) {
       if (timeout.aborted) throw new Error(`${ref} did not answer within ${timeoutMs} ms`);
       throw e;
     }
+    await recordEmbedding({
+      tenantId,
+      model: ref,
+      tokens: embeddingTokens(made.usage?.tokens, [text]),
+      source: 'memory.recall',
+      subject: opts.subject ?? null,
+      channel: opts.channel ?? null,
+      runId: opts.runId ?? null,
+    });
+    return { model: ref, vector: made.embedding };
   }
 
   /**
    * The memories nearest to the question that this principal may read now, best first. Records
    * of entities with the `memory` trait (the business's memory among them) and, for a person, what
    * they said before. `model` is null when the business has no embedding model it may use; a
-   * provider that fails or does not answer in time is a 503 (`recall_unavailable`).
+   * business whose caps refuse embeddings now is a 402 (`credits_paused`, with the rule and
+   * reason); a provider that fails or does not answer in time, or credits that cannot be checked,
+   * a 503 (`recall_unavailable`).
    */
   async recall(p: Principal, req: RecallRequest): Promise<RecallResult> {
     const tenantId = p.tenantId;
@@ -190,9 +216,17 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
     let embedded = req.embedded;
     if (!embedded) {
       try {
-        embedded = await this.embed(tenantId, req.query);
+        embedded = await this.embed(tenantId, req.query, {
+          subject: subjectKeyOf(p),
+          channel: p.channel ?? null,
+        });
       } catch (e) {
         if (e instanceof ModelRefused) return { items: [], model: null };
+        if (e instanceof UsageRefused)
+          throw new HttpException(
+            { error: 'credits_paused', rule: e.refusal.rule, reason: e.refusal.reason },
+            HttpStatus.PAYMENT_REQUIRED,
+          );
         log.warn(`Recall in business ${tenantId} failed: ${reason(e)}`);
         throw new ServiceUnavailableException({
           error: 'recall_unavailable',
@@ -313,8 +347,8 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
   /**
    * Before a chat turn: what the business and the person remember about the message, as context
    * lines (data, not instructions). Never for a draft (it goes to a customer). Recall only adds:
-   * when it cannot run (off, no embedding model, an error, a provider that does not answer within
-   * the channel's bound), the turn runs without it.
+   * when it cannot run (off, no embedding model, the business's caps, an error, a provider that
+   * does not answer within the channel's bound), the turn runs without it.
    */
   async beforeTurn(turn: TurnInfo): Promise<TurnGate | null> {
     this.sweep();
@@ -323,7 +357,12 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
     const policy = await this.policyOf(p.tenantId);
     if (!policy?.recall || policy.limit === 0) return null;
     try {
-      const embedded = await this.embed(p.tenantId, turn.message, recallTimeoutMs(turn.channel));
+      const embedded = await this.embed(p.tenantId, turn.message, {
+        timeoutMs: recallTimeoutMs(turn.channel),
+        subject: subjectKeyOf(p),
+        channel: turn.channel ?? null,
+        runId: turn.runId,
+      });
       if (policy.conversation && turn.threadId)
         this.made.set(turn.runId, { ...embedded, at: Date.now() });
       const { items } = await this.recall(p, {
@@ -339,7 +378,9 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
         context: items.map((item) => contextLine(item, entityDef(item.type)?.spec.label)),
       };
     } catch (e) {
-      if (!(e instanceof ModelRefused)) log.warn(`run=${turn.runId} recall failed: ${reason(e)}`);
+      if (e instanceof UsageRefused) log.debug(`run=${turn.runId} no recall: ${e.refusal.rule}`);
+      else if (!(e instanceof ModelRefused))
+        log.warn(`run=${turn.runId} recall failed: ${reason(e)}`);
       return null;
     }
   }

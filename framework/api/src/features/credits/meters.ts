@@ -1,5 +1,6 @@
 // What can be metered, and how credits are bought: two registries a feature or module adds to
 // through `contributes` (meters, creditPurchaseProviders). Nothing here reads the configuration.
+import { priceOf } from '@hykr/agents';
 import { createHookRegistry, MeterName } from '@hykr/contracts';
 import type { CreditsPlanResolved } from './config.js';
 
@@ -23,6 +24,12 @@ export interface MeterDef {
    * Messages pause only the variants the plan names, so codes and replies always go.
    */
   pausable?(variant: string | null | undefined, plan: CreditsPlanResolved): boolean;
+  /**
+   * The price per `per` units of a use neither the plan nor the deployment prices (by
+   * '<meter>.<variant>' or '<meter>'): embedding tokens ask the model's own price. Undefined: the
+   * use costs nothing.
+   */
+  fallbackPrice?(variant: string | null | undefined, plan: CreditsPlanResolved): number | undefined;
 }
 
 /** A meter, checked: its name and a positive `per`. */
@@ -33,7 +40,27 @@ export function defineMeter(def: MeterDef): MeterDef {
   return def;
 }
 
-/** Every meter, by name: the framework's four and any contributed. */
+/**
+ * A model's own input price per million tokens (MODEL_PROVIDERS) plus the deployment's markup,
+ * when it is in the credits currency; otherwise undefined (another currency, an unpriced or
+ * unknown model, or a registry that does not parse).
+ */
+export function modelInputPrice(
+  ref: string | null | undefined,
+  plan: Pick<CreditsPlanResolved, 'currency' | 'markupPercent'>,
+): number | undefined {
+  if (!ref || !plan.currency) return undefined;
+  let own: ReturnType<typeof priceOf>;
+  try {
+    own = priceOf(ref);
+  } catch {
+    return undefined;
+  }
+  if (!own || own.currency !== plan.currency) return undefined;
+  return own.inputPerMillion * (1 + plan.markupPercent / 100);
+}
+
+/** Every meter, by name: the framework's five and any contributed. */
 export const meters = createHookRegistry<MeterDef>('meter', (m) => defineMeter(m).name, {
   collects: 'meters',
 });
@@ -52,6 +79,16 @@ export const FrameworkMeters = {
   }),
   /** Voice session seconds, priced per minute. */
   voiceSeconds: defineMeter({ name: 'voice_seconds', unit: 'second', per: 60 }),
+  /**
+   * Tokens sent to an embedding model (memory recall and indexing); the variant is the model's
+   * ref. Unpriced, it costs the model's own input price plus the markup.
+   */
+  embeddingTokens: defineMeter({
+    name: 'embedding_tokens',
+    unit: 'token',
+    per: 1_000_000,
+    fallbackPrice: modelInputPrice,
+  }),
 } as const;
 
 /** What a purchase provider is asked to start. */

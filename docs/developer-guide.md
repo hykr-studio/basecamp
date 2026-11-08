@@ -2758,15 +2758,19 @@ Every business's use of what costs money is metered, priced and, when its plan s
 
 - **Meters.** `tokens` (a turn's input and output, the model as variant), `tool_calls` (one per
   tool a turn called), `messages` (a WhatsApp message the provider accepted, its template's
-  category as variant) and `voice_seconds` (a reported voice session). Each use is a row in
+  category as variant), `voice_seconds` (a reported voice session) and `embedding_tokens` (memory
+  recall and indexing, the embedding model as variant; section 7.7). Each use is a row in
   `app.usage_events`, added to its period's counter (`app.usage_counters`). A feature or module adds
-  a meter with `defineMeter({ name, unit, per })` (contributed as `meters`) and records with
-  `CreditsService.record({ tenantId, meter, quantity, source, ref })`; `ref` makes a retried
-  report count once. Turns without a business (Studio) are not metered.
+  a meter with `defineMeter({ name, unit, per, fallbackPrice? })` (contributed as `meters`) and
+  records with `CreditsService.record({ tenantId, meter, quantity, source, ref })`, or
+  `metering()?.record(...)` from code that must not depend on the feature; `ref` makes a retried
+  report count once. Before calling something costly, ask `metering()?.check({ tenantId, meter })`
+  and refuse when it answers. Turns without a business (Studio) are not metered.
 - **Prices** come from `CREDITS_CONFIG` (JSON): `currency`, `prices` by `<meter>` or
   `<meter>.<variant>` in credits per pricing unit (tokens per million, voice per minute),
-  `markupPercent` on a model's own `MODEL_PROVIDERS` price (used when no `tokens` price is set and
-  the currencies match), and `defaults`, the plan every business starts on. Malformed JSON stops
+  `markupPercent` on a model's own `MODEL_PROVIDERS` price (used when no `tokens` or
+  `embedding_tokens` price is set and the currencies match), and `defaults`, the plan every
+  business starts on. Malformed JSON stops
   the start. Unset, uses are metered at no cost and nothing is capped.
 - **The plan** is the settings section `credits`: `enforce`, `allowance` (credits per period),
   `period` (`day`, `week`, `month` in the business's time zone), `alertAt` (80) and `pauseAt`
@@ -2781,8 +2785,9 @@ Every business's use of what costs money is metered, priced and, when its plan s
   level; the application's notification words it. At `pauseAt` the business is paused.
 - **What a pause refuses** (402, rules `credits_exhausted`, `usage_limit_reached`,
   `credits_suspended`): assistant turns and back-office drafts (the `credits` turn hook), new voice
-  sessions (and a session's `maxSeconds` is cut to what is left), and outbound messages of a
-  category in `pauseMessages` (recorded as failed, never sent). Replies, codes, approvals, handoffs
+  sessions (and a session's `maxSeconds` is cut to what is left), outbound messages of a
+  category in `pauseMessages` (recorded as failed, never sent), and embeddings (recall answers 402,
+  a turn runs without recall, the indexer leaves rows pending). Replies, codes, approvals, handoffs
   and staff messages always go. A paused business's WhatsApp customer is handed to the team.
   One action may overshoot the cap; the wallet goes below zero by that much.
 - **The operator** is a platform operator holding `platform.credits` (section 6.6), signed in:
@@ -2843,6 +2848,13 @@ call. What survives reaches the model as context lines, which it reads as data. 
 `recall-memory` do the same on request; an `about` record the caller cannot read is a 404.
 Recall's embedding gets one try and 4 s (1.5 s on a voice turn): past that the turn runs without
 recall and the API answers 503 `recall_unavailable`, so a slow provider never holds a turn.
+
+**Credits.** Every embedding is an `embedding_tokens` use (section 7.6), checked before the provider
+is called and recorded after (`source` `memory.recall` or `memory.index`; a provider that reports no
+usage is charged a token per four characters). A business its credits refuse (paused, or its
+`embedding_tokens` limit reached) gets 402 `credits_paused` from the recall API, runs its turns
+without recall, and its index waits: pending rows are left as they are and looked at again every
+5 s, then embedded once the business may again (`docs/decisions/S4.md`).
 
 **The index.** `app.memory_index` keeps one vector per source and no text. A write hook marks every
 touched record of a trait entity (commands included, from `touched`) in the write's transaction; the
@@ -3321,7 +3333,7 @@ These are not built. Each has a workaround for now.
 | Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |
 | Buying credits | No purchase provider ships: register a `CreditPurchaseProvider` from a payment connector and call `CreditsService.settlePurchase` from its verified webhook. |
 | Credits mid-turn | A turn, a voice session or a message is checked before it starts; one may take a business past its cap. Tool calls are not refused in the middle of a turn. |
-| Metering everything | The guardrail's model calls, embeddings, WhatsApp voice-note transcription and voice sessions whose worker never reported an end are not metered. Call `CreditsService.record` from the feature. |
+| Metering everything | The guardrail's model calls, WhatsApp voice-note transcription, voice sessions whose worker never reported an end and embedding calls that fail or time out are not metered. Call `CreditsService.record` from the feature. |
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |

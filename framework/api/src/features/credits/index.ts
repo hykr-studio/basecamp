@@ -24,10 +24,10 @@ export const CreditsSweep = defineSchedule({
 });
 
 /**
- * Credits and caps: every business's tokens, tool calls, messages and voice seconds metered and
- * priced (CREDITS_CONFIG and its `credits` settings), a prepaid wallet with its ledger, alerts
- * and a pause as caps fill, an operator's override, and buying credits through a purchase
- * provider.
+ * Credits and caps: every business's tokens, tool calls, messages, voice seconds and embedding
+ * tokens metered and priced (CREDITS_CONFIG and its `credits` settings), a prepaid wallet with
+ * its ledger, alerts and a pause as caps fill, an operator's override, and buying credits through
+ * a purchase provider.
  */
 export const creditsFeature = defineFeature({
   name: 'credits',
