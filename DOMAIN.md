@@ -356,7 +356,8 @@ module sends on its own initiative is a template, declared in code:
 - **`defineNotification`:** what reaches whom, and when. `schedule: { on, at, cancelOn }`
   follows the entity events (`meeting.created`, `meeting.deleted`) and the module's own: a
   command's event implements `NamedEvent` (`eventName`, `row`) to be one. `to` names the
-  recipients (a user, a customer, a contact, or everyone with a role); `channels` is the order
+  recipients (a user, a customer, a contact, a party, or everyone whose roles in the business hold
+  a capability, its own roles included); `channels` is the order
   to try (`['push', 'whatsapp', 'email']`, `inapp` for the in-app inbox, or a delivery channel a
   feature registers); `whatsapp` (the template) is needed only when WhatsApp is one of them,
   `push` (`{ title, body, url? }`) only when push is, `inapp` (`{ title, body, url?, record? }`)
