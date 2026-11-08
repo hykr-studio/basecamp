@@ -22,6 +22,7 @@ export {
 } from './durable.js';
 export * from './models/index.js';
 export { type AgentModuleOf, mergeAgentModules, scriptConflicts, suitesFor } from './modules.js';
+export { EndWhenPaused, isPausedRefusal, pausedIn, pausedText, sayingModel } from './paused.js';
 export {
   briefForVoice,
   expectedOutcome,
@@ -29,4 +30,12 @@ export {
   noRetryAfterRefusal,
   repliesInLanguage,
 } from './scorers.js';
+export {
+  type ModelUsage,
+  type ModelUsageSink,
+  meteredModel,
+  reportModelUsage,
+  setModelUsageSink,
+  usageContext,
+} from './usage.js';
 export { AGENT_ID, agentVersion, buildInstructions, isFakeModel } from './version.js';

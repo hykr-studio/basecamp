@@ -9,8 +9,10 @@ import { fakeModel } from './fake/engine.js';
 import { platformScripts } from './fake/platform-scripts.js';
 import { FAKE_CHAT } from './models/config.js';
 import { type LanguageModel, modelRegistry, UnknownModel } from './models/registry.js';
+import { EndWhenPaused } from './paused.js';
 import { listBeforeWrite, noRetryAfterRefusal } from './scorers.js';
 import { generatedFor, type Profile } from './tools/index.js';
+import { meteredModel } from './usage.js';
 import { AGENT_ID, BUSINESS_ONLY_RULE, isFakeModel, VOICE_RULES } from './version.js';
 
 type Ctx = { requestContext?: { get(key: string): unknown } };
@@ -164,12 +166,21 @@ export function createAssistant(input: {
       },
       noRetryAfterRefusal: { scorer: noRetryAfterRefusal, sampling: { type: 'ratio', rate: 1 } },
     },
-    // The guardrail reads the person's text: it runs on the turn's model, never another one.
+    // The guardrail reads the person's text: it runs on the turn's model, never another one, and
+    // its calls are metered for the business like the turn's own. A run whose tool came back
+    // refused because the business is paused ends there, with the paused sentence.
     inputProcessors: (ctx) => [
       new UnicodeNormalizer(),
       ...(process.env.GUARDRAILS === 'on' && !isFakeModel()
-        ? [new PromptInjectionDetector({ model: modelFor(ctx), strategy: 'block', threshold: 0.8 })]
+        ? [
+            new PromptInjectionDetector({
+              model: meteredModel(modelFor(ctx), { ref: turnModel(ctx), source: 'guardrail' }, ctx),
+              strategy: 'block',
+              threshold: 0.8,
+            }),
+          ]
         : []),
+      new EndWhenPaused(),
     ],
   });
 }

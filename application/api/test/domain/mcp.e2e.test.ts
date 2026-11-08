@@ -3,7 +3,9 @@
 // module. A to-do is added at once (the to-dos' internal level, undoable in the app); an order
 // above the business's limit waits at the application's irreversible level, and the answer links
 // to the request in the app; an order moves through its states (submit, then approve, which waits
-// for the person in the app); an item's cost stays hidden from staff.
+// for the person in the app); an item's cost stays hidden from staff. Each tool says what it does
+// (the orders' cancel cannot be undone), and the to-dos' "clear done" is offered only once the
+// business switches its flag on.
 
 import {
   addMember,
@@ -167,6 +169,41 @@ describe('the sample application over MCP', () => {
       expect(fulfil.text).toContain('input.transition must be one of submit, approve, cancel');
     } finally {
       await c.close();
+    }
+  });
+
+  it('says which tools only read, and which can do what cannot be undone', async () => {
+    const c = await connectMcp(owner, 'todos:write meetings:write orders:write');
+    const notes = await c.annotations();
+    for (const read of ['todos_read', 'meetings_read', 'orders_read'])
+      expect(notes[read], read).toMatchObject({ readOnlyHint: true, destructiveHint: false });
+    // Orders are never deleted, but a cancelled one never comes back (the module marks it).
+    expect(notes.orders_write).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    // Meetings are deleted by people only, and nothing else of theirs is destructive.
+    expect(notes.meetings_write).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    await c.close();
+  });
+
+  it('offers "clear done" only once the business switches its flag on', async () => {
+    const clear = async () => {
+      const c = await connectMcp(owner, 'todos:write');
+      try {
+        return await c.call('todos_write', { action: 'clear-done-todos', input: {} });
+      } finally {
+        await c.close();
+      }
+    };
+    const off = await clear();
+    expect(off.isError).toBe(true);
+    expect(off.text).not.toContain('Not done yet');
+    await setTenantSettings(tenantId, { features: { 'todos.clear-done': true } });
+    try {
+      // The assistant's call waits for the person's approval, and so does the client's.
+      const on = await clear();
+      expect(on.isError).toBe(false);
+      expect(on.text).toContain('Not done yet');
+    } finally {
+      await setTenantSettings(tenantId, { features: null });
     }
   });
 

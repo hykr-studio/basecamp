@@ -266,6 +266,15 @@ export { runtime } from './runtime.js';
 /** What one MCP tool call answered: its text, and whether it is an error result. */
 export type McpToolOut = { text: string; isError: boolean };
 
+/** A tool's MCP annotations, as the client lists them. */
+export type McpToolAnnotations = {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+};
+
 /** An outside AI client a person connected over MCP (A1), with its tokens. */
 export interface McpConnection {
   clientId: string;
@@ -275,6 +284,8 @@ export interface McpConnection {
   scope: string;
   /** The tool names the MCP endpoint lists for this token, sorted. */
   tools(): Promise<string[]>;
+  /** Each listed tool's MCP annotations (read-only, destructive…), by name. */
+  annotations(): Promise<Record<string, McpToolAnnotations>>;
   /** Call one tool by its name (`todos_read`) over MCP. */
   call(tool: string, args: object): Promise<McpToolOut>;
   close(): Promise<void>;
@@ -376,6 +387,14 @@ export async function connectMcp(
       Object.keys(await tools())
         .map((n) => n.replace(/^app_/, ''))
         .sort(),
+    annotations: async () =>
+      Object.fromEntries(
+        Object.entries(await tools()).map(([n, t]) => [
+          n.replace(/^app_/, ''),
+          ((t as { mcp?: { annotations?: McpToolAnnotations } }).mcp?.annotations ??
+            {}) as McpToolAnnotations,
+        ]),
+      ),
     async call(tool, args) {
       const found = (await tools())[`app_${tool}`];
       if (!found?.execute) throw new Error(`No MCP tool ${tool}`);

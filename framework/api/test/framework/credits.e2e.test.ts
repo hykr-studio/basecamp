@@ -2,9 +2,12 @@
 // voice second and every embedding (memory recall and indexing, S4) metered and priced
 // (CREDITS_CONFIG); the operator's plan, override and grants; the 80% alert and the 100% pause;
 // the prepaid wallet with its ledger and purchases through a provider; and who may see and do
-// what.
-import { createHmac } from 'node:crypto';
+// what. H3: the guardrail is metered, an agent's calls stop mid-run at 100% (the run ends with
+// the paused sentence), and a purchase is settled by its gateway's signed webhook, for that
+// connection's business only.
+import { createHmac, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
+import { agentRunToken, pausedText, reportModelUsage } from '@hykr/agents';
 import { TenantConfigService } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CreditsService } from '../../dist/index.js';
@@ -24,8 +27,12 @@ import {
   APPROVAL_FROM,
   CHECKOUT_FROM,
   creditsApp,
+  GATEWAY,
   started,
 } from '../fixture/dist/features/credits/index.js';
+
+// Connections keep their credentials sealed with it; set before the app reads its configuration.
+process.env.SECRETS_KEY ||= 'test-secrets-key-0123456789abcdef0123456789';
 
 const PRICES = {
   tool_calls: 100,
@@ -152,7 +159,7 @@ let seq = 0;
 const addTask = (person: Person) => person.chat(`add credits task ${seq++}`);
 
 describe('metering, by default', () => {
-  it('prices a turn’s tokens and tool calls; nothing is capped or debited', async () => {
+  it('prices a turn’s tokens, its recall’s embedding and its tool calls; nothing is capped', async () => {
     const res = await addTask(ana);
     expect(res.status).toBe(200);
     const all = await uses(ana);
@@ -166,7 +173,8 @@ describe('metering, by default', () => {
       quantity: 4,
       cost: 0,
       source: 'memory.recall',
-      ref: null,
+      // Once per run (H3).
+      ref: `memory.recall:${res.body.runId}`,
       subject: `user:${ana.id}`,
     });
     expect(tokens).toMatchObject({ meter: 'tokens', variant: 'fake/scripted', source: 'turn' });
@@ -243,6 +251,38 @@ describe('metering, by default', () => {
     expect((await ana.chat('hello')).status).toBe(200);
     const added = (await uses(ana)).slice(before);
     expect(added.map((u) => u.meter)).toEqual(['embedding_tokens', 'tokens']);
+  });
+
+  it('the guardrail’s model calls are metered for the turn’s business', async () => {
+    await reportModelUsage({
+      tenantId: tenant[ana.name],
+      model: 'fake/scripted',
+      source: 'guardrail',
+      inputTokens: 300,
+      outputTokens: 20,
+      subject: `user:${ana.id}`,
+      runId: 'guard-run-1',
+      channel: 'app',
+    });
+    const guarded = (await uses(ana)).filter((u) => u.source === 'guardrail');
+    expect(guarded).toEqual([
+      expect.objectContaining({
+        meter: 'tokens',
+        variant: 'fake/scripted',
+        quantity: 320,
+        cost: Math.ceil((320 * PRICES.tokens) / 1_000_000),
+        subject: `user:${ana.id}`,
+      }),
+    ]);
+    // Nothing for a call without a business.
+    await reportModelUsage({
+      tenantId: '',
+      model: 'fake/scripted',
+      source: 'guardrail',
+      inputTokens: 1,
+      outputTokens: 1,
+    });
+    expect((await uses(ana)).filter((u) => u.source === 'guardrail')).toHaveLength(1);
   });
 });
 
@@ -393,7 +433,10 @@ describe('the 80% alert and the 100% pause', () => {
 
 describe('the wallet', () => {
   it('an instant purchase tops it up; turns run again, debited past the allowance', async () => {
-    const bought = await lee.call('POST', '/api/credits/purchases', { amount: 5000 });
+    const bought = await lee.call('POST', '/api/credits/purchases', {
+      amount: 5000,
+      provider: 'fixture-pay',
+    });
     expect(bought.status).toBe(201);
     expect(bought.body.status).toBe('done');
     expect(bought.body.value).toMatchObject({
@@ -424,17 +467,31 @@ describe('the wallet', () => {
   });
 
   it('a checkout opens, and its provider’s confirmation settles it once', async () => {
-    const bought = await lee.call('POST', '/api/credits/purchases', { amount: CHECKOUT_FROM });
+    const bought = await lee.call('POST', '/api/credits/purchases', {
+      amount: CHECKOUT_FROM,
+      provider: 'fixture-pay',
+    });
     const purchase = bought.body.value;
     expect(purchase).toMatchObject({
       status: 'open',
       checkoutUrl: `https://pay.example.test/${purchase.id}`,
     });
     const credits = server.app?.get(CreditsService, { strict: false }) as CreditsService;
-    const paid = await credits.settlePurchase(purchase.id, { status: 'paid', ref: 'pay-1' });
+    const of = { tenantId: tenant[lee.name], provider: 'fixture-pay', purchaseId: purchase.id };
+    // Only its own business and provider settle it: anyone else's is not found.
+    for (const wrong of [
+      { ...of, tenantId: tenant[ravi.name] },
+      { ...of, provider: GATEWAY },
+    ])
+      expect(
+        await credits
+          .settlePurchase(wrong, { status: 'paid' })
+          .catch((e: { getStatus(): number }) => e.getStatus()),
+      ).toBe(404);
+    const paid = await credits.settlePurchase(of, { status: 'paid', ref: 'pay-1' });
     expect(paid).toMatchObject({ status: 'paid', checkoutUrl: null });
     // Settled twice: nothing moves again.
-    await credits.settlePurchase(purchase.id, { status: 'paid', ref: 'pay-1' });
+    await credits.settlePurchase(of, { status: 'paid', ref: 'pay-1' });
     const topups = (await ledgerOf(lee)).filter((e) => e.kind === 'topup');
     expect(topups.map((e) => e.amount)).toEqual([5000, CHECKOUT_FROM]);
     expect((await lee.call('GET', `/api/credits/purchases/${purchase.id}`)).body.status).toBe(
@@ -450,11 +507,18 @@ describe('the wallet', () => {
 
   it('a failed payment moves nothing', async () => {
     const before = await ledgerOf(lee);
-    const { id } = (await lee.call('POST', '/api/credits/purchases', { amount: CHECKOUT_FROM + 1 }))
-      .body.value;
+    const { id } = (
+      await lee.call('POST', '/api/credits/purchases', {
+        amount: CHECKOUT_FROM + 1,
+        provider: 'fixture-pay',
+      })
+    ).body.value;
     const credits = server.app?.get(CreditsService, { strict: false }) as CreditsService;
     expect(
-      await credits.settlePurchase(id, { status: 'failed', reason: 'declined' }),
+      await credits.settlePurchase(
+        { tenantId: tenant[lee.name], provider: 'fixture-pay', purchaseId: id },
+        { status: 'failed', reason: 'declined' },
+      ),
     ).toMatchObject({
       status: 'failed',
       reason: 'declined',
@@ -463,7 +527,10 @@ describe('the wallet', () => {
   });
 
   it('a large purchase waits for an approval, audited, and starts once approved', async () => {
-    const parked = await lee.call('POST', '/api/credits/purchases', { amount: APPROVAL_FROM });
+    const parked = await lee.call('POST', '/api/credits/purchases', {
+      amount: APPROVAL_FROM,
+      provider: 'fixture-pay',
+    });
     expect(parked.body.status).toBe('needs_approval');
     const approvalId = parked.body.approval.id;
     const { rows } = await pool.query(
@@ -514,7 +581,10 @@ describe('the wallet', () => {
 
 describe('who may see and do what', () => {
   it('staff cannot buy; the refusal is audited', async () => {
-    const res = await inLee(sam)('POST', '/api/credits/purchases', { amount: 100 });
+    const res = await inLee(sam)('POST', '/api/credits/purchases', {
+      amount: 100,
+      provider: 'fixture-pay',
+    });
     expect(res.status).toBe(403);
     expect(res.body.rule).toBe('credits_manage');
     const { rows } = await pool.query(
@@ -979,5 +1049,294 @@ describe("the business's own roles say who is alerted (X1)", () => {
     });
     expect(mail).toBeTruthy();
     expect(await mailTo(kai.email)).toEqual([]);
+  });
+});
+
+describe('a run that crosses the cap in the middle (H3)', () => {
+  const pia = new Person('Pia Credits'); // on credits; report pages cost the most
+  const PLAN = { enforce: true, prices: { tokens: 0, tool_calls: 0, report_pages: 600 } };
+
+  const tasksTitled = async (title: string) =>
+    (
+      await pool.query('select id from app.fixture_tasks where tenant_id = $1 and title = $2', [
+        tenant[pia.name],
+        title,
+      ])
+    ).rows;
+
+  /** A running run of one of Pia's agents, made by hand: what its token reaches. */
+  async function runningRun(agentId: string) {
+    const runId = randomUUID().replaceAll('-', '');
+    await pool.query(
+      `insert into app.agent_runs (tenant_id, agent_id, run_id, trigger_kind, dedupe, status, queues)
+       values ($1, $2, $3, 'manual', $4, 'running', 'test-none')`,
+      [tenant[pia.name], agentId, runId, `test:${runId}`],
+    );
+    return runId;
+  }
+
+  const asRun = async (runId: string, method: string, path: string) => {
+    const res = await fetch(`${server.base}${path}`, {
+      method,
+      headers: { 'x-agent-run': agentRunToken(runId), 'x-run-id': runId },
+    });
+    const text = await res.text();
+    return { status: res.status, body: text ? JSON.parse(text) : null };
+  };
+
+  let agentId = '';
+
+  beforeAll(async () => {
+    await pia.signUp();
+    tenant[pia.name] = (await me(pia)).tenantId;
+    // 1,000 credits: two report pages (1,200) take the business past its cap.
+    expect((await setPlan(pia, { ...PLAN, allowance: 1000 })).status).toBe(200);
+    const made = await pia.call('POST', '/api/agents', {
+      name: 'Reporter',
+      instructions: 'render 2 report pages then add Agent follow-up',
+      scope: { tools: ['render-report', 'create-task', 'list-tasks'] },
+    });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    agentId = made.body.value.id;
+  });
+
+  it('a turn whose first call takes the business past 100% ends with the paused sentence', async () => {
+    const res = await pia.chat('render 2 report pages then add Pia follow-up');
+    expect(res.status).toBe(200);
+    expect(res.body.reply).toBe(pausedText('en'));
+    expect(
+      res.body.toolCalls.map((c: { tool: string; outcome: string }) => `${c.tool}:${c.outcome}`),
+    ).toEqual(['render-report:done', 'create-task:refused']);
+    // The second call never reached the write: no task, and nothing more was spent on it.
+    expect(await tasksTitled('Pia follow-up')).toEqual([]);
+    const pages = (await uses(pia)).filter((u) => u.meter === 'report_pages');
+    expect(pages).toEqual([
+      expect.objectContaining({ quantity: 2, cost: 1200, source: 'credit_checks.render' }),
+    ]);
+    const status = (await pia.call('GET', '/api/credits')).body;
+    expect(status.paused).toMatchObject({ rule: 'credits_exhausted' });
+    // The next turn is refused before it starts.
+    const next = await pia.chat('render 1 report page then add Another');
+    expect(next.status).toBe(402);
+    expect(next.body).toMatchObject({ error: 'turn_refused', rule: 'credits_exhausted' });
+  });
+
+  it('while paused, the assistant’s and an agent run’s calls are refused with 402', async () => {
+    const assistant = await asAssistant(`user:${pia.id}`, { 'x-channel': 'app' })(
+      'GET',
+      '/api/tasks',
+    );
+    expect(assistant.status).toBe(402);
+    expect(assistant.body).toMatchObject({ error: 'credits_paused', rule: 'credits_exhausted' });
+    const runId = await runningRun(agentId);
+    const run = await asRun(runId, 'GET', '/api/tasks');
+    expect(run.status).toBe(402);
+    expect(run.body).toMatchObject({ error: 'credits_paused' });
+    // The person still works in the app: only agents are stopped.
+    expect((await pia.call('GET', '/api/tasks')).status).toBe(200);
+    // Another business's assistant is not.
+    expect(
+      (await asAssistant(`user:${ana.id}`, { 'x-channel': 'app' })('GET', '/api/tasks')).status,
+    ).toBe(200);
+    // The operator's `run` lets them through again.
+    const until = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await operator('PUT', `/${tenant[pia.name]}/override`, {
+      override: { mode: 'run', until, reason: 'support case' },
+    });
+    expect(
+      (await asAssistant(`user:${pia.id}`, { 'x-channel': 'app' })('GET', '/api/tasks')).status,
+    ).toBe(200);
+    expect((await asRun(runId, 'GET', '/api/tasks')).status).toBe(200);
+    await operator('PUT', `/${tenant[pia.name]}/override`, { override: null });
+    expect((await asRun(runId, 'GET', '/api/tasks')).status).toBe(402);
+  });
+
+  it('an agent’s run that crosses the cap stops there, with the paused sentence in its log', async () => {
+    // 2,000 credits: under the cap when the run starts (the 200 the first turn overshot is still
+    // owed by the wallet: 1,200 of 1,800), and past it after its render.
+    expect((await setPlan(pia, { ...PLAN, allowance: 2000 })).status).toBe(200);
+    expect((await pia.call('GET', '/api/credits')).body).toMatchObject({
+      paused: null,
+      usedPercent: 66.7,
+      balance: -200,
+    });
+    const ran = await pia.call('POST', `/api/agents/${agentId}/run`, {});
+    expect(ran.status, JSON.stringify(ran.body)).toBe(200);
+    const id = ran.body.value.id as string;
+    const run = await eventually(async () => {
+      const r = await pia.call('GET', `/api/agent-runs/${id}`);
+      return ['done', 'waiting', 'failed', 'refused'].includes(r.body?.status) ? r.body : undefined;
+    }, 20_000);
+    expect(run.status).toBe('done');
+    expect(run.reply).toBe(pausedText('en'));
+    expect(
+      run.toolCalls.map((c: { tool: string; outcome: string }) => `${c.tool}:${c.outcome}`),
+    ).toEqual(['render-report:done', 'create-task:refused']);
+    expect(await tasksTitled('Agent follow-up')).toEqual([]);
+    expect((await pia.call('GET', '/api/credits')).body.paused).toMatchObject({
+      rule: 'credits_exhausted',
+    });
+  });
+});
+
+describe('a purchase its gateway confirms by webhook (H3)', () => {
+  const SECRET = 'fixture-gateway-secret-0123456789abcdef';
+  const OTHER = 'fixture-gateway-other-0123456789abcdef';
+  let leePath = '';
+  let raviPath = '';
+
+  const post = (path: string, body: object, secret: string, event = `ev-${randomUUID()}`) => {
+    const raw = JSON.stringify(body);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signed = `${timestamp}.${event}.${raw}`;
+    const signature = `sha256=${createHmac('sha256', secret).update(signed).digest('hex')}`;
+    return fetch(`${server.base}${path}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-gateway-signature': signature,
+        'x-gateway-event': event,
+        'x-gateway-timestamp': timestamp,
+      },
+      body: raw,
+    });
+  };
+
+  const buy = async (amount: number) => {
+    const res = await lee.call('POST', '/api/credits/purchases', { amount, provider: GATEWAY });
+    expect(res.status).toBe(201);
+    return res.body.value as { id: string; status: string; checkoutUrl: string | null };
+  };
+
+  const purchaseOf = async (id: string) =>
+    (await pool.query('select status, provider_ref from app.credit_purchases where id = $1', [id]))
+      .rows[0];
+
+  const topupsFor = async (id: string) =>
+    (
+      await pool.query(
+        `select amount::int from app.credit_ledger where tenant_id = $1 and kind = 'topup' and ref = $2`,
+        [tenant[lee.name], id],
+      )
+    ).rows;
+
+  const inboundOf = async (event: string) =>
+    (
+      await pool.query(
+        'select status, error, handled from app.integration_inbound where external_id = $1',
+        [event],
+      )
+    ).rows;
+
+  beforeAll(async () => {
+    const mine = await lee.call('POST', '/api/integrations/connections', {
+      connector: GATEWAY,
+      label: 'Our gateway',
+      credentials: { secret: SECRET },
+    });
+    expect(mine.status, JSON.stringify(mine.body)).toBe(201);
+    leePath = mine.body.value.inboundPath;
+    const theirs = await ravi.call('POST', '/api/integrations/connections', {
+      connector: GATEWAY,
+      credentials: { secret: OTHER },
+    });
+    expect(theirs.status, JSON.stringify(theirs.body)).toBe(201);
+    raviPath = theirs.body.value.inboundPath;
+  });
+
+  it('opens a checkout; the signed webhook tops the wallet up once, however often it comes', async () => {
+    const purchase = await buy(2000);
+    expect(purchase).toMatchObject({
+      status: 'open',
+      checkoutUrl: `https://gateway.example.test/pay/${purchase.id}`,
+    });
+    const body = { type: 'payment.succeeded', purchaseId: purchase.id, ref: 'gw-pay-1' };
+    const event = `ev-${randomUUID()}`;
+    expect((await post(leePath, body, SECRET, event)).status).toBe(200);
+    // The same delivery again (the gateway retries): stored once.
+    expect((await post(leePath, body, SECRET, event)).status).toBe(200);
+    await eventually(async () =>
+      (await purchaseOf(purchase.id))?.status === 'paid' ? true : undefined,
+    );
+    expect(await purchaseOf(purchase.id)).toEqual({ status: 'paid', provider_ref: 'gw-pay-1' });
+    expect(await inboundOf(event)).toEqual([
+      { status: 'processed', error: null, handled: { 'credit-checks.settle': 'done' } },
+    ]);
+    // Another event for the same purchase (a second notice): settled already, nothing moves.
+    const again = `ev-${randomUUID()}`;
+    expect((await post(leePath, body, SECRET, again)).status).toBe(200);
+    await eventually(async () =>
+      (await inboundOf(again))[0]?.status === 'processed' ? true : undefined,
+    );
+    expect(await topupsFor(purchase.id)).toEqual([{ amount: 2000 }]);
+    const { rows } = await pool.query(
+      `select actor_kind, actor_id from audit.events where action = 'credits.purchase.settle'
+       and resource_id = $1`,
+      [purchase.id],
+    );
+    expect(rows).toEqual([{ actor_kind: 'system', actor_id: 'credits.purchase' }]);
+  });
+
+  it('a failed payment moves nothing', async () => {
+    const purchase = await buy(2100);
+    const event = `ev-${randomUUID()}`;
+    await post(leePath, { type: 'payment.failed', purchaseId: purchase.id }, SECRET, event);
+    await eventually(async () =>
+      (await purchaseOf(purchase.id))?.status === 'failed' ? true : undefined,
+    );
+    expect(await topupsFor(purchase.id)).toEqual([]);
+  });
+
+  it('a bad signature is 401, and nothing is stored', async () => {
+    const purchase = await buy(2200);
+    const event = `ev-${randomUUID()}`;
+    const res = await post(
+      leePath,
+      { type: 'payment.succeeded', purchaseId: purchase.id },
+      'not-the-secret-0123456789abcdef',
+      event,
+    );
+    expect(res.status).toBe(401);
+    expect(await inboundOf(event)).toEqual([]);
+    expect((await purchaseOf(purchase.id)).status).toBe('open');
+  });
+
+  it('another business’s connection cannot settle this business’s purchase', async () => {
+    const purchase = await buy(2300);
+    const before = await ledgerOf(lee);
+    const event = `ev-${randomUUID()}`;
+    // Ravi's own connection, correctly signed with Ravi's secret, naming Lee's purchase.
+    const res = await post(
+      raviPath,
+      { type: 'payment.succeeded', purchaseId: purchase.id, ref: 'stolen' },
+      OTHER,
+      event,
+    );
+    expect(res.status).toBe(200);
+    const [row] = await eventually(async () => {
+      const rows = await inboundOf(event);
+      return rows[0]?.status === 'failed' ? rows : undefined;
+    });
+    expect(row.error).toContain('No such purchase');
+    expect(await purchaseOf(purchase.id)).toEqual({
+      status: 'open',
+      provider_ref: `gw-${purchase.id}`,
+    });
+    expect(await ledgerOf(lee)).toEqual(before);
+    expect((await ledgerOf(ravi)).filter((e) => e.kind === 'topup')).toEqual([]);
+  });
+
+  it('a purchase made through another provider is not the gateway’s to settle', async () => {
+    const res = await lee.call('POST', '/api/credits/purchases', {
+      amount: CHECKOUT_FROM + 2,
+      provider: 'fixture-pay',
+    });
+    const purchase = res.body.value as { id: string };
+    const event = `ev-${randomUUID()}`;
+    await post(leePath, { type: 'payment.succeeded', purchaseId: purchase.id }, SECRET, event);
+    await eventually(async () =>
+      (await inboundOf(event))[0]?.status === 'failed' ? true : undefined,
+    );
+    expect((await purchaseOf(purchase.id)).status).toBe('open');
   });
 });

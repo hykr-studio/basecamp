@@ -68,7 +68,9 @@ export class McpController {
       extra: { userId: grant.userId, tenantId: grant.tenantId, sub: grant.userId },
     };
     const url = new URL(req.originalUrl, 'http://localhost');
-    await this.servers.for(grant.scopes).startHTTP({ url, httpPath: MCP_PATH, req, res });
+    // The tools of what the business has switched off are not listed (A11, fail closed).
+    const server = await this.servers.for(grant.scopes, grant.tenantId);
+    await server.startHTTP({ url, httpPath: MCP_PATH, req, res });
   }
 }
 

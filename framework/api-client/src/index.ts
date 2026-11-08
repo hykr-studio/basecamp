@@ -120,6 +120,7 @@ import {
   type SettingsPatch,
   type SettingsSectionView,
   type SlaListInput,
+  type SlaPage,
   type SlaTimer,
   StartImportSpec,
   type Summary,
@@ -929,11 +930,12 @@ export function createApiClient(opts: ApiClientOptions) {
     sla: {
       of: (plural: string, id: string) =>
         call<SlaTimer[]>('GET', `/api/sla/${plural}/${encodeURIComponent(id)}`),
+      /** One page, earliest due first; pass its `nextCursor` as `cursor` for the next. */
       list: (q: SlaListInput = {}) => {
         const params = new URLSearchParams();
         for (const [k, v] of Object.entries(q)) if (v !== undefined) params.set(k, String(v));
         const qs = params.toString();
-        return call<SlaTimer[]>('GET', `/api/sla${qs ? `?${qs}` : ''}`);
+        return call<SlaPage>('GET', `/api/sla${qs ? `?${qs}` : ''}`);
       },
     },
     /** The revisions of a versioned record's series, oldest first (people only). */

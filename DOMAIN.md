@@ -530,7 +530,10 @@ From the contracts declaration alone:
   module (`<module>_read`, `<module>_write`), scopes per module that the API enforces on every
   route, a parked write answered with its `/approvals/<id>` link in the app, and the person's
   connections (`/api/mcp/connections`, the app's `connectionsPlugin`). The modules give the scopes
-  and the tools; the deployment gives the addresses (`MCP_URL`, `APP_URL`).
+  and the tools; the deployment gives the addresses (`MCP_URL`, `APP_URL`). Each tool says whether
+  it only reads or can do what cannot be undone (MCP annotations): a module marks a command or a
+  transition that cannot be undone with `destructive: true` (a command's `traits`; the sample's
+  order `cancel` and to-dos' clear-done), and a business's feature flags take tools away.
 - Exporting a business's data (`POST /api/exports`, `data.export`, owners by default): a job that
   reads every entity as the person who asked (their access and hidden fields) and keeps one zip of
   JSON and CSV files on the job; a module adds data no entity serves as a `dataExportSources`

@@ -1,7 +1,9 @@
 import { CreditsManageCapability, CreditsViewCapability, reserveRoutes } from '@hykr/contracts';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { defineQueue, defineSchedule } from '../../queues/define.js';
 import { defineFeature } from '../feature.js';
 import { OperatorGuard } from '../platform/operators.js';
+import { CreditsAgentInterceptor } from './agent-guard.js';
 import { CreditsController } from './credits.controller.js';
 import { CreditsService } from './credits.service.js';
 import { FrameworkMeters } from './meters.js';
@@ -24,15 +26,19 @@ export const CreditsSweep = defineSchedule({
 });
 
 /**
- * Credits and caps: every business's tokens, tool calls, messages, voice seconds and embedding
- * tokens metered and priced (CREDITS_CONFIG and its `credits` settings), a prepaid wallet with
- * its ledger, alerts and a pause as caps fill, an operator's override, and buying credits through
- * a purchase provider.
+ * Credits and caps: every business's tokens (turns and the guardrail), tool calls, messages,
+ * voice seconds and embedding tokens metered and priced (CREDITS_CONFIG and its `credits`
+ * settings), a prepaid wallet with its ledger, alerts and a pause as caps fill (an agent's calls
+ * stop mid-run), an operator's override, and buying credits through a purchase provider.
  */
 export const creditsFeature = defineFeature({
   name: 'credits',
   controllers: [CreditsController, CreditsOperatorController],
-  providers: [CreditsService, OperatorGuard],
+  providers: [
+    CreditsService,
+    OperatorGuard,
+    { provide: APP_INTERCEPTOR, useClass: CreditsAgentInterceptor },
+  ],
   exports: [CreditsService],
   contributes: {
     capabilities: [CreditsViewCapability, CreditsManageCapability],
@@ -43,6 +49,7 @@ export const creditsFeature = defineFeature({
   },
 });
 
+export { CreditsAgentInterceptor, creditsPaused } from './agent-guard.js';
 export { activeOverride, CreditsConfig, CreditsConfigError, creditsConfig } from './config.js';
 export { CreditsService, CreditsThreshold } from './credits.service.js';
 export {
