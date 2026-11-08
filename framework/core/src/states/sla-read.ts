@@ -137,7 +137,7 @@ async function reachOf(def: AnyEntityDef, p: Principal): Promise<SQL | undefined
  */
 export const SLA_BY_RECORD = 1_000;
 
-interface Branch {
+export interface SlaBranch {
   def: AnyEntityDef;
   /** The entity's list WHERE for the reader. */
   where: SQL;
@@ -151,7 +151,7 @@ interface Branch {
  * key: a semi-join would let a misestimate (a new business, fresh rows) pick a nested loop that
  * scans every record in reach for every timer, seconds at 20,000 timers.
  */
-function reachSql(branch: Branch): SQL {
+export function reachSql(branch: SlaBranch): SQL {
   if (branch.ids) return sql`${slaTimers.resourceId} = any(${sql.param(branch.ids)}::text[])`;
   const idCol = (getTableColumns(branch.def.table) as Record<string, Column>).id;
   return sql`exists (select 1 from ${branch.def.table} where ${idCol} = ${slaTimers.resourceId} and ${branch.where} offset 0)`;
@@ -164,7 +164,7 @@ function reachSql(branch: Branch): SQL {
 async function statesSeen(
   conn: Conn,
   p: Principal,
-  branches: ReadonlyMap<string, Branch>,
+  branches: ReadonlyMap<string, SlaBranch>,
   timers: readonly TimerRow[],
 ): Promise<Set<string>> {
   const seen = new Set<string>();
@@ -201,7 +201,7 @@ async function statesSeen(
 export async function listSlaTimers(conn: Conn, p: Principal, q: SlaQuery): Promise<SlaPage> {
   const tenantId = tenantOf(p);
   const after = q.cursor ? decodeSlaCursor(q.cursor) : undefined;
-  const branches = new Map<string, Branch>();
+  const branches = new Map<string, SlaBranch>();
   for (const def of entityDefs()) {
     if (!statesOf(def.spec) || (q.resourceType && def.name !== q.resourceType)) continue;
     if (!clocksServed(def, p) || stateFieldHidden(def, p)) continue;
@@ -209,7 +209,7 @@ export async function listSlaTimers(conn: Conn, p: Principal, q: SlaQuery): Prom
     if (!where) continue;
     const idCol = (getTableColumns(def.table) as Record<string, Column>).id;
     const few = (await conn
-      .select({ id: idCol })
+      .select({ id: sql<string>`${idCol}` })
       .from(def.table as Table)
       .where(where)
       .limit(SLA_BY_RECORD + 1)) as { id: unknown }[];

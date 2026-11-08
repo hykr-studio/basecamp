@@ -1,9 +1,19 @@
-// Who is served an entity's SLA clocks at all, and the list's keyset cursor, with no database:
-// the reach itself is SQL, tested end to end (framework/api/test/framework/sla.e2e.test.ts).
+// Who is served an entity's SLA clocks at all, the SQL each branch's reach takes, and the list's
+// keyset cursor, with no database: the reach itself is tested end to end
+// (framework/api/test/framework/sla.e2e.test.ts).
 import { type EntitySpec, type Expose, entitySpec, type Principal } from '@hykr/contracts';
+import { PgDialect, pgSchema, text } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { clocksServed, decodeSlaCursor, encodeSlaCursor, stateFieldHidden } from './sla-read.js';
+import { defineEntity } from '../entity/define-entity.js';
+import { listWhere } from '../query/aggregate.js';
+import {
+  clocksServed,
+  decodeSlaCursor,
+  encodeSlaCursor,
+  reachSql,
+  stateFieldHidden,
+} from './sla-read.js';
 
 const label = (en: string) => ({ en, hi: en, te: en });
 const Row = z.object({ id: z.string(), title: z.string(), stage: z.string().optional() });
@@ -15,7 +25,7 @@ const specOf = (get: Expose, traits: EntitySpec['traits'] = {}) =>
     description: 'Records with a clock.',
     schemas: { read: Row, create: Row.omit({ id: true }), update: Row.partial() },
     list: { filterable: {}, sortable: [], defaultSort: [], pageSize: { default: 20, max: 100 } },
-    expose: { get },
+    expose: { list: 'all', get, create: 'all', update: 'all', delete: 'all' },
     traits: {
       states: {
         field: 'stage',
@@ -61,6 +71,40 @@ describe('whose clocks are served', () => {
     const other = specOf('all', { fieldPolicy: { title: 'clocked.title.read' } });
     expect(stateFieldHidden({ spec: other }, person)).toBe(false);
     expect(stateFieldHidden({ spec: specOf('all') }, person)).toBe(false);
+  });
+});
+
+describe("a branch's reach", () => {
+  const rows = pgSchema('app').table('clocked_rows', {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull(),
+    ownerId: text('owner_id').notNull(),
+    title: text('title').notNull(),
+    stage: text('stage').notNull(),
+  });
+  const def = defineEntity(specOf('all'), {
+    table: rows,
+    owner: (t) => t.ownerId,
+    access: { read: { staff: 'own' }, write: { staff: 'own' } },
+  });
+  const render = (q: ReturnType<typeof reachSql>) => new PgDialect().sqlToQuery(q);
+
+  it('few records in reach: their timers by record, one array parameter', async () => {
+    const where = await listWhere(def, person, { filters: [] });
+    const q = render(reachSql({ def, where, ids: ['r1', 'r2'] }));
+    expect(q.sql).toBe('"app"."sla_timers"."resource_id" = any($1::text[])');
+    expect(q.params).toEqual([['r1', 'r2']]);
+  });
+
+  it("many: a fenced probe of the record per timer, under the entity's own list scope", async () => {
+    const where = await listWhere(def, person, { filters: [] });
+    const q = render(reachSql({ def, where }));
+    expect(q.sql).toBe(
+      'exists (select 1 from "app"."clocked_rows" where "app"."clocked_rows"."id" = ' +
+        '"app"."sla_timers"."resource_id" and ("app"."clocked_rows"."tenant_id" = $1 and ' +
+        '"app"."clocked_rows"."owner_id" = $2) offset 0)',
+    );
+    expect(q.params).toEqual(['t1', 'ana']);
   });
 });
 
