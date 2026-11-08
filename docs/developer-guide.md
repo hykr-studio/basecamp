@@ -1985,8 +1985,13 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
   reached by the person and the privacy team. It holds `manifest.json` and a JSON file per part:
   the account, memberships, customer records, contacts, consents and messages, threads and their
   messages, saved pages, approvals asked, the activity audit names them in, their assistant runs,
+  the outside clients (MCP) they allowed here (`mcp-connections`: the client, its scopes, when),
   `records/<plural>` (each declared entity's records, **personal fields only**, with ids and dates),
-  `features/<kind>` (every export contributor) and their earlier requests.
+  `features/<kind>` (every export contributor) and their earlier requests. Among the features'
+  parts: `calendarConnections`, `calendarEvents`, `calendarFeeds` and `calendarInvites` (never
+  a sealed token), `calls` (the calls they were on: as the member, or by their contact's number),
+  `acceptances` (their evidence, in full) and `otpChallenges` (the codes sent to them, never a
+  code's hash). Stored webhook bodies and inbound payloads are not in a copy (section 14).
 - **Erasure** is one transaction, through `runWrite` as the system principal (audited
   `privacy.erase` and `privacy.erased`): declared records deleted, anonymised or counted as kept;
   every erasure contributor (files, comments, memory, documents, jobs, parties, push, inbox,
@@ -3323,6 +3328,7 @@ These are not built. Each has a workaround for now.
 | Retention of the later features' logs | Webhook deliveries, attempts and inbound events, the call log and calendar invites have no retention target: they stay until erasure, or until their endpoint or connection is deleted (`docs/decisions/H4.md`). |
 | Approvals naming an erased person | An approval someone else's assistant left waiting (an invite to the person, a call to their number) keeps their email or number in its summary and input until it is decided or expires. |
 | Inbound payloads in a sender's own shape | Erasure nulls values that are the person's email or number and empties events whose handler wrote an erased record. A name, or a number written another way, stays until a connector gives its own redactor. |
+| Webhook payloads in a person's copy | A copy holds the person's records but none of the integration bus's own rows: stored delivery bodies and inbound payloads that mention them are not in it. The team reads them in the delivery log (`GET /api/integrations/endpoints/:id/deliveries`, `…/connections/:id/inbound`). |
 | A team filing's request id on its approval | A privacy request the team files that waits for an approval names a provisional request id on the approval (`resource_id`); the request gets its own id when the approval runs it. Find it by its person (`GET /api/privacy/requests`). |
 | A business's privacy contact before it sets one | Until the privacy team sets `grievanceContact` (the Privacy screen, `PATCH /api/privacy/settings`), the register and WhatsApp's HELP show the framework's placeholder contact. Nothing asks a new business for it. |
 | Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
