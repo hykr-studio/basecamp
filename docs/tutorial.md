@@ -14,7 +14,7 @@ Every step below comes from an implementation that was built and tested against 
 
 | Layer | What you add | File |
 |---|---|---|
-| Contracts | `VisitSpec`, `ConfirmVisitSpec`, `CancelVisitSpec`, `visitsSpec` | `application/domain/src/modules/visits/contracts/` |
+| Contracts | `VisitSpec`, `ConfirmVisitSpec`, `CancelVisitSpec`, the capability `ManageVisits`, `visitsSpec` | `application/domain/src/modules/visits/contracts/` |
 | Database | the `app.visits` table and its migration | `application/domain/src/modules/visits/db/schema.ts`, `application/domain/drizzle/<next number>_site_visits.sql` |
 | API | `Visit` (`defineEntity`), `ConfirmVisit` and `CancelVisit` (`defineCommand`), `VisitsModule` | `application/domain/src/modules/visits/server/` |
 | Views | `visit.list`, `visit.card` | `application/domain/src/modules/visits/views/` |
