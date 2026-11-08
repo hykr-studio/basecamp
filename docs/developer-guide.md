@@ -2,7 +2,7 @@
 
 **Basecamp is the agentic development stack for full-stack applications.** This guide is for developers who build a business on it. It covers how the pieces fit, where your code goes, the rules the framework enforces, and how to test and ship a feature.
 
-To learn by doing, start with a tutorial: [Build a new application](new-application.md) builds a new product from scratch, and [Build a feature end to end: site visits](tutorial.md) adds one feature to the sample through every layer. Both use tested code. Section 5 of this guide is the reference for the same steps.
+To learn by doing, start with a tutorial: [Build a new application](new-application.md) builds a new product from scratch, and [Build a feature end to end: site visits](tutorial.md) adds one feature to the sample through every layer. Both use tested code. Section 5 of this guide is the reference for the same steps, and section 10 has a short recipe for each primitive. [Working on modules in parallel](modules.md) is the procedure when several people build modules at once.
 
 Everything here describes the code as it is in this repository. File paths are relative to the repository root. The framework lives in `framework/` as `@hykr/*` packages; the application built on it, the sample domain, lives in `application/`. If this guide and the code disagree, the code wins. Please fix the guide when that happens.
 
@@ -13,14 +13,14 @@ Everything here describes the code as it is in this repository. File paths are r
 You declare your business once, in a typed spec: its records (entities), its multi-step actions (commands), who may do what, and what needs a person's approval. The framework builds the rest from that spec:
 
 - REST routes, with validation and a list grammar (filters, search, sort, keyset pages).
-- Tools for the assistant (`list-*`, `get-*`, `create-*`, `update-*`, `delete-*`, and one per command).
+- Tools for the assistant (`list-*`, `summarize-*`, `get-*`, `create-*`, `update-*`, `delete-*`, `transition-*` for a record with states, and one per command), and the same over MCP for outside AI clients.
 - Typed client methods and React data hooks for the app.
 - Scoping by business (tenant), role and customer, on every read and write.
 - Approvals: a write that needs a person's yes is parked, then replayed when someone approves it.
 - An audit row for every write, refusal and decision.
 - History lines, approval cards, and how the assistant shows results on screen, on WhatsApp and in speech.
 
-The template ships with a sample application: meetings, notes, to-dos and orders, as four modules in `application/`. It shows every feature. You replace it with your own (see `DOMAIN.md` at the root), or start a new application from the same sample with `npm create @hykr/basecamp <folder>`. The framework never imports the application: the application passes its modules in, through `defineServer` (`application/api/src/server.ts`) and `<AppShell>` (`application/mobile/src/app/_layout.tsx`).
+The template ships with a sample application: meetings, notes, to-dos and orders, plus `account` (it words the credits and privacy notices) and `briefs` (a public form), as six modules in `application/`. It shows every feature. You replace it with your own (see `DOMAIN.md` at the root), or start a new application from the same sample with `npm create @hykr/basecamp <folder>`. The framework never imports the application: the application passes its modules in, through `defineServer` (`application/api/src/server.ts`) and `<AppShell>` (`application/mobile/src/app/_layout.tsx`).
 
 ### The three rules
 
@@ -129,7 +129,7 @@ In a module (`application/domain/src/modules/<name>/`, for example `todos`):
 | `notifications/` | Its templates (`defineTemplate`) and notifications (`defineNotification`) | Your business sends reminders or WhatsApp templates |
 | `views/` | `<name>Views = { name, views, screens }` (`defineView`, `defineScreen`) | The assistant should show a record or a list in a new way |
 | `agent/` | An `AgentModule`: rules, scripted-model scripts, eval cases and setup | You teach the assistant your business, or add evals |
-| `index.ts` | `<name> = defineModule({ ...<name>Spec, server, views, screens, templates, notifications, agent, tables })` | You add a layer to the module |
+| `index.ts` | `<name> = defineModule({ ...<name>Spec, server, views, screens, templates, notifications, agent, tables, contributes })` | You add a layer to the module, or something it contributes (a capability, a queue, a document, a flag) |
 
 Around the modules:
 
@@ -137,9 +137,11 @@ Around the modules:
 |---|---|---|
 | `application/domain/src/modules/index.ts` | `modules`, in dependency order, one line per module | You add a module (`basecamp module add <name>` does it) |
 | `application/domain/src/contracts/`, `src/views/` | Every module's specs and views for the apps (`moduleSpecs`, `moduleViews`), one line per module | You add a module (`basecamp module add` does it) |
-| `application/domain/src/server/access.ts` | `BUSINESS_ACCESS`, shared by the modules | You change who sees what |
-| `application/domain/drizzle/` | Generated SQL migrations and `meta/_journal.json`, one journal for every module, recorded in `drizzle.__app_migrations` | After `pnpm db:generate --name <name>`. Never edit by hand. |
-| `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`; `main.ts` and `worker.ts` start it | You change who the assistant is, or what the WhatsApp welcome and HELP say it does (`channel.does`) |
+| `application/domain/src/server/` | What no one module owns: `access.ts` (`BUSINESS_ACCESS`, shared by the modules), `approval-levels.ts` (the approval levels, section 5.8.1), `privacy.ts` (processors, request policy, retention periods, section 5.27), and `index.ts`, which gathers them as `contributions` for `defineServer` | You change who sees what, what an approval level means, or the privacy policy |
+| `application/domain/src/languages.ts` | `languages = defineLanguages(...)`, given to the server and the app (section 9) | You add or drop a language |
+| `application/domain/drizzle/` | Generated SQL migrations and `meta/_journal.json`, one journal for every module, recorded in `drizzle.__app_migrations` | After `pnpm db:generate --name <name>`, or `basecamp db rebase` after a rebase. Never edit by hand. |
+| `application/domain/sql/pre/`, `sql/post/` | Idempotent SQL around the migrations: extensions, triggers, CHECK constraints (section 5.2) | One file per module and purpose (`orders-states.sql`) |
+| `application/api/src/server.ts` | `server = defineServer({ name, persona, help, languages, channel, modules, migrations, contributes })`; `main.ts` and `worker.ts` start it | You change who the assistant is, or what the WhatsApp welcome and HELP say it does (`channel.does`) |
 | `application/mobile/src/modules/<name>/` | The app half of each module: `index.tsx` (`defineAppModule({ name, nav, suggestions, bind, hrefFor, webmcp })` and what other modules may use), `routes.tsx`, `views.tsx`, `screens/`, `components/`. Listed in `src/modules/index.ts`, one line each | You draw a view in the app, add a screen or a nav item |
 | `application/mobile/src/catalog.ts`, `settings.ts`, `home/` | `catalog = createCatalog(...moduleSpecs)`, `registry = createUiRegistry(...moduleViews)` and the `Register` declaration; `settings` (title, tagline, home); the home screen, which combines modules | You change what the app serves or its home screen |
 | `application/mobile/src/app/` | Expo Router route files: one-line re-exports, each module's under `<name>/`. `index.tsx` is the home screen. `_layout.tsx` renders `<AppShell>`. | You add an app screen |
@@ -155,11 +157,11 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/contracts/src/platform/` | The framework's own entities (saved `pages`) and commands (`notify.send`, `handoff.request`) |
 | `framework/contracts/src/catalog.ts` | `createCatalog(...modules)`: every module's entities and commands plus the platform's, with the collision checks and `reserveRoutes`. Tools, hooks and history read from a catalog. |
 | `framework/core/src/` | `defineEntity`, `defineCommand`, `runWrite`, `ApprovalService`, guards, controller factories, list SQL. `src/tools/` builds agent tools (imported as `@hykr/core/tools`). `hooks.ts` holds the core's extension points (section 5.9). |
-| `framework/policy/src/` | `accessFor`, `rowAllowed`, `DEFAULT_ACCESS`, `subjectOf`, `userIdOf` |
+| `framework/policy/src/` | `accessFor`, `rowAllowed`, `DEFAULT_ACCESS`, `can`, `subjectOf`, `userIdOf` |
 | `framework/db/src/schema/`, `framework/db/drizzle/` | Tenancy, approvals, idempotency, audit, channel tables and their migrations (`drizzle.__framework_migrations`); `app`, `id()`, `tenantColumn()`, `customerColumn()` for your tables |
-| `framework/agents/src/` | `createAgents`, the Mastra assistant, profiles, the fake model, scorers, Studio; script helpers in `@hykr/agents/script`, the evals harness in `@hykr/agents/evals` |
+| `framework/agents/src/` | `createAgents`, the Mastra assistant, profiles, the model registry and gateways (`models/`), durable runs, the fake model, scorers, Studio; script helpers in `@hykr/agents/script`, the evals harness in `@hykr/agents/evals` |
 | `framework/ui-registry/src/` | `defineView`, `createUiRegistry`, platform views; `react.ts` for `bindView` / `bindScreen` |
-| `framework/i18n/src/` | `defineLanguages` and the process's languages (`lang.ts`), `Labels`, the framework's phrases (`messages.ts`), date, money and plural formatting |
+| `framework/i18n/src/` | `defineLanguages` and the process's languages (`lang.ts`), `Labels`, the framework's phrases (`messages/<feature>.ts`), date, money and plural formatting |
 | `framework/channels/src/` | WhatsApp transport only: adapter, render, split, keywords, approval tokens |
 | `framework/connectors/src/` | Talking to other systems, transport only: Standard Webhooks signing, HMAC checks, the secret box, the egress guard (`safeRequest`), the `Connector` interface (section 5.14) |
 | `framework/notifications/src/` | `defineTemplate`, `defineNotification`, `createNotificationCatalog`, quiet hours and marketing cap rules |
@@ -168,7 +170,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/api/src/channels/` | WhatsApp webhook, queues, sending, notifications dispatch, template sync, handoff, back office API, erasure |
 | `framework/api/src/modules/` | Chat, threads, history, me, voice, pages |
 | `framework/api/src/features/` | Framework features, one folder each (`defineFeature`), among them `events` (the outbox relay), `files`, `money`, `push`, `approvals`, `integrations` (webhooks out and in, section 5.14), `mcp` (outside AI clients, section 7.8) and `share` (share links and public forms, section 5.28) |
-| `framework/app/src/` | `AppShell`, `defineAppModule` and the plugin types (`framework/app-domain.ts`), their merge (`framework/compose-app.ts`) and plugin slots (`framework/plugins.ts`), data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; framework features as plugins in `features/<x>/` (live, push, WebMCP); primitives in `@hykr/app/ui` |
+| `framework/app/src/` | `AppShell`, `defineAppModule` and the plugin types (`framework/app-domain.ts`), their merge (`framework/compose-app.ts`) and plugin slots (`framework/plugins.ts`), data hooks (`framework/hooks.ts`), `InlineView`, chat runtime, canvas store and `PageHost`; framework features as plugins in `features/<x>/` (live, push, WebMCP, settings, offline, share, inbox, agents, credits, calendar, export, privacy, businesses, connections); primitives in `@hykr/app/ui` |
 | `framework/cli/` | The `basecamp` command (`module-add.ts` scaffolds a module, `db-rebase.ts` regenerates migrations after a rebase), plus the `compose.yaml` and `infra/` it starts |
 
 ### Import rules
@@ -231,7 +233,7 @@ pnpm dev               # the framework in watch mode, then basecamp dev: API + q
                        # mobile web, back office, voice worker, Studio
 ```
 
-The root scripts call the `basecamp` command (`@hykr/cli`) inside `application/`. You can run it there yourself: `cd application && pnpm exec basecamp <dev | start api|worker|voice | infra up|down | db migrate | db generate | templates sync|check | eval | studio>`. `pnpm exec basecamp --help` lists them.
+The root scripts call the `basecamp` command (`@hykr/cli`) inside `application/`. You can run it there yourself: `cd application && pnpm exec basecamp <dev | start api|worker|voice | infra up|down | db migrate|generate|rebase | module add | import | templates sync|check | operator add|remove|list | eval | studio>`, or from the root with `pnpm --dir application exec basecamp …`. `pnpm exec basecamp --help` lists them with their options.
 
 Check it is up:
 
@@ -244,6 +246,7 @@ Things that will trip you up:
 - Most of `pnpm dev` reloads on save. Each framework package runs `tsc -w` into its `dist/`. `basecamp dev` (the application's `dev` script) compiles `application/domain` (every module) and `application/api` the same way, restarts the API and queue worker under `node --watch` when any module they loaded changes, and both Expo apps fast-refresh through Metro. The voice worker runs from its build (`node …/@hykr/voice-worker/dist/main.js dev`) without a watcher. An edit in `framework/*` reaches every app that imports it. `pnpm dev` passes `--concurrency=30` because turbo runs 16 persistent tasks (15 framework watchers and the application's `basecamp dev`) and its default is 10; pass it too when you run `pnpm turbo run dev` yourself.
 - `basecamp dev` also starts the voice worker, which exits at startup if `VOICE_AGENT_KEY` is missing or short, or if `VOICE_MODE=live` has no `SARVAM_API_KEY` (`assertConfig()` in `framework/voice-worker/src/config.ts`). `basecamp dev` reports `voice … exited (1)`, keeps the other processes running, and does not start the worker again. `application/.env.example` ships `VOICE_AGENT_KEY=` empty and `VOICE_MODE=live`. Set `VOICE_AGENT_KEY` and `VOICE_MODE=fake`, then restart `pnpm dev`.
 - Mobile web serves on 8081 and the back office on 8082. If something else holds either port, Expo cannot ask for another one (`basecamp dev` gives it no terminal), so that app exits.
+- An API on another port (`PORT`, a second checkout) also needs `API_INTERNAL_URL` (the assistant's tools call it) and `BETTER_AUTH_URL` (the evals sign up with it as their origin) set to that address. Give each checkout its own database and `BULL_PREFIX` too ([Working on modules in parallel](modules.md), section 7).
 - With `MODEL_MODE=live` (the default in `.env.example`) and no model configured (no `OPENROUTER_API_KEY` for `AGENT_MODEL`'s OpenRouter model, no `MODEL_PROVIDERS`), chat answers 503 `model_not_configured` "Set MODEL_PROVIDERS (or OPENROUTER_API_KEY in development) in .env to use the assistant". Section 7.5 says how models are configured.
 - Stop the services with `pnpm infra:down` (or `basecamp infra down`). They run as the Compose project `basecamp` from `framework/cli/compose.yaml` (an application can name its own with `"project"` in its `basecamp` block), so a plain `docker compose down` at the root finds nothing.
 - `basecamp` is compiled: in this repository it works only after `pnpm build`, and says so until then. `pnpm infra:up` runs `docker compose` directly and needs no build.
@@ -349,7 +352,7 @@ The app shows the same data per record through `GET /api/history?resourceType=to
 
 ## 5. Declaring your domain
 
-Work inside a module (`application/domain/src/modules/<name>/`; `basecamp module add <name>` starts one), in this order:
+Work inside a module (`application/domain/src/modules/<name>/`; `basecamp module add <name>` starts one, and [Working on modules in parallel](modules.md) covers several at once), in this order:
 
 1. The spec (`contracts/`)
 2. The table (`db/schema.ts`)
@@ -462,7 +465,7 @@ pnpm db:migrate                         # the framework's migrations, then the a
 
 `application/domain/drizzle.config.ts` manages only your tables in the `app` schema (every module's `db/schema.ts`, one journal), and records what ran in `drizzle.__app_migrations`. After a rebase onto a branch with new migrations, `basecamp db rebase --base <branch>` drops yours and generates them again on top. The framework's tables (`public`, `app`, `audit`, `channel`) ship with `@hykr/db` (`framework/db/drizzle`, recorded in `drizzle.__framework_migrations`) and are applied first. Mastra owns `mastra` and `mastra_obs`.
 
-What drizzle-kit does not generate (extensions, triggers, functions, CHECK constraints) goes in SQL hook files next to the migrations: `application/domain/sql/pre/*.sql` runs before your migrations, `sql/post/*.sql` after them (the framework's are in `framework/db/sql`). They run on every migrate, in name order, one transaction per file, so each must be idempotent: `IF NOT EXISTS`, `CREATE OR REPLACE`, `DROP TRIGGER IF EXISTS` then `CREATE TRIGGER`. Use one file per feature.
+What drizzle-kit does not generate (extensions, triggers, functions, CHECK constraints) goes in SQL hook files next to the migrations: `application/domain/sql/pre/*.sql` runs before your migrations, `sql/post/*.sql` after them (the framework's are in `framework/db/sql`). They run on every migrate, in name order, one transaction per file, so each must be idempotent: `IF NOT EXISTS`, `CREATE OR REPLACE`, `DROP TRIGGER IF EXISTS` then `CREATE TRIGGER`. Use one file per module and purpose, named after the module (`orders-states.sql`): a hook that names a module's table fails once that module is removed.
 
 `pnpm db:migrate` holds a Postgres advisory lock, so two migrates on one database wait for each other. It refuses to start when a migration was never applied but is older than the last one applied: drizzle would skip it without a word. That happens when a branch generated before another was merged. Regenerate the migration (delete it and generate again) or recreate the database.
 
@@ -886,18 +889,21 @@ each works by TypeScript declaration merging plus a registry that rejects a dupl
   specs that carry the key (`memory`, section 7.7, is one).
 - **Contributions.** `defineServer({ ..., contributes: { turnHooks: [...], deliveryChannels: [...] } })`.
   Each key is a list, collected by one registry: `roles` and `capabilities` (section 6.4), with
-  `roleOverrides` and `roleDefaults`, and `approvalLevels` (section 5.8.1) in `@hykr/contracts`;
+  `roleOverrides` and `roleDefaults`, `approvalLevels` (section 5.8.1), `featureFlags` (section
+  5.18), `shareables` and `publicForms` (section 5.28), `participantRoles` (section 6.5) and
+  `operatorCapabilities` (section 6.6) in `@hykr/contracts`;
   `entityPlugins`, `writeHooks`, `readProjectors`, `listFieldSql`, `levelRules`, `grantKinds`,
-  `identityProviders` and `numberSeries` (section 5.13) in `@hykr/core`; `toolContributions` in
-  `@hykr/core/tools`; `documents` (section 5.19),
+  `identityProviders`, `standingProviders` (section 6.6) and `numberSeries` (section 5.13) in
+  `@hykr/core`; `toolContributions` in `@hykr/core/tools`; `documents` (section 5.19),
   `deliveryChannels`, `turnHooks`, `inboundHooks`, `queues`, `schedules`, `subscribers`,
   `eventFeeds`, `erasureContributors`, `exportContributors`, `authPlugins`, `liveResources`,
   `fileHolders` (section 5.12), `connectors` and `connectorHandlers` (section 5.14), `meters` and
   `creditPurchaseProviders` (section 7.6), `jobs` (section 5.17), `mentionKinds` (section 5.21),
   `dataExportSources` (section 5.22), `uploadTargets` (section 5.23), `telephonyProviders`
   (section 5.24), `acceptances` and `esignProviders` (section 5.25), `agentTemplates` (section
-  5.26), and `processors`, `privacyPolicies`, `retentionTargets` and `retentionPeriods` (section
-  5.27) in `@hykr/api`.
+  5.26), `processors`, `privacyPolicies`, `retentionTargets`, `retentionPeriods`,
+  `personalDataParts` and `recordCopies` (section 5.27), and `inboundRouters` and
+  `supportWithheld` (section 6.6) in `@hykr/api`.
   `@hykr/api` re-exports the core's and its own.
   - `setRuntime` installs the lists once, when the process starts serving the app. A key that no
     registry collects stops the start.
@@ -1015,7 +1021,9 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
 ### 5.11 Modules: several teams, one application
 
 An application is a list of modules (`DOMAIN.md`, "Modules"). Each is a folder with its own layers
-and an `index.ts` that bundles them:
+and an `index.ts` that bundles them. [Working on modules in parallel](modules.md) is the procedure
+for teams: what a module owns, the shared lists, the one journal, per-module tests and evals.
+The sample's to-dos:
 
 ```ts
 // application/domain/src/modules/todos/index.ts
@@ -1071,11 +1079,23 @@ claimed twice, two plugins or two route shapes with one name, a view or screen b
 - `onSignedIn(user)`: runs once per signed-in person, after the shell mounts, and its returned
   cleanup at sign-out or when the shell installs again (Fast Refresh). Errors are logged, never
   thrown into the app;
+- `onSignOut(user)`: runs at sign-out, before the session ends: forget what the plugin kept on
+  the device for that person;
+- `Banner`: a strip above the screen while someone is signed in (offline, changes waiting);
 - `routes`: screens at paths no route file claims, served by `+not-found` (`NotFoundScreen`). A
-  `public` one also renders signed out, alone, without the shell;
+  `public` one also renders signed out, alone, without the shell (`standalone`: no shell either
+  way);
 - `nav`: destinations for its routes;
+- `Brand`: the mark in the rail and the phone's top bar (the first plugin with one draws it);
 - `useNav(items)`: a hook that hides or reorders destinations (each carries its `module`), never
   adds one.
+
+The framework's plugins use them: `offlinePlugin()` the provider, sign-in, sign-out, route and
+banner slots; `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` the provider and sign-in;
+`settingsPlugin()` the provider, sign-in, nav filter and brand; `inboxPlugin()`, `exportPlugin`
+and `privacyPlugin` routes and nav; `creditsPlugin`, `businessesPlugin` and `agentsPlugin()`
+routes, nav and nav filters; `sharePlugin()` a public, standalone route. A module may bring
+plugins of its own (`defineAppModule({ plugins })`).
 
 `Register` takes `{ catalog }` or `{ modules }` (isomorphic `ModuleSpec`s, entities merged).
 The tests are in `framework/app/src/framework/*.test.ts` and `framework/ui-registry/src/react.test.ts`.
@@ -1447,8 +1467,8 @@ does not change a business's setup.
   at `_basecamp-verify.<host>`, then `POST /api/settings/domains/:id/verify`. Only a verified origin
   is trusted, for CORS (`AuthPlugin.originAllowed`) and Better Auth (a dynamic `trustedOrigins`), and
   `GET /api/branding/public?origin=` (no session; `api.settings.publicBranding(origin)`) returns its
-  name, logo and colours, which the back office's sign-in shows; the app's sign-in does not ask yet
-  (section 14). One origin belongs to one business (409). Anyone can ask about an origin, so each
+  name, logo and colours, which both sign-in screens show (the back office's, and the app's
+  `SignIn`). One origin belongs to one business (409). Anyone can ask about an origin, so each
   process holds a copy of every verified origin (loaded at most every 30 seconds, and again after a
   domain changes here) and never looks up anything that is not an exact https origin: a question
   costs no query and keeps nothing.
@@ -2706,7 +2726,7 @@ export const meetingsAgent: AgentModule = {
 
 The framework adds its own rules before yours (`FRAMEWORK_RULES` in `framework/agents/src/version.ts`). Among them: look up before you change, never invent ids, and do not retry after a refusal.
 
-On WhatsApp, the welcome and the HELP reply say what the assistant does in one sentence per language. That sentence is `channel.does` in `defineServer` (`application/api/src/server.ts`), not part of any module. Without it, WhatsApp uses the framework's generic `channel.does` phrase from `framework/i18n/src/messages.ts`.
+On WhatsApp, the welcome and the HELP reply say what the assistant does in one sentence per language. That sentence is `channel.does` in `defineServer` (`application/api/src/server.ts`), not part of any module. Without it, WhatsApp uses the framework's generic `channel.does` phrase from `framework/i18n/src/messages/channels.ts`.
 
 ### 7.3 The scripted model
 
@@ -2721,11 +2741,14 @@ defineScript({
     const r = turn.result('create-todo');
     if (!r) return [call('create-todo', { title })];
     const added = (t: { title: string }) =>
-      ({
-        en: `Added ${quoted(t.title)}.`,
-        hi: `${quoted(t.title)} जोड़ दिया।`,
-        te: `${quoted(t.title)} జోడించాను.`,
-      })[turn.lang];
+      pick(
+        {
+          en: `Added ${quoted(t.title)}.`,
+          hi: `${quoted(t.title)} जोड़ दिया।`,
+          te: `${quoted(t.title)} జోడించాను.`,
+        },
+        turn.lang,
+      );
     return [say(written(r, added, turn))];
   },
 }),
@@ -2772,7 +2795,7 @@ export const TodoListView = defineView({
 
 Add it to the module's `<name>Views.views`. `createUiRegistry` refuses a spoken list view without `labels.noun` and `labels.empty`, and a view or screen name another module (or the framework) already has.
 
-Bind it to a component in the app, in its app module's `bind` (`application/mobile/src/modules/todos/index.ts`):
+Bind it to a component in the app, in its app module's `bind` (`application/mobile/src/modules/todos/index.tsx`):
 
 ```ts
 bind: () => {
@@ -3267,6 +3290,106 @@ Give it `{ grant: 'granted' }` in the entity's `access`, and its children `{ gra
 **…put data no entity serves (a module's own table) in a business's export?**
 Contribute a `dataExportSources` entry, `{ name, rows(ctx) }`, that yields only what `ctx.principal` may read. Let admins export too: give them `data.export` (`roleOverrides`, or a role's `capabilities`). Section 5.22.
 
+### Modules and migrations
+
+**…start a module of my own?**
+`pnpm --dir application exec basecamp module add <name> [--entity <singular>]` writes both halves and registers them; then `pnpm db:generate --name <name>` and `pnpm db:migrate`. [Working on modules in parallel](modules.md), section 1.
+
+**…use another module from mine?**
+Add it to your `moduleSpec({ dependsOn })`, list your module after it, and import only its `contracts/` or `server/public.ts`. To react to it without depending on it, subscribe to its stored events. Section 5.11.
+
+**…rebase a branch that has a migration?**
+Take the base's side of every conflict under `application/domain/drizzle/`, then `pnpm --dir application exec basecamp db rebase --base <branch>`, recreate your database and migrate. [Working on modules in parallel](modules.md), section 5.
+
+### Approvals, roles and who decides
+
+**…make a write wait above an amount the business chooses?**
+Declare the levels (`defineApprovalLevel`, contributed as `approvalLevels`) and a level rule (`defineLevelRule({ on, decide })`) that returns `atLevel(level, rule, reason, { amount })`, comparing with `overThreshold(settings, '<key>', amount)`. The business sets `thresholds['<key>']` with `PATCH /api/settings/sections/approvals`. Section 5.8.1.
+
+**…send a decision to a capability's holders, a named person or an amount band?**
+`approval: { by: { capability } | { userId } | { band } }` on the spec or the command, or `approver` on one decision (`needsApproval(rule, reason, { approver })`). Section 5.8.
+
+**…let a person take back a write for a while?**
+A level whose policy has `undoMs` (or `undoMs` on an allowing decision): the write answers `undo: { id, until }`, its events and sends wait, and `POST /api/undo/:id` (`useUndo()` in the app) reverses it. Section 5.8.2.
+
+**…decide who may do something in code?**
+`can(p, '<module>.<action>')` (`@hykr/policy`), with the capability declared by the module (`defineCapability`, contributed as `capabilities`) and the roles that hold it by default. Never compare role names. Section 6.4.
+
+**…put people from outside the business on a record?**
+Declare a participant role (`defineParticipantRole`, contributed as `participantRoles`), give `{ grant: 'participant', as: ['<role>'] }` in the entity's `access`, and add a party with `POST /api/participants`. Section 6.5.
+
+### Records
+
+**…keep money, number documents and work out tax?**
+`minorUnits()` and `currencyColumn()` columns with the `money` trait; `defineNumberSeries` (contributed as `numberSeries`) and `nextNumber(tx, p, series)` in a command's `run`; `defineTaxFunction` and `applyTax`. Section 5.13.
+
+**…save a record with its lines in one write?**
+A child spec with `traits.parent`, served with `defineChildEntity`, and a command that calls `Child.children.replace(tx, p, parent, nodes, via)`: one write, one approval, one audit statement. Section 5.13.
+
+**…give a record a place, or check someone is there?**
+A `geoPoint()` column listed as `'geo'` in `filterable` (`near`, `within`, nearest first), and `withinMeters(tx, at, center, radiusM)` in a command's `load`. Section 5.15.
+
+**…show counts and totals?**
+Nothing to declare: `GET /api/<plural>/summary`, the assistant's `summarize-<plural>`, and `kpi.row` tiles with `of`. Section 5.16.
+
+**…let people comment on a record?**
+Nothing to declare (`comments: false` turns it off): `<Comments entity id />` on the screen and `inboxPlugin()` for mentions. Section 5.21.
+
+**…let a business add its own fields, or switch a feature on?**
+The `customFields` trait with a `customFieldsColumn()` (`<CustomFieldInputs>` in forms), and `defineFeatureFlag({ key, gates, managedBy: 'tenant' })` contributed as `featureFlags` (`useFeature(key)` in the app). Section 5.18.
+
+**…share a catalog across businesses?**
+`defineSharedEntity` with the `shared` trait: the platform's business (`PLATFORM_TENANT_ID`) publishes rows, each business reads them and overrides one with its own copy. Section 5.18.
+
+**…let the app capture records without a network?**
+`traits: { offline: {}, versioned: {} }` on the entity and `offlinePlugin()` in `<AppShell plugins>`. Section 5.29.
+
+### Documents, links and other systems
+
+**…have a customer accept a PDF with a one-time code?**
+`defineAcceptance` (contributed as `acceptances`) on a versioned entity that has a document, and `<RecordAcceptance entity id />` on its screen. Section 5.25.
+
+**…share a record by link, or take records from a public form?**
+`defineShareable` and `definePublicForm` (`@hykr/contracts`, contributed as `shareables` and `publicForms`), `sharePlugin()` in the app and `<ShareLinks>` on the record's screen. Section 5.28.
+
+**…send a business's events to another system, or take events from one?**
+Out: the business adds an endpoint (`POST /api/integrations/endpoints`) and nothing is declared. In: contribute a connector (`defineConnector`, `hmacConnector`) and a `defineConnectorHandler` whose `ctx.write` goes through the write path. Section 5.14.
+
+**…put records in people's calendars?**
+`traits.schedulable` on the spec and `calendarPlugin()` in the app; a move in Google is an event your module may subscribe to. Section 5.24.
+
+**…run work that takes minutes, elsewhere?**
+`defineJob` (contributed as `jobs`) and `startJob(tx, p, Job, input)` in a command's `run`; `<JobProgress job />` in the app. Section 5.17.
+
+**…run something on a schedule, or after an event?**
+`defineQueue` and `defineSchedule` (contributed as `queues`, `schedules`), or `defineSubscriber({ name, on, handle })` on the stored events. Background writes go through `runWrite` as `systemPrincipal({ tenantId, job })`. Section 5.10.
+
+**…let Claude, ChatGPT or an IDE use the application?**
+Nothing to declare: the modules give the MCP scopes and tools. Set `MCP_URL` and `APP_URL`, and mark a command that cannot be undone with `traits: { destructive: true }`. Section 7.8.
+
+### The assistant and the business's account
+
+**…let the assistant remember records?**
+`traits.memory: { text, about }` on the spec: recall loads each one again as the reader. Section 7.7.
+
+**…push a notification to a phone first?**
+`channels: ['push', 'whatsapp', 'email']` with `push: { title, body, url? }` on the notification, and `pushPlugin()` in the app. Sections 5.10 and 8.2.
+
+**…offer ready-made agents?**
+`defineAgentTemplate` (contributed as `agentTemplates`), with scripted-model scripts for their runs (`runData(text)`). Section 5.26.
+
+**…meter and price something a module does?**
+`defineMeter` (contributed as `meters`) and `CreditsService.record(...)` (or `metering()?.record(...)`); its price is in `CREDITS_CONFIG`. Section 7.6.
+
+**…add a language?**
+Declare it in `application/domain/src/languages.ts`, add its words to each `Labels`, and run `missingLabels` in a test. Section 9.
+
+**…add a settings section a business changes?**
+`defineSettingsSection(key, schema, { editable })` and, for what the schema cannot check, `defineSettingsCheck` (contributed as `settingsChecks`). Sections 5.9 and 5.18.
+
+**…act on behalf of the platform (operators, support)?**
+`pnpm --dir application exec basecamp operator add <email>`; support access to a business waits for its consent. Section 6.6.
+
 ---
 
 ## 11. Rules of the road
@@ -3285,6 +3408,14 @@ Contribute a `dataExportSources` entry, `{ name, rows(ctx) }`, that yields only 
 | Add words in each of the application's languages, and read them with `pick` | Hard-code English in views, or index `labels[lang]` | The channels speak every declared language; a missing one reads in English, and `missingLabels` in a test catches it |
 | Use the outbox to send from a write (events plus `schedule`/`send.on`, or `queueNotification(tx, …)` inside a command) | Call WhatsApp or SMTP directly | A rollback must send nothing, a crash after commit must still send, and an undo must withdraw it |
 | Let 404 mean "not yours" | Return 403 for someone else's id | No hint that a record exists |
+| Check capabilities with `can(p, …)`, and reach rows through `access` | Compare role names in code | Roles are data: a business makes its own and edits the application's |
+| Keep what changes with the business (role sets, approval levels and thresholds, currencies, states and SLAs, periods, templates, prices) in the application or the business's settings | Put it in `framework/` | The framework is mechanisms only; `pnpm lint:boundary` refuses product words there |
+| Keep money as `{ minor, currency }` in `minorUnits()` columns | Floats, `numeric`, or a currency constant | Sums stay exact, and the currency is the business's |
+| Import another module only through its `contracts/` or `server/public.ts`, listed in `dependsOn` | Reach into its `db/` or other server files | Each team changes its own module safely; `pnpm lint:deps` refuses it |
+| Generate migrations, and generate them again after a rebase (`basecamp db rebase`) | Edit `drizzle/` by hand, or merge two branches' migrations as they are | One journal: drizzle skips an out-of-order migration without a word |
+| Change a business's settings through their writers (`PATCH /api/settings/sections/:section`; `setTenantSettings` in tests) | `UPDATE app.tenants` | Writers validate, audit and drop the cached copy |
+| Put a file on a record through its file field | Write `app.files` | The `files` write hook claims and releases files, scoped to their record |
+| Run a model outside any database transaction | Hold a transaction open around a model run | Mastra's first storage use builds indexes concurrently, which waits for open transactions |
 
 ---
 
@@ -3294,11 +3425,12 @@ Contribute a `dataExportSources` entry, `{ name, rows(ctx) }`, that yields only 
 |---|---|---|---|
 | Lint and format | Style | whole repo | `pnpm lint` |
 | Types | Specs, tables and handlers agree | whole repo | `pnpm typecheck` |
-| Dependency rules | The boundaries in section 3 | `framework`, `application` | `pnpm lint:deps` |
+| Dependency rules | The boundaries in section 3, modules included | `framework`, `application` | `pnpm lint:deps` |
+| Framework vocabulary | No product words in `framework/` | `framework` | `pnpm lint:boundary` |
 | Package unit tests | List grammar, policy, views, i18n, templates, channels | `framework/*/src/**/*.test.ts` | `pnpm test` |
-| View and notification tests | `text` and `speak` output, your templates | `application/domain/src/views/views.test.ts`, `application/domain/src/modules/notifications.test.ts` | `pnpm --filter @application/domain test` |
+| View and notification tests | `text` and `speak` output, your templates, every language's words | `application/domain/src/views/views.test.ts`, `application/domain/src/modules/notifications.test.ts`, `application/domain/src/modules/<name>/**/*.test.ts` | `pnpm --filter @application/domain test`; one module: `cd application/domain && pnpm vitest run src/modules/<name>` |
 | Framework e2e | Platform features, on a fixture application (tasks and visits) | `framework/api/test/framework/*.e2e.test.ts`, fixture in `framework/api/test/fixture` | `cd framework/api && pnpm test` |
-| API e2e | Your routes, scoping, approvals, chat with the fake model | `application/api/test/domain/*.e2e.test.ts` | `cd application/api && pnpm vitest run test/domain` |
+| API e2e | Your routes, scoping, approvals, chat with the fake model | `application/api/test/domain/*.e2e.test.ts` | `cd application/api && pnpm vitest run test/domain`; one module: `pnpm vitest run test/domain/<name>` |
 | Golden WhatsApp | Full conversations against whaloc-test | `application/api/test/whatsapp/conversations/*.yaml` | whaloc-test runs with `pnpm infra:up`; then `cd application/api && pnpm vitest run test/whatsapp` |
 | Assistant evals | The right tools in the right order, and good replies | `application/domain/src/modules/<name>/agent/evals.ts` | `pnpm eval`; in `application/`, `pnpm exec basecamp eval voice` or `eval whatsapp`, `--module <name>` for one module (`--live` for the real model) |
 | Native UI | App flows | `application/mobile/maestro/*.yaml` | `maestro test maestro/demo.yaml -e EMAIL=… -e PASSWORD=…` |
@@ -3340,7 +3472,7 @@ An eval case lists the tools that must run, in order:
 
 Evals need the API running and are not in CI.
 
-**What CI runs** (`.github/workflows/ci.yml`): install, apply `framework/cli/infra/postgres/init.sql` (extensions and search path), `pnpm lint`, `pnpm build`, `pnpm typecheck`, `pnpm lint:deps`, `pnpm db:migrate`, `pnpm test`. It runs against Postgres, Redis and Mailpit only. Compose runs `init.sql` automatically, but only on a fresh volume. Golden WhatsApp conversations skip themselves without whaloc-test. Evals and Maestro are not run. A second job, `consumer`, packs every `@hykr/*` package, scaffolds an application with `create-basecamp`, installs it from the tarballs, and builds and typechecks it.
+**What CI runs** (`.github/workflows/ci.yml`): install, apply `framework/cli/infra/postgres/init.sql` (extensions and search path), `pnpm lint`, `pnpm lint:boundary`, `pnpm build`, `pnpm typecheck`, `pnpm lint:deps`, `pnpm db:migrate`, `pnpm test`. It runs against Postgres, Redis and Mailpit only. Compose runs `init.sql` automatically, but only on a fresh volume. Golden WhatsApp conversations skip themselves without whaloc-test. Evals and Maestro are not run. A second job, `consumer`, packs every `@hykr/*` package, scaffolds an application with `create-basecamp`, installs it from the tarballs, and builds and typechecks it.
 
 ---
 
@@ -3348,17 +3480,21 @@ Evals need the API running and are not in CI.
 
 A feature is done when every box is ticked:
 
+- [ ] The module is registered: its line in `modules/index.ts`, the contracts and views aggregates and the app's `modules/index.ts`, and `dependsOn` names every module it imports.
 - [ ] Spec in the module's `contracts/`, registered in its `moduleSpec`. `description`, `label`, `fieldLabels` and list `examples` are written for the model.
 - [ ] Table in the module's `db/schema.ts`, named after the module, with `id`, `tenantColumn()`, an owner column, `createdBy`, `createdAt`, `updatedAt`, and `customerColumn()` if customers have rows. Indexes match your filters and sorts.
-- [ ] A migration generated with `pnpm db:generate` and committed under `application/domain/drizzle/`.
+- [ ] A migration generated with `pnpm db:generate` after the latest base (`basecamp db rebase` after a rebase), committed under `application/domain/drizzle/`, and applied to a database migrated from scratch.
 - [ ] `defineEntity` / `defineCommand` with the right `access`, `rules` and `authorize`. Every command passes `via` and lists everything it changes in `touched`.
 - [ ] Nest module with controllers *and* handlers, passed to the module's `defineModule({ server })`.
 - [ ] Every action the agent should not do alone has an approval rule, or is `expose: 'human'`.
+- [ ] Who may do what is decided by capability (`can`, `access` keys), never by a role name; a field only some may see has `fieldPolicy`. What changes with the business is the module's or the business's settings, never a constant in `framework/`.
 - [ ] Views for list and item, with `text`, `speak` and `labels` in each of the application's languages (the sample: `en`, `hi` and `te`). They are bound in the app (the app module's `bind`, in `application/mobile/src/modules/<name>/index.tsx`).
 - [ ] Scripts for the fake model, and eval cases for new phrases.
 - [ ] Templates and notifications, if the feature sends anything. `pnpm templates:check` passes.
-- [ ] An e2e test in `application/api/test/domain/` covering: a stranger gets 404, a denied rule gets 403 with its `rule`, and a parked agent write shows up in approvals.
-- [ ] `pnpm lint`, `pnpm typecheck`, `pnpm lint:deps` and `pnpm test` pass. `pnpm eval` passes.
+- [ ] An e2e test in `application/api/test/domain/` covering: another business's record is a 404, a denied rule gets 403 with its `rule`, a hidden field stays hidden (in reads, tool results and approvals), and a parked agent write is audited and shows up in approvals.
+- [ ] `pnpm lint`, `pnpm typecheck`, `pnpm lint:deps` and `pnpm test` pass. `basecamp eval --module <name>` and `pnpm eval` pass.
+- [ ] A framework change has e2e tests on the fixture application (`framework/api/test/framework`), passes `pnpm lint:boundary`, and records its choices in `docs/decisions/<unit>.md`.
+- [ ] `DOMAIN.md` and this guide say what the feature adds, and section 14 says what it leaves out.
 - [ ] You found your feature's rows in `audit.events`.
 
 ---
@@ -3450,7 +3586,6 @@ These are not built. Each has a workaround for now.
 | A participant's assistant writing outside its roles | Its change parks (if the operation parks for agents) and the approved replay finds no row (404); the business sees a request it cannot carry out. |
 | Read models or custom queries (`defineQuery`) | Use `list` with the grammar, or a command that loads through repos. |
 | Filtering for null (`dueOn is null`) | The grammar does not accept `null`. Add a boolean column, or filter in a command. |
-| Hooks that run | Every registry of section 5.9 is read. Entity plugins, write hooks, read projectors and list field SQL run (F3); `roles`, `capabilities`, identity providers and auth plugins are read and run (F4); `roleOverrides`, `roleDefaults` and `grantKinds` (A4); `participantRoles` (B7); queues, schedules, subscribers, event feeds, turn, inbound and tool hooks, delivery channels and the personal-data contributors run (F5, section 5.10); `standingProviders`, `operatorCapabilities`, `supportWithheld` and `inboundRouters` (B19, section 6.6). |
 | Bulk writes for plain entities | Only children of a parent are inserted in bulk (`children.insert`/`replace`); `insertMany` for any other entity is one insert per row. There is no bulk update. |
 | Line-level tools | The assistant saves a whole tree in one call (the sample's `save-order`); there are no tools to add or move one line. |
 | Several currencies in one record | A record and its children have one currency, and there are no exchange rates. |
@@ -3491,7 +3626,8 @@ These are not built. Each has a workaround for now.
 | Tool descriptions for added list field types and plugin parks | A tool lists an added type by name only, and says a write may wait only when `spec.approval` says so. |
 | App modules without a server module | Nothing checks that each app module (`defineAppModule`) has a server module of the same name. |
 | Module boundaries in the app | Nothing enforces that a module imports another only through its `index.tsx`. Keep to it by hand (the meetings module uses the notes and to-dos rows through their `index`). |
-| Plugin slots in use | `AppPlugin` slots exist and work (provider, sign-in effect, sign-out, routes, nav, nav filter, brand, banner); `offlinePlugin()` (section 5.29) uses the provider, sign-in, sign-out, route and banner slots. `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` use the provider and sign-in slots; `settingsPlugin()` (section 5.18) fills the provider, sign-in, nav filter and brand slots; `inboxPlugin()` (section 5.21), `exportPlugin` (section 5.22) and `privacyPlugin` (section 5.27) use routes and nav; `creditsPlugin`, `businessesPlugin` and `agentsPlugin()` (section 5.26) use routes, nav and nav filters too; `sharePlugin()` (section 5.28) a public, standalone route. |
+| SQL hooks per module | `application/domain/sql/{pre,post}` holds every module's hooks in one folder, and nothing ties a hook to its module: one that names a removed module's table fails the next migrate. Name each file after its module, and remove it with the module. |
+| Guides checked in CI | The tutorials (`tutorial.md`, `new-application.md`) were replayed against the code by hand (`docs/decisions/HDOCS.md`); nothing in CI builds them, so they drift when an API changes. Replay a tutorial when you change what it uses. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
 | Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
@@ -3529,11 +3665,10 @@ These are not built. Each has a workaround for now.
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |
 | Per-module tools for the assistant | The assistant sees every module's tools on every turn. |
 | Replies kept for retries | A stored reply is forgotten after `IDEMPOTENCY_KEEP_DAYS` (30): a device offline longer may apply a queued update twice if its first try reached the server (a create is safe: its id is taken). |
-| Opt-out from a marketing quick reply | The `stop_offers` button is not handled. The STOP keyword is the only working opt-out. |
 | Clearing "unreachable" on WhatsApp | Only the START keyword clears it. |
 | Other channels (SMS, Telegram) | `ChannelAdapter.channel` is `'whatsapp'` only. |
 | Time zone in `TodoDueNotification` | It hard-codes IST (`+05:30`). Use the tenant's `timeZone` in your own notifications. |
-| Root `seed`, `start`, `infra:down`, `studio` scripts | Create data through the API; in `application/`, use `pnpm exec basecamp start api` (and `start worker`, `start voice`), `basecamp infra down` and `basecamp studio`. |
+| Root `seed`, `start`, `studio` scripts | Create data through the API; in `application/`, use `pnpm exec basecamp start api` (and `start worker`, `start voice`) and `basecamp studio`. |
 | Web e2e (Playwright) | Use API e2e tests. Maestro covers native flows, outside CI. |
 | Voice tests without a key | `pnpm test` runs `framework/api/test/framework/voice.e2e.test.ts` and `application/api/test/voice/say.e2e.test.ts`. They need `VOICE_AGENT_KEY` (worker calls send `x-agent-key: process.env.VOICE_AGENT_KEY ?? ''`) and have no skip guard. CI sets the key in `ci.yml`; locally, set it in `.env` or these tests fail. |
 
@@ -3552,7 +3687,7 @@ An earlier outline described an API that was never built. Map it like this:
 | `pnpm gen:client` | Nothing to generate. `@hykr/api-client` builds typed methods from the spec at runtime: `api.entity(Spec)`, `api.command(Spec, input)`. The app uses `useEntityList` / `useEntity` / `useEntityMutation` / `useCommand`. |
 | `pnpm infra:up` | Exists: `docker compose up -d` on `framework/cli/compose.yaml` (project `basecamp`); `basecamp infra up` does the same in an application |
 | `packages/evals` | `framework/agents/src/evals/` (harness, `@hykr/agents/evals`) and each module's `agent/evals.ts` (cases). Run with `pnpm eval`, or `basecamp eval --module <name>`. |
-| `messages/*.json` | TypeScript: framework phrases in `framework/i18n/src/messages.ts`, and domain words as `Labels` next to the domain code |
+| `messages/*.json` | TypeScript: framework phrases in `framework/i18n/src/messages/<feature>.ts`, and domain words as `Labels` next to the domain code |
 | `defineQuery` | Not built. Use the list grammar or a command. |
 | A seed command | Not built |
 
@@ -3563,7 +3698,13 @@ An earlier outline described an API that was never built. Map it like this:
 | Term | Meaning |
 |---|---|
 | **Domain** | Your business's records, commands, views, words and notifications: `application/domain`, one folder per module. |
-| **Module** | One part of the application, built on its own: `application/domain/src/modules/<name>/`, one folder per layer, merged by `defineServer({ modules })`. |
+| **Module** | One part of the application, built on its own: `application/domain/src/modules/<name>/`, one folder per layer, merged by `defineServer({ modules })`; its app half is `defineAppModule` in `application/mobile/src/modules/<name>/` |
+| **Trait** | A key on a spec (`traits: { states, versioned, money, … }`) that a framework plugin acts on |
+| **Contribution** | A list a module or the application gives a registry (`contributes: { capabilities, queues, documents, … }`) |
+| **Approval level** | What an approval means and does (waits or runs, who decides, undo window), declared by the application |
+| **Party**, **participant** | A person or organisation outside the team, put on a record in a participant role the application declares |
+| **Operator** | A person who runs the deployment, above the businesses (`platform.*` capabilities), reaching a business only through support access it consented to |
+| **Feature flag** | A switch per business that gates modules, entities, commands, tools or destinations, off unless the business's settings say on |
 | **Application** | `application/`: a domain, plus the server definition, app and back office that run it on the framework |
 | **Framework** | Everything in `framework/`: the `@hykr/*` packages. It never imports an application. |
 | **Entity** | A record type with CRUD, declared with `entitySpec` and `defineEntity` |
@@ -3576,7 +3717,7 @@ An earlier outline described an API that was never built. Map it like this:
 | **Membership** | A person's roles in a tenant (`app.memberships`) |
 | **Customer** | A record of a business's customer (`app.customers`). It is not a login. |
 | **Contact** | A WhatsApp number known to a business (`channel.contacts`) |
-| **Grant** | `own`, `customer`, `tenant` or `granted`: which rows a role or capability reaches |
+| **Grant** | `own`, `customer`, `tenant`, `granted` or `participant`: which rows a role or capability reaches (`share` is a guest's, never written in a map) |
 | **Record grant** | One person's access to one record (`app.record_grants`), for the `granted` reach |
 | **Share link** | An expiring, revocable link to a record, a saved page or a public form (`app.share_links`); its holder is a `guest` |
 | **Public form** | A form whose link creates one record of an entity (`definePublicForm`) |
@@ -3597,6 +3738,6 @@ An earlier outline described an API that was never built. Map it like this:
 | **Scripted model** | The fake LLM (`MODEL_MODE=fake`) that tests and evals use |
 | **Template** | A pre-approved WhatsApp message (`defineTemplate`), versioned by name |
 | **Notification** | When and to whom a template or email goes (`defineNotification`) |
-| **Outbox** | The table that makes a notification part of a write's transaction |
+| **Outbox** | A table a write fills in its own transaction, for the worker to pass on after commit: `app.domain_events` (stored events, relayed to subscribers) and `app.outbox` (sends). In the app, the offline outbox is the device's queue of writes made without a network (section 5.29) |
 | **Handoff** | A WhatsApp conversation passed to a person in the back office. The assistant stays silent until it is given back. |
 | **Audit** | `audit.events`: one row per write, refusal, park and decision |

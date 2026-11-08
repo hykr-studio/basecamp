@@ -8,12 +8,15 @@ Basecamp is a framework for full-stack apps where an AI assistant works alongsid
 approvals and audit trail. You declare an entity once (a Zod spec), and the framework generates the REST
 routes, the agent tools, the app data hooks, approval cards, history, and the WhatsApp and voice rendering.
 It is a pnpm + Turborepo monorepo. `framework/` holds the `@hykr/*` packages, which can be published to npm.
-`application/` holds one sample application built on them: meetings, notes, to-dos and orders, as four
-modules (`application/domain/src/modules/<name>/`).
+`application/` holds one sample application built on them, as six modules
+(`application/domain/src/modules/<name>/`): meetings, notes, to-dos and orders, plus `account` (words
+the credits and privacy notices) and `briefs` (a public form).
 
-The long-form references are `docs/developer-guide.md` (architecture, rules, testing, known gaps),
-`docs/tutorial.md` (one feature end to end), `docs/new-application.md` (a new product from scratch) and
-`DOMAIN.md` (what each application layer must export). Read the relevant one before a non-trivial change.
+The long-form references are `docs/developer-guide.md` (architecture, every primitive, rules, testing,
+section 14 "Not ready yet"), `docs/tutorial.md` (one feature end to end), `docs/new-application.md` (a
+new product from scratch), `docs/modules.md` (modules in parallel: boundaries, the one journal, the
+rebase procedure) and `DOMAIN.md` (what each application layer must export). Decisions per unit of
+work are in `docs/decisions/`. Read the relevant one before a non-trivial change.
 
 ## Commands
 
@@ -99,9 +102,10 @@ E2E test gotchas:
   (a shape `setTenantSettings` cannot) calls `settingsChanged(tenantId)` right after.
 - The golden WhatsApp conversations (`application/api/test/whatsapp/`) need `whaloc-test` on :8090, which
   `pnpm infra:up` starts. Without it they skip.
-- `OutboxRelay` only relays outbox rows of its own `BULL_PREFIX`, and each test run uses a fresh one. Two
-  processes with the same prefix on one database (two `pnpm dev` workers, both `bull`) still take each other's
-  rows: give each checkout its own `BULL_PREFIX`.
+- A worker relays only rows of its own `BULL_PREFIX`: sends in `app.outbox` (`OutboxRelay`) and stored
+  events in `app.domain_events` (the events feature). Each test run uses a fresh prefix. Two processes with
+  the same prefix on one database (two `pnpm dev` workers, both `bull`) take each other's rows: give each
+  checkout its own `BULL_PREFIX`, or its own database (`scripts/wt.sh`, `docs/modules.md` section 7).
 
 Other gotchas:
 - `basecamp` is compiled, so it only works after `pnpm build`.
@@ -109,6 +113,10 @@ Other gotchas:
 - The mobile app's typecheck fails on `@application/domain/*` until the domain is built.
 - Compose's `framework/cli/infra/postgres/init.sql` (PostGIS, pgcrypto, the `app` role's `search_path`) only
   runs on a fresh volume. On any other Postgres, run it yourself before migrating.
+- An API on another port (`PORT`) also needs `API_INTERNAL_URL` (its tools call it) and `BETTER_AUTH_URL`
+  (evals sign up with it as the origin) set to that address, for the API and for `basecamp eval`.
+- A module, entity or table must not take a framework name: `/api/jobs`, `/api/files`, `app.jobs` and the
+  other features' routes and tables are reserved, and `defineServer` refuses them (`ModulesError`).
 
 ## Architecture
 
@@ -122,9 +130,10 @@ Other gotchas:
   contents. `scripts/check-boundary.sh` (`pnpm lint:boundary`, also in CI) fails on product vocabulary in
   `framework/`. Pre-existing wording is listed in `scripts/boundary-allow.txt`.
 - `framework/` never imports `application/`. The application passes its modules in at exactly two points:
-  - the server: `application/api/src/server.ts`, through `defineServer({ name, persona, help, channel, modules, migrations, contributes })`, started by `startApi` / `startWorker`. Each module is `defineModule({ ...moduleSpec, server, views, screens, templates, notifications, agent, tables, contributes })`;
+  - the server: `application/api/src/server.ts`, through `defineServer({ name, persona, help, languages, channel, modules, migrations, contributes })`, started by `startApi` / `startWorker`. Each module is `defineModule({ ...moduleSpec, server, views, screens, templates, notifications, agent, tables, contributes })`; what no one module owns (approval levels, privacy policy, `BUSINESS_ACCESS`) is in `application/domain/src/server/`;
   - the app: `application/mobile/src/app/_layout.tsx`, through `<AppShell app modules plugins catalog registry config />`
-    (`plugins`: framework features such as `livePlugin()`, `pushPlugin()` and `webMcpPlugin()`).
+    (`plugins`: framework features such as `livePlugin()`, `pushPlugin()`, `webMcpPlugin()`, `sharePlugin()`
+    and `offlinePlugin()`).
     Each app module (`defineAppModule` in `application/mobile/src/modules/<name>/index.tsx`) brings its
     nav, suggestions, `bind`, `hrefFor` and `webmcp`; its routes are one-line files in `src/app/<name>/`.
 - `application/` imports `@hykr/*` by package name and public subpath only. No relative paths into
@@ -285,7 +294,7 @@ registries (`createHookRegistry`, in `framework/core/src/hooks.ts` and `framewor
 list field types (`defineListFieldType` plus `listFieldSql`), and settings sections
 (`defineSettingsSection`). Each is extended by declaration merging. Add a new kind in your own file
 instead of editing a central one. `registerOp` and the entity registry (`entityDefs()`) refuse a
-duplicate name. Decisions per unit are in `docs/decisions/`. Section 5.10 says where each runtime
+duplicate name. Section 5.10 says where each runtime
 registry is read: every queue comes from the `queues` registry (`defineQueue`, under `BULL_PREFIX`),
 framework features are one line each in `framework/api/src/features/index.ts` (`defineFeature`),
 event subscribers (`defineSubscriber`) run in the worker on the stored events of
