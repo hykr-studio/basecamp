@@ -272,6 +272,7 @@ nothing in `framework/` names them. To build a real product, replace the modules
 | `pnpm db:generate --name <n>` / `db:migrate` | Generate the application's migration, or apply the framework's and the application's |
 | `pnpm templates:sync` / `templates:check` | Send WhatsApp templates for review, or check they're approved |
 | `pnpm eval` | Scripted assistant eval of every module (the API must be running) |
+| `scripts/consumer.sh [--run] [<dir>]` | CI's `consumer` job: pack the framework, scaffold an app with it, install, build and typecheck; `--run` migrates it, starts its API and runs every eval suite |
 
 Inside `application/` (or any application), the `basecamp` command does the rest
 (`pnpm exec basecamp --help`; from the root, `pnpm --dir application exec basecamp …`):

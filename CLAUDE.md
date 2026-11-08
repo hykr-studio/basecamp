@@ -38,9 +38,12 @@ pnpm dev              # framework tsc -w watchers + `basecamp dev` (API, worker,
 - `pnpm lint`: Biome check (`pnpm format` fixes it). Style: single quotes, 2-space indent, 100 columns.
 - `pnpm typecheck` and `pnpm test` run through turbo. `pnpm lint:deps` runs the dependency-cruiser boundary rules; `pnpm lint:boundary` fails on product vocabulary in `framework/`.
 - CI (`.github/workflows/ci.yml`) runs lint, build, typecheck, lint:deps, db:migrate and test with
-  `MODEL_MODE=fake`. A second `consumer` job packs every `@hykr/*` package, scaffolds an app with
-  `create-basecamp` from the tarballs, then builds and typechecks it. If you change a package's public
-  exports or `files`, that job is what catches it.
+  `MODEL_MODE=fake`. A second `consumer` job (`scripts/consumer.sh --run`) packs every `@hykr/*`
+  package, scaffolds an app with `create-basecamp` from the tarballs, builds and typechecks it, then
+  migrates it, starts its API and runs `basecamp eval`, `eval voice` and `eval whatsapp`. If you change
+  a package's public exports, `files` or dependencies, or a module's scripts or eval cases, that job is
+  what catches it. Run the script locally the same way (`--run` needs Postgres, Redis and `.env`'s
+  variables, on a database of its own).
 - `pnpm db:generate --name <name>` generates the application's migration from every module's
   `application/domain/src/modules/*/db/schema.ts` (one journal). Never hand-edit files under `*/drizzle/`.
   Extensions, triggers and CHECK constraints go in idempotent SQL hooks: `sql/pre/*.sql` and `sql/post/*.sql`

@@ -4,7 +4,7 @@
  * the persona.
  */
 import type { AgentModule } from '@hykr/agents/script';
-import { evalCases } from './evals.js';
+import { evalCases, voiceEvalCases } from './evals.js';
 import { notesScripts } from './scripts.js';
 
 export const notesAgent: AgentModule = {
@@ -14,6 +14,7 @@ export const notesAgent: AgentModule = {
     'Notes are what the team remembers about a meeting. When the user asks what was said, decided or noted about something, use recall-memory; for one meeting, pass about as "meeting:<id>".',
   ],
   evalCases,
+  voiceEvalCases,
   // A note to recall, once the memory index has it (the worker embeds it within a second or two).
   evalSetup: async (api) => {
     await api('POST', '/api/notes', {

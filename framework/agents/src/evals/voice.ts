@@ -8,7 +8,7 @@ import type { Surface } from '@hykr/contracts';
 import type { Agents } from '../agents.js';
 import { suitesFor } from '../modules.js';
 import { briefForVoice, expectedOutcome, listBeforeWrite, repliesInLanguage } from '../scorers.js';
-import { prepare, type Row, report, runCases } from './harness.js';
+import { nothingRan, prepare, type Row, report, runCases } from './harness.js';
 
 const SPOKEN: Surface[] = ['inline', 'canvas', 'speech'];
 
@@ -40,5 +40,5 @@ export async function evalVoice(
       )),
     );
   }
-  return report(rows);
+  return report(rows, nothingRan(options.module, 'spoken eval cases (agent.voiceEvalCases)'));
 }

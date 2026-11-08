@@ -12,7 +12,7 @@ import type { EvalCase } from '../agent-domain.js';
 import type { Agents } from '../agents.js';
 import { suitesFor } from '../modules.js';
 import { expectedOutcome, listBeforeWrite, repliesInLanguage } from '../scorers.js';
-import { prepare, type Row, report, runCases } from './harness.js';
+import { nothingRan, prepare, type Row, report, runCases } from './harness.js';
 
 const TEXT: Surface[] = ['text'];
 const NO_SCREEN = ['canvas', 'screen', 'tap '];
@@ -71,5 +71,8 @@ export async function evalWhatsapp(
     const userId = await prepare(`WhatsApp turns (${suite.module})`, suite.evalSetup);
     rows.push(...(await runCases(agents, userId, typed, scorers, extra, truth)));
   }
-  return report(rows);
+  return report(
+    rows,
+    nothingRan(options.module, 'spoken eval cases outside English (agent.voiceEvalCases)'),
+  );
 }

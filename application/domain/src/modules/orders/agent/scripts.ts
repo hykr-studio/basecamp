@@ -1,5 +1,14 @@
-import { call, defineScript, items, type Outcome, say, sayIn, written } from '@hykr/agents/script';
-import { moneyText } from '@hykr/i18n';
+import {
+  call,
+  defineScript,
+  items,
+  type Outcome,
+  say,
+  sayIn,
+  verbs,
+  written,
+} from '@hykr/agents/script';
+import { moneyText, pick } from '@hykr/i18n';
 
 /**
  * The scripted model's knowledge of the orders module (tests, CI and demos without a key):
@@ -13,6 +22,8 @@ import { moneyText } from '@hykr/i18n';
  *   email order <number> to <address>                         … → send-document (waits)
  * A PDF is made in the turn's language.
  * Prices are decimals in the business's currency; a rate is the line's tax percentage.
+ * Listing, the totals by status and cancelling also take Hindi and Telugu ("ऑर्डर दिखाओ",
+ * "స్థితి వారీగా ఆర్డర్లు", "ऑर्डर <number> रद्द करो"), answered in the turn's language.
  */
 const first = (text: string) => text.split('\n')[0]?.trim() ?? '';
 const ORDER = /^order\s+(.+?):\s*(.+)$/i;
@@ -20,6 +31,12 @@ const PDF = /^pdf of order\s+(\S+)$/i;
 const SEND = /^(?:send order\s+(\S+)\s+to me|email order\s+(\S+)\s+to\s+(\S+@\S+))$/i;
 const MOVE = /^(submit|approve|cancel) order\s+(\S+)$/i;
 const REVISE = /^revise order\s+(\S+)$/i;
+/** "ऑर्डर <number> रद्द करो", "ఆర్డర్ <number> రద్దు చేయి": cancel, the verb last. */
+const CANCEL_LAST = new RegExp(
+  `^(?:${verbs('ऑर्डर', 'ఆర్డర్')})\\s+(\\S+)\\s+(?:${verbs('रद्द करो', 'రద్దు చేయి', 'రద్దు చేయండి')})$`,
+  'iu',
+);
+const LIST = new RegExp(`^(?:${verbs('list orders', 'ऑर्डर दिखाओ', 'ఆర్డర్లు చూపించు')})$`, 'iu');
 const DID = { submit: 'Submitted', approve: 'Approved', cancel: 'Cancelled' } as const;
 
 /** No order by that number: never an invented id. */
@@ -53,15 +70,20 @@ function parse(text: string): { title: string; lines: Line[] } | undefined {
 type Saved = { order: { number: string; total: { minor: number; currency: string } } };
 
 /** The summaries the scripted model asks for: the tiles show them, computed for the reader. */
-const SUMMARIES: Record<string, Record<string, unknown>> = {
-  'orders by status': { groupBy: ['status'], sum: ['total'] },
-  'order totals by month': {
-    groupBy: ['createdAt:month'],
-    sum: ['total'],
-    sort: '-key',
-    limit: 4,
-  },
-};
+const BY_STATUS = { groupBy: ['status'], sum: ['total'] };
+const SUMMARIES: Record<string, Record<string, unknown>> = Object.fromEntries(
+  Object.entries({
+    'orders by status': BY_STATUS,
+    'स्थिति के हिसाब से ऑर्डर': BY_STATUS,
+    'స్థితి వారీగా ఆర్డర్లు': BY_STATUS,
+    'order totals by month': {
+      groupBy: ['createdAt:month'],
+      sum: ['total'],
+      sort: '-key',
+      limit: 4,
+    },
+  }).map(([words, query]) => [words.normalize('NFC'), query]),
+);
 
 /** How many orders a summary counted (its totals are one bucket per currency). */
 const counted = (o: Outcome) =>
@@ -102,6 +124,8 @@ export const ordersScripts = [
   defineScript({
     name: 'move-order',
     match: (text) => {
+      const cancel = CANCEL_LAST.exec(first(text))?.[1];
+      if (cancel) return { move: 'cancel' as const, number: cancel };
       const m = MOVE.exec(first(text));
       return m ? { move: m[1].toLowerCase() as keyof typeof DID, number: m[2] } : undefined;
     },
@@ -212,10 +236,12 @@ export const ordersScripts = [
   }),
   defineScript({
     name: 'list-orders',
-    match: (text) => (/^list orders$/i.test(first(text)) ? true : undefined),
+    match: (text) => (LIST.test(first(text)) ? true : undefined),
     step: (_, turn) => {
       const r = turn.result('list-orders');
       if (!r) return [call('list-orders', {})];
+      // Spoken: the gist the server worded for this language; the list is on screen.
+      if (turn.spoken && r.speech) return [say(r.speech)];
       const orders = items(r) as unknown as {
         number: string;
         title: string;
@@ -229,11 +255,13 @@ export const ordersScripts = [
             te: 'మీకు ఆర్డర్లు ఏవీ లేవు.',
           }),
         ];
-      return [
-        say(
-          orders.map((o) => `${o.number} ${o.title}: ${moneyText(o.total, turn.lang)}`).join('\n'),
-        ),
-      ];
+      const lines = orders
+        .map((o) => `${o.number} ${o.title}: ${moneyText(o.total, turn.lang)}`)
+        .join('\n');
+      // Typed in Hindi or Telugu: a line in their language before the orders (which are data).
+      if (turn.lang === 'en') return [say(lines)];
+      const lead = { en: 'Your orders:', hi: 'आपके ऑर्डर ये हैं:', te: 'మీ ఆర్డర్లు ఇవి:' };
+      return [say(`${pick(lead, turn.lang)}\n${lines}`)];
     },
   }),
 ];

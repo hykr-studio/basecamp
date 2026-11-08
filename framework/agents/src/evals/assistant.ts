@@ -6,7 +6,7 @@
 import type { Agents } from '../agents.js';
 import { suitesFor } from '../modules.js';
 import { expectedOutcome, listBeforeWrite, noRetryAfterRefusal } from '../scorers.js';
-import { prepare, type Row, report, runCases } from './harness.js';
+import { nothingRan, prepare, type Row, report, runCases } from './harness.js';
 
 export async function evalAssistant(
   agents: Agents,
@@ -24,5 +24,5 @@ export async function evalAssistant(
       ])),
     );
   }
-  return report(rows);
+  return report(rows, nothingRan(options.module, 'eval cases (agent.evalCases)'));
 }

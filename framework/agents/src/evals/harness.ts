@@ -120,10 +120,20 @@ export async function runCases<C extends EvalCase>(
   return rows;
 }
 
-/** PASS/FAIL per turn; true if every turn passed. */
-export function report(rows: Row[]): boolean {
+/**
+ * Why a run evaluated nothing: the module it names has no cases of this kind (`kind` names the
+ * AgentModule field), or no module has any. Either way the run fails: nothing evaluated is no
+ * pass.
+ */
+export const nothingRan = (module: string | undefined, kind: string) =>
+  module === undefined
+    ? `No module has ${kind}: nothing was evaluated.`
+    : `${module} has no ${kind}: nothing was evaluated.`;
+
+/** PASS/FAIL per turn; true if every turn passed. `nothing` says why, when no case ran. */
+export function report(rows: Row[], nothing = nothingRan(undefined, 'eval cases')): boolean {
   if (rows.length === 0) {
-    console.log('No cases ran: nothing was evaluated.');
+    console.log(nothing);
     return false;
   }
   let failed = 0;

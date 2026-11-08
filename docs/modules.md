@@ -199,10 +199,11 @@ Name each file after its module (`orders-states.sql`), so two modules never edit
 
 An eval run makes a fresh user, runs only that module's `evalSetup`, then its cases in order.
 An unknown module fails (`No module called …`), and so does a run in which no case ran (a module
-with no voice cases, for `eval voice`). Since the first matching script takes a turn, earlier
-modules first, `defineServer` runs every module's eval inputs through all the modules' scripts
-and refuses to start when one module's script would take another's turn: give each module verbs
-of its own.
+with no voice cases, for `eval voice`: `<module> has no spoken eval cases …`); `eval whatsapp`
+types a module's spoken cases that are not in English. Since the first matching script takes a
+turn, earlier modules first, `defineServer` runs every module's eval inputs through all the
+modules' scripts and refuses to start when one module's script would take another's turn: give
+each module verbs of its own.
 
 The evals call the API at `API_INTERNAL_URL` (default `http://localhost:3000`) and sign up their
 user with that address as the request's origin. An API on another port (a second checkout) needs

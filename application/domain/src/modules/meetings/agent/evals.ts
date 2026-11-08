@@ -1,4 +1,4 @@
-import type { EvalCase } from '@hykr/agents/script';
+import type { EvalCase, VoiceEvalCase } from '@hykr/agents/script';
 import type { PageSpec } from '@hykr/contracts';
 
 const NO_SCREEN = ['canvas', 'screen', 'opened'];
@@ -63,5 +63,50 @@ export const evalCases: EvalCase[] = [
     input: 'open Eval sync',
     surfaces: ['text'],
     expect: { must: ['list-meetings'], mustNot: ['canvas-open'], replyExcludes: NO_SCREEN },
+  },
+];
+
+/**
+ * Spoken turns in English, Hindi and Telugu, after the same setup: the meeting's title stays as
+ * said, the answer comes in the turn's language, one line (the screen shows the rest). The ones
+ * not in English are typed on WhatsApp too, where there is no canvas: so they expect the lookup,
+ * not where the meeting opens.
+ */
+export const voiceEvalCases: VoiceEvalCase[] = [
+  {
+    lang: 'en',
+    why: 'today, as one spoken line (English)',
+    input: 'today',
+    expect: { must: ['list-meetings', 'list-todos'], replyIncludes: '1 meeting' },
+  },
+  {
+    lang: 'hi',
+    why: 'today (Hindi)',
+    input: 'आज',
+    expect: { must: ['list-meetings', 'list-todos'], mustNot: ['close-meeting'] },
+  },
+  {
+    lang: 'te',
+    why: 'today (Telugu)',
+    input: 'ఈరోజు',
+    expect: { must: ['list-meetings', 'list-todos'], mustNot: ['close-meeting'] },
+  },
+  {
+    lang: 'en',
+    why: 'opens a meeting by voice (English)',
+    input: 'open Eval sync',
+    expect: { must: ['list-meetings', 'canvas-open'], mustNot: ['canvas-compose'] },
+  },
+  {
+    lang: 'hi',
+    why: 'opens a meeting, verb last (Hindi)',
+    input: 'Eval sync खोलो',
+    expect: { must: ['list-meetings'], mustNot: ['close-meeting', 'canvas-compose'] },
+  },
+  {
+    lang: 'te',
+    why: 'opens a meeting, verb last (Telugu)',
+    input: 'Eval sync తెరువు',
+    expect: { must: ['list-meetings'], mustNot: ['close-meeting', 'canvas-compose'] },
   },
 ];

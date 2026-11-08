@@ -5,6 +5,36 @@ on:
     branches: [main]
   pull_request:
 
+# Both jobs run against the same services (each its own), with the same settings.
+env:
+  DATABASE_URL: postgres://app:app@localhost:5432/app
+  MIGRATE_DATABASE_URL: postgres://app:app@localhost:5432/app
+  REDIS_URL: redis://localhost:6379
+  BETTER_AUTH_URL: http://localhost:3000
+  WEB_ORIGINS: http://localhost:8081
+  API_INTERNAL_URL: http://localhost:3000
+  # Test values only (32+ characters); nothing real runs in CI.
+  BETTER_AUTH_SECRET: ci-better-auth-secret-0123456789abcdef
+  AGENT_API_KEY: ci-agent-api-key-0123456789abcdef0123
+  VOICE_AGENT_KEY: ci-voice-agent-key-0123456789abcdef01
+  APPROVAL_SECRET: ci-approval-secret-0123456789abcdef0123
+  SECRETS_KEY: ci-secrets-key-0123456789abcdef0123456789
+  # The scripted model: no OpenRouter key, no cost, same answers every run.
+  MODEL_MODE: fake
+  VOICE_MODE: fake
+  GUARDRAILS: "off"
+  # Links in messages, and the Mailpit service.
+  APP_URL: http://localhost:8081
+  SMTP_HOST: localhost
+  SMTP_PORT: "1025"
+  MAILPIT_URL: http://localhost:8025
+  # Files in memory: no object store in CI (the S3 driver's own test skips without MinIO).
+  STORAGE_DRIVER: memory
+  # Documents by the fake engine (plain text lines); the PDF engine's own tests run it directly.
+  DOCUMENTS_ENGINE: fake
+  # turbo passes every variable to the test tasks (turbo.json), so a new variable needs a
+  # line here only when its default is wrong for CI.
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -29,35 +59,6 @@ jobs:
       mailpit:
         image: axllent/mailpit:latest
         ports: ["1025:1025", "8025:8025"]
-
-    env:
-      DATABASE_URL: postgres://app:app@localhost:5432/app
-      MIGRATE_DATABASE_URL: postgres://app:app@localhost:5432/app
-      REDIS_URL: redis://localhost:6379
-      BETTER_AUTH_URL: http://localhost:3000
-      WEB_ORIGINS: http://localhost:8081
-      API_INTERNAL_URL: http://localhost:3000
-      # Test values only (32+ characters); nothing real runs in CI.
-      BETTER_AUTH_SECRET: ci-better-auth-secret-0123456789abcdef
-      AGENT_API_KEY: ci-agent-api-key-0123456789abcdef0123
-      VOICE_AGENT_KEY: ci-voice-agent-key-0123456789abcdef01
-      APPROVAL_SECRET: ci-approval-secret-0123456789abcdef0123
-      SECRETS_KEY: ci-secrets-key-0123456789abcdef0123456789
-      # The scripted model: no OpenRouter key, no cost, same answers every run.
-      MODEL_MODE: fake
-      VOICE_MODE: fake
-      GUARDRAILS: "off"
-      # Links in messages, and the Mailpit service above.
-      APP_URL: http://localhost:8081
-      SMTP_HOST: localhost
-      SMTP_PORT: "1025"
-      MAILPIT_URL: http://localhost:8025
-      # Files in memory: no object store in CI (the S3 driver's own test skips without MinIO).
-      STORAGE_DRIVER: memory
-      # Documents by the fake engine (plain text lines); the PDF engine's own tests run it directly.
-      DOCUMENTS_ENGINE: fake
-      # turbo passes every variable to the test tasks (turbo.json), so a new variable needs a
-      # line here only when its default is wrong for CI.
 
     steps:
       - uses: actions/checkout@v4
@@ -84,10 +85,31 @@ jobs:
 
   # The framework as a user gets it: every @hykr/* package packed as it would be published, a
   # new application scaffolded with create-basecamp, installed from those tarballs (no
-  # workspace links), then built and typechecked.
+  # workspace links), built and typechecked. Then it runs: migrated, its API started, and the
+  # assistant's evals (assistant, voice, WhatsApp) answered by the scripted model.
+  # scripts/consumer.sh is the job; run it locally the same way.
   consumer:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
+
+    services:
+      postgres:
+        image: postgis/postgis:17-3.5
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app -d app"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+      mailpit:
+        image: axllent/mailpit:latest
+        ports: ["1025:1025", "8025:8025"]
+
     steps:
       - uses: actions/checkout@v4
 
@@ -99,28 +121,9 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm turbo run build --filter="./framework/*"
 
-      - name: Pack the framework
-        run: |
-          mkdir -p "$RUNNER_TEMP/tgz"
-          for dir in framework/*/; do (cd "$dir" && pnpm pack --pack-destination "$RUNNER_TEMP/tgz"); done
+      - name: Prepare the database (extensions, search path)
+        run: psql postgres://app:app@localhost:5432/app -v ON_ERROR_STOP=1 -f framework/cli/infra/postgres/init.sql
 
-      - name: Scaffold an application from the packed create-basecamp
-        working-directory: ${{ runner.temp }}
-        run: |
-          mkdir cb && tar xzf tgz/hykr-create-basecamp-*.tgz -C cb
-          node cb/package/dist/index.js myapp
-          # The tarballs stand in for the registry.
-          { echo; echo "overrides:"; for t in "$RUNNER_TEMP"/tgz/hykr-*.tgz; do
-              n=$(basename "$t" .tgz | sed 's/^hykr-//; s/-[0-9.]*$//')
-              echo "  \"@hykr/$n\": \"file:$t\""
-            done; } >> myapp/pnpm-workspace.yaml
-
-      - name: Install, build and typecheck it
-        working-directory: ${{ runner.temp }}/myapp
-        run: |
-          pnpm install
-          pnpm -r build
-          pnpm -r typecheck
-          pnpm exec basecamp --help
+      - name: Pack, scaffold, install, build, typecheck, run and evaluate it
+        run: scripts/consumer.sh --run "$RUNNER_TEMP/consumer"

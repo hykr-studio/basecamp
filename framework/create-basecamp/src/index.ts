@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // npm create @hykr/basecamp <folder>   (or pnpm create @hykr/basecamp <folder>)
 //
-// A new Basecamp application: the sample modules (meetings, notes, to-dos) as a starting point,
-// on the published @hykr/* packages. Replace them with your own (see DOMAIN.md).
+// A new Basecamp application: the sample modules (to-dos, notes, meetings, orders, account and
+// briefs) as a starting point, on the published @hykr/* packages. Replace them with your own (see
+// DOMAIN.md).
 import { cpSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
