@@ -2,7 +2,6 @@ import {
   type DocumentRecipient,
   FrameworkCapabilities,
   type Principal,
-  parseTenantSettings,
   RenderDocumentSpec,
   SendDocumentSpec,
   versionedOf,
@@ -19,6 +18,7 @@ import {
   needsApproval,
   projectRead,
   type Tx,
+  tenantZone,
   toJson,
 } from '@hykr/core';
 import {
@@ -62,14 +62,14 @@ export interface Snapshot {
   value: unknown;
 }
 
-/** The business's name and time zone. */
+/** The business's name and time zone (`tenantZone`: its own, else the deployment's). */
 export async function businessOf(conn: Conn, tenantId: string): Promise<DocumentBusiness> {
   const [t] = await conn
     .select({ name: tenants.name, settings: tenants.settings })
     .from(tenants)
     .where(eq(tenants.id, tenantId));
   if (!t) throw new NotFoundException({ error: 'not_found', message: 'No such business' });
-  return { id: tenantId, name: t.name, timeZone: parseTenantSettings(t.settings).timeZone };
+  return { id: tenantId, name: t.name, timeZone: tenantZone(t.settings) };
 }
 
 /** How a document writes in a language: labels, amounts, dates in the business's zone. */

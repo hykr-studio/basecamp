@@ -1,14 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  Channel,
-  ChatContext,
-  ChatResponse,
-  Lang,
-  Present,
-  Principal,
-  Surface,
-  ToolCallSummary,
+import {
+  type Channel,
+  type ChatContext,
+  type ChatResponse,
+  isTimeZone,
+  type Lang,
+  type Present,
+  type Principal,
+  type Surface,
+  type ToolCallSummary,
 } from '@hykr/contracts';
+import { TenantConfigService, tenantZone } from '@hykr/core';
 import { toolsFor } from '@hykr/core/tools';
 import { LANG_ENGLISH_NAMES } from '@hykr/i18n';
 import { subjectKeyOf, userIdOf } from '@hykr/policy';
@@ -71,16 +73,6 @@ function partsOf(results: unknown[]): SavedPart[] {
       output: compact(x.result),
     };
   });
-}
-
-function validTimeZone(zone: string | undefined): string {
-  if (!zone) return 'UTC';
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: zone });
-    return zone;
-  } catch {
-    return 'UTC';
-  }
 }
 
 type RawToolResult = {
@@ -171,7 +163,17 @@ const outcomeOf = (
  */
 @Injectable()
 export class ChatService implements OnApplicationBootstrap {
-  constructor(private readonly threads: ThreadsService) {}
+  constructor(
+    private readonly threads: ThreadsService,
+    private readonly tenants: TenantConfigService,
+  ) {}
+
+  /** The person's zone as the turn says it; else their business's (`tenantZone`). */
+  private async zoneOf(given: string | undefined, tenantId: string): Promise<string> {
+    if (isTimeZone(given)) return given;
+    const business = await this.tenants.get(tenantId).catch(() => undefined);
+    return tenantZone(business?.settings);
+  }
 
   /**
    * Every tool the agent could get, built once: a tool id defined twice (a contribution named
@@ -225,7 +227,7 @@ export class ChatService implements OnApplicationBootstrap {
     requestContext.set('runId', runId);
     requestContext.set('channel', channel);
     if (turn.lang) requestContext.set('lang', turn.lang);
-    const timeZone = validTimeZone(turn.timeZone);
+    const timeZone = await this.zoneOf(turn.timeZone, owner.tenantId);
     requestContext.set('timeZone', timeZone);
     requestContext.set('today', new Date().toLocaleDateString('sv', { timeZone }));
     requestContext.set('surfaces', turn.surfaces);

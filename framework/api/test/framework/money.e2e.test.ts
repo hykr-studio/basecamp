@@ -5,8 +5,10 @@ import {
   CORE_OPTIONS,
   type CoreOptions,
   defaultCurrency,
+  defaultTimeZone,
   nextNumber,
   setDefaultCurrency,
+  setDefaultTimeZone,
 } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -271,5 +273,28 @@ describe('number series', () => {
     ).rejects.toThrow('roll back');
     const next = await db().transaction((tx) => nextNumber(tx, p, BasketSeries));
     expect(next.seq).toBe(taken.seq + 1);
+  });
+
+  it("a business without a zone of its own numbers in the deployment's, else UTC", async () => {
+    // 20:00 UTC on 31 March is 1 April in Tokyo: the next financial year there.
+    const at = new Date('2027-03-31T20:00:00Z');
+    const fresh = new Person('Fresh Money');
+    await fresh.signUp();
+    const freshTenant = (await me(fresh)).tenantId;
+    await setMoney(freshTenant, { currency: 'EUR', fyStartMonth: 4 });
+    const p = principalOf(fresh, freshTenant);
+    const was = defaultTimeZone();
+    try {
+      setDefaultTimeZone('Asia/Tokyo');
+      expect((await fresh.call('GET', '/api/money')).body.timeZone).toBe('Asia/Tokyo');
+      const tokyo = await db().transaction((tx) => nextNumber(tx, p, BasketSeries, at));
+      expect(tokyo).toMatchObject({ period: 'FY2027', number: 'B2027-28-001' });
+      setDefaultTimeZone(undefined);
+      expect((await fresh.call('GET', '/api/money')).body.timeZone).toBe('UTC');
+      const utc = await db().transaction((tx) => nextNumber(tx, p, BasketSeries, at));
+      expect(utc).toMatchObject({ period: 'FY2026', number: 'B2026-27-001' });
+    } finally {
+      setDefaultTimeZone(was === 'UTC' ? undefined : was);
+    }
   });
 });

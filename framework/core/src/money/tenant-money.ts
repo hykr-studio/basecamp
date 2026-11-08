@@ -1,7 +1,8 @@
-import { CurrencyCode, type Money, MoneySettings, TenantSettings } from '@hykr/contracts';
+import { CurrencyCode, type Money, MoneySettings } from '@hykr/contracts';
 import { schema } from '@hykr/db';
 import { currencyExponent } from '@hykr/i18n';
 import { eq } from 'drizzle-orm';
+import { tenantZone } from '../tenants/time-zone.js';
 import type { Conn } from '../tokens.js';
 
 /** ISO 4217's own code for "no currency": what money is in when nobody chose one. */
@@ -30,8 +31,8 @@ export interface ResolvedMoney {
 
 /**
  * A business's money settings, read now (in the caller's transaction, if given): its currency
- * (its own, else the deployment's, else XXX), financial-year start, time zone, named amounts
- * and bands. Only the `money` section and the time zone are read, so another section's bad
+ * (its own, else the deployment's, else XXX), financial-year start, time zone (`tenantZone`),
+ * named amounts and bands. Only the `money` section and the time zone are read, so another section's bad
  * value does not stop a write.
  */
 export async function tenantMoney(conn: Conn, tenantId: string): Promise<ResolvedMoney> {
@@ -41,7 +42,7 @@ export async function tenantMoney(conn: Conn, tenantId: string): Promise<Resolve
     .where(eq(schema.tenants.id, tenantId));
   const stored = (row?.settings ?? {}) as Record<string, unknown>;
   const money = MoneySettings.parse(stored.money);
-  const timeZone = TenantSettings.shape.timeZone.parse(stored.timeZone);
+  const timeZone = tenantZone(stored);
   const currency = money.currency ?? defaultCurrency();
   return {
     currency,

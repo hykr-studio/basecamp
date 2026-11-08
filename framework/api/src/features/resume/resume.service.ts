@@ -5,12 +5,13 @@ import {
   type Channel,
   type ChatResponse,
   type DomainEventEnvelope,
+  isTimeZone,
   type Principal,
   parseSubjectKey,
   type Subject,
   type Surface,
 } from '@hykr/contracts';
-import { type NamedEvent, PrincipalResolver, recordEvents } from '@hykr/core';
+import { type NamedEvent, PrincipalResolver, recordEvents, tenantZoneOf } from '@hykr/core';
 import type { ResumeDecision } from '@hykr/core/tools';
 import { type Database, schema } from '@hykr/db';
 import { isLang, type Lang, pick, t } from '@hykr/i18n';
@@ -252,7 +253,10 @@ export class ResumeService implements OnApplicationShutdown {
     requestContext.set('runId', runId);
     requestContext.set('channel', channel);
     if (isLang(ctx.lang)) requestContext.set('lang', ctx.lang);
-    const timeZone = validTimeZone(ctx.timeZone);
+    // The turn's zone, kept with the run; else the business's (`tenantZone`).
+    const timeZone = isTimeZone(ctx.timeZone)
+      ? ctx.timeZone
+      : await tenantZoneOf(this.db, row.tenantId);
     requestContext.set('timeZone', timeZone);
     requestContext.set('today', new Date().toLocaleDateString('sv', { timeZone }));
     requestContext.set('surfaces', surfaces);
@@ -457,15 +461,5 @@ export class ResumeService implements OnApplicationShutdown {
       appUrl: config.appUrl,
     });
     await outbound.queue({ tenantId, contactId: contact.id, from }, messages, { runId });
-  }
-}
-
-function validTimeZone(zone: string | undefined): string {
-  if (!zone) return 'UTC';
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: zone });
-    return zone;
-  } catch {
-    return 'UTC';
   }
 }

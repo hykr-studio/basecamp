@@ -60,6 +60,7 @@ import { jsonOf } from '../export/csv.js';
 import { ZipWriter } from '../export/zip.js';
 import { FilesService } from '../files/files.service.js';
 import { eraseFilesOn } from '../files/privacy.js';
+import { grievanceContactOf } from './contact.js';
 import { deleteContacts, eraseFramework, exportFramework, forgetAccount } from './framework.js';
 import { eraseMastra, exportMastra, runsOf } from './mastra.js';
 import {
@@ -823,7 +824,7 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
       fiduciary: {
         tenantId,
         name: t?.name ?? '',
-        grievanceContact: settings.grievanceContact,
+        grievanceContact: grievanceContactOf(settings),
         privacyUrl: settings.privacyUrl ?? null,
       },
       requests: { respondWithinDays: policy.respondWithinDays, review: policy.review },

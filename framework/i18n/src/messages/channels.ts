@@ -13,6 +13,9 @@ export const channelMessages = defineMessages({
       "Hi {name}! I'm the assistant for {business}. {does} By chatting here you agree to our privacy notice: {privacyUrl}. Send STOP at any time.",
     'channel.help':
       "{does} Send STOP to stop messages, START to turn reminders back on, 'talk to a person' to reach the team, or 'delete my data' to erase your data. Questions about your data: {grievance}.",
+    // HELP when the business has named nobody for personal data (nor has the deployment).
+    'channel.helpNoContact':
+      "{does} Send STOP to stop messages, START to turn reminders back on, 'talk to a person' to reach the team, or 'delete my data' to erase your data. No contact for questions about your data is named yet: ask the team with 'talk to a person'.",
     'channel.stopped':
       "You won't get reminders or offers here any more. Send START to turn reminders back on.",
     'channel.stoppedReminders': 'Reminders are off. Send START to turn them back on.',
@@ -36,6 +39,8 @@ export const channelMessages = defineMessages({
       'नमस्ते {name}! मैं {business} का असिस्टेंट हूँ। {does} यहाँ बात करके आप हमारी गोपनीयता सूचना से सहमत होते हैं: {privacyUrl}। कभी भी STOP भेजें।',
     'channel.help':
       "{does} संदेश रोकने के लिए STOP, रिमाइंडर फिर से शुरू करने के लिए START, टीम से बात करने के लिए 'किसी इंसान से बात', या अपना डेटा हटाने के लिए 'मेरा डेटा हटाओ' भेजें। आपके डेटा के बारे में सवाल: {grievance}।",
+    'channel.helpNoContact':
+      "{does} संदेश रोकने के लिए STOP, रिमाइंडर फिर से शुरू करने के लिए START, टीम से बात करने के लिए 'किसी इंसान से बात', या अपना डेटा हटाने के लिए 'मेरा डेटा हटाओ' भेजें। आपके डेटा के बारे में सवालों के लिए अभी कोई संपर्क तय नहीं है: 'किसी इंसान से बात' भेजकर टीम से पूछें।",
     'channel.stopped': 'अब आपको यहाँ रिमाइंडर या ऑफ़र नहीं मिलेंगे। रिमाइंडर फिर से शुरू करने के लिए START भेजें।',
     'channel.stoppedReminders': 'रिमाइंडर बंद हैं। फिर से शुरू करने के लिए START भेजें।',
     'channel.stoppedOffers': 'अब आपको यहाँ ऑफ़र नहीं मिलेंगे। रिमाइंडर आते रहेंगे।',
@@ -57,6 +62,8 @@ export const channelMessages = defineMessages({
       'నమస్తే {name}! నేను {business} అసిస్టెంట్‌ని. {does} ఇక్కడ మాట్లాడటం ద్వారా మీరు మా గోప్యతా నోటీసుకు అంగీకరిస్తున్నారు: {privacyUrl}. ఎప్పుడైనా STOP పంపండి.',
     'channel.help':
       "{does} సందేశాలు ఆపడానికి STOP, రిమైండర్లు మళ్లీ ప్రారంభించడానికి START, టీమ్‌తో మాట్లాడటానికి 'మనిషితో మాట్లాడాలి', మీ డేటా తొలగించడానికి 'నా డేటా తొలగించు' పంపండి. మీ డేటా గురించి ప్రశ్నలు: {grievance}.",
+    'channel.helpNoContact':
+      "{does} సందేశాలు ఆపడానికి STOP, రిమైండర్లు మళ్లీ ప్రారంభించడానికి START, టీమ్‌తో మాట్లాడటానికి 'మనిషితో మాట్లాడాలి', మీ డేటా తొలగించడానికి 'నా డేటా తొలగించు' పంపండి. మీ డేటా గురించి ప్రశ్నలకు ఇంకా ఎవరి సంప్రదింపు వివరాలూ ఇవ్వలేదు: 'మనిషితో మాట్లాడాలి' పంపి టీమ్‌ను అడగండి.",
     'channel.stopped': 'ఇకపై ఇక్కడ మీకు రిమైండర్లు లేదా ఆఫర్లు రావు. రిమైండర్లు మళ్లీ ప్రారంభించడానికి START పంపండి.',
     'channel.stoppedReminders': 'రిమైండర్లు ఆపివేయబడ్డాయి. మళ్లీ ప్రారంభించడానికి START పంపండి.',
     'channel.stoppedOffers': 'ఇకపై మీకు ఇక్కడ ఆఫర్లు రావు. రిమైండర్లు వస్తూనే ఉంటాయి.',

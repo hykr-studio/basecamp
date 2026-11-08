@@ -27,7 +27,7 @@ import {
   type Principal,
   parseTenantSettings,
 } from '@hykr/contracts';
-import { runWrite, toJson, type WriteOp } from '@hykr/core';
+import { runWrite, tenantZone, toJson, type WriteOp } from '@hykr/core';
 import { calendarConnections, calendarFeeds, type Database, tenants, user } from '@hykr/db';
 import { can, subjectOf } from '@hykr/policy';
 import {
@@ -409,7 +409,7 @@ export class CalendarService implements OnModuleInit {
       .from(tenants)
       .where(eq(tenants.id, p.tenantId ?? ''));
     const settings = parseTenantSettings(t?.settings ?? {});
-    const timeZone = settings.timeZone;
+    const timeZone = tenantZone(settings);
     // Hours asked for are the answer's; otherwise the business's own open hours and holidays
     // (none set: every hour). The framework assumes no working day of its own.
     const asked = !!(q.hoursFrom || q.hoursTo);

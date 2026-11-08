@@ -12,6 +12,7 @@ import {
   Person,
   pool,
   server,
+  setTenantSettings,
   shutdown,
 } from '../../dist/testing.js';
 // The framework's fixture application, compiled (Nest's DI needs the decorator metadata).
@@ -147,6 +148,24 @@ describe('whatsapp', () => {
     expect(rows).toEqual([{ customer: true, welcomed: true }]);
   });
 
+  it("a new number's contact is in its business's time zone", async () => {
+    const { tenantId } = await me(ana);
+    await setTenantSettings(tenantId, { timeZone: 'Pacific/Honolulu' });
+    try {
+      const stranger = `1557${String(Date.now()).slice(-7)}`;
+      const raw = delivery(stranger, 'open my Focus board page');
+      expect((await post(raw, sign(raw))).status).toBe(200);
+      await eventually(() => (to(stranger).length >= 2 ? true : undefined));
+      const { rows } = await pool.query(
+        'select time_zone, locale from channel.contacts where tenant_id = $1 and address = $2',
+        [tenantId, stranger],
+      );
+      expect(rows).toEqual([{ time_zone: 'Pacific/Honolulu', locale: 'en' }]);
+    } finally {
+      await setTenantSettings(tenantId, { timeZone: null });
+    }
+  });
+
   it('linking takes the code sent to the number; a wrong code is refused', async () => {
     const asked = await ana.call('POST', '/api/channels/whatsapp/code', {
       phone: `+${phone}`,
@@ -211,6 +230,42 @@ describe('whatsapp', () => {
       },
     );
     expect(taken.status).toBe(409);
+  });
+
+  it("a code sent without a zone links the number in the person's business's zone", async () => {
+    const { tenantId } = await me(ana);
+    const bea = new Person('Bea WhatsApp');
+    await bea.signUp();
+    await addMember(bea, tenantId, ['admin']);
+    const theirs = `9196${String(Date.now()).slice(-8)}`;
+    const inAna = { 'x-tenant-id': tenantId };
+    await setTenantSettings(tenantId, { timeZone: 'Pacific/Honolulu' });
+    try {
+      const asked = await bea.call(
+        'POST',
+        '/api/channels/whatsapp/code',
+        { phone: `+${theirs}` },
+        inAna,
+      );
+      expect(asked.status).toBe(201);
+      const sentCode = await eventually(() =>
+        to(theirs).find((s) => s.body.template?.name === 'login_code_v1'),
+      );
+      const code = sentCode.body.template?.components[0].parameters[0].text ?? '';
+      const linked = await bea.call(
+        'POST',
+        '/api/channels/whatsapp/verify',
+        { phone: theirs, code },
+        inAna,
+      );
+      expect(linked.status).toBe(201);
+      expect((await bea.call('GET', '/api/channels/whatsapp', undefined, inAna)).body).toEqual({
+        address: theirs,
+        timeZone: 'Pacific/Honolulu',
+      });
+    } finally {
+      await setTenantSettings(tenantId, { timeZone: null });
+    }
   });
 
   it("a number another business holds can't be taken over", async () => {
@@ -302,9 +357,30 @@ describe('whatsapp', () => {
       });
     });
 
-    it('HELP says what the assistant does and whom to ask about data', async () => {
-      const [help] = await say('help');
-      expect(help.body.text.body).toContain('privacy@example.in');
+    it('HELP says what the assistant does and whom to ask about data, or that nobody is named', async () => {
+      const { tenantId } = await me(ana);
+      const internals = await import('../../dist/testing-internals.js');
+      const was = internals.defaultGrievanceContact();
+      try {
+        await setTenantSettings(tenantId, { grievanceContact: null });
+        internals.setDefaultGrievanceContact(undefined);
+        const [none] = await say('help');
+        expect(none.body.text.body).toContain('Send STOP to stop messages');
+        expect(none.body.text.body).toContain(
+          'No contact for questions about your data is named yet',
+        );
+        internals.setDefaultGrievanceContact('privacy@deployment.test');
+        const [deployment] = await say('help');
+        expect(deployment.body.text.body).toContain(
+          'Questions about your data: privacy@deployment.test',
+        );
+        await setTenantSettings(tenantId, { grievanceContact: 'dpo@business.test' });
+        const [own] = await say('help');
+        expect(own.body.text.body).toContain('Questions about your data: dpo@business.test');
+      } finally {
+        internals.setDefaultGrievanceContact(was);
+        await setTenantSettings(tenantId, { grievanceContact: null });
+      }
     });
 
     it('a person: a handoff opens, and the assistant stays silent after', async () => {

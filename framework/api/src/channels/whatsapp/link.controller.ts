@@ -1,5 +1,5 @@
-import { FrameworkCapabilities, type Principal } from '@hykr/contracts';
-import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@hykr/core';
+import { FrameworkCapabilities, isTimeZone, type Principal } from '@hykr/contracts';
+import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard, tenantZoneOf } from '@hykr/core';
 import { type Database, schema } from '@hykr/db';
 import { can } from '@hykr/policy';
 import {
@@ -29,21 +29,13 @@ const { contacts } = schema;
 /** wa_id: digits only, no plus, no spaces. */
 export const toWaId = (phone: string) => phone.replace(/\D/g, '');
 
-const validZone = (zone: string) => {
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: zone });
-    return zone;
-  } catch {
-    return 'Asia/Kolkata';
-  }
-};
-
 const Phone = z.string().regex(/^\+?[\d\s()-]{7,20}$/, 'A phone number, with the country code');
 
 class CodeDto extends createZodDto(
   z.object({
     phone: Phone,
-    timeZone: z.string().min(1).max(64).default('Asia/Kolkata'),
+    /** The person's IANA zone (their device's); left out or unknown: their business's. */
+    timeZone: z.string().min(1).max(64).optional(),
     lang: z.enum(['en', 'hi', 'te']).default('en'),
   }),
 ) {}
@@ -84,8 +76,11 @@ export class WhatsAppLinkController {
 
   /** Send a one-time code to the number (login_code_v1): proof the person holds it. */
   @Post('code')
-  sendCode(@CurrentPrincipal() p: Principal, @Body() body: CodeDto) {
-    return this.linking.sendCode(p, toWaId(body.phone), validZone(body.timeZone), body.lang);
+  async sendCode(@CurrentPrincipal() p: Principal, @Body() body: CodeDto) {
+    const zone = isTimeZone(body.timeZone)
+      ? body.timeZone
+      : await tenantZoneOf(this.db, p.tenantId ?? '');
+    return this.linking.sendCode(p, toWaId(body.phone), zone, body.lang);
   }
 
   /** The code they received: the number is linked to their account. */

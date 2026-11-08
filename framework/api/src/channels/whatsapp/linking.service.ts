@@ -1,4 +1,5 @@
-import type { Principal } from '@hykr/contracts';
+import { isTimeZone, type Principal } from '@hykr/contracts';
+import { tenantZoneOf } from '@hykr/core';
 import { type Database, schema, writeAudit } from '@hykr/db';
 import type { Lang } from '@hykr/i18n';
 import { LoginCode } from '@hykr/notifications';
@@ -59,7 +60,9 @@ export class LinkingService {
     const outcome = await this.otp.verify(pending, code);
     if (outcome === 'wrong') throw new BadRequestException("That code isn't right");
     if (outcome !== 'ok') throw noCode();
-    const zone = (pending.meta as { timeZone?: string } | null)?.timeZone ?? 'UTC';
+    // The zone the code was sent with (theirs, else their business's when it was sent).
+    const sent = (pending.meta as { timeZone?: unknown } | null)?.timeZone;
+    const zone = isTimeZone(sent) ? sent : await tenantZoneOf(this.db, tenantId);
     return this.link(p.actor.id, tenantId, address, zone);
   }
 

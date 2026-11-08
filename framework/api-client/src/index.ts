@@ -839,10 +839,11 @@ export function createApiClient(opts: ApiClientOptions) {
     },
     /**
      * The business's setup (A11). Changes go through `command(SetFeatureSpec | UpdateBrandingSpec
-     * | UpdateWordingSpec | AddDomainSpec | VerifyDomainSpec | RemoveDomainSpec, input)`, custom
-     * fields through `entity(CustomFieldSpec)`, and every editable section (approvals, money,
-     * businessHours, sla, memory, shares, files, parties, members, and `general`: the time zone,
-     * quiet hours, reply time and marketing limit) through `updateSection` (H2).
+     * | UpdateWordingSpec | SetTimeZoneSpec | AddDomainSpec | VerifyDomainSpec | RemoveDomainSpec,
+     * input)`, custom fields through `entity(CustomFieldSpec)`, and every editable section
+     * (approvals, money, businessHours, sla, memory, shares, files, parties, members, and
+     * `general`: the time zone, quiet hours, reply time and marketing limit) through
+     * `updateSection` (H2).
      */
     settings: {
       /** The editable sections this person may change (`general` first), with their values. */
@@ -894,8 +895,11 @@ export function createApiClient(opts: ApiClientOptions) {
     whatsapp: {
       get: () =>
         call<{ address: string; timeZone: string } | null>('GET', '/api/channels/whatsapp'),
-      /** A one-time code to the number (WhatsApp's login_code_v1): proof the person holds it. */
-      sendCode: (phone: string, timeZone: string, lang: 'en' | 'hi' | 'te' = 'en') =>
+      /**
+       * A one-time code to the number (WhatsApp's login_code_v1): proof the person holds it.
+       * `timeZone` is theirs (their device's); undefined: their business's.
+       */
+      sendCode: (phone: string, timeZone: string | undefined, lang: 'en' | 'hi' | 'te' = 'en') =>
         call<{ sentTo: string; expiresInSeconds: number }>('POST', '/api/channels/whatsapp/code', {
           phone,
           timeZone,

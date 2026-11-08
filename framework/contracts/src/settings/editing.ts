@@ -2,6 +2,7 @@
 // the business stored, parsed by the section's schema, every key the schema does not know
 // refused. Pure, so an app can check a change before it sends it.
 import { z } from 'zod';
+import { isTimeZone } from '../framework/time-zone.js';
 import { TenantSettings } from '../principal.js';
 import {
   editableSection,
@@ -130,22 +131,13 @@ export function patchSettings<T>(
 export const GENERAL_KEYS = ['timeZone', 'quietHours', 'replyTime', 'marketingPerWeek'] as const;
 export type GeneralKey = (typeof GENERAL_KEYS)[number];
 
-/** Is this a time zone the runtime knows ('Europe/Berlin', 'UTC')? */
-export function isTimeZone(zone: string): boolean {
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: zone });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 const TimeOfDay = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 
 /**
  * The base settings a business changes itself, defaults applied, checked more strictly than
- * stored settings are read: a zone the runtime knows (an unknown one would stop every clock
- * counted in business hours) and times of day.
+ * stored settings are read: a zone (`isTimeZone`: UTC or an IANA Area/Location name, never an
+ * offset or an abbreviation; unset is the deployment's) and times of day. The server also asks
+ * Postgres whether it reads the zone the same way (the `general.timeZone` settings check).
  */
 export const GeneralSettings = TenantSettings.pick({
   timeZone: true,
@@ -153,11 +145,11 @@ export const GeneralSettings = TenantSettings.pick({
   replyTime: true,
   marketingPerWeek: true,
 }).superRefine((s, ctx) => {
-  if (!isTimeZone(s.timeZone))
+  if (s.timeZone !== undefined && !isTimeZone(s.timeZone))
     ctx.addIssue({
       code: 'custom',
       path: ['timeZone'],
-      message: `"${s.timeZone}" is not a time zone (use one such as "Europe/Berlin" or "UTC")`,
+      message: `"${s.timeZone}" is not a time zone (use one such as "Europe/Berlin" or "UTC", not an offset or an abbreviation)`,
     });
   for (const end of ['from', 'to'] as const)
     if (!TimeOfDay.safeParse(s.quietHours[end]).success)

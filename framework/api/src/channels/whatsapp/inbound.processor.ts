@@ -18,6 +18,7 @@ import { DelayedError, type Job, type Queue } from 'bullmq';
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { config } from '../../config.js';
+import { grievanceContactOf } from '../../features/privacy/contact.js';
 import { type InboundInfo, inboundHooks } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
 import { ChatService } from '../../modules/chat/chat.service.js';
@@ -323,7 +324,7 @@ export class InboundProcessor extends WorkerHost {
     contact: Contact,
     lang: Lang,
     say: (line: string) => Promise<unknown>,
-    settings: { grievanceContact: string; replyTime: string },
+    settings: { grievanceContact?: string; replyTime: string },
     text: string,
   ) {
     const consent = (topic: 'reminders' | 'marketing', granted: boolean) =>
@@ -340,10 +341,15 @@ export class InboundProcessor extends WorkerHost {
         await consent('reminders', true);
         await this.contacts.markUnreachable(contact.id, false);
         return say(t(lang, 'channel.started'));
-      case 'help':
+      case 'help': {
+        // The business's privacy contact, else the deployment's; with none, HELP says so.
+        const grievance = grievanceContactOf(settings);
         return say(
-          t(lang, 'channel.help', { does: does(lang), grievance: settings.grievanceContact }),
+          grievance
+            ? t(lang, 'channel.help', { does: does(lang), grievance })
+            : t(lang, 'channel.helpNoContact', { does: does(lang) }),
         );
+      }
       case 'human': {
         const handoff = await this.handoffs.open(contact, 'customer_asked');
         const reply = t(lang, 'channel.handoff', { replyTime: settings.replyTime });
@@ -501,7 +507,8 @@ export class InboundProcessor extends WorkerHost {
   private async languageOf(contact: Contact, text: string): Promise<Lang> {
     const written = scriptOf(text);
     if (written && written !== 'en') {
-      const locale = `${written}-IN`;
+      // The language alone: the script says nothing of where they are.
+      const locale = written;
       if (contact.locale !== locale)
         await this.db.update(contacts).set({ locale }).where(eq(contacts.id, contact.id));
       return written;

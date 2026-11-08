@@ -119,8 +119,8 @@ describe('reading the sections', () => {
       value: { defaultDays: 7, maxDays: 90, sessionHours: 12 },
       problems: [],
     });
+    // No zone of its own (X2): the deployment's applies, so `timeZone` is not set here.
     expect((await read(owner, 'general')).body.value).toEqual({
-      timeZone: expect.any(String),
       quietHours: { from: expect.any(String), to: expect.any(String) },
       replyTime: expect.any(String),
       marketingPerWeek: expect.any(Number),
@@ -407,6 +407,9 @@ describe('a change through the write path', () => {
       { timeZone: 'Mars/Olympus' },
       /^general\.timeZone: "Mars\/Olympus" is not a time zone/,
     );
+    // Offsets and abbreviations are not zones (X2): Postgres reads them otherwise.
+    for (const zone of ['IST', '+05:30', '+0530'])
+      await bad('general', { timeZone: zone }, /^general\.timeZone: ".+" is not a time zone/);
     await bad('general', { quietHours: { from: '9pm' } }, /^general\.quietHours\.from: /);
     await bad('general', { marketingPerWeek: -1 }, /^general\.marketingPerWeek: /);
     // Nothing was kept.

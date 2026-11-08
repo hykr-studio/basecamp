@@ -12,12 +12,11 @@ import {
   type SummaryMeasure,
   type SummaryQuery,
   type SummaryValue,
-  TenantSettings,
 } from '@hykr/contracts';
-import { schema } from '@hykr/db';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { type Column, eq, getTableColumns, type SQL, sql } from 'drizzle-orm';
+import { type Column, getTableColumns, type SQL, sql } from 'drizzle-orm';
 import { type AnyEntityDef, tenantOf } from '../entity/define-entity.js';
+import { tenantZoneOf } from '../tenants/time-zone.js';
 import type { Conn } from '../tokens.js';
 
 /**
@@ -92,23 +91,6 @@ async function visibleFields(
   const row = page.items[0];
   if (!row) return null;
   return new Set(Object.keys(def.toRead(row, p) as object));
-}
-
-/** The business's time zone (its settings), which dates are bucketed in. */
-async function tenantTimeZone(conn: Conn, tenantId: string): Promise<string> {
-  const [row] = await conn
-    .select({ settings: schema.tenants.settings })
-    .from(schema.tenants)
-    .where(eq(schema.tenants.id, tenantId));
-  const stored = (row?.settings ?? {}) as Record<string, unknown>;
-  const zone = TenantSettings.shape.timeZone.safeParse(stored.timeZone);
-  const timeZone = zone.success ? zone.data : 'UTC';
-  try {
-    new Intl.DateTimeFormat('en', { timeZone });
-    return timeZone;
-  } catch {
-    return 'UTC';
-  }
 }
 
 const FORMATS = {
@@ -211,9 +193,8 @@ export async function summarize(
     return c;
   };
   const where = await listWhere(def, p, q);
-  const timeZone = q.groupBy.some((g) => g.bucket)
-    ? await tenantTimeZone(conn, tenantOf(p))
-    : 'UTC';
+  // Dates are bucketed in the business's time zone (`tenantZone`).
+  const timeZone = q.groupBy.some((g) => g.bucket) ? await tenantZoneOf(conn, tenantOf(p)) : 'UTC';
 
   // The inner query: each record's group values, currency and measured values, in reach.
   const valueFields = [...new Set(q.measures.map((m) => m.field))];

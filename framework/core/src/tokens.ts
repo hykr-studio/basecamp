@@ -37,6 +37,11 @@ export interface CoreOptions {
    */
   defaultCurrency?: string;
   /**
+   * The time zone of a business that set none (DEFAULT_TIME_ZONE, IANA). Unset: UTC
+   * (`tenantZone`).
+   */
+  defaultTimeZone?: string;
+  /**
    * Does a person who signs up get a business of their own, as its creator? Default true. False:
    * they are in no business until someone invites them or puts them on a record (a participant).
    */

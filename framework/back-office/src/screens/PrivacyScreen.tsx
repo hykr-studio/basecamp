@@ -278,7 +278,10 @@ function Register() {
   return (
     <View className="gap-3 p-4">
       <Text className="text-small text-muted">
-        {r.fiduciary.name} answers for its personal data · contact {r.fiduciary.grievanceContact}
+        {r.fiduciary.name} answers for its personal data ·{' '}
+        {r.fiduciary.grievanceContact
+          ? `contact ${r.fiduciary.grievanceContact}`
+          : 'no privacy contact named yet'}
         {r.fiduciary.privacyUrl ? ` · notice ${r.fiduciary.privacyUrl}` : ''}
         {r.requests.respondWithinDays
           ? ` · requests answered within ${r.requests.respondWithinDays} days`
@@ -355,7 +358,7 @@ function SettingsForm(props: {
   );
   const [processors, setProcessors] = useState<ProcessorRecord[]>(current.processors);
   const [adding, setAdding] = useState(NO_PROCESSOR);
-  const [contact, setContact] = useState(current.grievanceContact);
+  const [contact, setContact] = useState(current.grievanceContact ?? '');
   const [notice, setNotice] = useState(current.privacyUrl ?? '');
   const invalid =
     (deadline.trim() !== '' && !WHOLE.test(deadline.trim())) ||
@@ -372,7 +375,7 @@ function SettingsForm(props: {
         retention,
         processors,
         // Unchanged, a contact or notice that is the default stays unset.
-        ...(contact !== current.grievanceContact
+        ...(contact !== (current.grievanceContact ?? '')
           ? { grievanceContact: contact.trim() || null }
           : {}),
         ...(notice !== (current.privacyUrl ?? '') ? { privacyUrl: notice.trim() || null } : {}),

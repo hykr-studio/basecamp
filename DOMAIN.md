@@ -225,6 +225,10 @@ The framework has no currency, number format or tax rule of its own; a module de
   currency is its `money.currency` setting, else the deployment's `DEFAULT_CURRENCY`, else `XXX`.
   Limits and bands a module's rules compare against are named amounts in the same settings,
   which the business changes with `PATCH /api/settings/sections/money`.
+  Its periods and dates are in its time zone: its `timeZone` setting, else `DEFAULT_TIME_ZONE`,
+  else UTC. The sample's `.env.example` sets `DEFAULT_CURRENCY=INR` and
+  `DEFAULT_TIME_ZONE=Asia/Kolkata` (and `DEFAULT_GRIEVANCE_CONTACT`, the privacy contact of a
+  business that names none): the framework assumes no market.
 - **Number series** (`defineNumberSeries`, contributed as `numberSeries`): the module's format
   (`ORD/{fy}/{seq:4}`) and reset (none, yearly, or the financial year from `fyStartMonth`);
   `nextNumber` in a command's `run` keeps them gapless. Numbered records are cancelled, never

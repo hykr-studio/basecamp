@@ -12,6 +12,7 @@ import {
   createHookRegistry,
   type EditableSettingsKey,
   type EditableSettingsValue,
+  type GeneralSettings,
   type Money,
   type MoneySettings,
   minutesOf,
@@ -21,7 +22,7 @@ import {
   statesOf,
   WEEKDAYS,
 } from '@hykr/contracts';
-import type { Tx } from '@hykr/core';
+import { type Tx, zoneName } from '@hykr/core';
 import { membershipOf } from '@hykr/db';
 
 declare module '@hykr/contracts' {
@@ -223,6 +224,21 @@ export function sharesProblems(value: SharesSettings): string[] {
   return problems;
 }
 
+/**
+ * The business's own zone, read the same way by Intl and Postgres (`zoneName`, docs/decisions/
+ * X2.md): the schema has refused offsets, abbreviations and names Intl does not know; Postgres
+ * must know it too, with the same offsets, or periods computed in SQL would disagree.
+ */
+export async function timeZoneProblems(
+  value: GeneralSettings,
+  { tx }: Pick<SettingsCheckContext, 'tx'>,
+): Promise<string[]> {
+  if (value.timeZone === undefined || (await zoneName(tx, value.timeZone))) return [];
+  return [
+    `general.timeZone: "${value.timeZone}" is not a time zone this server can use (give UTC or an IANA name such as Europe/Berlin)`,
+  ];
+}
+
 /** The framework's checks of its own sections. */
 export const frameworkSettingsChecks: readonly SettingsCheck[] = [
   defineSettingsCheck({
@@ -242,4 +258,5 @@ export const frameworkSettingsChecks: readonly SettingsCheck[] = [
     check: (value, { catalog }) => slaProblems(value, catalog),
   }),
   defineSettingsCheck({ name: 'shares.lifetimes', section: 'shares', check: sharesProblems }),
+  defineSettingsCheck({ name: 'general.timeZone', section: 'general', check: timeZoneProblems }),
 ] as SettingsCheck[];

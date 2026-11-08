@@ -19,6 +19,8 @@ import {
   systemPrincipal,
   TenantConfigService,
   type Tx,
+  tenantZone,
+  tenantZoneOf,
 } from '@hykr/core';
 import { type Database, schema } from '@hykr/db';
 import type { Lang } from '@hykr/i18n';
@@ -84,17 +86,6 @@ export interface Period {
   unit: CreditsPlanResolved['period'];
   start: Date;
   end: Date;
-}
-
-/** The business's time zone, if Postgres will know it; UTC otherwise. */
-function zoneOf(zone: string | undefined): string {
-  if (!zone) return 'UTC';
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: zone });
-    return zone;
-  } catch {
-    return 'UTC';
-  }
 }
 
 /** The calendar period `now` falls in, in the business's zone (Postgres does the calendar). */
@@ -233,18 +224,29 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
 
   /* ── Plans and assessments ───────────────────────────────────────────── */
 
-  /** The business's effective plan. Settings that do not parse throw. */
+  /**
+   * The business's effective plan, and the zone its periods are in (`tenantZone`). Settings
+   * that do not parse throw.
+   */
   async planOf(tenantId: string): Promise<{ plan: CreditsPlanResolved; zone: string }> {
     const { settings } = await this.tenants.get(tenantId);
     return {
       plan: resolvePlan(creditsConfig(), settings.credits),
-      zone: zoneOf(settings.timeZone),
+      zone: tenantZone(settings),
     };
   }
 
-  /** The plan from the deployment alone: for recording when the business's settings fail. */
-  private fallbackPlan(): { plan: CreditsPlanResolved; zone: string } {
-    return { plan: resolvePlan(creditsConfig(), undefined), zone: 'UTC' };
+  /**
+   * The plan from the deployment alone, for recording when the business's settings fail; its
+   * periods are still the business's (the zone is read alone, so the counters stay the same).
+   */
+  private async fallbackPlan(
+    tenantId: string,
+  ): Promise<{ plan: CreditsPlanResolved; zone: string }> {
+    return {
+      plan: resolvePlan(creditsConfig(), undefined),
+      zone: await tenantZoneOf(this.db, tenantId),
+    };
   }
 
   /** This period's counters and the wallet, read in `conn` (a transaction keeps them in step). */
@@ -302,7 +304,7 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
     } catch (e) {
       log.warn(`Settings of business ${tenantId} do not parse: ${reasonOf(e)}`);
       // Fail closed, except for what is never paused (a reply, a code, an approval request).
-      const fallback = this.fallbackPlan().plan;
+      const fallback = resolvePlan(creditsConfig(), undefined);
       return defs.map((d) =>
         !d.def || (d.def.pausable && !d.def.pausable(d.variant, fallback)) ? null : UNAVAILABLE,
       );
@@ -413,7 +415,7 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       log.warn(
         `Settings of business ${tenantId} do not parse; metering on the defaults: ${reasonOf(e)}`,
       );
-      resolved = this.fallbackPlan();
+      resolved = await this.fallbackPlan(tenantId);
     }
     const { plan, zone } = resolved;
     const events = await this.db.transaction(async (tx) => {

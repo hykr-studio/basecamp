@@ -27,6 +27,8 @@ export const coreImports = () => [
     queuePrefix: config.queuePrefix,
     // A business without its own currency counts in the deployment's (DEFAULT_CURRENCY).
     defaultCurrency: config.defaultCurrency,
+    // A business without its own time zone follows the deployment's (DEFAULT_TIME_ZONE), else UTC.
+    defaultTimeZone: config.defaultTimeZone,
     // Whether a person without a business gets one of their own (defineServer's signUp).
     createBusinessOnSignUp: createsBusinessOnSignUp(),
   }),
