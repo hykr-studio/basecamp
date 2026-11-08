@@ -1,21 +1,23 @@
 # Build a new application on Basecamp
 
 This tutorial builds a new product on the framework from scratch: **Fixit**, a small repair
-business. A person books repair jobs, sees what is coming up, and records each job as done.
+business. A person books repairs, sees what is coming up, and records each repair as done.
 An assistant can do all of that too, in the app, on WhatsApp or by voice. When the assistant
-completes a job, the person approves it first.
+completes a repair, the person approves it first.
 
 By the end you will have:
 
-- one entity (`job`) and one command (`complete-job`), each declared once;
+- one entity (`repair`) and one command (`complete-repair`), each declared once;
 - REST routes, agent tools, approvals, history and audit, generated from those declarations;
-- a WhatsApp reminder an hour before each job;
-- the assistant's views (how a job list looks in the chat, on the canvas, in text and in speech);
-- a mobile and web app with a Jobs screen and a job screen;
+- a WhatsApp reminder an hour before each repair;
+- the assistant's views (how a repair list looks in the chat, on the canvas, in text and in speech);
+- a mobile and web app with a Repairs screen and a repair screen;
 - an end-to-end test and an assistant eval.
 
-Every file below is the real file from a run of this tutorial against the packed framework.
-The tests and evals in step 11 passed on it, and the screenshots at the end come from that run.
+Every file below is the real file from a run of this tutorial against the framework: it builds
+and typechecks, and the tests and evals of step 11 pass on it. The entity is called `repair`, not
+`job`: the framework already serves long-running jobs at `/api/jobs` (developer guide 5.17), and
+`defineServer` refuses a module that claims a framework route or table.
 
 > This is the "new application" tutorial. To add a feature to the sample application in this
 > repository instead, read [tutorial.md](tutorial.md). [DOMAIN.md](../DOMAIN.md) is the
@@ -30,14 +32,14 @@ places:
 
 | Where | What you write | What the framework does with it |
 |---|---|---|
-| `api/src/server.ts` | `defineServer({ name, persona, help, channel, modules, migrations })` | Serves the REST API, runs the write path (rules, approvals, audit), builds the assistant and its tools, sends notifications, runs the WhatsApp channel |
-| `mobile/src/app/_layout.tsx` | `<AppShell app modules plugins catalog registry config />` | Renders the shell: sign-in, navigation, the assistant thread, approvals, the canvas, saved pages and voice. `modules` are your app modules (`defineAppModule`); `plugins` the framework features you use (`livePlugin()`, `pushPlugin()`, `webMcpPlugin()`) |
+| `api/src/server.ts` | `defineServer({ name, persona, help, languages, channel, modules, migrations, contributes })` | Serves the REST API, runs the write path (rules, approvals, audit), builds the assistant and its tools, sends notifications, runs the WhatsApp channel |
+| `mobile/src/app/_layout.tsx` | `<AppShell app modules plugins catalog registry config />` | Renders the shell: sign-in, navigation, the assistant thread, approvals, the canvas, saved pages and voice. `modules` are your app modules (`defineAppModule`); `plugins` the framework features you use (`livePlugin()`, `pushPlugin()`, `webMcpPlugin()`, `sharePlugin()` and the others) |
 
 Everything else in your application is one of these:
 
 ```
 domain/            the domain package: your modules, and what gathers them
-  src/modules/<name>/  one module (this guide builds `jobs`):
+  src/modules/<name>/  one module (this guide builds `repairs`):
     contracts/         entity and command specs (Zod), moduleSpec    → @application/domain/modules/<name>/contracts
     db/schema.ts       Drizzle tables, named after the module
     server/            Nest module: defineEntity / defineCommand; public.ts for other modules
@@ -49,7 +51,10 @@ domain/            the domain package: your modules, and what gathers them
   src/contracts/       every module's specs, for the app               → @application/domain/contracts
   src/views/           every module's views, for the app               → @application/domain/views
   src/db/index.ts      the migrations (drizzle/, one journal)          → @application/domain/db
-  src/server/access.ts who reaches which rows, shared by the modules
+  src/languages.ts     the languages the product speaks                → @application/domain/languages
+  src/server/          what no one module owns: access.ts (who reaches   → @application/domain/server
+                       which rows), approval-levels.ts, privacy.ts, index.ts (contributions)
+  sql/pre, sql/post    idempotent SQL run around the migrations (extensions, triggers, CHECKs)
 api/               server.ts (defineServer), main.ts, worker.ts, e2e tests
 mobile/            Expo app: <AppShell>, your app modules (src/modules/<name>/), thin routes in src/app/
 back-office/       Expo web app for staff; usually unchanged
@@ -60,7 +65,8 @@ A module's `contracts`, `views` and `notifications` are read by both the server 
 they import nothing from the server side. A module reaches another only through its
 `contracts/` or its `server/public.ts`, and only one it lists in `dependsOn`. `pnpm lint:deps`
 in the Basecamp repository enforces both; it's worth keeping the same discipline in your own
-application. `basecamp module add <name>` writes a new module, both halves, and registers it.
+application. `basecamp module add <name>` writes a new module, both halves, and registers it;
+[Working on modules in parallel](modules.md) says how several people build modules at once.
 
 ## 0. Before you start
 
@@ -86,7 +92,8 @@ pnpm exec basecamp infra up             # Postgres, Redis, Mailpit, whaloc, Live
 > **Inside the Basecamp repository** you don't scaffold: `application/` is the application. Run
 > the same steps against it, with `pnpm build`, `pnpm db:migrate` and `pnpm dev` at the root.
 
-The scaffold starts as a copy of the sample application (meetings, notes, to-dos and orders). Build it
+The scaffold starts as a copy of the sample application (the modules meetings, notes, to-dos,
+orders, briefs and account). Build it
 and run it once, so you know the pieces work before you change anything:
 
 ```bash
@@ -99,15 +106,18 @@ Sign up at http://localhost:8081, then stop it (Ctrl-C).
 
 ## 2. Remove the sample modules
 
-Delete the sample's four modules, their screens and their tests. Everything you delete here is
+Delete the sample's modules, their screens and their tests. Everything you delete here is
 application code; nothing in `node_modules/@hykr` changes.
 
 ```bash
 rm -rf domain/src/modules/meetings domain/src/modules/notes domain/src/modules/todos \
-       domain/src/modules/orders mobile/src/modules/orders mobile/src/app/orders \
+       domain/src/modules/orders domain/src/modules/briefs \
        domain/src/modules/notifications.test.ts domain/src/views/views.test.ts domain/drizzle \
+       domain/sql/post/orders-states.sql \
        mobile/src/modules/meetings mobile/src/modules/notes mobile/src/modules/todos \
-       mobile/src/home mobile/src/app/meetings mobile/src/app/notes mobile/src/app/todos \
+       mobile/src/modules/orders mobile/src/modules/briefs mobile/src/home \
+       mobile/src/app/meetings mobile/src/app/notes mobile/src/app/todos \
+       mobile/src/app/orders mobile/src/app/briefs \
        api/test/domain api/test/whatsapp api/test/voice
 ```
 
@@ -115,10 +125,15 @@ Keep these, which you will edit:
 
 - `domain/src/modules/index.ts`, `domain/src/contracts/index.ts`, `domain/src/views/index.ts`
   (the lists of modules: step 9)
+- `domain/src/modules/account/`: a module with no records, which words what the framework tells
+  a business's people (its credits alerts, the privacy team's notices). Reword it for your
+  product.
 - `domain/src/db/index.ts`
 - `domain/src/server/access.ts`
-- `domain/src/server/approval-levels.ts` and `domain/src/server/index.ts` (what each approval
-  level means in your product, and which writes reach it: developer guide 5.8.1)
+- `domain/src/server/approval-levels.ts`, `domain/src/server/privacy.ts` and
+  `domain/src/server/index.ts`: what each approval level means in your product and which writes
+  reach it (developer guide 5.8.1), and your processors, request deadline and retention periods
+  (developer guide 5.27)
 - `domain/src/languages.ts` (the languages your product speaks: English, then your own; each
   with its name, locale, speech tag and letters, `defineLanguages` in `@hykr/i18n`. Drop Hindi and
   Telugu if you don't speak them: a word in a language you don't declare is refused at boot)
@@ -130,15 +145,15 @@ Keep these, which you will edit:
 - `mobile/src/app/approvals/*` (the approvals list and the `/approvals/<id>` link WhatsApp sends)
 - `mobile/src/app/+not-found.tsx`
 
-> **A shortcut:** `pnpm exec basecamp module add jobs` writes every file of a `jobs` module with
-> one placeholder entity, and registers it. This guide writes each file by hand instead, so you
-> see what each one is for.
+> **A shortcut:** `pnpm exec basecamp module add repairs` writes every file of a `repairs`
+> module with one placeholder entity, and registers it. This guide writes each file by hand
+> instead, so you see what each one is for.
 
 ## 3. Contracts: declare the entity and the command
 
 The spec is the single declaration everything else is generated from. Write it once, in Zod.
 
-`domain/src/modules/jobs/contracts/job.ts`:
+`domain/src/modules/repairs/contracts/repair.ts`:
 
 ```ts
 import { CreatedBy, commandSpec, entitySpec } from '@hykr/contracts';
@@ -147,44 +162,44 @@ import { z } from 'zod';
 const title = z.string().min(1).max(200);
 const at = z.iso.datetime({ offset: true });
 
-export const JobStatus = z.enum(['booked', 'in_progress', 'done']);
-export type JobStatus = z.infer<typeof JobStatus>;
+export const RepairStatus = z.enum(['booked', 'in_progress', 'done']);
+export type RepairStatus = z.infer<typeof RepairStatus>;
 
-/** A repair job, as the API returns it. */
-export const Job = z.object({
+/** A repair, as the API returns it. */
+export const Repair = z.object({
   id: z.string(),
   title,
   address: z.string(),
   scheduledFor: z.iso.datetime(),
-  status: JobStatus,
+  status: RepairStatus,
   summary: z.string().nullable(),
   createdBy: CreatedBy,
   createdAt: z.iso.datetime(),
 });
-export type Job = z.infer<typeof Job>;
+export type Repair = z.infer<typeof Repair>;
 
-export const JobSpec = entitySpec({
-  name: 'job',
-  label: 'job',
+export const RepairSpec = entitySpec({
+  name: 'repair',
+  label: 'repair',
   description:
-    'Repair jobs: what to fix, where, and when (ISO date-time). Status moves booked → in_progress → done; finish one with complete-job.',
+    'Repairs: what to fix, where, and when (ISO date-time). Status moves booked → in_progress → done; finish one with complete-repair.',
   schemas: {
-    read: Job,
+    read: Repair,
     create: z.object({ title, address: z.string().min(1).max(300), scheduledFor: at }),
     update: z
       .object({
         title: title.optional(),
         address: z.string().min(1).max(300).optional(),
         scheduledFor: at.optional(),
-        // 'done' and the summary are written by complete-job only (a rule on the entity).
-        status: JobStatus.optional(),
+        // 'done' and the summary are written by complete-repair only (a rule on the entity).
+        status: RepairStatus.optional(),
         summary: z.string().min(1).max(1000).optional(),
       })
       .refine((v) => Object.values(v).some((x) => x !== undefined), 'Send a field to change'),
   },
   // What people call each field, in every language (approval cards, history, voice).
   fieldLabels: {
-    title: { en: 'Job', hi: 'काम', te: 'పని' },
+    title: { en: 'Repair', hi: 'काम', te: 'పని' },
     address: { en: 'Address', hi: 'पता', te: 'చిరునామా' },
     scheduledFor: { en: 'When', hi: 'कब', te: 'ఎప్పుడు' },
     status: { en: 'Status', hi: 'स्थिति', te: 'స్థితి' },
@@ -196,24 +211,24 @@ export const JobSpec = entitySpec({
     search: ['title', 'address'],
     pageSize: { default: 25, max: 100 },
   },
-  // The assistant never deletes a job without the person.
+  // The assistant never deletes a repair without the person.
   approval: { delete: (p) => p.actor.kind === 'agent' },
-  views: { list: 'job.list', item: 'job.card' },
+  views: { list: 'repair.list', item: 'repair.card' },
 });
 
-export const CompleteJobSpec = commandSpec({
-  name: 'job.complete',
+export const CompleteRepairSpec = commandSpec({
+  name: 'repair.complete',
   description:
-    'Finish a job: record what was done in one or two sentences and mark it done. Done jobs cannot be reopened.',
-  input: z.object({ jobId: z.uuid(), summary: z.string().min(1).max(1000) }),
-  output: Job,
-  http: { method: 'POST', path: '/api/jobs/:jobId/complete' },
-  tool: 'complete-job',
+    'Finish a repair: record what was done in one or two sentences and mark it done. Done repairs cannot be reopened.',
+  input: z.object({ repairId: z.uuid(), summary: z.string().min(1).max(1000) }),
+  output: Repair,
+  http: { method: 'POST', path: '/api/repairs/:repairId/complete' },
+  tool: 'complete-repair',
   expose: 'all',
   approvalNote: 'When the assistant calls it, the person approves it first.',
-  view: { name: 'job.card', id: (input) => input.jobId },
+  view: { name: 'repair.card', id: (input) => input.repairId },
   verb: { do: 'complete', did: 'completed' },
-  touches: ['job'],
+  touches: ['repair'],
 });
 ```
 
@@ -224,44 +239,45 @@ What each part does:
   app's hooks.
 - **`list`.** The list grammar: which fields can be filtered (`?status=booked`,
   `?scheduledFor[gte]=…`), sorted and searched (`?q=`), and the page sizes. The assistant's
-  `list-jobs` tool gets the same grammar.
+  `list-repairs` tool gets the same grammar.
 - **`approval`.** When a write waits for a person: here, an assistant's delete.
 - **`fieldLabels`.** What approval cards and history call each field, in each of the
   application's languages (`domain/src/languages.ts`). English is required; a language left out
   reads in English.
 - **`views`.** Which registered views show this entity's results (written in step 6).
 - **`commandSpec`.** A named operation beyond plain create, update and delete. It gets a route
-  (`POST /api/jobs/:jobId/complete`), a tool (`complete-job`) and a verb for history ("completed").
+  (`POST /api/repairs/:repairId/complete`), a tool (`complete-repair`) and a verb for history
+  ("completed").
 
-`domain/src/modules/jobs/contracts/index.ts` turns the specs into the module's isomorphic half:
+`domain/src/modules/repairs/contracts/index.ts` turns the specs into the module's isomorphic half:
 
 ```ts
-/** The jobs module's specs: read by the server, the views and the app. */
+/** The repairs module's specs: read by the server, the views and the app. */
 import { moduleSpec } from '@hykr/contracts';
-import { CompleteJobSpec, JobSpec } from './job.js';
+import { CompleteRepairSpec, RepairSpec } from './repair.js';
 
-export * from './job.js';
+export * from './repair.js';
 
-export const jobsSpec = moduleSpec({
-  name: 'jobs',
+export const repairsSpec = moduleSpec({
+  name: 'repairs',
   // The modules it builds on: none yet.
   dependsOn: [],
-  entities: { jobs: JobSpec },
-  commands: [CompleteJobSpec],
+  entities: { repairs: RepairSpec },
+  commands: [CompleteRepairSpec],
 });
 ```
 
-Entities are keyed by plural (`jobs`). That plural is the route (`/api/jobs`), the query-cache
-key, and the name your app uses (`useEntityList('jobs')`). `moduleSpec` stamps every spec with
-the module's name (`JobSpec.module` is `'jobs'`), and the module's name prefixes its tables.
+Entities are keyed by plural (`repairs`). That plural is the route (`/api/repairs`), the query-cache
+key, and the name your app uses (`useEntityList('repairs')`). `moduleSpec` stamps every spec with
+the module's name (`RepairSpec.module` is `'repairs'`), and the module's name prefixes its tables.
 
 ## 4. The table and its migration
 
-`domain/src/modules/jobs/db/schema.ts`:
+`domain/src/modules/repairs/db/schema.ts`:
 
 ```ts
 /**
- * The jobs module's tables, named after it (jobs, or jobs_<x>). Each needs an id, a tenant and
+ * The repairs module's tables, named after it (repairs, or repairs_<x>). Each needs an id, a tenant and
  * an owner column (customerColumn() too, for records customers have), and
  * created_by/created_at/updated_at: the framework's scoping, provenance and list grammar rely on
  * them.
@@ -269,8 +285,8 @@ the module's name (`JobSpec.module` is `'jobs'`), and the module's name prefixes
 import { app, customerColumn, id, tenantColumn, user } from '@hykr/db';
 import { index, text, timestamp } from 'drizzle-orm/pg-core';
 
-export const jobs = app.table(
-  'jobs',
+export const repairs = app.table(
+  'repairs',
   {
     id: id(),
     tenantId: tenantColumn(),
@@ -295,8 +311,8 @@ export const jobs = app.table(
       .notNull(),
   },
   (t) => [
-    index('jobs_owner_scheduled_idx').on(t.ownerId, t.scheduledFor),
-    index('jobs_tenant_customer_idx').on(t.tenantId, t.customerId),
+    index('repairs_owner_scheduled_idx').on(t.ownerId, t.scheduledFor),
+    index('repairs_tenant_customer_idx').on(t.tenantId, t.customerId),
   ],
 );
 ```
@@ -314,7 +330,7 @@ The framework's scoping, provenance and list grammar rely on these columns:
 Generate the migration and apply it:
 
 ```bash
-pnpm exec basecamp db generate --name jobs   # → domain/drizzle/0000_jobs.sql
+pnpm exec basecamp db generate --name repairs   # → domain/drizzle/0000_repairs.sql
 pnpm exec basecamp db migrate                # the framework's migrations, then yours
 ```
 
@@ -329,78 +345,81 @@ channels) ship with `@hykr/db` and run first; the two sets are recorded separate
 every assistant tool call goes through the same write path: validate, idempotency, load,
 authorize, run or park for approval, and audit.
 
-`domain/src/modules/jobs/server/job.entity.ts`:
+`domain/src/modules/repairs/server/repair.entity.ts`:
 
 ```ts
 import { defineEntity, deny } from '@hykr/core';
 import { BUSINESS_ACCESS } from '../../../server/access.js';
-import { JobSpec } from '../contracts/index.js';
-import { jobs } from '../db/schema.js';
+import { RepairSpec } from '../contracts/index.js';
+import { repairs } from '../db/schema.js';
 
-/** Jobs: CRUD from the spec, plus the business's rules. */
-export const Job = defineEntity(JobSpec, {
-  table: jobs,
+/** Repairs: CRUD from the spec, plus the business's rules. */
+export const Repair = defineEntity(RepairSpec, {
+  table: repairs,
   owner: (t) => t.ownerId,
   customer: (t) => t.customerId,
   access: BUSINESS_ACCESS,
   rules: [
-    // A done job stays done.
+    // A done repair stays done.
     (_p, action, row) =>
       (action === 'update' || action === 'delete') && row?.status === 'done'
-        ? deny('done_is_final', 'A done job cannot change')
+        ? deny('done_is_final', 'A done repair cannot change')
         : null,
-    // Finishing writes a summary, so it goes through complete-job, never a bare PATCH.
+    // Finishing writes a summary, so it goes through complete-repair, never a bare PATCH.
     (_p, action, _row, input, ctx) =>
       action === 'update' &&
       (input?.status === 'done' || input?.summary !== undefined) &&
-      ctx.via !== 'job.complete'
-        ? deny('use_complete_job', 'Finish a job with complete-job, so its summary is recorded')
+      ctx.via !== 'repair.complete'
+        ? deny(
+            'use_complete_repair',
+            'Finish a repair with complete-repair, so its summary is recorded',
+          )
         : null,
   ],
 });
 ```
 
 > **Fields a command writes must be in the entity's `update` schema.** A command writes through
-> `Job.repo.update`, which validates the patch against the public update schema. So `status:
+> `Repair.repo.update`, which validates the patch against the public update schema. So `status:
 > 'done'` and `summary` are in `update`, and a rule allows them only `via` the command
-> (`ctx.via === 'job.complete'`). Leave them out and the command fails with a 500 when it runs.
+> (`ctx.via === 'repair.complete'`). Leave them out and the command fails with a 500 when it runs.
 > The sample's meetings do the same with `status: 'closed'`.
 
-`domain/src/modules/jobs/server/complete-job.command.ts`:
+`domain/src/modules/repairs/server/complete-repair.command.ts`:
 
 ```ts
 import { allow, defineCommand, deny, type NamedEvent, needsApproval } from '@hykr/core';
-import { CompleteJobSpec } from '../contracts/index.js';
-import { Job } from './job.entity.js';
+import { CompleteRepairSpec } from '../contracts/index.js';
+import { Repair } from './repair.entity.js';
 
-/** job.completed: a NamedEvent, so a notification can follow it. */
-export class JobCompleted implements NamedEvent {
-  readonly eventName = 'job.completed';
+/** repair.completed: a NamedEvent, so a notification can follow it. */
+export class RepairCompleted implements NamedEvent {
+  readonly eventName = 'repair.completed';
   constructor(readonly row: unknown) {}
 }
 
-/** Finish a job. The assistant may draft it; the person approves before it is written. */
-export const CompleteJob = defineCommand(CompleteJobSpec, {
-  resource: { type: 'job', id: (input) => input.jobId },
-  load: async (tx, p, input) => ({ job: await Job.repo.get(tx, p, input.jobId) }),
-  authorize: (p, { job }) => {
-    if (job.status === 'done') return deny('done_is_final', 'This job is already done');
-    if (p.actor.kind === 'agent') return needsApproval('agent_completes', 'Completing a job');
+/** Finish a repair. The assistant may draft it; the person approves before it is written. */
+export const CompleteRepair = defineCommand(CompleteRepairSpec, {
+  resource: { type: 'repair', id: (input) => input.repairId },
+  load: async (tx, p, input) => ({ repair: await Repair.repo.get(tx, p, input.repairId) }),
+  authorize: (p, { repair }) => {
+    if (repair.status === 'done') return deny('done_is_final', 'This repair is already done');
+    if (p.actor.kind === 'agent') return needsApproval('agent_completes', 'Completing a repair');
     return allow('owner_completes');
   },
-  summarize: (input, { job }) => `Complete ${job.title}: ${input.summary}`,
-  run: async ({ tx, principal, input, loaded: { job }, via }) => {
-    const done = await Job.repo.update(
+  summarize: (input, { repair }) => `Complete ${repair.title}: ${input.summary}`,
+  run: async ({ tx, principal, input, loaded: { repair }, via }) => {
+    const done = await Repair.repo.update(
       tx,
       principal,
-      job,
+      repair,
       { status: 'done', summary: input.summary },
       via,
     );
     return {
       value: done,
-      touched: [{ type: 'job', id: done.id, change: 'updated', before: job, after: done }],
-      events: [new JobCompleted(done)],
+      touched: [{ type: 'repair', id: done.id, change: 'updated', before: repair, after: done }],
+      events: [new RepairCompleted(done)],
     };
   },
 });
@@ -414,26 +433,27 @@ A command declares five things:
 - **`summarize`:** what an approval card says.
 - **`run`:** what it writes. It returns the value, the rows it touched (for audit) and its events.
 
-`JobCompleted` is a `NamedEvent`, so notifications can follow it (step 7 cancels the reminder on it).
+`RepairCompleted` is a `NamedEvent`, so notifications can follow it (step 7 cancels the reminder
+on it).
 
-`domain/src/modules/jobs/server/jobs.module.ts`:
+`domain/src/modules/repairs/server/repairs.module.ts`:
 
 ```ts
 import { commandController, commandHandler, entityController, entityHandlers } from '@hykr/core';
 import { Module } from '@nestjs/common';
-import { CompleteJob } from './complete-job.command.js';
-import { Job } from './job.entity.js';
+import { CompleteRepair } from './complete-repair.command.js';
+import { Repair } from './repair.entity.js';
 
 @Module({
-  controllers: [entityController(Job), commandController(CompleteJob)],
-  providers: [...entityHandlers(Job), commandHandler(CompleteJob)],
+  controllers: [entityController(Repair), commandController(CompleteRepair)],
+  providers: [...entityHandlers(Repair), commandHandler(CompleteRepair)],
 })
-export class JobsModule {}
+export class RepairsModule {}
 ```
 
-Another module that builds on jobs (an `invoices` module with `dependsOn: ['jobs']`) would use
-only what `domain/src/modules/jobs/server/public.ts` exports, for example `export { Job } from
-'./job.entity.js'`: the entity's repo runs the framework's checks inside the caller's
+Another module that builds on repairs (an `invoices` module with `dependsOn: ['repairs']`) would use
+only what `domain/src/modules/repairs/server/public.ts` exports, for example `export { Repair } from
+'./repair.entity.js'`: the entity's repo runs the framework's checks inside the caller's
 transaction.
 
 `domain/src/server/access.ts` (kept from the scaffold) says who reaches which rows:
@@ -453,28 +473,28 @@ channel renders the view its own way:
 
 Views are declared here, once, and bound to components in the app (step 9).
 
-`domain/src/modules/jobs/views/job.ts`:
+`domain/src/modules/repairs/views/repair.ts`:
 
 ```ts
 import { pick, spokenWhen, whenText } from '@hykr/i18n';
 import { action, defineView, spokenList, type ViewLabels } from '@hykr/ui-registry';
 import { z } from 'zod';
-import { Job, JobSpec } from '../contracts/index.js';
+import { Repair, RepairSpec } from '../contracts/index.js';
 
 const labels = {
-  title: { en: 'Jobs', hi: 'काम', te: 'పనులు' },
-  empty: { en: 'No jobs.', hi: 'कोई काम नहीं।', te: 'పనులు ఏవీ లేవు.' },
-  noun: { en: ['job', 'jobs'], hi: ['काम', 'काम'], te: ['పని', 'పనులు'] },
+  title: { en: 'Repairs', hi: 'काम', te: 'పనులు' },
+  empty: { en: 'No repairs.', hi: 'कोई काम नहीं।', te: 'పనులు ఏవీ లేవు.' },
+  noun: { en: ['repair', 'repairs'], hi: ['काम', 'काम'], te: ['పని', 'పనులు'] },
 } satisfies ViewLabels;
 
-const open = action<Job>({ screen: 'job.detail', params: (j) => ({ id: j.id }) });
+const open = action<Repair>({ screen: 'repair.detail', params: (j) => ({ id: j.id }) });
 
-export const JobListView = defineView({
-  name: 'job.list',
-  description: 'A list of repair jobs with when and where. Use for any list of jobs.',
+export const RepairListView = defineView({
+  name: 'repair.list',
+  description: 'A list of repairs with when and where. Use for any list of repairs.',
   surfaces: ['inline', 'canvas', 'text', 'speech'],
-  props: z.object({ title: z.string().max(60).optional(), items: z.array(Job) }),
-  source: { entity: JobSpec, into: 'items' },
+  props: z.object({ title: z.string().max(60).optional(), items: z.array(Repair) }),
+  source: { entity: RepairSpec, into: 'items' },
   actions: { open },
   labels,
   text: (p, ctx) =>
@@ -491,12 +511,12 @@ export const JobListView = defineView({
     ),
 });
 
-export const JobCardView = defineView({
-  name: 'job.card',
-  description: 'One job: what, where, when and its status.',
+export const RepairCardView = defineView({
+  name: 'repair.card',
+  description: 'One repair: what, where, when and its status.',
   surfaces: ['inline', 'canvas', 'text', 'speech'],
-  props: z.object({ id: z.string(), item: Job }),
-  source: { entity: JobSpec, into: 'item', by: 'id' },
+  props: z.object({ id: z.string(), item: Repair }),
+  source: { entity: RepairSpec, into: 'item', by: 'id' },
   actions: { open },
   labels: { noun: labels.noun },
   text: (p, ctx) =>
@@ -505,44 +525,44 @@ export const JobCardView = defineView({
 });
 ```
 
-`domain/src/modules/jobs/views/screens.ts` declares a screen the assistant can open on the canvas
-(`act('open', job)` opens it):
+`domain/src/modules/repairs/views/screens.ts` declares a screen the assistant can open on the canvas
+(`act('open', repair)` opens it):
 
 ```ts
 import { defineScreen } from '@hykr/ui-registry';
 import { z } from 'zod';
 
-/** The job's own screen, which the assistant can open on the canvas. */
-export const JobDetailScreen = defineScreen({
-  name: 'job.detail',
-  title: 'job',
-  description: 'One job in full: what, where and when, completing it, and its history.',
+/** The repair's own screen, which the assistant can open on the canvas. */
+export const RepairDetailScreen = defineScreen({
+  name: 'repair.detail',
+  title: 'repair',
+  description: 'One repair in full: what, where and when, completing it, and its history.',
   params: z.object({ id: z.uuid() }),
 });
 ```
 
-`domain/src/modules/jobs/views/index.ts`:
+`domain/src/modules/repairs/views/index.ts`:
 
 ```ts
-/** The jobs module's views and screens: what the assistant may show for jobs. */
+/** The repairs module's views and screens: what the assistant may show for repairs. */
 import type { ScreenDef, UiPart, ViewDef } from '@hykr/ui-registry';
-import { JobCardView, JobListView } from './job.js';
-import { JobDetailScreen } from './screens.js';
+import { RepairCardView, RepairListView } from './repair.js';
+import { RepairDetailScreen } from './screens.js';
 
-export * from './job.js';
+export * from './repair.js';
 export * from './screens.js';
 
-export const jobsViews: UiPart = {
-  name: 'jobs',
-  views: [JobListView, JobCardView] as unknown as readonly ViewDef[],
-  screens: [JobDetailScreen] as unknown as readonly ScreenDef[],
+export const repairsViews: UiPart = {
+  name: 'repairs',
+  views: [RepairListView, RepairCardView] as unknown as readonly ViewDef[],
+  screens: [RepairDetailScreen] as unknown as readonly ScreenDef[],
 };
 ```
 
-View and screen names are unique across modules: a second `job.list` anywhere stops the server
+View and screen names are unique across modules: a second `repair.list` anywhere stops the server
 from starting.
 
-## 7. Notifications: a reminder before each job
+## 7. Notifications: a reminder before each repair
 
 Outside a customer's 24-hour window, WhatsApp delivers only approved templates. So anything
 your app sends on its own initiative is a template, declared in code:
@@ -550,16 +570,16 @@ your app sends on its own initiative is a template, declared in code:
 - **`defineTemplate`:** the words, in every language.
 - **`defineNotification`:** when the message goes, to whom, and over which channels.
 
-`domain/src/modules/jobs/notifications/index.ts`:
+`domain/src/modules/repairs/notifications/index.ts`:
 
 ```ts
-/** The jobs module's templates and notifications: a reminder before each job. */
+/** The repairs module's templates and notifications: a reminder before each repair. */
 import { pick, spokenWhen } from '@hykr/i18n';
 import { defineNotification, defineTemplate, type Row } from '@hykr/notifications';
 import { z } from 'zod';
 
-export const JobReminder = defineTemplate({
-  name: 'job_reminder_v1',
+export const RepairReminder = defineTemplate({
+  name: 'repair_reminder_v1',
   category: 'utility',
   params: z.object({ title: z.string().max(60), time: z.string().max(60) }),
   body: {
@@ -570,7 +590,7 @@ export const JobReminder = defineTemplate({
   example: { title: 'Fix the kitchen tap', time: '10:00 am' },
 });
 
-type JobRow = Row & {
+type RepairRow = Row & {
   title: string;
   scheduledFor: string;
   status: string;
@@ -580,87 +600,88 @@ type JobRow = Row & {
 
 const SOON = { en: 'is in an hour', hi: 'एक घंटे में है', te: 'ఒక గంటలో ఉంది' } as const;
 
-/** An hour before a booked job, to its customer and its owner. A reschedule moves it. */
-export const JobReminderNotification = defineNotification<JobRow>({
-  key: 'job.reminder',
+/** An hour before a booked repair, to its customer and its owner. A reschedule moves it. */
+export const RepairReminderNotification = defineNotification<RepairRow>({
+  key: 'repair.reminder',
   topic: 'reminders',
   schedule: {
-    on: ['job.created', 'job.updated'],
+    on: ['repair.created', 'repair.updated'],
     at: (j) =>
       j.status === 'booked' ? new Date(new Date(j.scheduledFor).getTime() - 60 * 60_000) : null,
-    cancelOn: ['job.deleted', 'job.completed'],
+    cancelOn: ['repair.deleted', 'repair.completed'],
   },
   to: (j) => [...(j.customerId ? [{ customerId: j.customerId }] : []), { userId: j.ownerId }],
   channels: ['whatsapp', 'email'],
   whatsapp: {
-    template: JobReminder,
+    template: RepairReminder,
     params: (j, r) => ({ title: j.title, time: spokenWhen(j.scheduledFor, r.timeZone, r.lang) }),
   },
   email: {
     subject: (j) => `Reminder: ${j.title}`,
     body: (j, r) => `${j.title} ${pick(SOON, r.lang)}.`,
   },
-  dedupe: (j) => `job.reminder:${j.id}`,
+  dedupe: (j) => `repair.reminder:${j.id}`,
 });
 
-export const jobsNotifications = {
-  templates: [JobReminder],
-  notifications: [JobReminderNotification],
+export const repairsNotifications = {
+  templates: [RepairReminder],
+  notifications: [RepairReminderNotification],
 };
 ```
 
 The framework handles the rest: consent, quiet hours, the person's language, falling back to
-email. `to` reads the job as stored; the words (`params`, the email) read it as each recipient may,
-so a field hidden from them is not there. The reminder is scheduled from the stored
-`job.created` and `job.updated` events, once their write has committed.
+email. `to` reads the repair as stored; the words (`params`, the email) read it as each recipient
+may, so a field hidden from them is not there. The reminder is scheduled from the stored
+`repair.created` and `repair.updated` events, once their write has committed.
 `pnpm exec basecamp templates sync` registers the template with the provider (whaloc locally).
 
 ## 8. The assistant: persona, rules, scripts and evals
 
-The assistant's tools come from your specs: `list-jobs`, `get-job`, `create-job`, `update-job`,
-`delete-job` and `complete-job`. What you add is who the assistant is (once, for the whole
-application: step 9), each module's rules, and, for the scripted model, how it answers.
+The assistant's tools come from your specs: `list-repairs`, `summarize-repairs`, `get-repair`,
+`create-repair`, `update-repair`, `delete-repair` and `complete-repair`. What you add is who the
+assistant is (once, for the whole application: step 9), each module's rules, and, for the
+scripted model, how it answers.
 
-`domain/src/modules/jobs/agent/index.ts`:
+`domain/src/modules/repairs/agent/index.ts`:
 
 ```ts
-/** What the jobs module teaches the assistant beyond its tools: rules, scripts and evals. */
+/** What the repairs module teaches the assistant beyond its tools: rules, scripts and evals. */
 import type { AgentModule } from '@hykr/agents/script';
 import { evalCases } from './evals.js';
-import { jobsScripts } from './scripts.js';
+import { repairsScripts } from './scripts.js';
 
-export const jobsAgent: AgentModule = {
+export const repairsAgent: AgentModule = {
   rules: [
-    'When the user says a job is finished, draft a complete-job call with a one or two sentence summary of what was done, then tell them to approve it.',
-    'Book jobs at the time the user gives; if they give none, ask for it.',
+    'When the user says a repair is finished, draft a complete-repair call with a one or two sentence summary of what was done, then tell them to approve it.',
+    'Book repairs at the time the user gives; if they give none, ask for it.',
   ],
-  scripts: jobsScripts,
+  scripts: repairsScripts,
   evalCases,
 };
 ```
 
 The scripted model (`MODEL_MODE=fake`) runs the real agent loop: real tools, real API calls,
 real approvals. Only the "thinking" is a script. That makes tests and evals free and
-deterministic. `domain/src/modules/jobs/agent/scripts.ts`:
+deterministic. `domain/src/modules/repairs/agent/scripts.ts`:
 
 ```ts
 /**
- * The scripted model's knowledge of jobs (MODEL_MODE=fake: tests, CI and demos without a key):
- *   jobs                      list-jobs
- *   book <title> at <address> tomorrow   create-job (tomorrow at 10:00)
- *   finish <title>: <summary> list-jobs → complete-job (waits for approval)
+ * The scripted model's knowledge of repairs (MODEL_MODE=fake: tests, CI and demos without a key):
+ *   repairs                      list-repairs
+ *   book <title> at <address> tomorrow   create-repair (tomorrow at 10:00)
+ *   finish <title>: <summary> list-repairs → complete-repair (waits for approval)
  */
 import { call, defineScript, items, sameTitle, say, sayIn, written } from '@hykr/agents/script';
 
-export const jobsScripts = [
+export const repairsScripts = [
   defineScript({
     name: 'list',
-    match: (text) => (/^jobs\??$/i.test(text.trim()) ? true : undefined),
+    match: (text) => (/^repairs\??$/i.test(text.trim()) ? true : undefined),
     step: (_, turn) => {
-      const r = turn.result('list-jobs');
-      if (!r) return [call('list-jobs', { status: { in: ['booked', 'in_progress'] } })];
-      const jobs = items(r);
-      return [say(jobs.length ? `${jobs.length} open job(s).` : 'No open jobs.')];
+      const r = turn.result('list-repairs');
+      if (!r) return [call('list-repairs', { status: { in: ['booked', 'in_progress'] } })];
+      const repairs = items(r);
+      return [say(repairs.length ? `${repairs.length} open repair(s).` : 'No open repairs.')];
     },
   }),
   defineScript({
@@ -670,11 +691,11 @@ export const jobsScripts = [
       return m ? { title: m[1], address: m[2] } : undefined;
     },
     step: ({ title, address }, turn) => {
-      const r = turn.result('create-job');
+      const r = turn.result('create-repair');
       if (r) return [say(written(r, (j: { title: string }) => `Booked "${j.title}".`, turn))];
       const when = new Date(Date.now() + 86_400_000);
       when.setUTCHours(10, 0, 0, 0);
-      return [call('create-job', { title, address, scheduledFor: when.toISOString() })];
+      return [call('create-repair', { title, address, scheduledFor: when.toISOString() })];
     },
   }),
   defineScript({
@@ -684,20 +705,20 @@ export const jobsScripts = [
       return m ? { title: m[1], summary: m[2] } : undefined;
     },
     step: ({ title, summary }, turn) => {
-      const done = turn.result('complete-job');
+      const done = turn.result('complete-repair');
       if (done) return [say(written(done, () => `Completed "${title}".`, turn))];
-      const list = turn.result('list-jobs');
-      if (!list) return [call('list-jobs', { q: title })];
-      const job = items(list).find((j) => sameTitle(j.title, title));
-      if (!job)
+      const list = turn.result('list-repairs');
+      if (!list) return [call('list-repairs', { q: title })];
+      const repair = items(list).find((j) => sameTitle(j.title, title));
+      if (!repair)
         return [
           sayIn(turn, {
-            en: `No job called "${title}".`,
+            en: `No repair called "${title}".`,
             hi: `"${title}" नाम का कोई काम नहीं।`,
             te: `"${title}" అనే పని లేదు.`,
           }),
         ];
-      return [call('complete-job', { jobId: job.id, summary })];
+      return [call('complete-repair', { repairId: repair.id, summary })];
     },
   }),
 ];
@@ -706,8 +727,8 @@ export const jobsScripts = [
 `written(...)` words the outcome: what was done, or that it waits for approval.
 
 The eval is one conversation per module, scored turn by turn: the right tools in order, none of
-the forbidden ones, and the reply's words. `basecamp eval --module jobs` runs it with a fresh
-user (and the module's `evalSetup`, when it has one). `domain/src/modules/jobs/agent/evals.ts`:
+the forbidden ones, and the reply's words. `basecamp eval --module repairs` runs it with a fresh
+user (and the module's `evalSetup`, when it has one). `domain/src/modules/repairs/agent/evals.ts`:
 
 ```ts
 import type { EvalCase } from '@hykr/agents/script';
@@ -715,84 +736,90 @@ import type { EvalCase } from '@hykr/agents/script';
 /** One conversation, in order: later turns rely on what earlier ones created. */
 export const evalCases: EvalCase[] = [
   {
-    why: 'books a job',
+    why: 'books a repair',
     input: 'book Fix the kitchen tap at 12 MG Road tomorrow',
-    expect: { must: ['create-job'], replyIncludes: 'kitchen tap' },
+    expect: { must: ['create-repair'], replyIncludes: 'kitchen tap' },
   },
   {
-    why: 'lists open jobs',
-    input: 'jobs',
-    expect: { must: ['list-jobs'], mustNot: ['create-job', 'complete-job'] },
+    why: 'lists open repairs',
+    input: 'repairs',
+    expect: { must: ['list-repairs'], mustNot: ['create-repair', 'complete-repair'] },
   },
   {
-    why: 'completing looks the job up first, and waits for approval',
+    why: 'completing looks the repair up first, and waits for approval',
     input: 'finish Fix the kitchen tap: replaced the washer',
-    expect: { must: ['list-jobs', 'complete-job'], replyIncludes: 'approv' },
+    expect: { must: ['list-repairs', 'complete-repair'], replyIncludes: 'approv' },
   },
 ];
 ```
 
 ## 9. The module and the server definition
 
-`domain/src/modules/jobs/index.ts` bundles the module's layers, server side:
+`domain/src/modules/repairs/index.ts` bundles the module's layers, server side:
 
 ```ts
-/** The jobs module: repair jobs, booked, reminded and completed. */
+/** The repairs module: repairs, booked, reminded and completed. */
 import { defineModule } from '@hykr/api';
-import { jobsAgent } from './agent/index.js';
-import { jobsSpec } from './contracts/index.js';
+import { repairsAgent } from './agent/index.js';
+import { repairsSpec } from './contracts/index.js';
 import * as tables from './db/schema.js';
-import { jobsNotifications } from './notifications/index.js';
-import { JobsModule } from './server/jobs.module.js';
-import { jobsViews } from './views/index.js';
+import { repairsNotifications } from './notifications/index.js';
+import { RepairsModule } from './server/repairs.module.js';
+import { repairsViews } from './views/index.js';
 
-export const jobs = defineModule({
-  ...jobsSpec,
-  server: JobsModule,
-  views: jobsViews.views,
-  screens: jobsViews.screens,
-  templates: jobsNotifications.templates,
-  notifications: jobsNotifications.notifications,
-  agent: jobsAgent,
+export const repairs = defineModule({
+  ...repairsSpec,
+  server: RepairsModule,
+  views: repairsViews.views,
+  screens: repairsViews.screens,
+  templates: repairsNotifications.templates,
+  notifications: repairsNotifications.notifications,
+  agent: repairsAgent,
   tables,
 });
 ```
 
-Then list it, one line per module, in the three lists the scaffold kept. A module comes after
-the modules it depends on. In `domain/src/modules/index.ts`:
+Then list it, one line per module, in the three lists the scaffold kept, where the sample's
+lines were. A module comes after the modules it depends on. In `domain/src/modules/index.ts`:
 
 ```ts
-import { jobs } from './jobs/index.js';
+import { account } from './account/index.js';
+import { repairs } from './repairs/index.js';
 
 export const modules = [
-  jobs,
+  repairs,
+  account,
   // basecamp module add: one line per module, above this one.
 ];
 ```
 
 In `domain/src/contracts/index.ts` (and the same in `domain/src/views/index.ts`, with
-`jobsViews` and `moduleViews`):
+`repairsViews` and `moduleViews`; `account` has no views):
 
 ```ts
-import { jobsSpec } from '../modules/jobs/contracts/index.js';
+import { accountSpec } from '../modules/account/contracts/index.js';
+import { repairsSpec } from '../modules/repairs/contracts/index.js';
 
-export * from '../modules/jobs/contracts/index.js';
+export * from '../modules/account/contracts/index.js';
+export * from '../modules/repairs/contracts/index.js';
 
 export const moduleSpecs = [
-  jobsSpec,
+  repairsSpec,
+  accountSpec,
   // basecamp module add: one line per module, above this one.
 ] as const;
 ```
 
 `api/src/server.ts` is where the server meets your modules. It names the product, says who the
-assistant is, and gives `channel.does`: the sentence the WhatsApp welcome and HELP use for what
-the assistant does.
+assistant is and which languages it speaks, and gives `channel.does`: the sentence the WhatsApp
+welcome and HELP use for what the assistant does.
 
 ```ts
 // Fixit, as the server runs it: its modules, who the assistant is, and the migrations.
 // `basecamp dev` and `basecamp start` run the API and the worker from this file.
 
 import { migrations } from '@application/domain/db';
+import { languages } from '@application/domain/languages';
 import { modules } from '@application/domain/modules';
 import { contributions } from '@application/domain/server';
 import { defineServer } from '@hykr/api';
@@ -800,12 +827,14 @@ import { defineServer } from '@hykr/api';
 export const server = defineServer({
   name: 'Fixit',
   persona:
-    'You are the assistant of a small repair business. You help book repair jobs, find them, and record them as done.',
-  help: 'I can book, list and complete repair jobs.',
+    'You are the assistant of a small repair business. You help book repairs, find them, and record them as done.',
+  help: 'I can book, list and complete repairs.',
+  // The languages it speaks (domain/src/languages.ts); the app is given the same ones.
+  languages,
   // On WhatsApp, in the welcome and in HELP.
   channel: {
     does: {
-      en: 'I can book your repair jobs, tell you when they are, and record them as done.',
+      en: 'I can book your repairs, tell you when they are, and record them as done.',
       hi: 'मैं आपके मरम्मत के काम बुक कर सकता हूँ, उनका समय बता सकता हूँ और उन्हें पूरा दर्ज कर सकता हूँ।',
       te: 'నేను మీ రిపేర్ పనులను బుక్ చేయగలను, వాటి సమయం చెప్పగలను, పూర్తయినట్లు నమోదు చేయగలను.',
     },
@@ -844,7 +873,7 @@ import { createUiRegistry } from '@hykr/ui-registry';
 export const catalog = createCatalog(...moduleSpecs);
 export const registry = createUiRegistry(...moduleViews);
 
-// Types entity names and rows in this app's screens: useEntityList('jobs') is Job[].
+// Types entity names and rows in this app's screens: useEntityList('repairs') is Repair[].
 declare module '@hykr/app' {
   interface Register {
     catalog: typeof catalog;
@@ -852,60 +881,62 @@ declare module '@hykr/app' {
 }
 ```
 
-The `declare module` block makes `useEntityList('jobs')` return typed `Job` rows, and a typo
+The `declare module` block makes `useEntityList('repairs')` return typed `Repair` rows, and a typo
 like `useEntityList('jbos')` fail to compile.
 
 `mobile/src/settings.ts` is the app's own part. Fixit has no home screen of its own, so `/`
-sends the person to their jobs:
+sends the person to their repairs:
 
 ```ts
 import type { AppSettings } from '@hykr/app';
 
 export const settings: AppSettings = {
   title: 'Fixit',
-  tagline: 'Repair jobs, with an assistant',
-  home: { href: '/jobs', label: 'Go to your jobs' },
+  tagline: 'Repairs, with an assistant',
+  home: { href: '/repairs', label: 'Go to your repairs' },
 };
 ```
 
-The jobs module, app side (`mobile/src/modules/jobs/index.tsx`). Its destinations live under
-`/jobs`, `bind` binds a component to each view and screen (`bindView` checks the component's
-props against the view's schema at compile time), and `hrefFor` says where a job opens, so the
+The repairs module, app side (`mobile/src/modules/repairs/index.tsx`). Its destinations live under
+`/repairs`, `bind` binds a component to each view and screen (`bindView` checks the component's
+props against the view's schema at compile time), and `hrefFor` says where a repair opens, so the
 assistant's activity and other modules can link to it:
 
 ```tsx
-import { JobCardView, JobDetailScreen, JobListView } from '@application/domain/views';
+import { RepairCardView, RepairDetailScreen, RepairListView } from '@application/domain/views';
 import { defineAppModule } from '@hykr/app';
 import { bindScreen, bindView } from '@hykr/ui-registry/react';
-import { JobDetail } from './screens/JobDetail';
-import { JobCardComponent, JobListComponent } from './views';
+import { RepairDetail } from './screens/RepairDetail';
+import { RepairCardComponent, RepairListComponent } from './views';
 
-export { JobStatus } from './JobStatus';
+export { RepairStatus } from './RepairStatus';
 
-export const jobs = defineAppModule({
-  name: 'jobs',
-  nav: [{ href: '/jobs', label: 'Jobs', icon: 'tool', match: (p) => p.startsWith('/jobs') }],
+export const repairs = defineAppModule({
+  name: 'repairs',
+  nav: [
+    { href: '/repairs', label: 'Repairs', icon: 'tool', match: (p) => p.startsWith('/repairs') },
+  ],
   suggestions: [
-    { text: 'jobs', what: 'your open jobs' },
-    { text: 'book Fix the kitchen tap at 12 MG Road tomorrow', what: 'books a job' },
+    { text: 'repairs', what: 'your open repairs' },
+    { text: 'book Fix the kitchen tap at 12 MG Road tomorrow', what: 'books a repair' },
     { text: 'finish Fix the kitchen tap: replaced the washer', what: 'waits for your approval' },
   ],
   bind: () => {
-    bindView(JobListView, JobListComponent);
-    bindView(JobCardView, JobCardComponent);
-    bindScreen(JobDetailScreen, ({ id }) => <JobDetail id={id} embedded />);
+    bindView(RepairListView, RepairListComponent);
+    bindView(RepairCardView, RepairCardComponent);
+    bindScreen(RepairDetailScreen, ({ id }) => <RepairDetail id={id} embedded />);
   },
-  hrefFor: { job: (id) => `/jobs/${id}` },
+  hrefFor: { repair: (id) => `/repairs/${id}` },
   // Read tools a browser agent may call on these screens (WebMCP), by useScreenContext name:
-  // list-jobs and get-job, with the person's access. `webMcpPlugin()` in _layout.tsx offers them.
-  webmcp: { jobs: { reads: ['jobs'] }, job: { reads: ['jobs'] } },
+  // list-repairs and get-repair, with the person's access. `webMcpPlugin()` in _layout.tsx offers them.
+  webmcp: { repairs: { reads: ['repairs'] }, repair: { reads: ['repairs'] } },
 });
 ```
 
 List it in `mobile/src/modules/index.ts`, one line per module:
 
 ```ts
-export { jobs } from './jobs';
+export { repairs } from './repairs';
 ```
 
 The shell merges the modules when it starts and refuses any collision (two modules with one
@@ -913,18 +944,23 @@ name, one destination or record type claimed twice, a view bound twice). Icons a
 [Feather](https://feathericons.com) names. Other modules import a module only through its
 `index.tsx`.
 
-`mobile/src/modules/jobs/views.tsx`. This is how `job.list` and `job.card` look in the chat and
-on the canvas:
+`mobile/src/modules/repairs/views.tsx`. This is how `repair.list` and `repair.card` look in the
+chat and on the canvas:
 
 ```tsx
-import type { JobCardView, JobListView } from '@application/domain/views';
+import type { RepairCardView, RepairListView } from '@application/domain/views';
 import { OpenRow, Rows, ViewCard, when } from '@hykr/app';
 import { Text } from '@hykr/app/ui';
 import type { ViewProps } from '@hykr/ui-registry/react';
-import { JobStatus } from './JobStatus';
+import { RepairStatus } from './RepairStatus';
 
-/** How job.list looks in the chat and on the canvas. */
-export function JobListComponent({ title, items, act, words }: ViewProps<typeof JobListView>) {
+/** How repair.list looks in the chat and on the canvas. */
+export function RepairListComponent({
+  title,
+  items,
+  act,
+  words,
+}: ViewProps<typeof RepairListView>) {
   return (
     <ViewCard title={title ?? words.title} count={items.length}>
       <Rows items={items} empty={words.empty}>
@@ -941,26 +977,27 @@ export function JobListComponent({ title, items, act, words }: ViewProps<typeof 
   );
 }
 
-/** How job.card looks. */
-export function JobCardComponent({ item, act }: ViewProps<typeof JobCardView>) {
+/** How repair.card looks. */
+export function RepairCardComponent({ item, act }: ViewProps<typeof RepairCardView>) {
   return (
     <ViewCard title={item.title}>
-      <JobStatus status={item.status} />
+      <RepairStatus status={item.status} />
       <Text variant="muted">
         {when(item.scheduledFor)} · {item.address}
       </Text>
       <OpenRow label={`Open ${item.title}`} onPress={() => act('open', item)}>
-        <Text className="font-semibold text-primary">Open the job</Text>
+        <Text className="font-semibold text-primary">Open the repair</Text>
       </OpenRow>
     </ViewCard>
   );
 }
 ```
 
-One status badge, used everywhere a job's status shows (`mobile/src/modules/jobs/JobStatus.tsx`):
+One status badge, used everywhere a repair's status shows
+(`mobile/src/modules/repairs/RepairStatus.tsx`):
 
 ```tsx
-import type { JobStatus as Status } from '@application/domain/contracts';
+import type { RepairStatus as Status } from '@application/domain/contracts';
 import { Badge, Text } from '@hykr/app/ui';
 
 const LOOK = {
@@ -969,8 +1006,8 @@ const LOOK = {
   done: { label: 'Done', variant: 'success' },
 } as const;
 
-/** A job's status, the one way the app shows it. */
-export function JobStatus({ status }: { status: Status }) {
+/** A repair's status, the one way the app shows it. */
+export function RepairStatus({ status }: { status: Status }) {
   const look = LOOK[status];
   return (
     <Badge variant={look.variant} className="self-start">
@@ -980,11 +1017,11 @@ export function JobStatus({ status }: { status: Status }) {
 }
 ```
 
-The job's screen. The route and the canvas both show it.
-`mobile/src/modules/jobs/screens/JobDetail.tsx`:
+The repair's screen. The route and the canvas both show it.
+`mobile/src/modules/repairs/screens/RepairDetail.tsx`:
 
 ```tsx
-import { CompleteJobSpec } from '@application/domain/contracts';
+import { CompleteRepairSpec } from '@application/domain/contracts';
 import {
   Button,
   errorMessage,
@@ -1001,26 +1038,26 @@ import {
 import { Text } from '@hykr/app/ui';
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
-import { JobStatus } from '../JobStatus';
+import { RepairStatus } from '../RepairStatus';
 
-/** One job: what, where, when; complete it; its history. The route and the canvas show it. */
-export function JobDetail({ id, embedded = false }: { id: string; embedded?: boolean }) {
-  // The assistant's context: "finish this one" on this screen names this job.
-  useScreenContext(embedded ? undefined : { screen: 'job', record: { type: 'job', id } });
-  const job = useEntity('jobs', id);
-  const complete = useCommand(CompleteJobSpec);
+/** One repair: what, where, when; complete it; its history. The route and the canvas show it. */
+export function RepairDetail({ id, embedded = false }: { id: string; embedded?: boolean }) {
+  // The assistant's context: "finish this one" on this screen names this repair.
+  useScreenContext(embedded ? undefined : { screen: 'repair', record: { type: 'repair', id } });
+  const repair = useEntity('repairs', id);
+  const complete = useCommand(CompleteRepairSpec);
   const [summary, setSummary] = useState('');
-  if (!job.data) return <Loading error={job.error} />;
-  const j = job.data;
+  if (!repair.data) return <Loading error={repair.error} />;
+  const j = repair.data;
   return (
     <ScrollView contentContainerClassName="gap-5 p-5">
       <ScreenTitle title={j.title} subtitle={`${when(j.scheduledFor)} · ${j.address}`} />
-      <JobStatus status={j.status} />
+      <RepairStatus status={j.status} />
       {j.status === 'done' ? (
         <Text>{j.summary}</Text>
       ) : (
         <View className="gap-2">
-          <SectionHeading>Complete the job</SectionHeading>
+          <SectionHeading>Complete the repair</SectionHeading>
           <Field
             label="What was done"
             value={summary}
@@ -1032,23 +1069,23 @@ export function JobDetail({ id, embedded = false }: { id: string; embedded?: boo
             icon="check"
             busy={complete.isPending}
             disabled={!summary.trim()}
-            onPress={() => complete.mutate({ jobId: j.id, summary: summary.trim() })}
+            onPress={() => complete.mutate({ repairId: j.id, summary: summary.trim() })}
           />
           {complete.error && <Text className="text-danger">{errorMessage(complete.error)}</Text>}
         </View>
       )}
       <SectionHeading>History</SectionHeading>
-      <History type="job" id={j.id} />
+      <History type="repair" id={j.id} />
     </ScrollView>
   );
 }
 ```
 
 `useScreenContext` tells the assistant what the person is looking at, so "finish this one"
-can name this job. `useCommand(CompleteJobSpec)` runs the command as the person. Because a
+can name this repair. `useCommand(CompleteRepairSpec)` runs the command as the person. Because a
 person is completing it, it runs at once; the same command from the assistant waits for approval.
 
-The jobs list, `mobile/src/modules/jobs/screens/Jobs.tsx`:
+The repairs list, `mobile/src/modules/repairs/screens/Repairs.tsx`:
 
 ```tsx
 import {
@@ -1074,11 +1111,11 @@ import { Text } from '@hykr/app/ui';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, View } from 'react-native';
-import { JobStatus } from '../JobStatus';
+import { RepairStatus } from '../RepairStatus';
 
-/** Book a job: what, where, when. */
-function BookJob() {
-  const { create } = useEntityMutation('jobs');
+/** Book a repair: what, where, when. */
+function BookRepair() {
+  const { create } = useEntityMutation('repairs');
   const [title, setTitle] = useState('');
   const [address, setAddress] = useState('');
   const [date, setDate] = useState(todayLocal());
@@ -1087,7 +1124,7 @@ function BookJob() {
   return (
     <View className="gap-2 rounded-card border border-border bg-card p-4">
       <Field
-        label="Job"
+        label="Repair"
         value={title}
         onChangeText={setTitle}
         placeholder="e.g. Fix the kitchen tap"
@@ -1122,10 +1159,10 @@ function BookJob() {
   );
 }
 
-/** Open jobs, soonest first, and a form to book one. */
-export function Jobs() {
-  useScreenContext({ screen: 'jobs' });
-  const list = useEntityList('jobs', {
+/** Open repairs, soonest first, and a form to book one. */
+export function Repairs() {
+  useScreenContext({ screen: 'repairs' });
+  const list = useEntityList('repairs', {
     status: { in: ['booked', 'in_progress'] },
     sort: 'scheduledFor',
   });
@@ -1136,15 +1173,18 @@ export function Jobs() {
       keyExtractor={(j) => j.id}
       ListHeaderComponent={
         <View className="gap-4">
-          <ScreenTitle title="Jobs" />
-          <BookJob />
+          <ScreenTitle title="Repairs" />
+          <BookRepair />
         </View>
       }
       renderItem={({ item }) => (
-        <OpenRow label={`Open ${item.title}`} onPress={() => router.navigate(`/jobs/${item.id}`)}>
+        <OpenRow
+          label={`Open ${item.title}`}
+          onPress={() => router.navigate(`/repairs/${item.id}`)}
+        >
           <View className="flex-row items-center justify-between gap-2">
             <Text className="shrink font-semibold">{item.title}</Text>
-            <JobStatus status={item.status} />
+            <RepairStatus status={item.status} />
           </View>
           <Text variant="muted">
             {when(item.scheduledFor)} · {item.address}
@@ -1153,13 +1193,13 @@ export function Jobs() {
       )}
       ListEmptyComponent={
         list.error ? (
-          <LoadError what="jobs" onRetry={list.refresh} />
+          <LoadError what="repairs" onRetry={list.refresh} />
         ) : list.loading ? (
           <Text variant="muted">Loading…</Text>
         ) : (
           <EmptyState
             icon="tool"
-            title="No open jobs"
+            title="No open repairs"
             body="Book one above, or ask the assistant."
           />
         )
@@ -1170,18 +1210,18 @@ export function Jobs() {
 }
 ```
 
-The module's route components, `mobile/src/modules/jobs/routes.tsx`:
+The module's route components, `mobile/src/modules/repairs/routes.tsx`:
 
 ```tsx
 import { useLocalSearchParams } from 'expo-router';
-import { JobDetail } from './screens/JobDetail';
+import { RepairDetail } from './screens/RepairDetail';
 
-export { Jobs as JobsRoute } from './screens/Jobs';
+export { Repairs as RepairsRoute } from './screens/Repairs';
 
-/** /jobs/:id: the job's screen (the canvas shows the same one, bound in index.tsx). */
-export function JobRoute() {
+/** /repairs/:id: the repair's screen (the canvas shows the same one, bound in index.tsx). */
+export function RepairRoute() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  return <JobDetail id={id} />;
+  return <RepairDetail id={id} />;
 }
 ```
 
@@ -1190,14 +1230,14 @@ there: one line that re-exports the module's component. A module's routes sit in
 `src/app/<module>/`:
 
 ```tsx
-// mobile/src/app/jobs/index.tsx
-export { JobsRoute as default } from '@/modules/jobs/routes';
-// mobile/src/app/jobs/[id].tsx
-export { JobRoute as default } from '@/modules/jobs/routes';
-// mobile/src/app/index.tsx: the app's own home, here straight to the jobs
+// mobile/src/app/repairs/index.tsx
+export { RepairsRoute as default } from '@/modules/repairs/routes';
+// mobile/src/app/repairs/[id].tsx
+export { RepairRoute as default } from '@/modules/repairs/routes';
+// mobile/src/app/index.tsx: the app's own home, here straight to the repairs
 import { Redirect } from 'expo-router';
 export default function Home() {
-  return <Redirect href="/jobs" />;
+  return <Redirect href="/repairs" />;
 }
 ```
 
@@ -1209,30 +1249,32 @@ import { PagesScreen } from '@hykr/app';
 
 /** The framework's saved pages, suggesting a page the assistant can compose from Fixit's views. */
 export default function Pages() {
-  return <PagesScreen ask="show my jobs this week" />;
+  return <PagesScreen ask="show my repairs this week" />;
 }
 ```
 
 `_layout.tsx`, `pages/[id].tsx` and `+not-found.tsx` stay as the scaffold made them. They
 render the framework's shell and screens: `_layout.tsx` passes `settings`, the modules barrel
-(`import * as modules from '@/modules'`), `catalog`, `registry` and the framework plugins
-(`livePlugin()` for live updates, `pushPlugin()` for push notifications, `webMcpPlugin()` for a
-browser agent's read tools, `creditsPlugin` for the credits screen) to `<AppShell>`, and
-`+not-found.tsx` also serves the framework plugins' screens. The scaffold's `account` module words
+(`import * as modules from '@/modules'`), `catalog`, `registry`, `config` (with the languages
+from `domain/src/languages.ts`) and the framework features the sample uses, as plugins, to
+`<AppShell>`: the business switcher, settings and branding, live updates, push, WebMCP read
+tools, credits, calendars, the inbox, data export, MCP connections, agents, "Your data", share
+links and offline capture. Remove the plugins you don't want; `+not-found.tsx` serves their
+screens. The scaffold's `account` module words
 the credits alerts and `.env.example`'s `CREDITS_CONFIG` sets the prices and the plan every
 business starts on (developer guide, section 7.6): change both for your product, or remove
 `CREDITS_CONFIG` to measure usage without caps. `.env.example` also gives every business that
 sets none the sample's currency, time zone and privacy contact (`DEFAULT_CURRENCY=INR`,
 `DEFAULT_TIME_ZONE=Asia/Kolkata`, `DEFAULT_GRIEVANCE_CONTACT`): set your market's, or leave them
-unset for the framework's neutral ones (no currency, UTC, no contact). Rename the app in `mobile/app.json` (`name`, `slug`,
-`scheme`, the iOS `bundleIdentifier` and the Android `package`). If you change `scheme`, change
-it in `_layout.tsx` too.
+unset for the framework's neutral ones (no currency, UTC, no contact). Rename the app in
+`mobile/app.json` (`name`, `slug`, `scheme`, the iOS `bundleIdentifier` and the Android
+`package`). If you change `scheme`, change it in `_layout.tsx` too.
 
 ## 11. Test it
 
 An end-to-end test boots your compiled API against real Postgres and Redis, with the scripted
 model. `@hykr/api/testing` gives you `boot`, a signed-in `Person`, and helpers for the
-assistant and the database. `api/test/jobs.e2e.test.ts`:
+assistant and the database. `api/test/repairs.e2e.test.ts`:
 
 ```ts
 // Fixit end to end: the compiled API on real Postgres and Redis, with the scripted model.
@@ -1250,16 +1292,16 @@ beforeAll(async () => {
 });
 afterAll(shutdown);
 
-describe('jobs', () => {
-  it('a person books a job and lists it', async () => {
-    const made = await ana.call('POST', '/api/jobs', {
+describe('repairs', () => {
+  it('a person books a repair and lists it', async () => {
+    const made = await ana.call('POST', '/api/repairs', {
       title: 'Fix the kitchen tap',
       address: '12 MG Road',
       scheduledFor: tomorrow(),
     });
     expect(made.status).toBe(201);
     expect(made.body.value).toMatchObject({ status: 'booked', createdBy: 'person' });
-    const list = await ana.call('GET', '/api/jobs?status=booked');
+    const list = await ana.call('GET', '/api/repairs?status=booked');
     expect(list.body.items.map((j: { title: string }) => j.title)).toContain('Fix the kitchen tap');
   });
 
@@ -1271,41 +1313,41 @@ describe('jobs', () => {
       id: string;
       action: string;
     }[];
-    const parked = approvals.find((a) => a.action === 'job.complete');
+    const parked = approvals.find((a) => a.action === 'repair.complete');
     expect(parked).toBeDefined();
     const ok = await ana.call('POST', `/api/approvals/${parked?.id}/approve`);
     expect(ok.body.status).toBe('approved');
-    const jobs = (await ana.call('GET', '/api/jobs?q=gate')).body.items;
-    expect(jobs[0]).toMatchObject({ status: 'done', summary: 'two coats, done' });
+    const repairs = (await ana.call('GET', '/api/repairs?q=gate')).body.items;
+    expect(repairs[0]).toMatchObject({ status: 'done', summary: 'two coats, done' });
   });
 
-  it('a job is finished with complete-job, not a bare PATCH', async () => {
-    const job = (
-      await ana.call('POST', '/api/jobs', {
+  it('a repair is finished with complete-repair, not a bare PATCH', async () => {
+    const repair = (
+      await ana.call('POST', '/api/repairs', {
         title: 'Fix the fence',
         address: '3 Park Lane',
         scheduledFor: tomorrow(),
       })
     ).body.value;
-    const patch = await ana.call('PATCH', `/api/jobs/${job.id}`, { status: 'done' });
+    const patch = await ana.call('PATCH', `/api/repairs/${repair.id}`, { status: 'done' });
     expect(patch.status).toBe(403);
-    expect(patch.body.reason).toMatch(/complete-job/);
+    expect(patch.body.reason).toMatch(/complete-repair/);
   });
 
-  it('the person completes a job directly, and a done job stays done', async () => {
-    const job = (
-      await ana.call('POST', '/api/jobs', {
+  it('the person completes a repair directly, and a done repair stays done', async () => {
+    const repair = (
+      await ana.call('POST', '/api/repairs', {
         title: 'Clear the drain',
         address: '9 Hill Street',
         scheduledFor: tomorrow(),
       })
     ).body.value;
-    const done = await ana.call('POST', `/api/jobs/${job.id}/complete`, {
-      jobId: job.id,
+    const done = await ana.call('POST', `/api/repairs/${repair.id}/complete`, {
+      repairId: repair.id,
       summary: 'Cleared',
     });
     expect(done.body.status).toBe('done');
-    const again = await ana.call('PATCH', `/api/jobs/${job.id}`, { title: 'Changed' });
+    const again = await ana.call('PATCH', `/api/repairs/${repair.id}`, { title: 'Changed' });
     expect(again.status).toBe(403);
   });
 });
@@ -1334,23 +1376,19 @@ pnpm exec basecamp dev
 
 Open http://localhost:8081 and sign up:
 
-- **Book a job with the form.** It appears with a "Booked" badge.
-- **Ask the assistant** `book Fix the kitchen tap at 12 MG Road tomorrow`. The job appears on
-  the Jobs screen without a reload: the assistant wrote through the API, and the app refreshed
+- **Book a repair with the form.** It appears with a "Booked" badge.
+- **Ask the assistant** `book Fix the kitchen tap at 12 MG Road tomorrow`. The repair appears on
+  the Repairs screen without a reload: the assistant wrote through the API, and the app refreshed
   what it touched.
-- **Ask** `jobs`. The answer is your `job.list` component, inline in the chat.
+- **Ask** `repairs`. The answer is your `repair.list` component, inline in the chat.
 - **Ask** `finish Fix the kitchen tap: replaced the washer`. It waits for your approval. Approve
-  it in the card, and the job's History shows who asked, who approved, and when.
-
-![Fixit's Jobs screen](images/fixit-jobs.png)
-
-![The assistant booking and listing jobs](images/fixit-chat.png)
+  it in the card, and the repair's History shows who asked, who approved, and when.
 
 You also have, without writing them:
 
-- the job's history and the approval cards;
+- the repair's history and the approval cards;
 - saved canvas pages built from your views;
-- WhatsApp, where the reminder goes an hour before each job and the assistant answers in the
+- WhatsApp, where the reminder goes an hour before each repair and the assistant answers in the
   customer's language;
 - voice mode;
 - the back office at http://localhost:8082, where staff pick up WhatsApp conversations;
@@ -1385,7 +1423,8 @@ Then, once:
    `channel.does` in each language.
 10. **App** (`mobile/src`): `settings.ts` (title, tagline, home, and the screens that combine
     modules) and `catalog.ts`. Rename `app.json`.
-11. **Tests and evals**: an e2e test per rule that matters, and `basecamp eval` (`--module` for one).
+11. **Tests and evals**: an e2e test per rule that matters, and `basecamp eval` (`--module` for
+    one).
 
 ## Things that will trip you up
 
@@ -1394,8 +1433,9 @@ Then, once:
   `pnpm -r build` (it builds in dependency order); `basecamp dev` keeps it compiled from then on.
 - **Fields a command writes must be in the update schema.** See step 5. Without them the command
   fails with a bare 500 rather than a clear error.
-- **A refused write answers 403 with the rule's message in `reason`,** for example "Finish a job
-  with complete-job…". The rule's code (`use_complete_job`) is in the audit row's `rule` column.
+- **A refused write answers 403 with the rule's message in `reason`,** for example "Finish a
+  repair with complete-repair…". The rule's code (`use_complete_repair`) is in the audit row's
+  `rule` column.
 - **The scaffold starts from the sample modules,** so step 2 is a deletion. Do it before you
   start, not as you go, or the sample's types mix with yours.
 - **A module's views need a cast** (`as unknown as readonly ViewDef[]`): each view is typed by
