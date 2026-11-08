@@ -606,8 +606,10 @@ export const jobsNotifications = {
 ```
 
 The framework handles the rest: consent, quiet hours, the person's language, falling back to
-email. `pnpm exec basecamp templates sync` registers the template with the provider (whaloc
-locally).
+email. `to` reads the job as stored; the words (`params`, the email) read it as each recipient may,
+so a field hidden from them is not there. The reminder is scheduled from the stored
+`job.created` and `job.updated` events, once their write has committed.
+`pnpm exec basecamp templates sync` registers the template with the provider (whaloc locally).
 
 ## 8. The assistant: persona, rules, scripts and evals
 

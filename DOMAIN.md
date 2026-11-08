@@ -148,8 +148,9 @@ Approvals take an object form, `{ when, by, channels, minAssurance, level }`: wh
 person it is for by default; a request from outside the team, such as a customer's or a
 participant's, goes to holders of `approvals.decide`; `by` names a capability, a person or an
 amount band, never a role), and where (`channels: ['app']` for anything irreversible keeps it off
-WhatsApp buttons). Nobody decides their own request unless the
-policy sends it back to them. What each approval level means (does it wait, who decides, how long
+WhatsApp buttons). Nobody decides their own request unless the policy sends it back to them. The
+deciders hear of it by push, WhatsApp (where they can decide there) or email, and find it in
+their in-app inbox. What each approval level means (does it wait, who decides, how long
 it can be undone) is the application's: the sample declares `read`, `internal`, `external` and
 `irreversible` (`application/domain/src/server/approval-levels.ts`), and the to-dos module maps its
 writes to `internal` with a level rule. Thresholds and approvers per amount band are each
@@ -324,6 +325,13 @@ sample's `orders` module does, developer guide 5.20):
   an approval is pinned to the version it was asked on, and `frozenWhen` names the states in
   which a record (and its lines) no longer changes. **Revisions** (`revisionColumns()`,
   `reviseWithChildren` in the module's own command) copy a record and its lines as v2.
+
+The sample's orders go `draft`, `submitted`, `approved`, then `accepted` once the customer
+accepts the PDF (the system transition `accept`, run by `OrderAcceptance`), then `fulfilled`:
+by the team (an approved order too, one accepted on paper) or by the supplier's system through
+the `orders-supplier` connector (an accepted order only). An order can be `cancelled` until it is
+fulfilled, and a submitted one `expired` or `superseded` by its next revision. Every state after
+`draft` is frozen.
 
 A state column can also get a CHECK in the module's `sql/post` hook (the sample's
 `orders-states.sql`); keep it in step with the states.
@@ -514,9 +522,10 @@ From the contracts declaration alone:
   OpenRouter in development) and each business's model policy (`GET /api/models`,
   `PUT /api/models/policy`), which picks every turn's model and fails closed (developer guide,
   section 7.5). The application only configures them in `.env`.
-- Credits and caps: every business's assistant tokens and tool calls, WhatsApp messages, voice
-  seconds and memory embeddings metered and priced, a per-period allowance and a prepaid wallet,
-  an alert and a pause as caps fill, an operator's override, and buying credits through a
+- Credits and caps: every business's assistant and guardrail tokens and tool calls, WhatsApp
+  messages, voice seconds and memory embeddings metered and priced, a per-period allowance and a
+  prepaid wallet, an alert and a pause as caps fill (a paused business's agents are refused on
+  their next call, mid-turn included), an operator's override, and buying credits through a
   purchase provider (`/api/credits`, developer guide section 7.6). The application configures the
   prices and plans (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on
   `credits.threshold` to `{ capability: 'credits.manage' }`; the sample's `account` module) and

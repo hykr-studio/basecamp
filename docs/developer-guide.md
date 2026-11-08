@@ -102,8 +102,8 @@ Every write, from any caller, follows these steps in `runWrite`:
 | Audit | One row per touched record, plus one for a command | `audit.events` |
 | Stored events | Each `NamedEvent` (and `approval.requested`) is inserted in `app.domain_events` in the transaction, with the row before, and held back (`available_at`) for the write's undo window when it has one | `write/events.ts` |
 | Undo window | A write that ran with `undoMs`, for a person, touching only entities, records an `app.undo_windows` row; the result carries `undo: { id, until }` | `write/undo.ts` |
-| Write hooks | `afterRun` for a write that ran or parked, in the transaction. Throwing rolls it all back. | `writeHooks` |
-| Events | Published in-process after commit by the CQRS handler | `NamedEvent` |
+| Write hooks | `afterRun` for a write that ran or parked, in the transaction. Throwing rolls it all back. The framework's `notify.held-sends` holds the write's outbox sends for its undo window. | `writeHooks` |
+| Events | Published in-process after commit by the CQRS handler. The worker relays the stored ones to subscribers, notifications among them (section 5.10). | `NamedEvent` |
 
 Every write answers a `WriteResult` (`framework/contracts/src/framework/write.ts`):
 
@@ -718,6 +718,12 @@ levels). No role name decides it, so an application that renames its outsider ro
 decides their own request unless the policy sends it back to them: a request decided by a capability
 is never decidable by its requester. The requester can still open it (`GET /api/approvals/:id`, with
 `canDecide: false`); `POST .../approve` answers 403 `own_request`.
+
+A request someone else decides reaches its deciders through the framework's `approval.request`
+notification (section 8.2): by push, else on WhatsApp with signed Approve and Reject buttons (only
+where the request may be decided there, with `APPROVAL_SECRET` set and the decider's number
+linked), else by email, and always in their in-app inbox. Each opens `/approvals/<id>`. A person's
+own assistant asks them in the conversation instead.
 
 Approvals expire after 24 hours by default (`CoreModule.forRoot({ approvalTtlMs })`), or after their
 level's `expiresInMs`. The framework's `approvals` feature runs a sweeper every minute
@@ -2068,8 +2074,13 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
   reached by the person and the privacy team. It holds `manifest.json` and a JSON file per part:
   the account, memberships, customer records, contacts, consents and messages, threads and their
   messages, saved pages, approvals asked, the activity audit names them in, their assistant runs,
+  the outside clients (MCP) they allowed here (`mcp-connections`: the client, its scopes, when),
   `records/<plural>` (each declared entity's records, **personal fields only**, with ids and dates),
-  `features/<kind>` (every export contributor) and their earlier requests.
+  `features/<kind>` (every export contributor) and their earlier requests. Among the features'
+  parts: `calendarConnections`, `calendarEvents`, `calendarFeeds` and `calendarInvites` (never
+  a sealed token), `calls` (the calls they were on: as the member, or by their contact's number),
+  `acceptances` (their evidence, in full) and `otpChallenges` (the codes sent to them, never a
+  code's hash). Stored webhook bodies and inbound payloads are not in a copy (section 14).
 - **Erasure** is one transaction, through `runWrite` as the system principal (audited
   `privacy.erase` and `privacy.erased`): declared records deleted, anonymised or counted as kept;
   every erasure contributor (files, comments, memory, documents, jobs, parties, push, inbox,
@@ -2956,7 +2967,10 @@ has the extension (`framework/db/sql/pre/memory.sql` creates it when offered), o
 **Settings.** The section `memory`: `{ recall: true, conversation: true, limit: 5, minScore: 0.3 }`.
 `recall: false` stops recall before turns (and keeping what people say); `recall-memory` still
 searches. `conversation: false` leaves people's words out everywhere. A business without an
-embedding model its policy allows gets no recall, and its turns still run.
+embedding model its policy allows gets no recall, and its turns still run. Its owners and admins
+(`settings.manage`) change the section with `PATCH /api/settings/sections/memory { value }`
+(section 5.18; `limit` 0 to 10, `minScore` 0 to 1), or as JSON on the back office's Settings
+screen.
 
 A trait's `text` sees the record as the reader may see it, so a field hidden from them is missing:
 write it to cope (`n.body?.trim()`). A trait that throws drops that record from recall.
@@ -3037,7 +3051,7 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
 
 ### 8.1 WhatsApp
 
-You do not write WhatsApp code for a feature. Inbound messages become chat turns on the `text` surface. Your views' `text` decides the words. Approvals become signed buttons when `APPROVAL_SECRET` is set and the approver is the person writing; a request someone else decides goes to them as `approval_request_v1`, and every answer links to `/approvals/<id>` in the app. The framework handles keywords (STOP, START, HELP, talk to a person, delete my data, link my account) in English, Hindi and Telugu, plus consent, the 24-hour window, handoff to a person and erasure.
+You do not write WhatsApp code for a feature. Inbound messages become chat turns on the `text` surface. Your views' `text` decides the words. Approvals become signed buttons when `APPROVAL_SECRET` is set and the approver is the person writing; a request someone else decides reaches them as `approval_request_v1` when push does not and the request may be decided on WhatsApp (section 5.8), and every answer links to `/approvals/<id>` in the app. The framework handles keywords (STOP, START, HELP, talk to a person, delete my data, link my account) in English, Hindi and Telugu, plus consent, the 24-hour window, handoff to a person and erasure.
 
 ### 8.2 Templates and notifications
 
@@ -3346,7 +3360,7 @@ These are not built. Each has a workaround for now.
 | Importing with no worker | `basecamp import` starts the job and follows it; the worker runs it. With no worker running it waits (and says so). Large JSON files through the local storage drivers (memory, fs) also pass the API's JSON body limit (`JSON_BODY_LIMIT`) on upload; S3 has no such limit. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Packages installed but not used yet | `@mastra/memory` (in `@hykr/agents`; memory recall is the API's own, section 7.7) and the React Query persister (in `@hykr/app`). Each feature that uses one adds its code. Add a package's Expo config plugin to `app.json` with the feature, then rebuild the dev client (the image picker's is in, for files, `expo-notifications`', for push, and `expo-location`'s, for places). Versions and reasons: `docs/decisions/F6.md`. |
+| A package installed but not used yet | `@mastra/memory` (in `@hykr/agents`): memory recall is the API's own (section 7.7). A feature that uses it adds its code. Versions and reasons: `docs/decisions/F6.md`. |
 | More Postgres connections in CI | Compose allows 400. GitHub's service containers cannot take a command, so CI keeps the default 100, enough for one suite at a time. |
 | System writes that park | `systemPrincipal()` creates (owned by the business's default owner), updates and deletes rows of its business, but cannot park (nobody decides). Maintenance jobs still write their audit rows directly. |
 | Impersonation, break-glass access | An operator works in a business only through support access it consented to, as themselves. There is no acting as one of its people, and no access without consent. |
@@ -3386,7 +3400,7 @@ These are not built. Each has a workaround for now.
 | WhatsApp turns with share links | `RenderTurn.pages` is still not filled: links to a customer still point at the app (`APP_URL`), which needs an account. |
 | Share pages on a business's domain | The URL a link answers is `APP_URL`'s; a verified domain (section 5.18) is not used for it, though the page shows the business's branding. |
 | An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
-| Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders allow cancelling an approved order, accepted or not). |
+| Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders can be cancelled when approved or accepted). |
 | The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set Express's `trust proxy` (not done by the framework). |
 | Acceptance tools for the assistant | The assistant can neither ask for a code nor accept (on purpose), and has no tool to read acceptances yet. |
 | Retiring `channel.link_codes` | Linking codes now live in `channel.otp_challenges`; the old table stays, unused, until a migration may drop it. |
@@ -3463,6 +3477,7 @@ These are not built. Each has a workaround for now.
 | Retention of the later features' logs | Webhook deliveries, attempts and inbound events, the call log and calendar invites have no retention target: they stay until erasure, or until their endpoint or connection is deleted (`docs/decisions/H4.md`). |
 | Approvals naming an erased person | An approval someone else's assistant left waiting (an invite to the person, a call to their number) keeps their email or number in its summary and input until it is decided or expires. |
 | Inbound payloads in a sender's own shape | Erasure nulls values that are the person's email or number and empties events whose handler wrote an erased record. A name, or a number written another way, stays until a connector gives its own redactor. |
+| Webhook payloads in a person's copy | A copy holds the person's records but none of the integration bus's own rows: stored delivery bodies and inbound payloads that mention them are not in it. The team reads them in the delivery log (`GET /api/integrations/endpoints/:id/deliveries`, `…/connections/:id/inbound`). |
 | A team filing's request id on its approval | A privacy request the team files that waits for an approval names a provisional request id on the approval (`resource_id`); the request gets its own id when the approval runs it. Find it by its person (`GET /api/privacy/requests`). |
 | A business's privacy contact before it sets one | Until the privacy team sets `grievanceContact` (the Privacy screen, `PATCH /api/privacy/settings`), the register and WhatsApp's HELP show the deployment's `DEFAULT_GRIEVANCE_CONTACT`, or say that none is named. Nothing asks a new business for it. |
 | Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
