@@ -33,7 +33,9 @@ An application is a list of modules. A module is a folder,
 `application/domain/src/modules/<name>/`, that teams can build in parallel. Its name is lower
 case (`orders`); it prefixes the module's tables, and every spec it declares is stamped with it
 (`spec.module`, `catalog.moduleOf`). `basecamp module add <name>` writes a new one, both halves,
-and registers it.
+and registers it. [Working on modules in parallel](docs/modules.md) is the procedure for several
+people building modules at once: what a module owns, the shared lists, the one migration journal,
+and tests and evals per module.
 
 | Layer | In the module | It must export |
 |---|---|---|
@@ -52,7 +54,8 @@ Around the modules, the application keeps:
 | Modules list | `application/domain/src/modules/index.ts` | `modules`, in dependency order (a module after the modules it depends on), one line per module |
 | Aggregates for the apps | `application/domain/src/contracts/index.ts`, `src/views/index.ts` | Every module's specs and views (`moduleSpecs`, `moduleViews`), one line per module. The apps import `@application/domain/contracts` and `/views`, or one module's `@application/domain/modules/<name>/contracts` and `/views` |
 | Migrations | `application/domain/drizzle/`, `src/db/index.ts` | One journal for every module, generated from `src/modules/*/db/schema.ts`; `migrations` |
-| Shared server code | `application/domain/src/server/` | What several modules use, such as `BUSINESS_ACCESS` |
+| Shared server code | `application/domain/src/server/` (`@application/domain/server`) | What no one module owns: `access.ts` (`BUSINESS_ACCESS`, which the modules share), `approval-levels.ts` (the application's approval levels and the level rules that are not one module's), `privacy.ts` (its processors, request policy and retention periods), and `index.ts`, which gathers them as `contributions` for `defineServer({ contributes })` |
+| SQL hooks | `application/domain/sql/pre/*.sql`, `sql/post/*.sql` | What drizzle-kit does not generate (extensions, triggers, CHECK constraints), idempotent, run around the migrations on every migrate. One file per module and purpose, named after the module (`orders-states.sql`) |
 | Languages | `application/domain/src/languages.ts` (`@application/domain/languages`) | `languages = defineLanguages({ en?, <code>: { name, english, locale?, speech?, letters?, keywords? } })` from `@hykr/i18n`: the languages the product speaks, English first (the sample: English, Hindi and Telugu). Isomorphic: the server and the app are given the same one |
 | Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, languages, channel, modules, migrations })`: what the product is called, who the assistant is, the languages it speaks (`@application/domain/languages`), and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools, delivery channels, connectors and connector handlers (developer guide, sections 5.9, 5.10 and 5.14), the application's approval levels and level rules (section 5.8.1; the sample's are in `application/domain/src/server/approval-levels.ts`, passed through `@application/domain/server`), and what it says about personal data: its processors, its request policy and its retention periods (section 5.27; the sample's are in `application/domain/src/server/privacy.ts`) |
 | App modules | `application/mobile/src/modules/<name>/` and the barrel `src/modules/index.ts` (one line per module) | The app half of each module: `defineAppModule({ name, nav, suggestions, bind, hrefFor, webmcp })` from `@hykr/app`, in `index.tsx`: destinations under `/<name>`; `bind` calls `bindView` / `bindScreen` for the module's views and screens; `hrefFor` says where each of its records opens. Other modules import only that `index.tsx` |
@@ -84,7 +87,8 @@ Around the modules, the application keeps:
   tables. After a rebase, `basecamp db rebase` drops your branch's migrations and generates them
   again on top of the base's.
 
-To bring another domain, replace the modules. Nothing in `framework/` changes. Then:
+To bring another domain, replace the modules ([Build a new application](docs/new-application.md)
+does it step by step). Nothing in `framework/` changes. Then:
 
 1. `pnpm db:generate --name <domain>` (or `basecamp db generate`) and `pnpm db:migrate` for
    the new tables: the framework's migrations run first, then the application's.
@@ -429,10 +433,10 @@ not a declared language stops the boot). Read them with `pick(labels, lang)`:
 
 From the contracts declaration alone:
 
-- REST routes with the list grammar (filters, search, sort, keyset pages), validation and
-  OpenAPI shapes.
+- REST routes with the list grammar (filters, search, sort, keyset pages) and validation.
 - Agent tools (`list-*`, `summarize-*`, `get-*`, `create-*`, `update-*`, `delete-*`, one per
-  command), with approvals where the spec asks for them.
+  command, and `transition-*` for an entity with states), with approvals where the spec asks for
+  them; over MCP, two tools per module (`<module>_read`, `<module>_write`).
 - `GET /api/<plural>/summary`: counts and totals under the list's scope and filters.
 - The app's data hooks (`useEntityList`, `useEntity`, mutations, commands) and
   query-cache refresh after the assistant writes (commands declare `touches`).
