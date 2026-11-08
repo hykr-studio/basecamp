@@ -31,6 +31,7 @@ import {
   tenantMoney,
 } from '@hykr/core';
 import { customFields, type Database, documents, shareLinks } from '@hykr/db';
+import type { Labels } from '@hykr/i18n';
 import { can } from '@hykr/policy';
 import {
   ForbiddenException,
@@ -292,11 +293,11 @@ export class ShareService {
       for (const f of own) {
         const type = CUSTOM_TYPES[f.type];
         if (!type) continue;
-        const label = f.label as { en: string; hi?: string; te?: string };
         fields.push({
           key: f.key,
           type,
-          label: { en: label.en, hi: label.hi ?? label.en, te: label.te ?? label.en },
+          // The business's words; a language it left out reads in English.
+          label: f.label as Labels,
           required: f.required,
           ...(type === 'select' ? { options: [...((f.options as string[] | null) ?? [])] } : {}),
           custom: true,

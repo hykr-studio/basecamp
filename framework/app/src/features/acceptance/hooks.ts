@@ -3,6 +3,7 @@ import type {
   AcceptanceStatus,
   AcceptInput,
   ESignStarted,
+  Lang,
   WriteResult,
 } from '@hykr/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -19,10 +20,7 @@ export interface AcceptanceClient {
   status(documentId: string, lang?: string): Promise<AcceptanceStatus>;
   challenge(input: AcceptanceChallengeInput): Promise<WriteResult<{ id: string; sentTo: string }>>;
   accept(input: AcceptInput): Promise<WriteResult<unknown>>;
-  esign?(input: {
-    documentId: string;
-    lang?: 'en' | 'hi' | 'te';
-  }): Promise<WriteResult<ESignStarted>>;
+  esign?(input: { documentId: string; lang?: Lang }): Promise<WriteResult<ESignStarted>>;
 }
 
 const session: AcceptanceClient = {
@@ -101,7 +99,7 @@ export function useAccept() {
 export function useStartESign() {
   const client = useAcceptanceClient();
   return useMutation({
-    mutationFn: (input: { documentId: string; lang?: 'en' | 'hi' | 'te' }) => {
+    mutationFn: (input: { documentId: string; lang?: Lang }) => {
       if (!client.esign) throw new Error('Signing at a provider is not offered here');
       return client.esign(input);
     },

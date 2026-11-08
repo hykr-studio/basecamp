@@ -1,4 +1,4 @@
-import { FrameworkCapabilities, isTimeZone, type Principal } from '@hykr/contracts';
+import { FrameworkCapabilities, isTimeZone, Lang, type Principal } from '@hykr/contracts';
 import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard, tenantZoneOf } from '@hykr/core';
 import { type Database, schema } from '@hykr/db';
 import { can } from '@hykr/policy';
@@ -36,7 +36,7 @@ class CodeDto extends createZodDto(
     phone: Phone,
     /** The person's IANA zone (their device's); left out or unknown: their business's. */
     timeZone: z.string().min(1).max(64).optional(),
-    lang: z.enum(['en', 'hi', 'te']).default('en'),
+    lang: Lang.default('en'),
   }),
 ) {}
 

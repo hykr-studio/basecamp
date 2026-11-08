@@ -10,6 +10,7 @@ import {
   voiceRoom,
 } from '@hykr/contracts';
 import { type Database, writeAudit } from '@hykr/db';
+import { languages } from '@hykr/i18n';
 import {
   ForbiddenException,
   HttpException,
@@ -100,6 +101,8 @@ export class VoiceService {
             lang: input.lang,
             timeZone: input.timeZone,
             maxSeconds,
+            // The application's languages: the worker does not load the application.
+            languages: languages().toWire(),
           } satisfies VoiceDispatch),
         }),
       ],

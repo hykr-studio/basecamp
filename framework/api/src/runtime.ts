@@ -8,13 +8,21 @@ import {
   mergeContributions,
 } from '@hykr/contracts';
 import type { MigrationSet } from '@hykr/db';
-import { type Labels, overridePhrases, type PhraseOverrides } from '@hykr/i18n';
+import {
+  defineLanguages,
+  type Labels,
+  type Languages,
+  overridePhrases,
+  type PhraseOverrides,
+  setLanguages,
+} from '@hykr/i18n';
 import {
   createNotificationCatalog,
   type NotificationCatalog,
   type NotificationOverride,
 } from '@hykr/notifications';
 import { createUiRegistry, type Registry } from '@hykr/ui-registry';
+import { languageCheckProblems } from './language-checks.js';
 import type { ModuleDef } from './module.js';
 import { crossProblems, tableProblems } from './module-checks.js';
 // The registries every contribution key goes to: loaded before any app is installed.
@@ -32,6 +40,12 @@ export interface ServerDefinition {
   persona: string;
   /** The scripted model's answer when no script matches. Default: the modules' help lines. */
   help?: string;
+  /**
+   * The languages it speaks (`defineLanguages`, declared once in a file the app imports too):
+   * English always, then its own. Left out: English alone. Every word keyed by another
+   * language is refused at boot; a word missing in one reads in English.
+   */
+  languages?: Languages;
   /** On WhatsApp: what the assistant helps with, one sentence per language (welcome, HELP). */
   channel?: { does: Labels };
   /**
@@ -73,6 +87,8 @@ export interface ServerDefinition {
 /** An application as the server runs it: its definition, built into the framework's parts. */
 export interface Basecamp {
   definition: ServerDefinition;
+  /** The languages it speaks: its declaration, or English alone. */
+  languages: Languages;
   catalog: Catalog;
   registry: Registry;
   notifications: NotificationCatalog;
@@ -123,6 +139,8 @@ export function defineServer(definition: ServerDefinition): Basecamp {
     ),
   );
   problems.push(...tableProblems(modules, definition.tablePrefix));
+  const languages = definition.languages ?? defineLanguages({});
+  problems.push(...languageCheckProblems({ modules, languages, does: definition.channel?.does }));
   if (catalog && registry) problems.push(...crossProblems({ modules, catalog, registry }));
   if (problems.length || !catalog || !registry || !notifications) throw new ModulesError(problems);
 
@@ -130,6 +148,7 @@ export function defineServer(definition: ServerDefinition): Basecamp {
   let agents: Agents | undefined;
   return {
     definition,
+    languages,
     catalog,
     registry,
     notifications,
@@ -163,6 +182,8 @@ export function setRuntime(app: Basecamp) {
   if (current === app) return;
   if (current) throw new Error('Another application is already registered');
   installContributions(app.contributions);
+  // Its languages first: its phrases may be in a language the framework has no words for.
+  setLanguages(app.languages);
   if (app.definition.wording?.phrases) overridePhrases(app.definition.wording.phrases);
   current = app;
 }

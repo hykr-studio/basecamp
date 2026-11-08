@@ -3,7 +3,7 @@
 // tool call per tool it called).
 import { CreditsViewCapability, type Subject } from '@hykr/contracts';
 import { schema } from '@hykr/db';
-import { LANGS, type Labels, type MessageKey, t } from '@hykr/i18n';
+import { type Labels, languages, type MessageKey, pick, t } from '@hykr/i18n';
 import { can, subjectKeyOf } from '@hykr/policy';
 import { Logger } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
@@ -13,9 +13,9 @@ import { FrameworkMeters } from './meters.js';
 
 const log = new Logger('Credits');
 
-/** A framework phrase in every language. */
+/** A framework phrase in each of the application's languages. */
 const labels = (key: MessageKey, vars: Record<string, string> = {}): Labels =>
-  Object.fromEntries(LANGS.map((lang) => [lang, t(lang, key, vars)])) as Labels;
+  Object.fromEntries(languages().codes.map((lang) => [lang, t(lang, key, vars)])) as Labels;
 
 /** This person's WhatsApp contact in the business: the number they wrote from. */
 async function contactOf(svc: CreditsService, tenantId: string, subject: Subject) {
@@ -57,7 +57,7 @@ async function before(svc: CreditsService, turn: TurnInfo): Promise<TurnGate | n
       const { settings } = await svc.tenantInfo(p.tenantId);
       say = labels('channel.handoff', { replyTime: settings.replyTime });
       const lang = turn.lang ?? 'en';
-      await svc.handOver(contact, { message: turn.message, reply: say[lang], lang });
+      await svc.handOver(contact, { message: turn.message, reply: pick(say, lang), lang });
     }
   }
   return { refuse: { rule: refusal.rule, reason: refusal.reason, status: 402, say } };

@@ -97,5 +97,6 @@ A Basecamp application in ${target}
 Your application is a list of modules: domain/src/modules/<name>/ (contracts, db, server,
 views, notifications, agent), registered in domain/src/modules/index.ts, and the app's side of
 each in mobile/src/modules/<name> (routes in mobile/src/app/<name>). Start a new one with:
-pnpm exec basecamp module add <name>. The framework is @hykr/*.
+pnpm exec basecamp module add <name>. The languages it speaks are declared in
+domain/src/languages.ts. The framework is @hykr/*.
 `);

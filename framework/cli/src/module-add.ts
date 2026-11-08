@@ -19,6 +19,11 @@ export type ModuleAddInput = {
   name: string;
   /** The entity's singular name. Default: the module's name without its final s. */
   entity?: string;
+  /**
+   * The application's languages other than English, by name ("Hindi"): the words it writes are
+   * English, and the next steps say to translate them into these. Unknown: none named.
+   */
+  languages?: readonly string[];
 };
 
 export type ModuleAddResult = {
@@ -169,9 +174,10 @@ export function moduleAdd(input: ModuleAddInput): ModuleAddResult {
         `Register ${n.m} (${relative(root, join(appDir, 'modules', name))}) with the app shell: ${relative(root, list)} does not exist yet.`,
       );
   }
+  result.todo.push(`Generate the migration for its table: basecamp db generate --name ${name}`);
+  const others = input.languages ?? [];
   result.todo.push(
-    `Generate the migration for its table: basecamp db generate --name ${name}`,
-    `Translate the hi and te words in ${relative(root, join(dir, 'views', `${entity}.ts`))} (they are English for now).`,
+    `Its words are English only (other languages read them in English): add the application's ${others.length ? `other languages (${others.join(', ')})` : 'other languages, if it has any,'} to the labels in ${relative(root, join(dir, 'views', `${entity}.ts`))} and ${relative(root, join(dir, 'contracts', `${entity}.ts`))}.`,
   );
   return result;
 }
@@ -249,8 +255,10 @@ export const ${n.E}Spec = entitySpec({
   // What the assistant reads to choose its tools: say what one is and when to use it.
   description: '${n.Title}: each has a title.',
   schemas: { read: ${n.E}View, create: Create${n.E}Input, update: Update${n.E}Input },
+  // Each field's name, in English and in the application's other languages (they fall back
+  // to English).
   fieldLabels: {
-    title: { en: 'Title', hi: 'शीर्षक', te: 'శీర్షిక' },
+    title: { en: 'Title' },
   },
   list: {
     filterable: { title: 'text', createdAt: 'date' },
@@ -341,15 +349,12 @@ import { defineView, spokenList, type ViewLabels } from '@hykr/ui-registry';
 import { z } from 'zod';
 import { ${n.E}Spec, ${n.E}View } from '../contracts/index.js';
 
-// TODO: translate. The Hindi and Telugu words are English placeholders.
+// English; add the application's other languages beside it (\`de: 'Aufgaben'\`). A language
+// left out reads in English.
 const labels = {
-  title: { en: '${n.Title}', hi: '${n.Title}', te: '${n.Title}' },
-  empty: { en: 'No ${n.label}s.', hi: 'No ${n.label}s.', te: 'No ${n.label}s.' },
-  noun: {
-    en: ['${n.label}', '${n.label}s'],
-    hi: ['${n.label}', '${n.label}s'],
-    te: ['${n.label}', '${n.label}s'],
-  },
+  title: { en: '${n.Title}' },
+  empty: { en: 'No ${n.label}s.' },
+  noun: { en: ['${n.label}', '${n.label}s'] },
 } satisfies ViewLabels;
 
 export const ${n.E}ListView = defineView({

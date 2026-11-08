@@ -105,6 +105,22 @@ async function loadServer(root: string, config: Config) {
   return { api, server };
 }
 
+/**
+ * The English names of the application's languages other than English, from its built server
+ * definition; undefined when it is not built (or does not load), so `module add` still works.
+ */
+async function otherLanguages(root: string, config: Config): Promise<string[] | undefined> {
+  const file = resolve(root, config.server);
+  if (!existsSync(file)) return undefined;
+  try {
+    const { server } = await import(pathToFileURL(file).href);
+    const list = server?.languages?.list as { english: string }[] | undefined;
+    return list?.slice(1).map((l) => l.english);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The package manager the application uses, from its lockfile. */
 function packageManager(root: string): string {
   for (let dir = root; ; dir = dirname(dir)) {
@@ -281,8 +297,16 @@ async function main() {
       if (sub !== 'add' || !name) fail('module add <name> [--entity <singular>]');
       if (!config.db) fail('set "db" in the basecamp block: the package the modules live in');
       const app = (config.apps ?? []).find((a) => existsSync(resolve(root, a, 'src', 'app')));
+      const languages = await otherLanguages(root, config);
       try {
-        const result = moduleAdd({ root, db: config.db, app, name, entity: values.entity });
+        const result = moduleAdd({
+          root,
+          db: config.db,
+          app,
+          name,
+          entity: values.entity,
+          languages,
+        });
         for (const file of result.created) console.log(`created     ${file}`);
         for (const file of result.registered) console.log(`registered  ${file}`);
         formatIfBiome(root, [...result.created, ...result.registered]);
