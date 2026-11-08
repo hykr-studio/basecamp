@@ -1,7 +1,9 @@
 // State machines, SLAs, versions and revisions (B6, B4), on neutral data: a `tickets` module
 // whose tickets move open → active → resolved → closed (or are cancelled), carry SLAs on open
 // and active, a version per write, revisions in a series, and a tree of steps that freezes with
-// the ticket. Only the states, sla and versions tests boot this server (`statesServer`).
+// the ticket. Private tickets, a second type on the same table, are handled by people only, so
+// the assistant sees no clock of theirs. The states, sla, versions and MCP states tests boot this
+// server (`statesServer`).
 import { defineModule, defineServer } from '@hykr/api';
 import {
   type Contributions,
@@ -162,6 +164,47 @@ export const TicketSpec = entitySpec({
   },
 });
 
+/**
+ * The same tickets as people alone handle them (a second type on the same table, as the summary
+ * fixture's tallies): the assistant reaches neither them nor their SLA clocks.
+ */
+export const PrivateTicketSpec = entitySpec({
+  name: 'privateTicket',
+  label: 'private ticket',
+  description: 'Private tickets: handled by people only, clocks and all.',
+  schemas: {
+    read: z.object({
+      id: z.string(),
+      title,
+      status: z.enum(['open', 'closed']),
+      createdAt: z.iso.datetime(),
+    }),
+    create: z.object({ title }),
+    update: z.object({ title: title.optional(), status: z.enum(['open', 'closed']).optional() }),
+  },
+  list: {
+    filterable: { status: 'enum' },
+    sortable: ['createdAt'],
+    defaultSort: [['createdAt', 'asc']],
+    pageSize: { default: 50, max: 100 },
+  },
+  expose: { list: 'human', get: 'human', create: 'human', update: 'human', delete: 'human' },
+  traits: {
+    states: {
+      field: 'status',
+      initial: 'open',
+      states: {
+        open: { label: label('Open') },
+        closed: { label: label('Closed'), terminal: true },
+      },
+      transitions: [
+        { name: 'close', from: 'open', to: 'closed', label: label('Close'), expose: 'human' },
+      ],
+      slas: [{ name: 'fixture.private-tickets.respond', state: 'open', within: '4h' }],
+    },
+  },
+});
+
 export const Step = z.object({
   id: z.string(),
   ticketId: z.string(),
@@ -224,7 +267,7 @@ export const ReviseTicketSpec = commandSpec({
 
 export const ticketsSpec = moduleSpec({
   name: 'tickets',
-  entities: { tickets: TicketSpec, ticketSteps: StepSpec },
+  entities: { tickets: TicketSpec, ticketSteps: StepSpec, privateTickets: PrivateTicketSpec },
   commands: [PlanTicketSpec, ReviseTicketSpec],
 });
 
@@ -242,6 +285,13 @@ const ACCESS: Access = {
 };
 
 export const TicketDef = defineEntity(TicketSpec, {
+  table: tickets,
+  owner: (t) => t.ownerId,
+  customer: (t) => t.customerId,
+  access: ACCESS,
+});
+
+export const PrivateTicketDef = defineEntity(PrivateTicketSpec, {
   table: tickets,
   owner: (t) => t.ownerId,
   customer: (t) => t.customerId,
@@ -329,10 +379,12 @@ export const ReviseTicket = defineCommand(ReviseTicketSpec, {
     commandController(ReviseTicket),
     entityController(TicketDef),
     entityController(StepDef),
+    entityController(PrivateTicketDef),
   ],
   providers: [
     ...entityHandlers(TicketDef),
     ...entityHandlers(StepDef),
+    ...entityHandlers(PrivateTicketDef),
     commandHandler(PlanTicket),
     commandHandler(ReviseTicket),
   ],
@@ -354,6 +406,20 @@ export const notesHidden: ReadProjector = {
   project: (type, value, p) => {
     if (type !== 'ticket' || can(p, 'fixture.tickets.notes')) return value;
     const { note: _note, ...rest } = value;
+    return rest;
+  },
+};
+
+/**
+ * A "[sealed]" ticket's status is read only with fixture.tickets.notes: removed for everyone
+ * else, record by record, and so are its SLA clocks, which carry the state.
+ */
+export const sealedStatus: ReadProjector = {
+  name: 'fixture.tickets.sealed-status',
+  project: (type, value, p) => {
+    if (type !== 'ticket' || can(p, 'fixture.tickets.notes')) return value;
+    if (!String(value.title ?? '').startsWith('[sealed]')) return value;
+    const { status: _status, ...rest } = value;
     return rest;
   },
 };
@@ -390,7 +456,7 @@ export const statesContributions: Partial<Contributions> = {
   ],
   roles: [Viewer],
   approvalLevels: [FinalLevel],
-  readProjectors: [notesHidden],
+  readProjectors: [notesHidden, sealedStatus],
 };
 
 /** The fixture with the tickets module. */
