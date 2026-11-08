@@ -1030,7 +1030,9 @@ describe('the run log', () => {
     const subject = { kind: 'user' as const, userId: gone.id };
     const exported = await exportPersonalData({ subject, tenantId, db });
     expect(exported.agents).toEqual([expect.objectContaining({ id: theirs.id, name: 'To erase' })]);
-    const counts = await db.transaction((tx) => eraseWithContributors({ tx, subject, tenantId }));
+    const { counts } = await db.transaction((tx) =>
+      eraseWithContributors({ tx, subject, tenantId }),
+    );
     expect(counts.agents).toBe(1);
     expect((await pool.query('select 1 from app.agents where id = $1', [theirs.id])).rows).toEqual(
       [],

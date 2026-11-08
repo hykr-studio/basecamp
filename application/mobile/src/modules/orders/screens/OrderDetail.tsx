@@ -24,6 +24,7 @@ import {
   useEntityList,
   useMoneyText,
   useScreenContext,
+  useT,
   useVersions,
   VersionList,
 } from '@hykr/app';
@@ -95,11 +96,18 @@ function Node({ node, depth }: { node: TreeNode<OrderItemView>; depth: number })
   );
 }
 
+/** What an accepted order is, under its state, in each language. */
+const ACCEPTED = {
+  en: 'Accepted by its customer: the contract, placed with its supplier.',
+  hi: 'ग्राहक ने स्वीकार किया: यही अनुबंध है, आपूर्तिकर्ता को दिया गया।',
+  te: 'కస్టమర్ అంగీకరించారు: ఇదే ఒప్పందం, సరఫరాదారుకు ఇవ్వబడింది.',
+};
+
 /**
  * One order: its state and moves, its groups and lines as a tree, its tax lines and totals, its
- * revisions, its PDFs (make, open, send to me), its customer's acceptance, its discussion
- * (comments with @-mentions) and its history. The orders/[id] route shows it, and so does the
- * canvas (order.detail).
+ * revisions, its PDFs (make, open, send to me), its customer's acceptance (which moves it to
+ * accepted), its discussion (comments with @-mentions) and its history. The orders/[id] route
+ * shows it, and so does the canvas (order.detail).
  */
 export function OrderDetail({ id, embedded = false }: { id: string; embedded?: boolean }) {
   useScreenContext(embedded ? undefined : { screen: 'order', record: { type: 'order', id } });
@@ -108,6 +116,7 @@ export function OrderDetail({ id, embedded = false }: { id: string; embedded?: b
   const versions = useVersions('order', id);
   const revise = useCommand(ReviseOrderSpec);
   const money = useMoneyText();
+  const { pick } = useT();
   if (!order.data) return <Loading error={order.error} />;
   const o = order.data;
   const tree = buildTree(items.items as OrderItemView[], {
@@ -125,6 +134,7 @@ export function OrderDetail({ id, embedded = false }: { id: string; embedded?: b
         </Text>
         <Text style={styles.muted}>{o.number}</Text>
         <StateBadge spec={OrderSpec} row={o} />
+        {o.status === 'accepted' ? <Text style={styles.muted}>{pick(ACCEPTED)}</Text> : null}
         {o.cancelReason ? <Text style={styles.muted}>{o.cancelReason}</Text> : null}
         <SlaBadge plural="orders" id={o.id} />
       </View>

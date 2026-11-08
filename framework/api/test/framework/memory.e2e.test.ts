@@ -505,7 +505,7 @@ describe('personal data', () => {
       [bob.id, anaTenant],
     );
     await indexed('memory', mine[0].id);
-    const counts = await db.transaction((tx: unknown) =>
+    const { counts } = await db.transaction((tx: unknown) =>
       api.eraseWithContributors({ subject, tenantId: anaTenant, tx: tx as never }),
     );
     expect(counts.memory).toBeGreaterThanOrEqual(1);

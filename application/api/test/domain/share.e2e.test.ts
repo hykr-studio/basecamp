@@ -1,8 +1,9 @@
 // The sample's share links (B9): an approved order shared by link with its customer, behind a
 // code to their WhatsApp number. Through the link they see the order and its lines (never what
 // the lines cost), open its PDF and accept it with the acceptance's own code, as the order's
-// customer (OrderShare, OrderAcceptance). And the brief form (briefs.brief): its link asks the
-// brief's questions, and each answer is a brief, owned by the business, for a new customer.
+// customer (OrderShare, OrderAcceptance): the order moves to accepted, frozen, and the link shows
+// it so (H5). And the brief form (briefs.brief): its link asks the brief's questions, and each
+// answer is a brief, owned by the business, for a new customer.
 import {
   addMember,
   boot,
@@ -218,7 +219,7 @@ describe('an order shared with its customer', () => {
     });
   });
 
-  it('opens the PDF and accepts it as the order’s customer', async () => {
+  it('opens the PDF and accepts it as the order’s customer; the order is accepted, frozen', async () => {
     const h = { 'x-share-session': session };
     const pdf = await guest('GET', `/api/share/${link.token}/documents/${doc.id}`, undefined, h);
     expect(pdf.status).toBe(200);
@@ -254,6 +255,26 @@ describe('an order shared with its customer', () => {
       inTenant(),
     );
     expect(again.body.accepted).toHaveLength(1);
+    // The order moved with the acceptance: accepted, one write on, and frozen.
+    const now = (await owner.call('GET', `/api/orders/${order.id}`)).body;
+    expect(now).toMatchObject({ status: 'accepted', version: doc.recordVersion + 1 });
+    const save = await owner.call('POST', '/api/orders/save', {
+      orderId: order.id,
+      title: 'Changed after acceptance',
+      items: [],
+    });
+    expect(save.status).toBe(403);
+    expect(save.body.rule).toBe('record_frozen');
+    // The link shows it accepted, and its PDF is not accepted again.
+    const shown = await guest('GET', `/api/share/${link.token}`, undefined, h);
+    expect(shown.body.record.value).toMatchObject({ id: order.id, status: 'accepted' });
+    const once = await guest(
+      'GET',
+      `/api/share/${link.token}/acceptances/documents/${doc.id}`,
+      undefined,
+      h,
+    );
+    expect(once.body.can).toMatchObject({ ok: false, rule: 'already_accepted' });
   });
 });
 

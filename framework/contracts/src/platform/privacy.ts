@@ -248,9 +248,22 @@ export const RegisterRecord = z.object({
   fields: z.array(z.object({ name: z.string(), label: z.string() })),
   erase: z.enum(['delete', 'anonymise', 'keep']),
   keepReason: z.string().nullable(),
+  /** Why it may stay, in the application's words (its policy's `keepReasons`). */
+  keepBasis: z.string().nullable(),
   retention: z.string().nullable(),
 });
 export type RegisterRecord = z.infer<typeof RegisterRecord>;
+
+/** Personal data a framework feature keeps in its own tables, and what erasure does to it. */
+export const RegisterPart = z.object({
+  name: z.string(),
+  label: z.string(),
+  fields: z.array(z.string()),
+  erase: z.enum(['delete', 'anonymise', 'keep']),
+  keepReason: z.string().nullable(),
+  keepBasis: z.string().nullable(),
+});
+export type RegisterPart = z.infer<typeof RegisterPart>;
 
 /** One retention rule and its period in this business (null: not applied here). */
 export const RegisterRetention = z.object({
@@ -279,6 +292,7 @@ export const PrivacyRegister = z.object({
   }),
   processors: z.array(RegisterProcessor),
   records: z.array(RegisterRecord),
+  parts: z.array(RegisterPart),
   retention: z.array(RegisterRetention),
 });
 export type PrivacyRegister = z.infer<typeof PrivacyRegister>;

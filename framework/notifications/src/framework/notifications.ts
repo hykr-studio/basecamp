@@ -1,6 +1,6 @@
 /**
- * The framework's own notifications: a request waiting for the business's decision, its outcome
- * told back to the customer who asked, and a person mentioned in a comment. Any domain gets them.
+ * The framework's own notifications: a request waiting for someone's decision, its outcome told
+ * back to the customer who asked, and a person mentioned in a comment. Any domain gets them.
  */
 import { type Lang, t } from '@hykr/i18n';
 import { defineNotification, type Row } from '../define-notification.js';
@@ -13,12 +13,25 @@ type ApprovalRow = Row & {
   approverUserId: string | null;
   approverCapability: string | null;
   approverChannels: string[] | null;
+  minAssurance: string | null;
   requesterContactId: string | null;
 };
 
 /** Is someone other than the requester to decide it (a capability's holders, or a named person)? */
 const decidedByOthers = (a: ApprovalRow) =>
   a.approverUserId ? a.approverUserId !== a.ownerId : !!a.approverCapability;
+
+/**
+ * May its Approve and Reject buttons decide it on WhatsApp? Only where its channels allow
+ * WhatsApp, and when it asks for no more than a number (a tap is only as sure as that).
+ */
+export const decidableOnWhatsApp = (a: Pick<ApprovalRow, 'approverChannels' | 'minAssurance'>) =>
+  (!a.approverChannels || a.approverChannels.includes('whatsapp')) &&
+  (!a.minAssurance || a.minAssurance === 'whatsapp_number');
+
+/** Where the app shows it: the decider decides there, the requester follows it. */
+const pathOf = (a: Pick<ApprovalRow, 'id'>) => `/approvals/${encodeURIComponent(a.id)}`;
+const summaryOf = (a: Pick<ApprovalRow, 'summary'>) => (a.summary ?? '').slice(0, 200);
 
 const OUTCOME: Record<string, Record<Lang, string>> = {
   approved: { en: 'approved', hi: 'मंज़ूर हुआ', te: 'అనుమతించబడింది' },
@@ -28,26 +41,47 @@ const OUTCOME: Record<string, Record<Lang, string>> = {
 
 /**
  * A request someone else decides (a customer's, or one the policy sends to a capability or a
- * named person): its deciders get it on WhatsApp with Approve and Reject, never the requester,
- * unless the action may only be decided in the app. A person's own assistant asks them in the
- * conversation instead.
+ * named person): its deciders are asked, never the requester. It is always kept in each
+ * decider's in-app inbox, and reaches them by push, else on WhatsApp with Approve and Reject
+ * (only where it may be decided there), else by email. Each opens `/approvals/<id>`. A person's
+ * own assistant asks them in the conversation instead. An application changes the order with
+ * `overrideNotification('approval.request', { channels, also })`.
  */
 export const ApprovalRequestNotification = defineNotification<ApprovalRow>({
   key: 'approval.request',
   topic: 'service',
   send: { on: ['approval.requested'] },
-  when: (a) =>
-    decidedByOthers(a) && (!a.approverChannels || a.approverChannels.includes('whatsapp')),
+  when: decidedByOthers,
   to: (a) =>
     a.approverUserId
       ? [{ userId: a.approverUserId }]
       : a.approverCapability
         ? [{ capability: a.approverCapability, except: a.ownerId ? [a.ownerId] : [] }]
         : [],
-  channels: ['whatsapp'],
+  channels: ['push', 'whatsapp', 'email'],
+  also: ['inapp'],
+  channelWhen: { whatsapp: decidableOnWhatsApp },
+  push: {
+    title: (_a, r) => t(r.lang, 'approval.waiting'),
+    body: summaryOf,
+    url: pathOf,
+  },
+  inapp: {
+    title: (_a, r) => t(r.lang, 'approval.waiting'),
+    body: summaryOf,
+    url: pathOf,
+  },
   whatsapp: {
     template: ApprovalRequest,
-    params: (a) => ({ summary: (a.summary ?? '').slice(0, 200) }),
+    params: (a) => ({ summary: summaryOf(a) }),
+  },
+  email: {
+    subject: (a, r) => t(r.lang, 'approval.requestSubject', { summary: summaryOf(a) }),
+    body: (a, r) =>
+      t(r.lang, 'approval.requestBody', {
+        summary: summaryOf(a),
+        url: `${r.appUrl ?? ''}${pathOf(a)}`,
+      }),
   },
   approval: (a) => a.id,
   dedupe: (a) => `approval.request:${a.id}`,
@@ -64,7 +98,7 @@ export const ApprovalOutcomeNotification = defineNotification<ApprovalRow>({
   whatsapp: {
     template: ApprovalOutcome,
     params: (a, r) => ({
-      summary: (a.summary ?? '').slice(0, 200),
+      summary: summaryOf(a),
       outcome: OUTCOME[a.status]?.[r.lang] ?? a.status,
     }),
   },

@@ -7,13 +7,16 @@
 // processing one parks for an approval; an erasure the team files that waits for an approval
 // leaves no email, number or note behind; deadlines are marked once; retention runs per business
 // with its own periods; the register lists who holds what; the business's privacy team changes
-// its own settings, audited, and the register and the runner follow them.
+// its own settings, audited, and the register and the runner follow them. The later features'
+// tables (calendars, calls, the integration bus, acceptance, MCP grants) are exported and erased
+// too, and another business's rows stay as they were (decisions H4).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrivacyService, readZip } from '../../dist/index.js';
 import {
   addMember,
   asAssistant,
   boot,
+  connectMcp,
   eventually,
   type Json,
   me,
@@ -24,7 +27,7 @@ import {
   setTenantSettings,
   shutdown,
 } from '../../dist/testing.js';
-import { privacyApp } from '../fixture/dist/features/privacy/index.js';
+import { erasedAfterCommit, privacyApp } from '../fixture/dist/features/privacy/index.js';
 
 const ana = new Person('Ana Privacy'); // owner of the business
 const bob = new Person('Bob Privacy'); // staff
@@ -566,14 +569,21 @@ describe('retention', () => {
        values ($1, 'fixture.old', '{}', now() - interval '3 days', now() - interval '3 days')`,
       [tenantId],
     );
+    // A send an undo withdrew (H1) is never passed on, and goes too.
+    await pool.query(
+      `insert into app.outbox (tenant_id, key, payload, created_at, cancelled_at)
+       values ($1, 'fixture.withdrawn', '{}', now() - interval '3 days', now() - interval '3 days')`,
+      [tenantId],
+    );
     const ran = await privacy().runRetention({ tenantId });
-    expect(ran['outbox.relayed']).toBeGreaterThanOrEqual(1);
+    expect(ran['outbox.relayed']).toBeGreaterThanOrEqual(2);
     expect(ran).not.toHaveProperty('chat.messages');
     expect(
       (
-        await pool.query(`select 1 from app.outbox where tenant_id = $1 and key = 'fixture.old'`, [
-          tenantId,
-        ])
+        await pool.query(
+          `select 1 from app.outbox where tenant_id = $1 and key in ('fixture.old', 'fixture.withdrawn')`,
+          [tenantId],
+        )
       ).rows,
     ).toEqual([]);
   });
@@ -913,5 +923,502 @@ describe("the business's own privacy settings", () => {
     expect((await call(bob, 'GET', '/api/privacy/register')).body.requests.respondWithinDays).toBe(
       30,
     );
+  });
+});
+
+describe("the later features' personal data", () => {
+  const hal = new Person('Hal Privacy'); // a customer with everything, forgotten
+  const ian = new Person('Ian Privacy'); // staff here, owner of his own business
+  const HAL_NUMBER = '919800000101';
+  const OTHER_LINE = '+918000000001';
+  let ianTenant = '';
+  let contactId = '';
+  let cardId = '';
+  const rows: Record<string, string> = {};
+  const mcp: Record<string, Awaited<ReturnType<typeof connectMcp>>> = {};
+
+  const one = async (sql: string, params: unknown[]) => (await pool.query(sql, params)).rows[0];
+  const id = async (sql: string, params: unknown[]) => (await one(sql, params)).id as string;
+  /** The REST API with a bearer token, as an MCP client calls it. */
+  const withToken = async (token: string, path: string, tenant?: string) =>
+    (
+      await fetch(`${server.base}${path}`, {
+        headers: { authorization: `Bearer ${token}`, ...(tenant ? { 'x-tenant-id': tenant } : {}) },
+      })
+    ).status;
+  const logCall = async (p: Person, tenant: string, body: Json) => {
+    const res = await p.call('POST', '/api/calls', body, { 'x-tenant-id': tenant });
+    expect(res.status).toBeLessThan(300);
+    return res.body.value.id as string;
+  };
+  const webhookBody = (resourceType: string, resourceId: string, row: Json) =>
+    JSON.stringify({
+      type: `${resourceType}.created`,
+      timestamp: new Date().toISOString(),
+      data: { eventId: 'e1', tenantId, resourceType, resourceId, row },
+    });
+
+  beforeAll(async () => {
+    await setTenantSettings(tenantId, { privacy: null });
+    for (const p of [hal, ian]) await p.signUp();
+    ianTenant = (await me(ian)).tenantId;
+    customer[hal.name] = await makeCustomer(hal);
+    await addMember(ian, tenantId, ['staff']);
+    // Hal's WhatsApp number is linked to his account here.
+    contactId = (await seedContact(tenantId, 'Hal Privacy', HAL_NUMBER)).contactId;
+    await pool.query('update channel.contacts set user_id = $1 where id = $2', [hal.id, contactId]);
+    cardId = (
+      await call(hal, 'POST', '/api/cards', {
+        name: 'Hal card',
+        phone: '+91 90000 00101',
+        amountMinor: 300,
+      })
+    ).body.value.id;
+    const halEmail = hal.email;
+
+    // Calendars: a connection (its event link, its push channel's inbound connection and event),
+    // a feed, a sign-in under way, an invite to his email; in Ravi's business, one too.
+    rows.calendarInbound = await id(
+      `insert into app.integration_connections (tenant_id, connector, credentials_sealed)
+       values ($1, 'fixture-calendar', 'sealed') returning id`,
+      [tenantId],
+    );
+    await pool.query(
+      `insert into app.integration_inbound (tenant_id, connection_id, connector, external_id, type, data)
+       values ($1, $2, 'fixture-calendar', 'ch1', 'calendar.changed', '{"channelId":"ch1"}')`,
+      [tenantId, rows.calendarInbound],
+    );
+    rows.connection = await id(
+      `insert into app.calendar_connections (tenant_id, user_id, provider, account, tokens_sealed,
+         inbound_connection_id)
+       values ($1, $2, 'google', $3, 'not-a-sealed-value', $4) returning id`,
+      [tenantId, hal.id, halEmail, rows.calendarInbound],
+    );
+    await pool.query(
+      `insert into app.calendar_event_links (tenant_id, connection_id, resource_type, resource_id, external_id)
+       values ($1, $2, 'card', $3, 'google-event-1')`,
+      [tenantId, rows.connection, cardId],
+    );
+    await pool.query(
+      `insert into app.calendar_feeds (tenant_id, user_id, label, token_hash)
+       values ($1, $2, 'Hal phone', md5(random()::text) || md5(random()::text))`,
+      [tenantId, hal.id],
+    );
+    await pool.query(
+      `insert into app.calendar_oauth_states (tenant_id, user_id, provider, state_hash,
+         verifier_sealed, return_to, expires_at)
+       values ($1, $2, 'google', md5(random()::text), 'sealed', 'http://localhost/back',
+         now() + interval '10 minutes')`,
+      [tenantId, hal.id],
+    );
+    for (const t of [tenantId, raviTenant])
+      await pool.query(
+        `insert into app.calendar_invites (tenant_id, resource_type, resource_id, email, name)
+         values ($1, 'card', $2, $3, 'Hal P')`,
+        [t, cardId, t === tenantId ? halEmail.toUpperCase() : halEmail],
+      );
+
+    // Calls with his number, here and in Ravi's business.
+    rows.callIn = await logCall(ana, tenantId, {
+      direction: 'inbound',
+      from: `+${HAL_NUMBER}`,
+      to: OTHER_LINE,
+      notes: 'Hal asked about the delivery',
+    });
+    rows.callOut = await logCall(ana, tenantId, {
+      direction: 'outbound',
+      from: OTHER_LINE,
+      to: `+${HAL_NUMBER}`,
+      notes: 'Rang Hal back',
+    });
+    rows.callElsewhere = await logCall(ravi, raviTenant, {
+      direction: 'inbound',
+      from: `+${HAL_NUMBER}`,
+      notes: 'Another business',
+    });
+
+    // The bus: his card delivered (with a try the receiver answered), a record naming his
+    // number delivered, an inbound event whose handler wrote his card, and one naming his email;
+    // in Ravi's business, a delivery and an inbound event naming him too.
+    for (const t of [tenantId, raviTenant]) {
+      const endpoint = await id(
+        `insert into app.integration_endpoints (tenant_id, url, events, secret_sealed)
+         values ($1, 'https://receiver.test/hook', '{*}', 'sealed') returning id`,
+        [t],
+      );
+      const hooks = await id(
+        `insert into app.integration_connections (tenant_id, connector, credentials_sealed)
+         values ($1, 'fixture-hooks', 'sealed') returning id`,
+        [t],
+      );
+      const deliver = (type: string, rid: string, row: Json) =>
+        id(
+          `insert into app.integration_deliveries (tenant_id, endpoint_id, event_id, event_name,
+             resource_type, resource_id, body, status)
+           values ($1, $2, gen_random_uuid()::text, $3, $4, $5, $6, 'delivered') returning id`,
+          [t, endpoint, `${type}.created`, type, rid, webhookBody(type, rid, row)],
+        );
+      const receive = (externalId: string, data: Json) =>
+        id(
+          `insert into app.integration_inbound (tenant_id, connection_id, connector, external_id,
+             type, data, status)
+           values ($1, $2, 'fixture-hooks', $3, 'fixture.event', $4, 'processed') returning id`,
+          [t, hooks, externalId, JSON.stringify(data)],
+        );
+      const naming = {
+        id: 'r1',
+        title: 'Ring back',
+        phone: `+${HAL_NUMBER}`,
+        note: `Ring +${HAL_NUMBER} later`,
+      };
+      const mail = { attendee: { email: halEmail.toUpperCase(), name: 'Hal' }, text: halEmail };
+      if (t === raviTenant) {
+        rows.otherDelivery = await deliver('task', 'r1', naming);
+        rows.otherInbound = await receive('mail', mail);
+        continue;
+      }
+      rows.cardDelivery = await deliver('card', cardId, {
+        id: cardId,
+        name: 'Hal card',
+        phone: '+91 90000 00101',
+        amountMinor: 300,
+      });
+      await pool.query(
+        `insert into app.integration_attempts (tenant_id, delivery_id, attempt, url, status, response)
+         values ($1, $2, 1, 'https://receiver.test/hook', 200, '{"got":"Hal card"}')`,
+        [t, rows.cardDelivery],
+      );
+      rows.namingDelivery = await deliver('task', 'r1', naming);
+      rows.wroteCard = await receive('card', { card: { name: 'Hal card' } });
+      await pool.query(
+        `insert into audit.events (action, resource_type, resource_id, actor_kind, actor_id,
+           tenant_id, request_id)
+         values ('card.update', 'card', $1, 'system', 'integrations.fixture-hooks', $2, $3)`,
+        [cardId, t, `inbound-${rows.wroteCard}`],
+      );
+      rows.mailInbound = await receive('mail', mail);
+    }
+
+    // Acceptance: evidence he signed, and codes sent to him (here and in Ravi's business).
+    await pool.query(
+      `insert into audit.acceptances (id, tenant_id, seq, name, method, resource_type, resource_id,
+         document_id, document_name, document_version, document_sha256, document_file_name,
+         statement, lang, signer_kind, signer_user_id, signer_name, otp_channel, otp_address, ip,
+         user_agent, accepted_at, hash)
+       values (gen_random_uuid()::text, $1, 1, 'fixture.terms', 'otp', 'card', $2, 'doc-1',
+         'fixture.terms', 1, 'abc123', 'terms.pdf', 'I agree', 'en', 'user', $3, 'Hal Privacy',
+         'email', $4, '203.0.113.5', 'Fixture agent', now(), 'h1')`,
+      [tenantId, cardId, hal.id, halEmail],
+    );
+    const code = (t: string, userId: string | null, channel: string, address: string) =>
+      pool.query(
+        `insert into channel.otp_challenges (tenant_id, purpose, user_id, channel, address,
+           code_hash, expires_at)
+         values ($1, 'acceptance', $2, $3, $4, 'hash-never-exported', now() + interval '10 minutes')`,
+        [t, userId, channel, address],
+      );
+    await code(tenantId, hal.id, 'email', halEmail);
+    await code(tenantId, null, 'email', halEmail.toUpperCase());
+    await code(raviTenant, null, 'email', halEmail);
+
+    // MCP: Hal's client here; Ian's here and in his own business.
+    mcp.hal = await connectMcp(hal, 'ledgers:read');
+    expect((await ian.call('PUT', '/api/me/default', { tenantId })).status).toBe(200);
+    mcp.ianHere = await connectMcp(ian, 'ledgers:read');
+    expect((await ian.call('PUT', '/api/me/default', { tenantId: ianTenant })).status).toBe(200);
+    mcp.ianOwn = await connectMcp(ian, 'ledgers:read');
+    // Ian's calls as the member: his own number on each.
+    rows.ianOut = await logCall(ian, tenantId, {
+      direction: 'outbound',
+      from: '+918000000002',
+      to: '+917000000001',
+      notes: 'Agreed a time',
+    });
+    rows.ianIn = await logCall(ian, tenantId, {
+      direction: 'inbound',
+      from: '+917000000002',
+      to: '+918000000002',
+      notes: 'Asked for a call back',
+    });
+  });
+
+  afterAll(async () => {
+    for (const c of Object.values(mcp)) await c.close().catch(() => undefined);
+  });
+
+  it("are in the person's copy, without sealed values or code hashes", async () => {
+    expect(await withToken(mcp.hal.accessToken, '/api/cards')).toBe(200);
+    const res = await file(hal, 'export');
+    expect(res.status).toBe(200);
+    const done = await finished(hal, res.body.value.id);
+    expect(done.status).toBe('completed');
+    const zip = await archive(hal, done.files[0]);
+    expect(json(zip, 'features/calendarConnections.json')).toMatchObject([
+      { id: rows.connection, provider: 'google', account: hal.email },
+    ]);
+    expect(json(zip, 'features/calendarEvents.json')).toMatchObject([
+      { record: { entity: 'card', id: cardId }, externalId: 'google-event-1' },
+    ]);
+    expect(json(zip, 'features/calendarFeeds.json')).toMatchObject([{ label: 'Hal phone' }]);
+    expect(json(zip, 'features/calendarInvites.json')).toMatchObject([
+      { tenantId, email: hal.email.toUpperCase(), record: { entity: 'card', id: cardId } },
+    ]);
+    expect(
+      json(zip, 'features/calls.json')
+        .map((c: Json) => c.id)
+        .sort(),
+    ).toEqual([rows.callIn, rows.callOut].sort());
+    expect(json(zip, 'features/acceptances.json')).toMatchObject([
+      {
+        name: 'fixture.terms',
+        signerName: 'Hal Privacy',
+        otpAddress: hal.email,
+        ip: '203.0.113.5',
+      },
+    ]);
+    expect(json(zip, 'features/otpChallenges.json')).toHaveLength(2);
+    expect(json(zip, 'mcp-connections.json')).toMatchObject([
+      { clientId: mcp.hal.clientId, scopes: expect.arrayContaining(['ledgers:read']) },
+    ]);
+    // What the person is, never the keys to their accounts.
+    const everything = [...zip.values()].map((b) => b.toString('utf8')).join('\n');
+    expect(everything).not.toContain('not-a-sealed-value');
+    expect(everything).not.toContain('hash-never-exported');
+    expect(everything).not.toContain('Another business');
+  });
+
+  it('are erased or kept as decided, counted per part, and nothing of another business moves', async () => {
+    const before = erasedAfterCommit.length;
+    const res = await file(hal, 'erase');
+    expect(res.status).toBe(200);
+    const done = await finished(ana, res.body.value.id);
+    expect(done.status).toBe('completed');
+    expect(done.outcome).toMatchObject({
+      features: { calendar: 4, calls: 2, integrations: 2 },
+      kept: { 'acceptance.evidence': { kept: 1, keepReason: 'acceptance_evidence' } },
+      redacted: { inbound: 1 },
+      account: true,
+    });
+    // The card's delivery (and the bus's own, if it fanned the card out to the endpoint).
+    expect(done.outcome.redacted.deliveries).toBeGreaterThanOrEqual(1);
+    expect(done.outcome.redacted.attempts).toBeGreaterThanOrEqual(1);
+    expect(done.outcome.features.acceptance).toBeGreaterThanOrEqual(2);
+    expect(done.outcome.framework.oauth).toBeGreaterThanOrEqual(2);
+
+    // Calendars: the connection, its links, its inbound connection and events, the feed, the
+    // sign-in and the invite are gone.
+    const count = async (sql: string, params: unknown[]) =>
+      Number((await one(`select count(*)::int as n from ${sql}`, params)).n);
+    expect(await count('app.calendar_connections where user_id = $1', [hal.id])).toBe(0);
+    expect(
+      await count('app.calendar_event_links where connection_id = $1', [rows.connection]),
+    ).toBe(0);
+    expect(await count('app.integration_connections where id = $1', [rows.calendarInbound])).toBe(
+      0,
+    );
+    expect(
+      await count('app.integration_inbound where connection_id = $1', [rows.calendarInbound]),
+    ).toBe(0);
+    expect(await count('app.calendar_feeds where user_id = $1', [hal.id])).toBe(0);
+    expect(await count('app.calendar_oauth_states where user_id = $1', [hal.id])).toBe(0);
+    expect(
+      (
+        await pool.query('select tenant_id from app.calendar_invites where resource_id = $1', [
+          cardId,
+        ])
+      ).rows,
+    ).toEqual([{ tenant_id: raviTenant }]);
+
+    // Calls: his number, the notes and the error are off; the other side and the call stay.
+    const callOf = (callId: string) =>
+      one('select from_number, to_number, notes from app.call_logs where id = $1', [callId]);
+    expect(await callOf(rows.callIn)).toEqual({
+      from_number: null,
+      to_number: OTHER_LINE,
+      notes: null,
+    });
+    expect(await callOf(rows.callOut)).toEqual({
+      from_number: OTHER_LINE,
+      to_number: null,
+      notes: null,
+    });
+    expect(await callOf(rows.callElsewhere)).toEqual({
+      from_number: `+${HAL_NUMBER}`,
+      to_number: null,
+      notes: 'Another business',
+    });
+    // Its audit copies lose them too.
+    const logged = await one(
+      `select after from audit.events where resource_type = 'call' and resource_id = $1
+         and action = 'call.create'`,
+      [rows.callIn],
+    );
+    expect(logged.after).not.toHaveProperty('from');
+    expect(logged.after).not.toHaveProperty('notes');
+    expect(logged.after).toHaveProperty('to', OTHER_LINE);
+
+    // The bus: the card's body without its personal fields, the answer gone, the payload that
+    // wrote it emptied; his number and email nulled where they were whole values.
+    const bodyOf = async (d: string) =>
+      JSON.parse(
+        (await one('select body from app.integration_deliveries where id = $1', [d])).body,
+      );
+    const card = await bodyOf(rows.cardDelivery);
+    expect(card.data.row).toEqual({ id: cardId, amountMinor: 300 });
+    for (const d of (
+      await pool.query('select body from app.integration_deliveries where resource_id = $1', [
+        cardId,
+      ])
+    ).rows) {
+      expect(JSON.parse(d.body).data.row).not.toHaveProperty('name');
+      expect(JSON.parse(d.body).data.row).not.toHaveProperty('phone');
+    }
+    expect(
+      (
+        await one('select response from app.integration_attempts where delivery_id = $1', [
+          rows.cardDelivery,
+        ])
+      ).response,
+    ).toBeNull();
+    expect((await bodyOf(rows.namingDelivery)).data.row).toEqual({
+      id: 'r1',
+      title: 'Ring back',
+      phone: null,
+      note: `Ring +${HAL_NUMBER} later`,
+    });
+    const dataOf = async (i: string) =>
+      (await one('select data from app.integration_inbound where id = $1', [i])).data;
+    expect(await dataOf(rows.wroteCard)).toBeNull();
+    expect(await dataOf(rows.mailInbound)).toEqual({
+      attendee: { email: null, name: 'Hal' },
+      text: null,
+    });
+    expect((await bodyOf(rows.otherDelivery)).data.row.phone).toBe(`+${HAL_NUMBER}`);
+    expect((await dataOf(rows.otherInbound)).attendee.email).toBe(hal.email.toUpperCase());
+
+    // Acceptance: his codes go, the evidence stays as it was.
+    expect(
+      await count('channel.otp_challenges where tenant_id = $1 and lower(address) = $2', [
+        tenantId,
+        hal.email,
+      ]),
+    ).toBe(0);
+    expect(
+      await count('channel.otp_challenges where tenant_id = $1 and address = $2', [
+        raviTenant,
+        hal.email,
+      ]),
+    ).toBe(1);
+    expect(
+      await one('select signer_name, ip from audit.acceptances where signer_user_id = $1', [
+        hal.id,
+      ]),
+    ).toEqual({ signer_name: 'Hal Privacy', ip: '203.0.113.5' });
+
+    // MCP: his grants are gone, and his token is refused.
+    for (const t of ['oauth_consent', 'oauth_access_token', 'oauth_refresh_token'])
+      expect(await count(`public.${t} where user_id = $1`, [hal.id])).toBe(0);
+    expect(await withToken(mcp.hal.accessToken, '/api/cards')).toBe(401);
+
+    // Work outside the database ran once the erasure had committed; its failure changed nothing.
+    const after = await eventually(() =>
+      erasedAfterCommit
+        .slice(before)
+        .find((e) => e.subject.kind === 'user' && e.subject.userId === hal.id),
+    );
+    expect(after.status).toBe('completed');
+  });
+
+  it('unlinks a team member from their calls and ends their grants in this business only', async () => {
+    expect(await withToken(mcp.ianHere.accessToken, '/api/cards')).toBe(200);
+    const res = await file(carol, 'erase', { for: { userId: ian.id }, intake: 'email' });
+    expect(res.status).toBe(200);
+    const done = await finished(carol, res.body.value.id);
+    expect(done.status).toBe('completed');
+    expect(done.outcome).toMatchObject({ features: { calls: 2 }, account: false });
+    expect(done.outcome.framework.oauth).toBeGreaterThanOrEqual(2);
+    const callOf = (callId: string) =>
+      one(
+        'select user_id, logged_by, from_number, to_number, notes from app.call_logs where id = $1',
+        [callId],
+      );
+    // The number he called from, and the one he was called on, go; the other side and the
+    // business's notes stay.
+    expect(await callOf(rows.ianOut)).toEqual({
+      user_id: null,
+      logged_by: null,
+      from_number: null,
+      to_number: '+917000000001',
+      notes: 'Agreed a time',
+    });
+    expect(await callOf(rows.ianIn)).toEqual({
+      user_id: null,
+      logged_by: null,
+      from_number: '+917000000002',
+      to_number: null,
+      notes: 'Asked for a call back',
+    });
+    // His client here stops; the one in his own business still works.
+    expect(await withToken(mcp.ianHere.accessToken, '/api/cards')).toBe(401);
+    expect(await withToken(mcp.ianOwn.accessToken, '/api/cards')).toBe(200);
+    expect(
+      (
+        await pool.query('select reference_id from public.oauth_consent where user_id = $1', [
+          ian.id,
+        ])
+      ).rows,
+    ).toEqual([{ reference_id: ianTenant }]);
+  });
+
+  it("are on the register, with the application's words for what stays", async () => {
+    const reg = (await call(bob, 'GET', '/api/privacy/register')).body;
+    expect(reg.parts.map((x: Json) => x.name)).toEqual(
+      expect.arrayContaining([
+        'calendar.connections',
+        'calendar.invites',
+        'calls.log',
+        'integrations.payloads',
+        'acceptance.codes',
+        'mcp.grants',
+      ]),
+    );
+    expect(reg.parts.find((x: Json) => x.name === 'acceptance.evidence')).toMatchObject({
+      erase: 'keep',
+      keepReason: 'acceptance_evidence',
+      keepBasis: 'Kept as proof of what was agreed',
+    });
+    expect(reg.records.find((x: Json) => x.entity === 'ledgerEntry')).toMatchObject({
+      keepReason: 'legal_hold',
+      keepBasis: 'Kept while a legal hold lasts',
+    });
+  });
+
+  it('redact a delivered record when a retention rule deletes it', async () => {
+    await setTenantSettings(tenantId, { privacy: null });
+    const old = (await call(eve, 'POST', '/api/cards', { name: 'Eve, long ago', phone: '+91 3' }))
+      .body.value;
+    await pool.query(
+      `update app.fixture_ledgers_cards set created_at = now() - interval '40 days' where id = $1`,
+      [old.id],
+    );
+    const endpoint = await id(
+      `insert into app.integration_endpoints (tenant_id, url, events, secret_sealed)
+       values ($1, 'https://receiver.test/old', '{*}', 'sealed') returning id`,
+      [tenantId],
+    );
+    const delivery = await id(
+      `insert into app.integration_deliveries (tenant_id, endpoint_id, event_id, event_name,
+         resource_type, resource_id, body, status)
+       values ($1, $2, gen_random_uuid()::text, 'card.created', 'card', $3, $4, 'delivered')
+       returning id`,
+      [tenantId, endpoint, old.id, webhookBody('card', old.id, { ...old })],
+    );
+    expect((await privacy().runRetention({ tenantId }))['ledgers.cards']).toBeGreaterThanOrEqual(1);
+    const body = JSON.parse(
+      (await one('select body from app.integration_deliveries where id = $1', [delivery])).body,
+    );
+    expect(body.data.row).not.toHaveProperty('name');
+    expect(body.data.row).not.toHaveProperty('phone');
+    expect(body.data.row).toHaveProperty('id', old.id);
   });
 });

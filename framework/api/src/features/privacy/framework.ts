@@ -1,7 +1,7 @@
 // What the framework's own tables hold about a person in one business (B18): their account,
 // membership, customer records, contacts and what was said on them, threads, saved pages,
-// approvals they asked for, and the activity audit names them in. Exported as it is; erased in
-// the erasure's transaction. Nothing here loads Nest.
+// approvals they asked for, the outside clients they allowed, and the activity audit names them
+// in. Exported as it is; erased in the erasure's transaction. Nothing here loads Nest.
 import type { Conn, Tx } from '@hykr/core';
 import {
   account,
@@ -13,6 +13,10 @@ import {
   customers,
   memberships,
   messages,
+  oauthAccessToken,
+  oauthClient,
+  oauthConsent,
+  oauthRefreshToken,
   pages,
   partyMembers,
   session,
@@ -91,6 +95,22 @@ export async function exportFramework(
         .from(channelLinks)
         .where(and(eq(channelLinks.tenantId, t), eq(channelLinks.ownerId, ids.userId)))
     ).map((l) => ({ channel: l.channel, address: l.address, createdAt: iso(l.createdAt) }));
+    // The outside clients (MCP) they allowed to act for them here.
+    out['mcp-connections'] = (
+      await conn
+        .select({ consent: oauthConsent, name: oauthClient.name, uri: oauthClient.uri })
+        .from(oauthConsent)
+        .innerJoin(oauthClient, eq(oauthClient.clientId, oauthConsent.clientId))
+        .where(and(eq(oauthConsent.userId, ids.userId), eq(oauthConsent.referenceId, t)))
+        .orderBy(asc(oauthConsent.createdAt))
+    ).map((r) => ({
+      clientId: r.consent.clientId,
+      name: r.name ?? r.consent.clientId,
+      uri: r.uri,
+      scopes: [...r.consent.scopes],
+      connectedAt: iso(r.consent.createdAt),
+      updatedAt: iso(r.consent.updatedAt),
+    }));
   }
   out.customers = ids.customerIds.length
     ? (
@@ -202,9 +222,36 @@ export async function exportFramework(
 const count = (rows: readonly unknown[]) => rows.length;
 
 /**
+ * The outside clients (MCP) a person allowed: their consents, access and refresh tokens, in one
+ * business (`reference_id`), or in all of them. A token stops at once: checking one needs its
+ * row and its consent (features/mcp/tokens.ts). The clients stay: they belong to no one.
+ */
+export async function forgetGrants(tx: Tx, userId: string, tenantId?: string): Promise<number> {
+  const where = <
+    T extends typeof oauthConsent | typeof oauthAccessToken | typeof oauthRefreshToken,
+  >(
+    t: T,
+  ) => and(eq(t.userId, userId), tenantId ? eq(t.referenceId, tenantId) : undefined) as SQL;
+  const consented = await tx
+    .delete(oauthConsent)
+    .where(where(oauthConsent))
+    .returning({ id: oauthConsent.id });
+  const access = await tx
+    .delete(oauthAccessToken)
+    .where(where(oauthAccessToken))
+    .returning({ id: oauthAccessToken.id });
+  const refresh = await tx
+    .delete(oauthRefreshToken)
+    .where(where(oauthRefreshToken))
+    .returning({ id: oauthRefreshToken.id });
+  return consented.length + access.length + refresh.length;
+}
+
+/**
  * The account's part of an erasure here: saved pages, WhatsApp links, threads (their messages go
- * with them), approvals left pending, customer records (anonymised, unlinked) and the membership.
- * The contacts go last, after every contributor (`deleteContacts`).
+ * with them), approvals left pending, customer records (anonymised, unlinked), the outside
+ * clients they allowed here (consents and tokens) and the membership. The contacts go last, after
+ * every contributor (`deleteContacts`).
  */
 export async function eraseFramework(tx: Tx, ids: Identities): Promise<Record<string, number>> {
   const t = ids.tenantId;
@@ -241,6 +288,7 @@ export async function eraseFramework(tx: Tx, ids: Identities): Promise<Record<st
       .where(and(eq(customers.tenantId, t), eq(customers.userId, u)))
       .returning({ id: customers.id }),
   );
+  out.oauth = await forgetGrants(tx, u, t);
   out.memberships = count(
     await tx
       .delete(memberships)
@@ -266,8 +314,8 @@ export const erasedEmail = (userId: string) => `erased-${userId}@erased.invalid`
 
 /**
  * The login, once the person is in no business and no party: its name, email and picture go,
- * with its sessions, credentials and pending verifications. The row stays (audit and foreign
- * keys name it). Returns whether it was anonymised.
+ * with its sessions, credentials, pending verifications and every outside client's grant. The
+ * row stays (audit and foreign keys name it). Returns whether it was anonymised.
  */
 export async function forgetAccount(tx: Tx, userId: string): Promise<boolean> {
   const [member] = await tx
@@ -286,6 +334,7 @@ export async function forgetAccount(tx: Tx, userId: string): Promise<boolean> {
   await tx.delete(session).where(eq(session.userId, userId));
   await tx.delete(account).where(eq(account.userId, userId));
   await tx.delete(verification).where(eq(verification.identifier, u.email));
+  await forgetGrants(tx, userId);
   await tx
     .update(user)
     .set({ name: '', email: erasedEmail(userId), emailVerified: false, image: null })

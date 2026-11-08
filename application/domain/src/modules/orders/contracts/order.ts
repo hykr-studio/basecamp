@@ -17,12 +17,35 @@ export const OrderStatus = z.enum([
   'draft',
   'submitted',
   'approved',
+  'accepted',
   'fulfilled',
   'cancelled',
   'superseded',
   'expired',
 ]);
 export type OrderStatus = z.infer<typeof OrderStatus>;
+
+/** One node of an order: a group (a heading with lines under it) or a priced line. */
+export const OrderItemView = z.object({
+  id: z.string(),
+  orderId: z.string(),
+  parentItemId: z.string().nullable(),
+  position: z.number().int(),
+  kind: z.enum(['group', 'line']),
+  title,
+  quantity: z.number().int().nullable(),
+  unitPrice: Money.nullable(),
+  /** The line's tax rate in basis points (1800 is 18%). */
+  taxRateBp: z.number().int().nullable(),
+  /** A line's quantity × unit price; a group's lines added up. */
+  amount: Money,
+  /** What it costs the business: hidden without orders.cost.read. */
+  cost: Money.nullable().optional(),
+  currency: CurrencyCode,
+  createdBy: CreatedBy,
+  createdAt: z.iso.datetime(),
+});
+export type OrderItemView = z.infer<typeof OrderItemView>;
 
 /** An order: its number from the module's series, its totals in minor units, its tax lines. */
 export const OrderView = z.object({
@@ -45,6 +68,12 @@ export const OrderView = z.object({
   taxLines: z.array(TaxLine),
   /** How many priced lines it has (groups not counted). */
   lineCount: z.number().int(),
+  /**
+   * Its groups and lines, in tree order: only on its `order.placed` event, so an outside system
+   * gets the whole order in one delivery (each line's cost hidden without orders.cost.read).
+   * Reads list them with /api/orderItems.
+   */
+  items: z.array(OrderItemView).optional(),
   createdBy: CreatedBy,
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -84,9 +113,10 @@ const agentAsks = (p: { actor: { kind: string } }) => p.actor.kind === 'agent';
 /**
  * An order's life: a draft is saved and changed freely; submitted, it is frozen and waits for a
  * decision (an owner is told after 24 business hours, and it expires after a week); approved,
- * it is the contract until it is fulfilled. To change a submitted order, revise it: v2 is a
- * draft, and v1 is superseded. The assistant's moves wait for the person; its approve waits for
- * an owner, signed in to the app.
+ * it is the contract; accepted (its customer accepted its PDF with a one-time code,
+ * OrderAcceptance), it is placed with its supplier until it is fulfilled. To change a submitted
+ * order, revise it: v2 is a draft, and v1 is superseded. The assistant's moves wait for the
+ * person; its approve waits for an owner, signed in to the app.
  */
 export const ORDER_STATES: StatesTrait = {
   field: 'status',
@@ -95,6 +125,7 @@ export const ORDER_STATES: StatesTrait = {
     draft: { label: label('Draft', 'ड्राफ़्ट', 'డ్రాఫ్ట్') },
     submitted: { label: label('Submitted', 'भेजा गया', 'సమర్పించబడింది') },
     approved: { label: label('Approved', 'मंज़ूर', 'ఆమోదించబడింది') },
+    accepted: { label: label('Accepted', 'स्वीकृत', 'అంగీకరించబడింది') },
     fulfilled: { label: label('Fulfilled', 'पूरा', 'పూర్తయింది'), terminal: true },
     cancelled: { label: label('Cancelled', 'रद्द', 'రద్దు చేయబడింది'), terminal: true },
     superseded: { label: label('Superseded', 'बदला गया', 'భర్తీ చేయబడింది'), terminal: true },
@@ -126,15 +157,17 @@ export const ORDER_STATES: StatesTrait = {
       },
     },
     {
+      // People (an approved order its customer accepted on paper, too) and the supplier's
+      // verified report (the orders-supplier connector); never the assistant.
       name: 'fulfil',
-      from: 'approved',
+      from: ['approved', 'accepted'],
       to: 'fulfilled',
       label: label('Mark fulfilled', 'पूरा करें', 'పూర్తి చేయి'),
       expose: 'human',
     },
     {
       name: 'cancel',
-      from: ['draft', 'submitted', 'approved'],
+      from: ['draft', 'submitted', 'approved', 'accepted'],
       to: 'cancelled',
       label: label('Cancel', 'रद्द करें', 'రద్దు చేయి'),
       fields: ['cancelReason'],
@@ -142,9 +175,11 @@ export const ORDER_STATES: StatesTrait = {
       // A cancelled order never comes back: an outside AI client is told it cannot be undone.
       destructive: true,
     },
-    // The server's own moves: the expiry SLA, and order.revise freezing the old revision.
+    // The server's own moves: the expiry SLA, order.revise freezing the old revision, and the
+    // customer's acceptance of the approved order's PDF (OrderAcceptance runs it).
     { name: 'expire', from: 'submitted', to: 'expired', expose: 'system' },
     { name: 'supersede', from: ['submitted', 'expired'], to: 'superseded', expose: 'system' },
+    { name: 'accept', from: 'approved', to: 'accepted', expose: 'system' },
   ],
   slas: [
     {
@@ -164,10 +199,18 @@ export const ORDER_STATES: StatesTrait = {
   ],
 };
 
-/** Frozen once submitted: v2 is made by revising; an approved order is the contract. */
+/** Frozen once submitted: v2 is made by revising; an approved or accepted order is the contract. */
 export const ORDER_VERSIONS: VersionedTrait = {
   frozenWhen: {
-    status: ['submitted', 'approved', 'fulfilled', 'cancelled', 'superseded', 'expired'],
+    status: [
+      'submitted',
+      'approved',
+      'accepted',
+      'fulfilled',
+      'cancelled',
+      'superseded',
+      'expired',
+    ],
   },
   revisions: {},
 };
@@ -203,28 +246,6 @@ export const OrderSpec = entitySpec({
   },
   views: { list: 'order.list', item: 'order.card' },
 });
-
-/** One node of an order: a group (a heading with lines under it) or a priced line. */
-export const OrderItemView = z.object({
-  id: z.string(),
-  orderId: z.string(),
-  parentItemId: z.string().nullable(),
-  position: z.number().int(),
-  kind: z.enum(['group', 'line']),
-  title,
-  quantity: z.number().int().nullable(),
-  unitPrice: Money.nullable(),
-  /** The line's tax rate in basis points (1800 is 18%). */
-  taxRateBp: z.number().int().nullable(),
-  /** A line's quantity × unit price; a group's lines added up. */
-  amount: Money,
-  /** What it costs the business: hidden without orders.cost.read. */
-  cost: Money.nullable().optional(),
-  currency: CurrencyCode,
-  createdBy: CreatedBy,
-  createdAt: z.iso.datetime(),
-});
-export type OrderItemView = z.infer<typeof OrderItemView>;
 
 const itemFields = {
   kind: z.enum(['group', 'line']),

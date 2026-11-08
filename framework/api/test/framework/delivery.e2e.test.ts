@@ -311,16 +311,21 @@ describe('personal data contributors', () => {
       `select after from audit.events where action = 'channel.contact.erased' and resource_id = $1`,
       [contactId],
     );
-    // The framework's own (agents, comments, files, inbox, jobs, memory, parties, push, share
-    // links) run too: a contact has no agents, comments, files, inbox items, jobs, memories, party
-    // memberships, devices or links made for them. The channel's own trail anonymises its
-    // customer record (B18: a privacy request now).
+    // The framework's own (acceptance, agents, calendar, calls, comments, files, inbox,
+    // integrations, jobs, memory, parties, push, share links) run too: a contact has no codes,
+    // agents, calendars, calls, comments, files, inbox items, payloads naming them, jobs,
+    // memories, party memberships, devices or links made for them. The channel's own trail
+    // anonymises its customer record (B18: a privacy request now).
     expect(rows).toEqual([
       {
         after: {
           contributors: {
+            acceptance: 0,
             agents: 0,
+            calendar: 0,
+            calls: 0,
             channel: 1,
+            integrations: 0,
             comments: 0,
             files: 0,
             inbox: 0,
@@ -342,7 +347,15 @@ describe('personal data contributors', () => {
     const subject = { kind: 'user' as const, userId: ana.id };
     expect(await api.exportPersonalData({ subject, tenantId, db })).toEqual({
       // The framework's comments, documents, files, inbox, jobs and push: Ana wrote, made,
-      // uploaded, got, started and registered nothing; and parties: she is no party's member.
+      // uploaded, got, started and registered nothing; parties: she is no party's member; and
+      // acceptance, calendars and calls: she accepted, connected and called nothing.
+      acceptances: [],
+      otpChallenges: [],
+      calendarConnections: [],
+      calendarEvents: [],
+      calendarFeeds: [],
+      calendarInvites: [],
+      calls: [],
       comments: [],
       documents: [],
       files: [],
