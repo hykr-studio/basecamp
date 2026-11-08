@@ -10,6 +10,15 @@ export {
   timerOut,
 } from './sla.js';
 export {
+  clocksServed,
+  decodeSlaCursor,
+  encodeSlaCursor,
+  listSlaTimers,
+  recordSlaTimers,
+  type SlaCursor,
+  stateFieldHidden,
+} from './sla-read.js';
+export {
   assertWritable,
   checkTransition,
   machineOf,
