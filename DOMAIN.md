@@ -518,9 +518,10 @@ From the contracts declaration alone:
   OpenRouter in development) and each business's model policy (`GET /api/models`,
   `PUT /api/models/policy`), which picks every turn's model and fails closed (developer guide,
   section 7.5). The application only configures them in `.env`.
-- Credits and caps: every business's assistant tokens and tool calls, WhatsApp messages, voice
-  seconds and memory embeddings metered and priced, a per-period allowance and a prepaid wallet,
-  an alert and a pause as caps fill, an operator's override, and buying credits through a
+- Credits and caps: every business's assistant and guardrail tokens and tool calls, WhatsApp
+  messages, voice seconds and memory embeddings metered and priced, a per-period allowance and a
+  prepaid wallet, an alert and a pause as caps fill (a paused business's agents are refused on
+  their next call, mid-turn included), an operator's override, and buying credits through a
   purchase provider (`/api/credits`, developer guide section 7.6). The application configures the
   prices and plans (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on
   `credits.threshold` to `{ capability: 'credits.manage' }`; the sample's `account` module) and
