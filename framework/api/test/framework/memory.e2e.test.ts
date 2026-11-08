@@ -567,6 +567,42 @@ describe('credits (H3)', () => {
     expect(after.at(-1)).toMatchObject({ quantity: 2, subject: `user:${bob.id}` });
   });
 
+  it('a turn that calls recall-memory meters both embeddings: the message and the query', async () => {
+    const before = (await usesOf(anaTenant, 'memory.recall')).length;
+    const turn = await chatInAna(bob, 'what do you remember about the metered crate?');
+    expect(turn.status).toBe(200);
+    expect(turn.body.toolCalls).toMatchObject([{ tool: 'recall-memory', outcome: 'done' }]);
+    const { runId } = turn.body;
+    const uses = (await usesOf(anaTenant, 'memory.recall'))
+      .slice(before)
+      .sort((a, b) => b.quantity - a.quantity);
+    // The recall before the turn (eight words, keyed to the run) and the tool’s own (three).
+    expect(uses).toEqual([
+      expect.objectContaining({
+        quantity: 8,
+        ref: `memory.recall:${runId}`,
+        run_id: runId,
+        subject: `user:${bob.id}`,
+      }),
+      expect.objectContaining({ quantity: 3, ref: null, run_id: runId, subject: `user:${bob.id}` }),
+    ]);
+  });
+
+  it('each recall in one run counts, however many the run makes', async () => {
+    const before = (await usesOf(anaTenant, 'memory.recall')).length;
+    const runId = `r-recall-${Date.now()}`;
+    const asAna = asAssistant(`user:${ana.id}`, { 'x-tenant-id': anaTenant, 'x-run-id': runId });
+    for (const q of ['metered crate', 'green ladder shed'])
+      expect((await asAna('GET', `/api/memory/recall?${new URLSearchParams({ q })}`)).status).toBe(
+        200,
+      );
+    const uses = (await usesOf(anaTenant, 'memory.recall')).slice(before);
+    expect(uses.map((u) => [u.quantity, u.run_id, u.ref])).toEqual([
+      [2, runId, null],
+      [3, runId, null],
+    ]);
+  });
+
   it('a paused business embeds nothing: recall is 402 and its memories wait', async () => {
     let memoId = '';
     await settings(patTenant, 'credits', { override: { mode: 'pause', reason: 'test pause' } });

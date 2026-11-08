@@ -110,6 +110,12 @@ export interface EmbedUse {
   subject?: string | null;
   runId?: string;
   channel?: string;
+  /**
+   * The use's key, for an embedding that must count once however often it is reported (the
+   * recall before a turn: one per run). Without it every embedding counts: the recall API and
+   * the assistant's recall-memory tool make a new one for each call.
+   */
+  ref?: string;
 }
 
 /** A business paused at its cap embeds nothing (H3): recall then runs without it, or is 402. */
@@ -208,7 +214,7 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
         runId: use.runId ?? null,
         channel: use.channel ?? null,
         source: 'memory.recall',
-        ref: use.runId ? `memory.recall:${use.runId}` : null,
+        ref: use.ref ?? null,
       });
       return { model: ref, vector: embedding };
     } catch (e) {
@@ -230,6 +236,7 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
     let embedded = req.embedded;
     if (!embedded) {
       try {
+        // No ref: each call embeds again and counts, even several in the run of one turn.
         embedded = await this.embed(tenantId, req.query, RECALL_TIMEOUT_MS, {
           subject: subjectKeyOf(p) ?? null,
           ...(p.runId ? { runId: p.runId } : {}),
@@ -372,6 +379,7 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
         subject: subjectKeyOf(p) ?? null,
         runId: turn.runId,
         channel: turn.channel,
+        ref: `memory.recall:${turn.runId}`,
       });
       if (policy.conversation && turn.threadId)
         this.made.set(turn.runId, { ...embedded, at: Date.now() });

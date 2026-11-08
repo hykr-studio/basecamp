@@ -2837,7 +2837,8 @@ call. What survives reaches the model as context lines, which it reads as data. 
 Recall's embedding gets one try and 4 s (1.5 s on a voice turn): past that the turn runs without
 recall and the API answers 503 `recall_unavailable`, so a slow provider never holds a turn.
 Every embedding (recall's and the indexer's, a use per batch) is metered as `tokens` for the
-business, the embedding model as variant (section 7.6). A business paused at its cap embeds
+business, the embedding model as variant (section 7.6). The recall before a turn counts once per
+run (ref `memory.recall:<run>`); each API or `recall-memory` call counts on its own. A business paused at its cap embeds
 nothing: its turns run without recall, the API answers 402 `credits_paused`, and the indexer
 leaves its memories pending and looks again after a minute (`MemoryIndexer.wake(tenantId)` sooner).
 
