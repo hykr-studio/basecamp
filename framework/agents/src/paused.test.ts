@@ -1,12 +1,18 @@
 // A run that reaches the business's cap in the middle (H3): once a tool comes back 402
 // `credits_paused`, the run ends with the paused sentence, calls nothing more and spends nothing.
+
+import { defineLanguages, resetLanguages, setLanguages, t } from '@hykr/i18n';
 import { Agent } from '@mastra/core/agent';
 import { RequestContext } from '@mastra/core/request-context';
 import { createTool } from '@mastra/core/tools';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { call, defineScript, fakeModel, say } from './fake/engine.js';
 import { EndWhenPaused, isPausedRefusal, pausedText } from './paused.js';
+
+// Hindi, which the framework has a translation for, declared as an application would.
+beforeAll(() => setLanguages(defineLanguages({ hi: { name: 'हिंदी', english: 'Hindi' } })));
+afterAll(resetLanguages);
 
 let calls: string[] = [];
 const paused = {
@@ -81,6 +87,8 @@ describe('a run that reaches the cap in the middle', () => {
       maxSteps: 8,
     });
     expect(await out.text).toBe(pausedText('hi'));
+    expect(pausedText('hi')).toBe(t('hi', 'credits.paused'));
+    expect(pausedText('hi')).not.toBe(pausedText('en'));
     expect(calls).toEqual(['first', 'second']);
   });
 

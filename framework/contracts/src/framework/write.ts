@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LabelsShape } from '../languages.js';
 import { Money } from './money.js';
 
 export const ApprovalStatus = z.enum(['pending', 'approved', 'rejected', 'expired', 'failed']);
@@ -8,7 +9,7 @@ export type ApprovalStatus = z.infer<typeof ApprovalStatus>;
 export const ApprovalLevelInfo = z.object({
   name: z.string(),
   rank: z.number().int().optional(),
-  label: z.object({ en: z.string(), hi: z.string(), te: z.string() }).optional(),
+  label: LabelsShape.optional(),
 });
 export type ApprovalLevelInfo = z.infer<typeof ApprovalLevelInfo>;
 

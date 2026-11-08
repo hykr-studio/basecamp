@@ -2,6 +2,7 @@
 //   remember (that) <fact>              create-memory: the business remembers it
 //   what do you remember about <x>      recall-memory, then the best match
 //   recall <x>
+import { pick } from '@hykr/i18n';
 import { call, defineScript, type Outcome, say, sayIn, written } from '../engine.js';
 import { defineScriptSet } from '../script-set.js';
 
@@ -29,11 +30,14 @@ export const memoryScripts = defineScriptSet({
             written(
               r,
               () =>
-                ({
-                  en: "I'll remember that.",
-                  hi: 'मैं यह याद रखूँगा।',
-                  te: 'నేను దీన్ని గుర్తుంచుకుంటాను.',
-                })[turn.lang],
+                pick(
+                  {
+                    en: "I'll remember that.",
+                    hi: 'मैं यह याद रखूँगा।',
+                    te: 'నేను దీన్ని గుర్తుంచుకుంటాను.',
+                  },
+                  turn.lang,
+                ),
               turn,
             ),
           ),

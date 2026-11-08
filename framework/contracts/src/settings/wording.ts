@@ -1,8 +1,9 @@
 // A business's own words (A11): framework phrases and notification emails it words its own way.
 // The application's overrides (`overridePhrases`, `overrideNotification`) come first; these
 // replace them for one business.
-import { catalogs, LANGS, type Lang, type MessageKey, t } from '@hykr/i18n';
+import { catalogs, isLang, type Lang, type MessageKey, t } from '@hykr/i18n';
 import { z } from 'zod';
+import { Lang as DeclaredLang, LangCode } from '../languages.js';
 import { defineSettingsSection } from './sections.js';
 
 declare module './sections.js' {
@@ -11,19 +12,24 @@ declare module './sections.js' {
   }
 }
 
-/** Some languages' words: a language left out keeps the application's. */
-export const SomeLabels = z
-  .object({
-    en: z.string().min(1).max(1000).optional(),
-    hi: z.string().min(1).max(1000).optional(),
-    te: z.string().min(1).max(1000).optional(),
-  })
-  .strict();
+const words = z.string().min(1).max(1000);
+
+/**
+ * Some languages' words, as stored: a language left out keeps the application's. Any language
+ * code is kept (one the application stops declaring is never read).
+ */
+export const SomeLabels = z.record(LangCode, words);
 export type SomeLabels = z.infer<typeof SomeLabels>;
+
+/** Some languages' words as a person writes them: only the application's languages. */
+export const SomeLabelsInput = z.record(DeclaredLang, words);
 
 /** A notification's email, worded by the business. `{field}` is filled from the record. */
 export const EmailWording = z
   .object({ subject: SomeLabels.optional(), body: SomeLabels.optional() })
+  .strict();
+const EmailWordingInput = z
+  .object({ subject: SomeLabelsInput.optional(), body: SomeLabelsInput.optional() })
   .strict();
 
 export const Wording = z
@@ -41,8 +47,9 @@ export const WordingSection = defineSettingsSection('wording', Wording);
 const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
 /**
- * Problems with a business's phrases: a key that is no framework phrase, or words whose
- * `{placeholders}` differ from the phrase they replace (the filled-in values would be lost).
+ * Problems with a business's phrases: a key that is no framework phrase, words in a language
+ * the application does not speak, or words whose `{placeholders}` differ from the phrase they
+ * replace (the filled-in values would be lost).
  */
 export function phraseProblems(phrases: Readonly<Record<string, SomeLabels>>): string[] {
   const problems: string[] = [];
@@ -53,9 +60,10 @@ export function phraseProblems(phrases: Readonly<Record<string, SomeLabels>>): s
       continue;
     }
     const want = placeholders(base).join(',');
-    for (const lang of LANGS) {
-      const words = labels[lang];
-      if (words !== undefined && placeholders(words).join(',') !== want)
+    for (const [lang, words] of Object.entries(labels)) {
+      if (!isLang(lang))
+        problems.push(`"${key}" (${lang}): not one of the application's languages`);
+      else if (placeholders(words).join(',') !== want)
         problems.push(`"${key}" (${lang}) must keep the placeholders {${want || 'none'}}`);
     }
   }
@@ -82,9 +90,9 @@ export function tenantPhrase(
 /** A change to the wording: each key sent replaces that key's words; null removes it. */
 export const WordingPatch = z
   .object({
-    phrases: z.record(z.string(), SomeLabels.nullable()).optional(),
+    phrases: z.record(z.string(), SomeLabelsInput.nullable()).optional(),
     notifications: z
-      .record(z.string(), z.object({ email: EmailWording.optional() }).nullable())
+      .record(z.string(), z.object({ email: EmailWordingInput.optional() }).nullable())
       .optional(),
   })
   .strict();

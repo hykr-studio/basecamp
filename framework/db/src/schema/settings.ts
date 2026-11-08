@@ -23,7 +23,7 @@ export const customFields = app.table(
     key: text('key').notNull(),
     /** A custom field type ('select'). */
     type: text('type').notNull(),
-    /** What people call it: { en, hi?, te? }. */
+    /** What people call it: Labels (English, and the application's other languages it has). */
     label: jsonb('label').notNull(),
     /** For a select: the values it may take. */
     options: jsonb('options').notNull().default([]),

@@ -3,6 +3,7 @@
 // opts in with the `customFields` trait, `custom` in its schemas and `custom: 'custom'` in
 // `list.filterable`. The definitions are records of the framework's `customField` entity.
 import { z } from 'zod';
+import { Lang, LangCode, typedLabels } from '../languages.js';
 import { defineListFieldType, type FieldValueContext } from './list.js';
 import { PLATFORM_MODULE, stampModule } from './module.js';
 import { createHookRegistry } from './registry.js';
@@ -119,14 +120,13 @@ export function customValueFromText(type: string, text: string): CustomFieldValu
   return trimmed;
 }
 
-/** A label in the business's languages; English is required, the others fall back to it. */
-export const FieldLabel = z
-  .object({
-    en: z.string().trim().min(1).max(60),
-    hi: z.string().trim().min(1).max(60).optional(),
-    te: z.string().trim().min(1).max(60).optional(),
-  })
-  .strict();
+/**
+ * A label in the business's languages, as a person writes it: English required, any of the
+ * application's other languages optional (they fall back to it).
+ */
+export const FieldLabel = typedLabels(Lang, z.string().trim().min(1).max(60));
+/** A field's label as read back: any language code (one no longer declared is never shown). */
+const StoredFieldLabel = typedLabels(LangCode, z.string());
 
 /** An entity's name, as entities are named ('todo'). */
 const EntityName = z.string().regex(/^[a-z][a-zA-Z0-9]{0,63}$/);
@@ -137,7 +137,7 @@ export const CustomField = z.object({
   entity: z.string(),
   key: z.string(),
   type: z.string(),
-  label: FieldLabel,
+  label: StoredFieldLabel,
   options: z.array(z.string()),
   required: z.boolean(),
   filterable: z.boolean(),

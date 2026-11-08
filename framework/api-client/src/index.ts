@@ -73,6 +73,7 @@ import {
   type Invite,
   type InviteInfo,
   type JobInfo,
+  type Lang,
   type LedgerEntry,
   type ListInput,
   type ListJobsQuery,
@@ -899,7 +900,7 @@ export function createApiClient(opts: ApiClientOptions) {
        * A one-time code to the number (WhatsApp's login_code_v1): proof the person holds it.
        * `timeZone` is theirs (their device's); undefined: their business's.
        */
-      sendCode: (phone: string, timeZone: string | undefined, lang: 'en' | 'hi' | 'te' = 'en') =>
+      sendCode: (phone: string, timeZone: string | undefined, lang: Lang = 'en') =>
         call<{ sentTo: string; expiresInSeconds: number }>('POST', '/api/channels/whatsapp/code', {
           phone,
           timeZone,

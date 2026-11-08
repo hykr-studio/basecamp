@@ -1,7 +1,13 @@
+import { defineLanguages } from '@hykr/i18n';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { defineNotification } from './define-notification.js';
-import { contentHash, defineTemplate, toTemplateSpec } from './define-template.js';
+import {
+  contentHash,
+  defineTemplate,
+  templateLanguages,
+  toTemplateSpec,
+} from './define-template.js';
 import {
   CommentMentionNotification,
   createNotificationCatalog,
@@ -27,6 +33,28 @@ describe('defineTemplate refuses what Meta would reject', () => {
       /te body's parameters/,
     );
     expect(() => defineTemplate({ ...ok, body: { ...body, hi: '' } })).toThrow(/no hi body/);
+  });
+
+  it('needs English only; the languages it is synced in are the declared ones it has', () => {
+    const english = defineTemplate({ ...ok, body: { en: 'Hi {{name}}' } });
+    expect(() => defineTemplate({ ...ok, body: { en: '', hi: 'नमस्ते {{name}}' } })).toThrow(
+      /no en body/,
+    );
+    const set = defineLanguages({
+      hi: { name: 'हिंदी', english: 'Hindi' },
+      el: { name: 'Ελληνικά', english: 'Greek' },
+    });
+    expect(templateLanguages(english, set)).toEqual(['en']);
+    // Telugu is not declared, Greek has no body: neither is synced.
+    expect(templateLanguages(defineTemplate(ok), set)).toEqual(['en', 'hi']);
+    // A language without words reads its buttons and footer in English.
+    const withButton = defineTemplate({
+      ...ok,
+      buttons: [{ type: 'quick_reply', id: 'ok', text: { en: 'OK', hi: 'ठीक' } }],
+    });
+    expect(toTemplateSpec(withButton, 'te', 'http://app').buttons).toEqual([
+      { type: 'QUICK_REPLY', text: 'OK' },
+    ]);
   });
 
   it('a marketing template without an opt-out; no example for a parameter', () => {

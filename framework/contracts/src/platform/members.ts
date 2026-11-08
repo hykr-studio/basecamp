@@ -4,7 +4,7 @@ import type { Labels } from '@hykr/i18n';
 import { z } from 'zod';
 import { ROLE_NAME } from '../principal.js';
 import { CAPABILITY_NAME } from '../roles.js';
-import { BusinessLabel, type RoleView } from '../settings/roles.js';
+import { BusinessLabelInput, type RoleView } from '../settings/roles.js';
 
 const RoleName = z.string().regex(ROLE_NAME);
 const Roles = z.array(RoleName).min(1).max(20);
@@ -58,7 +58,7 @@ export type SetMemberRolesInput = z.infer<typeof SetMemberRolesInput>;
 
 export const DefineRoleInput = z.object({
   name: RoleName,
-  label: BusinessLabel,
+  label: BusinessLabelInput,
   capabilities: z.array(z.string().regex(CAPABILITY_NAME)).max(200),
 });
 export type DefineRoleInput = z.input<typeof DefineRoleInput>;
@@ -69,7 +69,7 @@ export type DefineRoleInput = z.input<typeof DefineRoleInput>;
  */
 export const EditRoleInput = z
   .object({
-    label: BusinessLabel.nullable().optional(),
+    label: BusinessLabelInput.nullable().optional(),
     capabilities: z.array(z.string().regex(CAPABILITY_NAME)).max(200).nullable().optional(),
   })
   .refine(

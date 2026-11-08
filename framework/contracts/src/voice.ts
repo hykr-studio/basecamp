@@ -1,9 +1,6 @@
-import { LANGS } from '@hykr/i18n';
+import { isLang } from '@hykr/i18n';
 import { z } from 'zod';
-
-/** The languages the assistant speaks and shows (@hykr/i18n holds the list and the words). */
-export const Lang = z.enum(LANGS);
-export type Lang = z.infer<typeof Lang>;
+import { type Lang, LangCode, LanguageWire } from './languages.js';
 
 /**
  * How a call reached the server. Set by who called (never by the request body): the app,
@@ -26,13 +23,20 @@ export type Channel = z.infer<typeof Channel>;
 export const TURN_CHANNELS = ['app', 'voice', 'whatsapp'] as const satisfies readonly Channel[];
 export type TurnChannel = (typeof TURN_CHANNELS)[number];
 
-/** A voice session's language: detected per turn ('auto'), or pinned. */
-export const VoiceLang = z.enum(['auto', 'en-IN', 'hi-IN', 'te-IN']);
-export type VoiceLang = z.infer<typeof VoiceLang>;
+/**
+ * A voice session's language: detected per turn ('auto'), or pinned to one the application
+ * speaks (its code; the speech provider is asked for the language's speech tag).
+ */
+export const VoiceLang = z.string().refine((v) => v === 'auto' || isLang(v), {
+  error: "'auto' or one of the application's languages",
+});
+export type VoiceLang = 'auto' | Lang;
 
-/** 'te-IN' → 'te'; 'auto' → undefined (the session decides). */
-export const langOfVoice = (v: VoiceLang): Lang | undefined =>
-  v === 'auto' ? undefined : (v.slice(0, 2) as Lang);
+/** A voice language's shape only: the voice worker checks it against its dispatch's languages. */
+export const VoiceLangCode = z.union([z.literal('auto'), LangCode]);
+
+/** 'te' → 'te'; 'auto' → undefined (the session decides). */
+export const langOfVoice = (v: VoiceLang): Lang | undefined => (v === 'auto' ? undefined : v);
 
 export const VoiceSessionRequest = z.object({
   /** Continue this thread by voice; omitted, the person's current thread. */
@@ -86,10 +90,12 @@ export const VOICE_LANG_TOPIC = 'voice-lang';
 /** What the API tells the worker about a room when it dispatches it (the dispatch metadata). */
 export const VoiceDispatch = z.object({
   threadId: z.uuid(),
-  lang: VoiceLang.default('auto'),
+  lang: VoiceLangCode.default('auto'),
   timeZone: z.string().max(64).optional(),
   /** How long this session may run: the person's minutes left today, at most one session's. */
   maxSeconds: z.number().int().min(1).optional(),
+  /** The languages the session may be in. Left out: English alone. */
+  languages: z.array(LanguageWire).min(1).max(50).optional(),
 });
 export type VoiceDispatch = z.infer<typeof VoiceDispatch>;
 

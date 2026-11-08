@@ -5,7 +5,7 @@ import type {
   LanguageModelV2Prompt,
   LanguageModelV2StreamPart,
 } from '@ai-sdk/provider';
-import { LANG_ENGLISH_NAMES, LANGS, type Labels, type Lang, pick, scriptOf, t } from '@hykr/i18n';
+import { englishName, type Labels, type Lang, languages, pick, scriptOf, t } from '@hykr/i18n';
 import { parkedLine } from '../parked-line.js';
 
 /**
@@ -174,9 +174,16 @@ function stepsThisTurn(prompt: LanguageModelV2Prompt): Step[] {
   return steps;
 }
 
-/** "Reply in Telugu." → 'te': the instruction line as assistant.ts writes it, from one list. */
-const PINNED = new Map<string, Lang>(LANGS.map((l) => [LANG_ENGLISH_NAMES[l], l]));
-const PIN_LINE = new RegExp(`^Reply in (${[...PINNED.keys()].join('|')})\\.`, 'm');
+/**
+ * "Reply in Greek." → 'el': the instruction line as assistant.ts writes it, for the languages
+ * this process speaks (read each turn: the application declares them after this loads).
+ */
+function pinnedLang(prompt: LanguageModelV2Prompt): Lang | undefined {
+  const named = new Map(languages().codes.map((l) => [englishName(l), l]));
+  const line = new RegExp(`^Reply in (${[...named.keys()].map(literally).join('|')})\\.`, 'm');
+  return fromSystem(prompt, line, (m) => named.get(m[1]));
+}
+const literally = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function turnOf(prompt: LanguageModelV2Prompt): Turn {
   const steps = stepsThisTurn(prompt);
@@ -185,7 +192,7 @@ function turnOf(prompt: LanguageModelV2Prompt): Turn {
   const text = lastUserText(prompt).normalize('NFC');
   return {
     text,
-    lang: fromSystem(prompt, PIN_LINE, (m) => PINNED.get(m[1])) ?? scriptOf(text) ?? 'en',
+    lang: pinnedLang(prompt) ?? scriptOf(text) ?? 'en',
     spoken: fromSystem(prompt, /This turn is spoken/, () => true) ?? false,
     steps,
     result: (tool) => steps.find((s) => s.toolName === tool)?.outcome,
