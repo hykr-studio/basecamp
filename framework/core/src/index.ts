@@ -138,11 +138,13 @@ export * from './states/index.js';
 export { type SystemPrincipalOptions, systemPrincipal } from './system.js';
 export { TenantConfigService, type TenantInfo } from './tenants/tenant-config.service.js';
 export {
+  checkTimeZones,
   defaultTimeZone,
   NEUTRAL_TIME_ZONE,
   setDefaultTimeZone,
   tenantZone,
   tenantZoneOf,
+  zoneName,
 } from './tenants/time-zone.js';
 export { type AgentKey, CORE_OPTIONS, type Conn, type CoreOptions, type Tx } from './tokens.js';
 export * from './versions/index.js';

@@ -8,7 +8,6 @@ import {
   domainRecordName,
   type FeatureFlagDef,
   featureFlags,
-  isTimeZone,
   type Principal,
   phraseProblems,
   RemoveDomainSpec,
@@ -21,7 +20,15 @@ import {
   VerifyDomainSpec,
   Wording,
 } from '@hykr/contracts';
-import { allow, defineCommand, deny, type NamedEvent, type Tx, tenantZone } from '@hykr/core';
+import {
+  allow,
+  defineCommand,
+  deny,
+  type NamedEvent,
+  type Tx,
+  tenantZone,
+  zoneName,
+} from '@hykr/core';
 import { schema } from '@hykr/db';
 import { can } from '@hykr/policy';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
@@ -197,9 +204,11 @@ export const UpdateWording = defineCommand(UpdateWordingSpec, {
 });
 
 /**
- * PUT /api/settings/time-zone: the business's own zone (an IANA name this server knows), or null
- * for the deployment's. Its periods, hours and dates follow it from the next write on: numbers,
- * credit periods and SLA clocks already started keep theirs.
+ * PUT /api/settings/time-zone: the business's own zone, or null for the deployment's. The zone
+ * is UTC or an IANA Area/Location name that Intl and Postgres both know and read alike
+ * (`zoneName`): never an offset or an abbreviation, which the two read differently. It is
+ * stored as Postgres spells it. Its periods, hours and dates follow it from the next write on:
+ * numbers, credit periods and SLA clocks already started keep theirs.
  */
 export const SetTimeZone = defineCommand(SetTimeZoneSpec, {
   resource: { type: 'tenant', id: (_input, loaded: Loaded) => loaded.tenantId },
@@ -211,13 +220,13 @@ export const SetTimeZone = defineCommand(SetTimeZoneSpec, {
   summarize: (input) =>
     input.timeZone ? `Set the time zone to ${input.timeZone}` : "Use the deployment's time zone",
   run: async ({ tx, input, loaded: { tenantId, settings } }) => {
-    if (input.timeZone !== null && !isTimeZone(input.timeZone))
+    const after = input.timeZone === null ? null : await zoneName(tx, input.timeZone);
+    if (input.timeZone !== null && after === null)
       throw new BadRequestException({
         error: 'time_zone_invalid',
-        message: `"${input.timeZone}" is not a time zone: use an IANA name such as Europe/Berlin`,
+        message: `"${input.timeZone}" is not a time zone this server can use: give UTC or an IANA name such as Europe/Berlin, not an offset or an abbreviation`,
       });
     const before = typeof settings.timeZone === 'string' ? settings.timeZone : null;
-    const after = input.timeZone;
     await tx
       .update(schema.tenants)
       .set({

@@ -6,6 +6,7 @@ import { ShareGuard } from './http/share.guard.js';
 import { UndoController } from './http/undo.controller.js';
 import { setDefaultCurrency } from './money/tenant-money.js';
 import { TenantConfigService } from './tenants/tenant-config.service.js';
+import { TimeZonesCheck } from './tenants/time-zone.check.js';
 import { setDefaultTimeZone } from './tenants/time-zone.js';
 import { CORE_OPTIONS, type CoreOptions } from './tokens.js';
 import { ApprovalService, setApprovalTtl } from './write/approvals.js';
@@ -37,6 +38,7 @@ export class CoreModule {
         ApprovalService,
         UndoService,
         TenantConfigService,
+        TimeZonesCheck,
       ],
       exports: [
         CORE_OPTIONS,

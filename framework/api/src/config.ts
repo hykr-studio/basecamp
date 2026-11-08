@@ -68,8 +68,10 @@ export const config = {
    */
   defaultCurrency: env.DEFAULT_CURRENCY?.trim() || undefined,
   /**
-   * The time zone of a business that set none in its settings (IANA, e.g. Europe/Berlin): its
-   * periods, business hours, quiet hours and dates. Unset: UTC.
+   * The time zone of a business that set none in its settings (UTC or an IANA Area/Location
+   * name, e.g. Europe/Berlin; never an offset or an abbreviation): its periods, business hours,
+   * quiet hours and dates. Unset: UTC. `assertConfig` checks its shape; at start, CoreModule
+   * checks that Postgres reads it as Intl does (`checkTimeZones`).
    */
   defaultTimeZone: env.DEFAULT_TIME_ZONE?.trim() || undefined,
   /**
@@ -106,7 +108,7 @@ export function assertConfig() {
     );
   if (config.defaultTimeZone !== undefined && !isTimeZone(config.defaultTimeZone))
     throw new Error(
-      `DEFAULT_TIME_ZONE must be an IANA time zone such as Europe/Berlin, not "${config.defaultTimeZone}"`,
+      `DEFAULT_TIME_ZONE must be UTC or an IANA zone name such as Europe/Berlin (not an offset or an abbreviation), not "${config.defaultTimeZone}"`,
     );
   if (
     config.defaultGrievanceContact !== undefined &&
