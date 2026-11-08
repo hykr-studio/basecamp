@@ -1,6 +1,7 @@
 // Summaries (B14): counts and totals grouped by up to two fields, over exactly the rows a list
 // reaches, never over a field the reader cannot see; the agent's summarize tool and kpi.row
 // tiles computed from a summary, on the fixture's entries (fixture/src/features/summary).
+import { defaultTimeZone, setDefaultTimeZone } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { addMember, asAssistant, boot, me, Person, pool, shutdown } from '../../dist/testing.js';
 import { summaryServer } from '../fixture/dist/features/summary/index.js';
@@ -185,6 +186,35 @@ describe('dates, in the business’s time zone', () => {
     expect(quarter.body.groups).toEqual([{ key: { bookedAt: '2026-Q4' }, count: 3 }]);
     const year = await summary(owner, 'groupBy=dueOn:year&dueOn[gte]=2026-01-01');
     expect(year.body.groups).toEqual([{ key: { dueOn: '2026' }, count: 2 }]);
+  });
+});
+
+describe("dates, in the deployment's zone while the business sets none", () => {
+  it("16:30 UTC on 31 October is November in Tokyo's deployment, October in UTC", async () => {
+    const fresh = new Person('Fresh Summary');
+    await fresh.signUp();
+    await add(
+      fresh,
+      {
+        title: 'Late',
+        state: 'done',
+        currency: 'EUR',
+        amount: { minor: 1 },
+        bookedAt: '2026-10-31T16:30:00Z',
+      },
+      false,
+    );
+    const months = async () =>
+      (await fresh.call('GET', '/api/entries/summary?groupBy=bookedAt:month')).body.groups;
+    const was = defaultTimeZone();
+    try {
+      setDefaultTimeZone('Asia/Tokyo');
+      expect(await months()).toEqual([{ key: { bookedAt: '2026-11' }, count: 1 }]);
+      setDefaultTimeZone(undefined);
+      expect(await months()).toEqual([{ key: { bookedAt: '2026-10' }, count: 1 }]);
+    } finally {
+      setDefaultTimeZone(was === 'UTC' ? undefined : was);
+    }
   });
 });
 

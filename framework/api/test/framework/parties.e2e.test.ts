@@ -17,6 +17,7 @@ import {
   pool,
   seedContact,
   server,
+  setTenantSettings,
   settingsChanged,
   shutdown,
 } from '../../dist/testing.js';
@@ -224,11 +225,19 @@ describe('party members', () => {
   it("by number: the business's contact for it, with no customer record, once", async () => {
     const party = await newParty('organisation', 'Numbers Ltd');
     const address = phone();
+    // A contact made here is in the business's zone (nobody has said theirs yet).
+    await setTenantSettings(tenantId, { timeZone: 'Pacific/Honolulu' });
     const added = await ana.call('POST', `/api/parties/${party.id}/members`, {
       address,
       name: 'Dispatch desk',
     });
+    await setTenantSettings(tenantId, { timeZone: null });
     expect(added.status).toBe(200);
+    const zone = await pool.query(
+      'select time_zone from channel.contacts where tenant_id = $1 and address = $2',
+      [tenantId, address],
+    );
+    expect(zone.rows).toEqual([{ time_zone: 'Pacific/Honolulu' }]);
     expect(added.body.value.member).toMatchObject({ address, name: 'Dispatch desk' });
     expect(added.body.value.token).toBeUndefined();
     const contact = await contactOf(address);

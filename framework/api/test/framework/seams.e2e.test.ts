@@ -126,13 +126,16 @@ describe('contributions', () => {
 });
 
 describe('tenant settings', () => {
-  it('base settings, features and sections all have defaults', () => {
+  it('base settings, features and sections all have defaults; no zone or contact is assumed', () => {
     const settings = parseTenantSettings(undefined);
     expect(settings).toMatchObject({
-      timeZone: 'Asia/Kolkata',
       features: {},
       fixtureSeams: { limit: 5 },
     });
+    // A business's zone and privacy contact are its own, else the deployment's: never the
+    // framework's.
+    expect(settings.timeZone).toBeUndefined();
+    expect(settings.grievanceContact).toBeUndefined();
   });
 
   it('stored values win; invalid ones throw', () => {
