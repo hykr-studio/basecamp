@@ -1,8 +1,9 @@
 # The domain is replaceable
 
 Basecamp, the agentic development stack for full-stack applications, ships with a sample
-application: meetings, notes, to-dos and orders, as four modules, plus `account`, which words the
-credits alerts, and `briefs`, a customer's brief and the form that asks for it. The framework (the API pipeline with
+application of six modules: meetings, notes, to-dos and orders, plus `account`, which words the
+credits alerts and the privacy team's notices, and `briefs`, a customer's brief and the form that
+asks for it. The framework (the API pipeline with
 its rules, approvals and audit; the assistant with its tools, surfaces, canvas and WhatsApp;
 saved pages; the app shell) lives in `framework/` and is published as `@hykr/*` packages. The
 application lives in `application/`. The framework never imports the application; the
