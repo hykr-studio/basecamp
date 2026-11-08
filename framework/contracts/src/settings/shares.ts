@@ -26,4 +26,4 @@ export const SharesSettings = z
   .default({ defaultDays: 7, maxDays: 90, sessionHours: 12 });
 export type SharesSettings = z.infer<typeof SharesSettings>;
 
-export const SharesSection = defineSettingsSection('shares', SharesSettings);
+export const SharesSection = defineSettingsSection('shares', SharesSettings, { editable: true });

@@ -1,5 +1,6 @@
 // A business's setup (A11): feature flags that fail closed, custom fields, white label (branding
-// and verified custom domains), platform-scoped shared records and the business's own wording.
+// and verified custom domains), platform-scoped shared records and the business's own wording;
+// and the generic writer for every editable settings section (H2).
 import { reserveRoutes } from '@hykr/contracts';
 import {
   commandController,
@@ -24,6 +25,8 @@ import { FeatureFlagsService } from './flags.service.js';
 import { FeatureGateInterceptor } from './gate.interceptor.js';
 import { FeatureGates, featureFlagsHook } from './gates.js';
 import { EmailWording, SettingsChangedHandler } from './lifecycle.js';
+import { frameworkSettingsChecks } from './section-checks.js';
+import { SettingsSectionsCheck, UpdateSettingsSection } from './sections.js';
 import { SettingsController } from './settings.controller.js';
 import { SettingsTurnHook } from './turn.js';
 
@@ -46,10 +49,12 @@ export const settingsFeature = defineFeature({
     SettingsController,
     entityController(CustomFieldDef),
     ...settingsCommandDefs.map(commandController),
+    commandController(UpdateSettingsSection),
   ],
   providers: [
     FeatureGates,
     FeatureFlagsCheck,
+    SettingsSectionsCheck,
     FeatureFlagsService,
     SharedRecordsConfig,
     SettingsTurnHook,
@@ -58,6 +63,7 @@ export const settingsFeature = defineFeature({
     { provide: APP_INTERCEPTOR, useClass: FeatureGateInterceptor },
     ...entityHandlers(CustomFieldDef),
     ...settingsCommandDefs.map(commandHandler),
+    commandHandler(UpdateSettingsSection),
   ],
   exports: [FeatureGates, FeatureFlagsService],
   contributes: {
@@ -65,5 +71,6 @@ export const settingsFeature = defineFeature({
     writeHooks: [customFieldsHook, sharedRecordsHook, featureFlagsHook],
     listFieldSql: [customListSql],
     authPlugins: [customDomainsAuth],
+    settingsChecks: frameworkSettingsChecks,
   },
 });

@@ -154,7 +154,8 @@ their in-app inbox. What each approval level means (does it wait, who decides, h
 it can be undone) is the application's: the sample declares `read`, `internal`, `external` and
 `irreversible` (`application/domain/src/server/approval-levels.ts`), and the to-dos module maps its
 writes to `internal` with a level rule. Thresholds and approvers per amount band are each
-business's settings (`approvals`).
+business's settings (`approvals`), which its owners and admins change with
+`PATCH /api/settings/sections/approvals`.
 
 When the assistant's write waits for approval, its run waits too, and goes on once the request is
 decided: the tool's result then says `approved`, `rejected` or `expired` (`failed` reads as a
@@ -199,6 +200,17 @@ setup, changed by people with `settings.manage` (owners and admins) through the 
   on its team reviews first, its own retention periods, its own processors and its privacy
   contact and notice (`privacy` settings, changed by its privacy team on the back office's
   Privacy screen, `PATCH /api/privacy/settings`; developer guide 5.27).
+- **How it works.** Its time zone, quiet hours, reply time and marketing limit (`general`), and
+  every settings section declared `editable`: approval thresholds, level changes and who approves
+  each amount band (`approvals`), currency and financial year (`money`), open hours and holidays
+  (`businessHours`), SLA durations (`sla`), memory recall, share-link lifetimes, inbound media,
+  unknown senders and how long an invitation lasts (`members`, changed by whoever manages
+  members). One writer changes them, `PATCH /api/settings/sections/:section` (a merge patch,
+  checked; the back office's Settings screen edits them as JSON). A module's own section
+  opts in with `defineSettingsSection(key, schema, { editable: { capability } })` and checks what
+  its schema cannot with a settings check (`defineSettingsCheck`, contributed as
+  `settingsChecks`). A module may make such a change wait with a level rule on
+  `settings.section` (developer guide 5.18).
 
 The sample's to-dos take custom fields (a business adds its `priority`; the to-dos screen sets it
 in its add form and each row's editor with `<CustomFieldInputs>`), and "clear done to-dos"
@@ -212,7 +224,8 @@ The framework has no currency, number format or tax rule of its own; a module de
 - **Money** is whole minor units with an ISO 4217 currency (`Money = { minor, currency }`):
   `minorUnits()` and `currencyColumn()` columns and the spec's `money` trait. A business's
   currency is its `money.currency` setting, else the deployment's `DEFAULT_CURRENCY`, else `XXX`.
-  Limits and bands a module's rules compare against are named amounts in the same settings.
+  Limits and bands a module's rules compare against are named amounts in the same settings,
+  which the business changes with `PATCH /api/settings/sections/money`.
 - **Number series** (`defineNumberSeries`, contributed as `numberSeries`): the module's format
   (`ORD/{fy}/{seq:4}`) and reset (none, yearly, or the financial year from `fyStartMonth`);
   `nextNumber` in a command's `run` keeps them gapless. Numbered records are cancelled, never
@@ -302,7 +315,8 @@ sample's `orders` module does, developer guide 5.20):
 - **SLAs** run while a record is in a state. Their names (`orders.decision`), durations and
   escalations (capabilities whose holders are told, a transition the server runs) are the module's; what a breach
   says is the module's notification on `<entity>.sla.breached`. A business's `businessHours`
-  and `sla` settings decide open hours, and override a duration or switch one off.
+  and `sla` settings decide open hours, and override a duration or switch one off
+  (`PATCH /api/settings/sections/businessHours`, `…/sla`; the time zone is `general`'s).
 - **Versions** (`traits.versioned`, `versionColumn()`): a write against an old version is 409,
   an approval is pinned to the version it was asked on, and `frozenWhen` names the states in
   which a record (and its lines) no longer changes. **Revisions** (`revisionColumns()`,

@@ -16,6 +16,7 @@ import { ScrollView, Switch, Text, TextInput, View } from 'react-native';
 import { api, reasonOf } from '../api';
 import { Badge, Button, Empty, ErrorLine } from '../components/ui';
 import { DataExport } from './DataExport';
+import { SettingsSections } from './SettingsSections';
 
 const INPUT = 'min-h-9 rounded-control border border-border bg-card px-3 text-body text-text';
 
@@ -314,7 +315,10 @@ function Domains() {
   );
 }
 
-/** The business's setup: branding, features, custom fields, web addresses and data export. */
+/**
+ * The business's setup: branding, features, custom fields, web addresses, the settings sections
+ * and data export.
+ */
 export function SettingsScreen() {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   if (me.isPending) return <Empty title="Loading…" />;
@@ -327,6 +331,7 @@ export function SettingsScreen() {
       <Features canManage={canManage} />
       <CustomFields canManage={canManage} />
       {canManage ? <Domains /> : null}
+      <SettingsSections />
       {canExport ? <DataExport /> : null}
     </ScrollView>
   );

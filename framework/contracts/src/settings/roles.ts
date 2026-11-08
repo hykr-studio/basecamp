@@ -1,7 +1,9 @@
 // A business's own roles and its changes to the declared ones (settings section `roles`), and
 // how long an invitation lasts (section `members`). Code declares roles and capabilities
 // (roles.ts); each business then names, adds and rearranges roles from those capabilities,
-// without a deploy. The resolver reads these per request through TenantConfigService.
+// without a deploy. The resolver reads these per request through TenantConfigService. Roles
+// have their own writer (/api/members/roles); `members` is changed through the generic settings
+// writer by whoever manages members (docs/decisions/H2.md).
 import { LANGS, type Labels } from '@hykr/i18n';
 import { z } from 'zod';
 import { ROLE_NAME } from '../principal.js';
@@ -10,6 +12,7 @@ import {
   capabilities,
   declaredCapabilities,
   declaredLabel,
+  FrameworkCapabilities,
   FrameworkRoles,
   isGrantable,
   roles,
@@ -74,7 +77,9 @@ declare module './sections.js' {
 }
 
 defineSettingsSection('roles', RolesSettings);
-defineSettingsSection('members', MembersSettings);
+defineSettingsSection('members', MembersSettings, {
+  editable: { capability: FrameworkCapabilities.manageMembers.name },
+});
 
 /** Where a role comes from: the framework, the application's code, or this business. */
 export type RoleSource = 'framework' | 'application' | 'business';

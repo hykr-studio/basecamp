@@ -6,9 +6,18 @@ const TimeOfDay = z
   .string()
   .regex(/^([01]\d|2[0-3]):[0-5]\d$|^24:00$/, 'A time of day: HH:MM, 00:00 to 24:00');
 
+/** Ends after it starts. A time that is no time of day is its own issue: not compared here. */
+const ordered = (i: { from: string; to: string }) => {
+  try {
+    return minutesOf(i.from) < minutesOf(i.to);
+  } catch {
+    return true;
+  }
+};
+
 const Interval = z
   .object({ from: TimeOfDay, to: TimeOfDay })
-  .refine((i) => minutesOf(i.from) < minutesOf(i.to), 'An interval ends after it starts');
+  .refine(ordered, 'An interval ends after it starts');
 
 const Week = z
   .object(Object.fromEntries(WEEKDAYS.map((d) => [d, z.array(Interval).max(8).optional()])))
@@ -38,7 +47,9 @@ declare module './sections.js' {
   }
 }
 
-export const BusinessHoursSection = defineSettingsSection('businessHours', BusinessHours);
+export const BusinessHoursSection = defineSettingsSection('businessHours', BusinessHours, {
+  editable: true,
+});
 
 /** The settings as `addBusinessTime` takes them. */
 export const openHoursOf = (s: BusinessHours | undefined): OpenHours => ({
