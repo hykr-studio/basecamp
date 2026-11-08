@@ -455,8 +455,8 @@ Without `by`, `decidersFor` in `framework/core/src/write/approvals.ts` behaves l
 
 | Requester | Who decides by default |
 |---|---|
-| A person with a user id on the business's team | The requester (they approve their own assistant's request). |
-| A customer, or a participant (anyone holding only the roles contacts and participants are given, `roleDefaults`) | Holders of `approvals.decide` (`owner` and `ops` by default) |
+| A member of the business's team (a role beyond the ones contacts and participants are given) | The requester (they approve their own assistant's request). |
+| Anyone outside it: a customer's contact, a participant, support access, an operator, a member holding only the contact's roles | Holders of `approvals.decide` (`owner` and `ops` by default) |
 
 Setting `by` sends every parked cancel to the holders of the capability, including a staff member's own assistant's request, and never to the person who asked: their own request is theirs to look at, not to decide.
 
