@@ -159,7 +159,7 @@ You should rarely need to change these. When you do, it is a framework change an
 | `framework/db/src/schema/`, `framework/db/drizzle/` | Tenancy, approvals, idempotency, audit, channel tables and their migrations (`drizzle.__framework_migrations`); `app`, `id()`, `tenantColumn()`, `customerColumn()` for your tables |
 | `framework/agents/src/` | `createAgents`, the Mastra assistant, profiles, the fake model, scorers, Studio; script helpers in `@hykr/agents/script`, the evals harness in `@hykr/agents/evals` |
 | `framework/ui-registry/src/` | `defineView`, `createUiRegistry`, platform views; `react.ts` for `bindView` / `bindScreen` |
-| `framework/i18n/src/` | `LANGS`, `Labels`, the framework's phrases (`messages.ts`), date and plural formatting |
+| `framework/i18n/src/` | `defineLanguages` and the process's languages (`lang.ts`), `Labels`, the framework's phrases (`messages.ts`), date, money and plural formatting |
 | `framework/channels/src/` | WhatsApp transport only: adapter, render, split, keywords, approval tokens |
 | `framework/connectors/src/` | Talking to other systems, transport only: Standard Webhooks signing, HMAC checks, the secret box, the egress guard (`safeRequest`), the `Connector` interface (section 5.14) |
 | `framework/notifications/src/` | `defineTemplate`, `defineNotification`, `createNotificationCatalog`, quiet hours and marketing cap rules |
@@ -370,7 +370,7 @@ Work inside a module (`application/domain/src/modules/<name>/`; `basecamp module
 | `name` | Singular, lower case. Used in routes, command names (`todo.create`), tool ids and audit `resource_type`. |
 | `plural`, `pascal` | Derived unless you give them. Give `plural` when "s" is wrong. |
 | `label` | How people say it ("to-do"). Used in messages such as `No such to-do`. |
-| `fieldLabels` | `{ field: { en, hi, te } }`. Field names in the approval preview. |
+| `fieldLabels` | `{ field: { en, …the application's other languages } }`. Field names in the approval preview. |
 | `description` | Goes into tool descriptions. Write it for the model. |
 | `schemas` | `{ read, create, update }`, all `z.object(...)` |
 | `list` | The list grammar config (see 5.6) |
@@ -2735,7 +2735,7 @@ defineScript({
 
 The first script that matches runs, and earlier modules' scripts come first. `defineServer` runs every module's eval inputs through all the modules' scripts and refuses to boot when another module's script would take one (`todos`'s `add` would take `add order 5` from an `orders` module listed after it). Give each module verbs of its own.
 
-Helpers you will use, all from `@hykr/agents/script`: `call`, `say`, `sayIn(turn, { en, hi, te })`, `verbs(...)`, `items(outcome)`, `written(...)`, `decided(outcome)`.
+Helpers you will use, all from `@hykr/agents/script`: `call`, `say`, `sayIn(turn, { en, … })` (the turn's language, else English), `verbs(...)`, `items(outcome)`, `written(...)`, `decided(outcome)`. For other words by language use `pick({ en, … }, turn.lang)` from `@hykr/i18n`, never `{ … }[turn.lang]`.
 
 A write that waits for approval suspends the run: the script's next step runs when the request is decided, with the tool's result saying `approved`, `rejected` or `expired` (section 5.8.3). The steps before the park are still in `turn.steps`.
 
@@ -2764,7 +2764,7 @@ export const TodoListView = defineView({
   props: z.object({ title: z.string().max(60).optional(), items: z.array(Todo) }),
   source: { entity: TodoSpec, into: 'items' }, // fetched by query; the agent never writes `items`
   actions: { toggle },                         // action<Todo>({ command: 'todo.update', args: (t) => ({ id: t.id, done: !t.done }) })
-  labels,                                      // { title, empty } as { en, hi, te }; noun as { en: ['to-do', 'to-dos'], hi: [...], te: [...] }
+  labels,                                      // { title, empty } as { en, hi, te } (the sample's languages); noun as { en: ['to-do', 'to-dos'], hi: [...], te: [...] }
   text: (p, ctx) => /* WhatsApp words */,
   speak: (p, ctx) => spokenList(p.items.map((t) => t.title), labels, ctx),
 });
@@ -3051,7 +3051,7 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
 
 ### 8.1 WhatsApp
 
-You do not write WhatsApp code for a feature. Inbound messages become chat turns on the `text` surface. Your views' `text` decides the words. Approvals become signed buttons when `APPROVAL_SECRET` is set and the approver is the person writing; a request someone else decides reaches them as `approval_request_v1` when push does not and the request may be decided on WhatsApp (section 5.8), and every answer links to `/approvals/<id>` in the app. The framework handles keywords (STOP, START, HELP, talk to a person, delete my data, link my account) in English, Hindi and Telugu, plus consent, the 24-hour window, handoff to a person and erasure.
+You do not write WhatsApp code for a feature. Inbound messages become chat turns on the `text` surface. Your views' `text` decides the words. Approvals become signed buttons when `APPROVAL_SECRET` is set and the approver is the person writing; a request someone else decides reaches them as `approval_request_v1` when push does not and the request may be decided on WhatsApp (section 5.8), and every answer links to `/approvals/<id>` in the app. The framework handles keywords (STOP, START, HELP, talk to a person, delete my data, link my account) in English, Hindi and Telugu, and in each declared language's own `keywords` (section 9), plus consent, the 24-hour window, handoff to a person and erasure.
 
 ### 8.2 Templates and notifications
 
@@ -3146,16 +3146,51 @@ Voice is a framework channel. The worker (`@hykr/voice-worker`, started by `base
 
 ## 9. Languages
 
-The product speaks English, Hindi and Telugu (`LANGS` in `framework/i18n/src/lang.ts`). `Labels` is `Readonly<Record<Lang, string>>`, so a missing translation does not compile.
+The application declares the languages it speaks, once, in an isomorphic file (the sample's is
+`application/domain/src/languages.ts`, exported as `@application/domain/languages`):
+
+```ts
+export const languages = defineLanguages({
+  en: { locale: 'en-GB', speech: 'en-IN' },       // English is always there; change its defaults here
+  hi: { name: 'हिंदी', english: 'Hindi', locale: 'hi-IN', letters: /[\u0900-\u0963…]/ },
+  te: { name: 'తెలుగు', english: 'Telugu', locale: 'te-IN', letters: /[\u0C00-\u0C7F]/ },
+});
+```
+
+Each language has its name in its own script (the voice chip), its name in English (the model's
+"Reply in Hindi."), an Intl `locale` (dates, numbers, money, plurals; default its code), a
+`speech` tag for speech-to-text and text-to-speech (default its locale), the `letters` of its
+script (how a typed or transcribed text is known to be in it: the other languages are tried
+before English, so a code-mixed line counts as the other language), and optional WhatsApp
+`keywords` (`{ stop: ['…'], help: ['…'] }`, beside the framework's own English, Hindi and Telugu
+words, which always match). Without a declaration a process speaks English alone; English's
+defaults are the locale `en-GB` and the letters `a-z`.
+
+The server gets it with `defineServer({ languages })` and installs it when it serves
+(`setRuntime`, before the application's phrase overrides); the app gets it with
+`<AppShell config={{ languages }}>`. The voice worker never loads the application: the API puts
+the set on each session's dispatch. `isLang`, `langOf`, `localeOf`, `speechTagOf`, `scriptOf`
+and `englishName` read the process's set.
+
+`Labels` is `{ en: string; [lang]: string | undefined }`: English is required and any other
+language is optional. A language left out reads in English (`pick(labels, lang)`; never
+`labels[lang]`, which may be undefined). For a table of anything else by language (a function, an
+object) use `PerLang<T>` and `pick`. `defineServer` refuses a word keyed by a language the
+application does not declare (view labels, field labels, templates, `channel.does`), a voice
+eval case in one, and keywords for no keyword. To keep a language complete, test it:
+`missingLabels(views, languages.codes)` from `@hykr/ui-registry` (the sample's
+`application/domain/src/views/views.test.ts`).
 
 | Words | Where they go |
 |---|---|
-| Framework phrases ("Waiting for your approval") | `framework/i18n/src/messages/<feature>.ts`: `defineMessages({ en, hi, te })`, where `hi` and `te` must have exactly `en`'s keys or it does not compile. A new file gets one line in `messages/index.ts`. A key in two files throws. The test checks the placeholders match. |
+| Framework phrases ("Waiting for your approval") | `framework/i18n/src/messages/<feature>.ts`: `defineMessages({ en, ...translations })`. A translation has some or all of `en`'s keys and no other (an extra one does not compile); a phrase it lacks reads in English. The framework ships Hindi and Telugu, complete (a test). A new file gets one line in `messages/index.ts`. A key in two files throws. The test checks the placeholders match. |
+| Framework phrases in a language the framework has no words for | The application's `wording.phrases` in `defineServer` (`{ el: { 'channel.stopped': '…' } }`); a business's own in its `wording` settings |
 | View titles, empty lines, nouns | View `labels` |
 | Field names in approval previews | Entity `fieldLabels` |
-| Scripted answers | `sayIn(turn, { en, hi, te })`, and `VERBS` with `verbs(...)` |
-| Template bodies | `defineTemplate` `body` |
+| Scripted answers | `sayIn(turn, { en, … })`, `pick({ en, … }, turn.lang)`, and `VERBS` with `verbs(...)` |
+| Template bodies | `defineTemplate` `body`. `templates sync` creates each declared language the template has a body in; a contact in another gets the English template |
 | What the assistant does, in the WhatsApp welcome and HELP | `channel.does` in `defineServer` |
+| Labels a business types (its roles, custom fields, wording) | Any of the application's languages; a write in another is refused |
 
 Some app copy is still English only: toasts in `useAct`, tool-line labels in `ToolPart`, and the `text` of `approval.card` and `kpi.row`.
 
@@ -3247,7 +3282,7 @@ Contribute a `dataExportSources` entry, `{ name, rows(ctx) }`, that yields only 
 | Mark irreversible agent actions for approval | Trust the model to ask first | The prompt is advice. The spec is enforced. |
 | Write `description`s and `examples` for the model | Leave them vague | They are the tool descriptions the model reads |
 | Add a new version of a template (`_v2`) | Edit an approved template | Providers re-review templates; `templates:sync` refuses the edit |
-| Add words in all three languages | Hard-code English in views | `Labels` will not compile without them; the channels speak three languages |
+| Add words in each of the application's languages, and read them with `pick` | Hard-code English in views, or index `labels[lang]` | The channels speak every declared language; a missing one reads in English, and `missingLabels` in a test catches it |
 | Use the outbox to send from a write (events plus `schedule`/`send.on`, or `queueNotification(tx, …)` inside a command) | Call WhatsApp or SMTP directly | A rollback must send nothing, a crash after commit must still send, and an undo must withdraw it |
 | Let 404 mean "not yours" | Return 403 for someone else's id | No hint that a record exists |
 
@@ -3319,7 +3354,7 @@ A feature is done when every box is ticked:
 - [ ] `defineEntity` / `defineCommand` with the right `access`, `rules` and `authorize`. Every command passes `via` and lists everything it changes in `touched`.
 - [ ] Nest module with controllers *and* handlers, passed to the module's `defineModule({ server })`.
 - [ ] Every action the agent should not do alone has an approval rule, or is `expose: 'human'`.
-- [ ] Views for list and item, with `text`, `speak` and `labels` in `en`, `hi` and `te`. They are bound in the app (the app module's `bind`, in `application/mobile/src/modules/<name>/index.tsx`).
+- [ ] Views for list and item, with `text`, `speak` and `labels` in each of the application's languages (the sample: `en`, `hi` and `te`). They are bound in the app (the app module's `bind`, in `application/mobile/src/modules/<name>/index.tsx`).
 - [ ] Scripts for the fake model, and eval cases for new phrases.
 - [ ] Templates and notifications, if the feature sends anything. `pnpm templates:check` passes.
 - [ ] An e2e test in `application/api/test/domain/` covering: a stranger gets 404, a denied rule gets 403 with its `rule`, and a parked agent write shows up in approvals.
@@ -3343,7 +3378,9 @@ These are not built. Each has a workaround for now.
 | A Chromium engine, digital signatures, PDF/A | Documents are drawn by pdfkit only, unsigned; their SHA-256 is kept, and an acceptance binds it (section 5.25). |
 | Notifications that carry a document | The dispatcher sends no files. Send a document with `document.send` (a subscriber can call it as the person). |
 | A WhatsApp document's later failure | A send is `sent` once WhatsApp has it; its message's own status shows a later failure, and no email follows. |
-| Other scripts in documents (Tamil, Kannada, right to left) | Only the Noto Latin, Devanagari and Telugu fonts are bundled. |
+| Other scripts in documents (Tamil, Kannada, right to left) | Only the Noto Latin, Devanagari and Telugu fonts are bundled. A declared language in another script shows in documents as missing glyphs; a language declaration names no font yet. |
+| Checking a language's completeness at compile time | `Labels` needs English only; a missing translation reads in English. Run `missingLabels(views, languages.codes)` in the application's tests. |
+| A business choosing among the application's languages | Every business speaks all the application's languages, and English is every fallback. |
 | A document send left `sending` for good | A send's job claims it before delivering, so it leaves at most once. If every try of that job stopped part way (the worker died each time), the row stays `sending`; nothing sweeps it. Send the document again. |
 | A file on two records, versioned files | One file belongs to one record field. Upload the file again for a second record. |
 | Storage quotas, malware scanning | Not built. Keep `FILES_MAX_BYTES` and each field's `maxBytes` small. |

@@ -119,6 +119,9 @@ Keep these, which you will edit:
 - `domain/src/server/access.ts`
 - `domain/src/server/approval-levels.ts` and `domain/src/server/index.ts` (what each approval
   level means in your product, and which writes reach it: developer guide 5.8.1)
+- `domain/src/languages.ts` (the languages your product speaks: English, then your own; each
+  with its name, locale, speech tag and letters, `defineLanguages` in `@hykr/i18n`. Drop Hindi and
+  Telugu if you don't speak them: a word in a language you don't declare is refused at boot)
 - `api/src/server.ts`
 - `mobile/src/modules/index.ts` (the list of app modules), `mobile/src/catalog.ts`,
   `mobile/src/settings.ts` (step 10)
@@ -223,8 +226,9 @@ What each part does:
   `?scheduledFor[gte]=…`), sorted and searched (`?q=`), and the page sizes. The assistant's
   `list-jobs` tool gets the same grammar.
 - **`approval`.** When a write waits for a person: here, an assistant's delete.
-- **`fieldLabels`.** What approval cards and history call each field, in every language. A
-  missing language doesn't compile.
+- **`fieldLabels`.** What approval cards and history call each field, in each of the
+  application's languages (`domain/src/languages.ts`). English is required; a language left out
+  reads in English.
 - **`views`.** Which registered views show this entity's results (written in step 6).
 - **`commandSpec`.** A named operation beyond plain create, update and delete. It gets a route
   (`POST /api/jobs/:jobId/complete`), a tool (`complete-job`) and a verb for history ("completed").
@@ -1376,7 +1380,9 @@ For each module (`domain/src/modules/<name>/`, or `basecamp module add <name>`):
 
 Then, once:
 
-9. **`api/src/server.ts`**: `name`, `persona`, `help`, and `channel.does` in each language.
+9. **`api/src/server.ts`**: `name`, `persona`, `help`, `languages` (from
+   `domain/src/languages.ts`, which `mobile/src/app/_layout.tsx` passes to the app too), and
+   `channel.does` in each language.
 10. **App** (`mobile/src`): `settings.ts` (title, tagline, home, and the screens that combine
     modules) and `catalog.ts`. Rename `app.json`.
 11. **Tests and evals**: an e2e test per rule that matters, and `basecamp eval` (`--module` for one).

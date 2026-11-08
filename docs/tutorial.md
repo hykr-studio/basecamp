@@ -134,7 +134,7 @@ export const VisitSpec = entitySpec({
 | Field | What it does here |
 |---|---|
 | `label` | The word in messages, for example `No such site visit` on a 404. |
-| `fieldLabels` | Names for each field on the approval preview, in every language. `Labels` is `{ en, hi, te }`, so a missing translation does not compile. |
+| `fieldLabels` | Names for each field on the approval preview, in each of the application's languages. `Labels` needs `en`; a language left out reads in English. |
 | `description` | Opens the `list-visits` tool's description (the get and create tools get generic text such as "Get one site visit by id." and "Create a site visit."), and appears in OpenAPI. |
 | `list` | The list grammar for both HTTP and the tools (see the table below). Every name must be a column. Nothing checks this at startup: the first request that filters or sorts on a misspelt field fails with `List config names "x", which is not a column` (a 500). |
 | `expose` | `'all'` gives a route and an agent tool. `'human'` gives a route behind `HumanOnlyGuard` and no tool. `'internal'` gives neither. |
@@ -812,7 +812,7 @@ Pass `agent: visitsAgent` to the module's `defineModule`.
 
 > **Pitfall: keep the start of `help`.** `application/api/test/whatsapp/conversations/07-off-topic.yaml` expects the off-topic answer to contain `I can add, list`. Extend the sentence; don't rewrite it.
 
-The WhatsApp welcome and the HELP reply have their own sentence about what the assistant does: `channel.does` in `application/api/src/server.ts`. It starts with the same words. Extend it in all three languages too, keeping that start:
+The WhatsApp welcome and the HELP reply have their own sentence about what the assistant does: `channel.does` in `application/api/src/server.ts`. It starts with the same words. Extend it in each of the application's languages too, keeping that start:
 
 ```ts
 // application/api/src/server.ts (changed lines)

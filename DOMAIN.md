@@ -53,9 +53,10 @@ Around the modules, the application keeps:
 | Aggregates for the apps | `application/domain/src/contracts/index.ts`, `src/views/index.ts` | Every module's specs and views (`moduleSpecs`, `moduleViews`), one line per module. The apps import `@application/domain/contracts` and `/views`, or one module's `@application/domain/modules/<name>/contracts` and `/views` |
 | Migrations | `application/domain/drizzle/`, `src/db/index.ts` | One journal for every module, generated from `src/modules/*/db/schema.ts`; `migrations` |
 | Shared server code | `application/domain/src/server/` | What several modules use, such as `BUSINESS_ACCESS` |
-| Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, channel, modules, migrations })`: what the product is called, who the assistant is, and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools, delivery channels, connectors and connector handlers (developer guide, sections 5.9, 5.10 and 5.14), the application's approval levels and level rules (section 5.8.1; the sample's are in `application/domain/src/server/approval-levels.ts`, passed through `@application/domain/server`), and what it says about personal data: its processors, its request policy and its retention periods (section 5.27; the sample's are in `application/domain/src/server/privacy.ts`) |
+| Languages | `application/domain/src/languages.ts` (`@application/domain/languages`) | `languages = defineLanguages({ en?, <code>: { name, english, locale?, speech?, letters?, keywords? } })` from `@hykr/i18n`: the languages the product speaks, English first (the sample: English, Hindi and Telugu). Isomorphic: the server and the app are given the same one |
+| Server | `application/api/src/server.ts` | `server = defineServer({ name, persona, help, languages, channel, modules, migrations })`: what the product is called, who the assistant is, the languages it speaks (`@application/domain/languages`), and `channel.does`: what it helps with, in each language (WhatsApp's welcome and HELP). Optionally `contributes`: hooks and plugins by kind, among them queues, schedules, event subscribers, turn hooks, tools, delivery channels, connectors and connector handlers (developer guide, sections 5.9, 5.10 and 5.14), the application's approval levels and level rules (section 5.8.1; the sample's are in `application/domain/src/server/approval-levels.ts`, passed through `@application/domain/server`), and what it says about personal data: its processors, its request policy and its retention periods (section 5.27; the sample's are in `application/domain/src/server/privacy.ts`) |
 | App modules | `application/mobile/src/modules/<name>/` and the barrel `src/modules/index.ts` (one line per module) | The app half of each module: `defineAppModule({ name, nav, suggestions, bind, hrefFor, webmcp })` from `@hykr/app`, in `index.tsx`: destinations under `/<name>`; `bind` calls `bindView` / `bindScreen` for the module's views and screens; `hrefFor` says where each of its records opens. Other modules import only that `index.tsx` |
-| App | `application/mobile/src/catalog.ts`, `settings.ts`, `home/` | `catalog = createCatalog(...moduleSpecs)` and `registry = createUiRegistry(...moduleViews)` with the `Register` declaration; `settings: AppSettings` (`title`, `tagline`, `home`, and the nav and suggestions of the screens that combine modules, such as the home screen) |
+| App | `application/mobile/src/catalog.ts`, `settings.ts`, `home/`, `app/_layout.tsx` | `catalog = createCatalog(...moduleSpecs)` and `registry = createUiRegistry(...moduleViews)` with the `Register` declaration; `settings: AppSettings` (`title`, `tagline`, `home`, and the nav and suggestions of the screens that combine modules, such as the home screen); `<AppShell config={{ languages }}>` with the server's languages |
 | App routes | `application/mobile/src/app/<name>/` and `src/app/index.tsx` | One-line re-exports of each module's route components (Expo Router only knows files); `index.tsx` is the home screen |
 | Tests | `application/api/test/`, `application/domain/src/**/*.test.ts` | The application's own e2e, WhatsApp, voice, view and notification tests |
 
@@ -407,8 +408,10 @@ entities contributes a `liveResources` check for its type, or its events are nev
 ## What a module adds for voice and languages
 
 Voice is a framework channel (the worker in `framework/voice-worker` calls `/api/chat` like the
-app). The product speaks English, Hindi and Telugu (`@hykr/i18n`); a module brings its own
-words, each as `Labels` (`{ en, hi, te }`, so a missing translation does not compile):
+app). The product speaks the languages the application declares (`application/domain/src/languages.ts`:
+English, Hindi and Telugu in the sample); a module brings its own words, each as `Labels`
+(`{ en, hi, te }`: English is required, a language left out reads in English, and a key that is
+not a declared language stops the boot). Read them with `pick(labels, lang)`:
 
 - **Views:** `labels: { title, empty, noun }`. A list view that can be spoken must have
   `noun` and `empty` (the registry refuses it otherwise); `speak(props, { lang })` returns the
@@ -416,9 +419,11 @@ words, each as `Labels` (`{ en, hi, te }`, so a missing translation does not com
   in the person's language) from the renderer.
 - **Entities:** `fieldLabels`: what the approval preview calls each field, in the person's language.
 - **Scripted model:** the module's verbs in each language (`verbs(...)`, before or after the
-  title), answers through `sayIn(turn, { en, hi, te })`, and `written(..., turn)` for writes.
-- **Evals:** `voiceEvalCases`, scored on the tools, the answer's language and its length.
-  `eval:whatsapp` replays the Hindi and Telugu ones as typed WhatsApp messages.
+  title), answers through `sayIn(turn, { en, hi, te })` or `pick({ … }, turn.lang)`, and
+  `written(..., turn)` for writes.
+- **Evals:** `voiceEvalCases`, each in one of the application's languages, scored on the tools,
+  the answer's language (by the declared languages' letters) and its length. `eval:whatsapp`
+  replays the ones not in English as typed WhatsApp messages.
 
 ## What comes for free
 
