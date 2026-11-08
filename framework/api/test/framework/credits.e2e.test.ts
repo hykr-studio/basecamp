@@ -317,8 +317,9 @@ describe('the 80% alert and the 100% pause', () => {
       level: 'alert',
       usedPercent: 80,
       threshold: 80,
-      recipients: [lee.id],
     });
+    // It names nobody: the application's notification asks for whoever holds credits.manage.
+    expect(rows[0].row).not.toHaveProperty('recipients');
     // The application's notification: an email to Lee, none to the staff member.
     const mail = await eventually(async () => {
       const m = await mailTo(lee.email);
@@ -768,5 +769,51 @@ describe('WhatsApp', () => {
       (await uses(mia)).some((u) => u.variant === 'utility') ? true : undefined,
     );
     expect((await uses(mia)).some((u) => u.variant === 'marketing')).toBe(false);
+  });
+});
+
+describe("the business's own roles say who is alerted (X1)", () => {
+  const kai = new Person('Kai Credits'); // the owner, whose role the business edits
+  const bea = new Person('Bea Credits'); // a role the business made, with credits.manage
+  let kaiTenant = '';
+  const inKai = (person: Person) => (method: string, path: string, body?: unknown) =>
+    person.call(method, path, body, { 'x-tenant-id': kaiTenant });
+
+  beforeAll(async () => {
+    for (const person of [kai, bea]) await person.signUp();
+    kaiTenant = (await me(kai)).tenantId;
+    const made = await kai.call('POST', '/api/members/roles', {
+      name: 'billing',
+      label: { en: 'Billing' },
+      capabilities: ['credits.manage', 'credits.view'],
+    });
+    expect(made.status).toBe(200);
+    // The owner keeps managing members, and stops managing the credits.
+    const edited = await kai.call('PATCH', '/api/members/roles/owner', {
+      capabilities: ['members.manage', 'members.read', 'credits.view'],
+    });
+    expect(edited.status).toBe(200);
+    await addMember(bea, kaiTenant, ['billing']);
+  });
+
+  it('the amounts and the alert go to the role the business made, not to the role it edited', async () => {
+    expect((await inKai(bea)('GET', '/api/credits')).body).toHaveProperty('spent');
+    expect((await kai.call('GET', '/api/credits')).body).not.toHaveProperty('spent');
+
+    const plan = { enforce: true, allowance: 500, prices: { tokens: 0 } };
+    expect((await operator('PUT', `/${kaiTenant}/settings`, plan)).status).toBe(200);
+    for (let i = 0; i < 4; i++) expect((await addTask(kai)).status).toBe(200);
+    const { rows } = await pool.query(
+      `select row from app.domain_events where tenant_id = $1 and name = 'credits.threshold'`,
+      [kaiTenant],
+    );
+    expect(rows.map((r) => [r.row.cap, r.row.level])).toEqual([['credits', 'alert']]);
+
+    const mail = await eventually(async () => {
+      const m = await mailTo(bea.email);
+      return m.find((x) => x.Subject === '[credits] credits alert');
+    });
+    expect(mail).toBeTruthy();
+    expect(await mailTo(kai.email)).toEqual([]);
   });
 });
