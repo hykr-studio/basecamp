@@ -92,6 +92,7 @@ export const CreditsViewCapability = defineCapability({
     te: 'వ్యాపార వినియోగాన్ని చూడండి',
   },
   roles: ['owner', 'admin', 'ops', 'staff'],
+  supportable: true,
 });
 
 /** See amounts, the ledger and purchases, buy credits and set the alert threshold. */
@@ -103,6 +104,7 @@ export const CreditsManageCapability = defineCapability({
     te: 'వ్యాపార క్రెడిట్‌లను నిర్వహించండి',
   },
   roles: ['owner', 'admin'],
+  supportable: false,
 });
 
 /**

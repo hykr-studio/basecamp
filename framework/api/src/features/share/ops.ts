@@ -7,6 +7,7 @@ import {
   type AuthorizeResult,
   CreateShareInput,
   maskAddress,
+  onBehalfOfKey,
   type Principal,
   type PublicFormDef,
   publicForms,
@@ -109,6 +110,7 @@ export function infoOf(row: ShareLinkRow): ShareLinkInfo {
     expiresAt: row.expiresAt.toISOString(),
     revokedAt: row.revokedAt?.toISOString() ?? null,
     createdBy: row.createdBy,
+    onBehalfOf: row.onBehalfOf,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -273,6 +275,11 @@ export function createOp(): WriteOp<
       const token = randomBytes(32).toString('base64url');
       const max = Math.min(l.settings.maxDays, l.policy.maxDays ?? Number.POSITIVE_INFINITY);
       const days = input.expiresInDays ?? Math.min(l.settings.defaultDays, max);
+      // Made under support access: it never outlives that access (S1).
+      const until =
+        p.onBehalfOf?.kind === 'support'
+          ? Date.parse(p.onBehalfOf.until)
+          : Number.POSITIVE_INFINITY;
       const otp = input.otp ?? null;
       const [row] = await tx
         .insert(shareLinks)
@@ -296,7 +303,8 @@ export function createOp(): WriteOp<
                 ? (l.recipient?.email ?? null)
                 : null,
           maxUses: input.maxUses ?? null,
-          expiresAt: new Date(Date.now() + days * DAY),
+          expiresAt: new Date(Math.min(Date.now() + days * DAY, until)),
+          onBehalfOf: onBehalfOfKey(p.onBehalfOf),
         })
         .returning();
       // The token is in the answer only: the audit and the database keep its hash.

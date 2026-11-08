@@ -17,6 +17,8 @@ export const PrivacyManageCapability = defineCapability({
     te: 'వ్యక్తిగత డేటా అభ్యర్థనలను నిర్వహించండి',
   },
   roles: ['owner', 'admin'],
+  // Another person's personal data, filed, erased or downloaded: never support's.
+  supportable: false,
 });
 capabilities.register(PrivacyManageCapability);
 

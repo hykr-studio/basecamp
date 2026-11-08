@@ -222,6 +222,7 @@ export {
   type RouteContext,
   type RouteTarget,
   SupportEvent,
+  supportMayHold,
   supportWithheld,
   TenantProvisioned,
 } from './features/platform/index.js';

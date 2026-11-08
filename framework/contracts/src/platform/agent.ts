@@ -344,6 +344,8 @@ export const AgentCapabilities = {
       te: 'మీ తరఫున పనిచేసే ఏజెంట్‌లను తయారు చేయండి',
     },
     roles: ['owner', 'admin'],
+    // An agent acts later, by itself: support leaves nothing that acts after it ends.
+    supportable: false,
   }),
   /** See every agent and run log; pause, run and delete anyone's agent. */
   manage: defineCapability({
@@ -354,5 +356,7 @@ export const AgentCapabilities = {
       te: 'అందరి ఏజెంట్‌లను చూడండి, ఆపండి, నడపండి, తొలగించండి',
     },
     roles: ['owner', 'admin'],
+    // Running someone's agent acts as them: more than the business consented to.
+    supportable: false,
   }),
 } as const;

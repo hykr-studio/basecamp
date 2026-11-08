@@ -10,12 +10,7 @@ import { PlatformController, PlatformMeController } from './platform.controller.
 import { PlatformInboundHook, PlatformRoutingService } from './routing.js';
 import { platformScopeHook, platformScopePlugin, platformScopeStanding } from './scope.js';
 import { SupportAccessController } from './support.controller.js';
-import {
-  FRAMEWORK_WITHHELD,
-  SupportLogModule,
-  supportReadOnlyHook,
-  supportStanding,
-} from './support.js';
+import { SupportLogModule, supportReadOnlyHook, supportStanding } from './support.js';
 
 // /api/platform (operators) and /api/support-access (a business's side) are the framework's.
 reserveRoutes('platform', 'support-access');
@@ -31,7 +26,6 @@ export const platformFeature = defineFeature({
     standingProviders: [supportStanding, platformScopeStanding],
     entityPlugins: [platformScopePlugin],
     writeHooks: [supportReadOnlyHook, platformScopeHook],
-    supportWithheld: FRAMEWORK_WITHHELD,
   },
 });
 
@@ -53,5 +47,5 @@ export {
   type RouteContext,
   type RouteTarget,
 } from './routing.js';
-export { SupportEvent, supportWithheld } from './support.js';
+export { SupportEvent, supportMayHold, supportWithheld } from './support.js';
 export { TenantProvisioned } from './tenants.js';

@@ -162,6 +162,7 @@ export const CommentCapabilities = {
       te: 'టీమ్‌కు మాత్రమే ఉండే వ్యాఖ్యలను చదవండి, రాయండి',
     },
     roles: ['owner', 'admin', 'ops', 'staff'],
+    supportable: true,
   }),
   /** Remove anyone's comment on a record you can read. */
   moderate: defineCapability({
@@ -172,6 +173,7 @@ export const CommentCapabilities = {
       te: 'ఇతరుల వ్యాఖ్యలను తొలగించండి',
     },
     roles: ['owner', 'admin'],
+    supportable: true,
   }),
 } as const;
 

@@ -3,7 +3,9 @@
 // business holding `support.consent` consents or declines; it lasts the minutes consented and
 // ends at once when revoked. While it lasts, the operator stands in the business as `support`
 // (the standing provider below), every request is logged, and every write audited
-// `on_behalf_of = support:<grant>`. Every step is a write through runWrite.
+// `on_behalf_of = support:<grant>`. It holds only capabilities declared `supportable`, and what
+// it makes (a share link) ends with it (docs/decisions/S1.md). Every step is a write through
+// runWrite.
 import {
   type AuthorizeResult,
   capabilities,
@@ -38,6 +40,7 @@ import {
   type Database,
   type DbOrTx,
   platformOperators,
+  shareLinks,
   supportGrants,
   supportLog,
   tenants,
@@ -71,31 +74,21 @@ declare module '@hykr/contracts' {
 }
 
 /**
- * Capabilities support access never holds, whatever the business consents to: those that change
- * who reaches the business (or what leaves it) beyond the time box. The framework's own; an
- * application adds its own as `supportWithheld`.
+ * Capabilities declared `supportable` that the application still keeps from support access (a
+ * framework one it considers too much for its businesses). Collects `contributes.supportWithheld`.
  */
-export const FRAMEWORK_WITHHELD: readonly string[] = [
-  'members.manage',
-  'records.grant',
-  'parties.manage',
-  'support.consent',
-  'channels.manage',
-  'settings.manage',
-  'models.manage',
-  'credits.manage',
-  'integrations.manage',
-  'data.export',
-];
-
-/** Every withheld capability. Collects `contributes.supportWithheld`. */
 export const supportWithheld = createHookRegistry<string>('withheld capability', (n) => n, {
   collects: 'supportWithheld',
 });
 
-/** May support access hold this capability? Defined, grantable by a business, not withheld. */
+/**
+ * May support access hold this capability, whatever the business consents to? Only one that is
+ * defined, grantable by a business, declared `supportable: true` where it is defined, and not
+ * withheld by the application. Anything else (a capability nobody thought about included) stays
+ * with the business's own people: support leaves nothing that lasts beyond its time box.
+ */
 export const supportMayHold = (name: string) =>
-  capabilities.has(name) && isGrantable(name) && !supportWithheld.has(name);
+  isGrantable(name) && capabilities.get(name)?.supportable === true && !supportWithheld.has(name);
 
 /** A support event, stored in the outbox with the write (subscribers may tell someone). */
 export class SupportEvent {
@@ -437,24 +430,57 @@ export const endSupport = (id: string, by: { operator: ActingOperator } | 'busin
     summarize: (_i, g) => `End support access: ${g.reason}`,
     async run({ tx, principal, loaded: g }) {
       const endedBy = by === 'business' ? principal.actor.id : `operator:${by.operator.id}`;
+      const now = new Date();
       const [row] = await tx
         .update(supportGrants)
         .set({
           endedBy,
-          endedAt: new Date(),
+          endedAt: now,
           endedHow: by === 'business' ? 'revoked' : 'ended',
         })
         .where(eq(supportGrants.id, g.id))
         .returning();
+      const links = await revokeLinksOf(tx, g, now);
       const info = await operatorInfo(tx, g.operatorId);
       const grant = toGrant(row, info);
       return {
         value: grant,
-        touched: [touched(g.id, 'updated', toGrant(g, info), grant)],
+        touched: [touched(g.id, 'updated', toGrant(g, info), grant), ...links],
         events: [new SupportEvent('support.ended', grant)],
       };
     },
   });
+
+/**
+ * The share links made under this grant, revoked with it (they are dead already: a link made
+ * under a standing that ended reaches nothing; this keeps the business's list of them true).
+ */
+async function revokeLinksOf(tx: Tx, g: GrantRow, now: Date) {
+  const revoked = await tx
+    .update(shareLinks)
+    .set({ revokedAt: now, revokedBy: SUPPORT_ENDED })
+    .where(
+      and(
+        eq(shareLinks.tenantId, g.tenantId),
+        eq(shareLinks.onBehalfOf, behalfKeyOf(g.id)),
+        isNull(shareLinks.revokedAt),
+      ),
+    )
+    .returning({ id: shareLinks.id });
+  return revoked.map((l) => ({
+    type: 'shareLink',
+    id: l.id,
+    change: 'updated' as const,
+    after: { revokedAt: now.toISOString(), revokedBy: SUPPORT_ENDED },
+  }));
+}
+
+/** Who revoked a link made under support access that ended. */
+const SUPPORT_ENDED = 'support.ended';
+
+/** A grant as `on_behalf_of` names it (`onBehalfOfKey`): in audit, and on what was made under it. */
+const SUPPORT_KEY = 'support:';
+const behalfKeyOf = (grantId: string) => `${SUPPORT_KEY}${grantId}`;
 
 /** The business's `support` section, replaced (only that key of its settings). */
 export const setSupportSettings = () =>
@@ -502,34 +528,47 @@ export const setSupportSettings = () =>
 const SESSION_CHANNELS = new Set([undefined, 'app', 'api', 'voice', 'mcp', 'webmcp']);
 
 /**
+ * The person's latest grant in this business that is in force now (consented, not ended, not
+ * past its end), of an operator who is enabled and still holds `platform.support`; or undefined.
+ */
+async function grantInForce(
+  db: DbOrTx,
+  a: { userId: string; tenantId: string; grantId?: string },
+): Promise<GrantRow | undefined> {
+  const [row] = await db
+    .select({ g: supportGrants, capabilities: platformOperators.capabilities })
+    .from(supportGrants)
+    .innerJoin(platformOperators, eq(platformOperators.id, supportGrants.operatorId))
+    .where(
+      and(
+        a.grantId ? eq(supportGrants.id, a.grantId) : undefined,
+        eq(supportGrants.userId, a.userId),
+        eq(supportGrants.tenantId, a.tenantId),
+        isNull(supportGrants.declinedAt),
+        isNull(supportGrants.endedAt),
+        gt(supportGrants.endsAt, new Date()),
+        isNull(platformOperators.disabledAt),
+      ),
+    )
+    .orderBy(desc(supportGrants.consentedAt))
+    .limit(1);
+  if (!row?.g.endsAt || !row.capabilities.includes(PlatformCapabilities.support.name))
+    return undefined;
+  return row.g;
+}
+
+/**
  * The operator's standing in a business while a consented grant lasts: the roles it names whose
  * access applies, only the capabilities it names that support may hold, on a signed-in channel,
  * while the operator is enabled and holds `platform.support`. The latest active grant wins.
+ * What was made under a grant (a share link) lasts only while that grant does (`stillStands`).
  */
 export const supportStanding: StandingProvider = {
   name: 'support',
   async forUser({ db, userId, tenantId, channel }) {
     if (!SESSION_CHANNELS.has(channel)) return null;
-    const now = new Date();
-    const [row] = await db
-      .select({ g: supportGrants, capabilities: platformOperators.capabilities })
-      .from(supportGrants)
-      .innerJoin(platformOperators, eq(platformOperators.id, supportGrants.operatorId))
-      .where(
-        and(
-          eq(supportGrants.userId, userId),
-          eq(supportGrants.tenantId, tenantId),
-          isNull(supportGrants.declinedAt),
-          isNull(supportGrants.endedAt),
-          gt(supportGrants.endsAt, now),
-          isNull(platformOperators.disabledAt),
-        ),
-      )
-      .orderBy(desc(supportGrants.consentedAt))
-      .limit(1);
-    if (!row?.g.endsAt || !row.capabilities.includes(PlatformCapabilities.support.name))
-      return null;
-    const g = row.g;
+    const g = await grantInForce(db, { userId, tenantId });
+    if (!g) return null;
     const onBehalfOf: OnBehalfOf = {
       kind: 'support',
       operatorId: g.operatorId,
@@ -543,6 +582,11 @@ export const supportStanding: StandingProvider = {
       standing: 'support',
       onBehalfOf,
     };
+  },
+  async stillStands({ db, userId, tenantId, onBehalfOf }) {
+    if (!onBehalfOf.startsWith(SUPPORT_KEY)) return null;
+    const grantId = onBehalfOf.slice(SUPPORT_KEY.length);
+    return !!grantId && !!(await grantInForce(db, { userId, tenantId, grantId }));
   },
 };
 

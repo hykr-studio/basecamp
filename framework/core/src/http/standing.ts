@@ -35,6 +35,18 @@ export interface StandingProvider {
     tenantId: string;
     channel?: Channel;
   }): Promise<OtherStanding | null>;
+  /**
+   * Is the standing this key names (`onBehalfOfKey`, as stored on something this person made
+   * under it, such as a share link) still in force for them in this business? null: the key is
+   * not this provider's. A key no provider vouches for counts as ended: what was made under it
+   * reaches nothing.
+   */
+  stillStands?(a: {
+    db: Database;
+    userId: string;
+    tenantId: string;
+    onBehalfOf: string;
+  }): Promise<boolean | null>;
 }
 
 /** Standing providers, asked in order; the first answer wins. */

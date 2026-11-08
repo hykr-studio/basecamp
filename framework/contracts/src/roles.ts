@@ -40,6 +40,14 @@ export interface CapabilityDef {
    * beyond one business (the job queues of every business) must never be a business's choice.
    */
   grantable?: boolean;
+  /**
+   * May a platform operator's support access hold it, when a business consents (B19)? Default
+   * false: only a capability that says true. Say true only for what ends with the time box:
+   * reading, and writing the business's own records. Never for what changes who reaches the
+   * business, lets its data leave, or acts after the access ends (an invitation, a share link, an
+   * export, an erasure, a webhook, an agent).
+   */
+  supportable?: boolean;
 }
 
 /**
@@ -160,6 +168,7 @@ export const FrameworkCapabilities = {
       te: 'బ్యాక్ ఆఫీస్‌లో పని చేయండి',
     },
     roles: TEAM,
+    supportable: true,
   }),
   /** Send a template to a customer by hand (notify.send). */
   messageCustomers: defineCapability({
@@ -170,6 +179,7 @@ export const FrameworkCapabilities = {
       te: 'కస్టమర్లకు సందేశం పంపండి',
     },
     roles: TEAM,
+    supportable: true,
   }),
   /** The whole business's history, not only what you (or your assistant) did. */
   wholeHistory: defineCapability({
@@ -180,6 +190,7 @@ export const FrameworkCapabilities = {
       te: 'మొత్తం వ్యాపార చరిత్రను చూడండి',
     },
     roles: ['admin', 'ops'],
+    supportable: true,
   }),
   /** Set the business's WhatsApp number. */
   channelSetup: defineCapability({
@@ -190,6 +201,7 @@ export const FrameworkCapabilities = {
       te: 'వ్యాపార WhatsApp నంబర్‌ను సెట్ చేయండి',
     },
     roles: ['owner', 'admin'],
+    supportable: false,
   }),
   /** The business's members and roles, read only (GET /api/members). */
   readMembers: defineCapability({
@@ -200,6 +212,7 @@ export const FrameworkCapabilities = {
       te: 'వ్యాపార సభ్యులను చూడండి',
     },
     roles: TEAM,
+    supportable: true,
   }),
   /** Invite people, change and remove members, define and edit the business's roles. */
   manageMembers: defineCapability({
@@ -210,6 +223,7 @@ export const FrameworkCapabilities = {
       te: 'వ్యక్తులను ఆహ్వానించండి, పాత్రలను నిర్వహించండి',
     },
     roles: ['owner', 'admin'],
+    supportable: false,
   }),
   /** Give a member access to one record (an access rule's `granted` reach), and take it back. */
   grantRecords: defineCapability({
@@ -220,6 +234,7 @@ export const FrameworkCapabilities = {
       te: 'ఒక రికార్డుకు ప్రాప్తిని ఇవ్వండి',
     },
     roles: ['owner', 'admin', 'ops'],
+    supportable: false,
   }),
 } as const;
 

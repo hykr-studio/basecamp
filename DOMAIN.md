@@ -534,7 +534,8 @@ From the contracts declaration alone:
   records, a usage report across businesses, and the back office's Operator and Support screens.
   The application adds what is its own: which business takes an inbound request (an
   `inboundRouters` entry: the framework holds no routing rule), operator capabilities of its own,
-  and capabilities support must never hold (`supportWithheld`).
+  which of its capabilities support access may hold (`supportable: true` where it defines them;
+  none by default), and framework ones support must never hold (`supportWithheld`).
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

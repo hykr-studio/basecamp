@@ -11,6 +11,9 @@ export const OrdersCostRead = defineCapability({
     te: 'ఆర్డర్ లైన్ల ఖర్చు చూడండి',
   },
   roles: ['owner', 'admin'],
+  // Seeing a cost is a read: the platform's support access may hold it when a business consents.
+  // `orders.approve` says nothing, so support never approves an order.
+  supportable: true,
 });
 
 const withoutCost = (item: unknown) => {
