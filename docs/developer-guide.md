@@ -1429,23 +1429,24 @@ does not change a business's setup.
   with `sharedId` (once: 409 `shared_override_exists`), and then reads its own instead. What is
   shared (a catalog) is application data.
 - **Settings sections** (`docs/decisions/H2.md`). Every section declared `editable` (the
-  framework's `approvals`, `money`, `businessHours`, `sla`, `memory`, `shares`, `files` and
-  `parties`, and an application's own) and `general` (the base settings `timeZone`, `quietHours`,
-  `replyTime`, `marketingPerWeek`) are changed by one command, `settings.section`:
+  framework's `approvals`, `money`, `businessHours`, `sla`, `memory`, `shares`, `files`, `parties`
+  and `members`, and an application's own) and `general` (the base settings `timeZone`,
+  `quietHours`, `replyTime`, `marketingPerWeek`) are changed by one command, `settings.section`:
   `PATCH /api/settings/sections/:section { value }`, a JSON merge patch of what the business stored
   (an object changes key by key, `null` restores a key's default, a list is replaced). The merged
   value must parse with the section's schema; a key the schema does not know is refused, not
   dropped; then the section's settings checks run in the transaction (400 `settings_invalid` with
   `problems`, one per path). It needs the section's capability (403 `needs_settings_manage`,
-  audited), a person signed in, or the system principal; the assistant has no tool for it. The
-  business's row is locked, only the section's keys change (what the business set is stored, not
-  the defaults), the touched `tenant` row carries the section before and after, and
+  audited; `members`, how long an invitation lasts, needs `members.manage`: 403
+  `needs_members_manage`), a person signed in, or the system principal; the assistant has no tool
+  for it. The business's row is locked, only the section's keys change (what the business set is
+  stored, not the defaults), the touched `tenant` row carries the section before and after, and
   `settings.changed` drops this process's cached copy. A module's level rule on `settings.section`
   can make a change wait; the check runs when it is asked for and again when it runs.
   `GET /api/settings/sections` lists the sections the person may change with their values (or,
   for a stored value that no longer parses, `value: null` and its `problems`), and
-  `GET /api/settings/sections/:section` reads one. Credits, models, privacy, roles, members,
-  support, branding and wording keep their own writers (404 here). Client:
+  `GET /api/settings/sections/:section` reads one. Credits, models, privacy, roles, support,
+  branding and wording keep their own writers (404 here). Client:
   `api.settings.sections()`, `section(key)`, `updateSection(key, patch)`; the back office's
   Settings screen edits each one as JSON and sends `patchBetween(before, after)`.
 - **Wording.** The application rewords framework phrases and notifications without declaring them
@@ -2400,6 +2401,7 @@ serves them, people only, every write audited:
 | `GET /api/members/roles` | `members.read` | Every role here (source, label, capabilities) and every capability |
 | `POST /api/members/roles`, `PATCH /api/members/roles/:name`, `DELETE …` | `members.manage` | Define, edit (`null` resets a declared role's part), delete or reset |
 | `GET/POST /api/members/invites`, `DELETE /api/members/invites/:id` | `members.manage` | Invitations by email with roles; the code is returned once |
+| `PATCH /api/settings/sections/members` `{ value: { inviteDays } }` | `members.manage` | How long an invitation (a member's or a party's) can be accepted, 1 to 90 days (default 7; section 5.18) |
 | `POST /api/members/invites/accept` `{ token }` | signed in, same email | Join; that business becomes the default |
 | `GET/POST /api/grants`, `DELETE /api/grants/:id` | `records.grant` | Who holds a grant on a record you reach; give or take one |
 

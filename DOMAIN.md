@@ -201,9 +201,10 @@ setup, changed by people with `settings.manage` (owners and admins) through the 
 - **How it works.** Its time zone, quiet hours, reply time and marketing limit (`general`), and
   every settings section declared `editable`: approval thresholds, level changes and who approves
   each amount band (`approvals`), currency and financial year (`money`), open hours and holidays
-  (`businessHours`), SLA durations (`sla`), memory recall, share-link lifetimes, inbound media
-  and unknown senders. One writer changes them, `PATCH /api/settings/sections/:section` (a merge
-  patch, checked; the back office's Settings screen edits them as JSON). A module's own section
+  (`businessHours`), SLA durations (`sla`), memory recall, share-link lifetimes, inbound media,
+  unknown senders and how long an invitation lasts (`members`, changed by whoever manages
+  members). One writer changes them, `PATCH /api/settings/sections/:section` (a merge patch,
+  checked; the back office's Settings screen edits them as JSON). A module's own section
   opts in with `defineSettingsSection(key, schema, { editable: { capability } })` and checks what
   its schema cannot with a settings check (`defineSettingsCheck`, contributed as
   `settingsChecks`). A module may make such a change wait with a level rule on

@@ -20,6 +20,7 @@ const TITLES: Record<string, string> = {
   shares: 'Share links',
   files: 'Files',
   parties: 'People who write in',
+  members: 'Invitations: how long they last',
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> =>

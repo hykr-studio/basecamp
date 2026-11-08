@@ -840,8 +840,8 @@ export function createApiClient(opts: ApiClientOptions) {
      * The business's setup (A11). Changes go through `command(SetFeatureSpec | UpdateBrandingSpec
      * | UpdateWordingSpec | AddDomainSpec | VerifyDomainSpec | RemoveDomainSpec, input)`, custom
      * fields through `entity(CustomFieldSpec)`, and every editable section (approvals, money,
-     * businessHours, sla, memory, shares, files, parties, and `general`: the time zone, quiet
-     * hours, reply time and marketing limit) through `updateSection` (H2).
+     * businessHours, sla, memory, shares, files, parties, members, and `general`: the time zone,
+     * quiet hours, reply time and marketing limit) through `updateSection` (H2).
      */
     settings: {
       /** The editable sections this person may change (`general` first), with their values. */

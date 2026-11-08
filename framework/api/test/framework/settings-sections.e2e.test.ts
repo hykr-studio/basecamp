@@ -106,6 +106,7 @@ describe('reading the sections', () => {
       'shares',
       'files',
       'parties',
+      'members',
       'fixtureClaims',
     ])
       expect(keys).toContain(key);
@@ -140,6 +141,40 @@ describe('reading the sections', () => {
     });
     expect((await read(owner, 'credits')).status).toBe(404);
     expect((await read(owner, 'nothing')).status).toBe(404);
+  });
+});
+
+describe('the members section', () => {
+  it('whoever manages members sets how long an invitation lasts; the next one lasts that long', async () => {
+    expect(await read(owner, 'members')).toMatchObject({
+      status: 200,
+      body: { key: 'members', capability: 'members.manage', value: { inviteDays: 7 } },
+    });
+    const refused = await patch(staff, 'members', { inviteDays: 30 });
+    expect(refused.status).toBe(403);
+    expect(refused.body).toMatchObject({ rule: 'needs_members_manage' });
+    expect(problemsOf(await patch(owner, 'members', { inviteDays: 91 }))).toEqual([
+      expect.stringMatching(/^members\.inviteDays: /),
+    ]);
+    const set = await patch(admin, 'members', { inviteDays: 14 });
+    expect(set.body).toMatchObject({
+      status: 'done',
+      value: { key: 'members', value: { inviteDays: 14 } },
+    });
+    expect((await stored()).members).toEqual({ inviteDays: 14 });
+    const sent = await admin.call(
+      'POST',
+      '/api/members/invites',
+      { email: `invited-${Date.now()}@example.test`, roles: ['staff'] },
+      inTenant(),
+    );
+    expect(sent.status).toBe(200);
+    const { createdAt, expiresAt } = sent.body.value.invite;
+    const days = (Date.parse(expiresAt) - Date.parse(createdAt)) / (24 * 60 * 60 * 1000);
+    expect(days).toBeCloseTo(14, 2);
+    // Back to the default: the next invitation lasts a week again.
+    await patch(owner, 'members', { inviteDays: null });
+    expect((await stored()).members).toEqual({});
   });
 });
 
