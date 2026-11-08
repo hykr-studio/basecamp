@@ -15,7 +15,7 @@ Every step below comes from an implementation that was built and tested against 
 | Layer | What you add | File |
 |---|---|---|
 | Contracts | `VisitSpec`, `ConfirmVisitSpec`, `CancelVisitSpec`, `visitsSpec` | `application/domain/src/modules/visits/contracts/` |
-| Database | the `app.visits` table and migration `0001` | `application/domain/src/modules/visits/db/schema.ts`, `application/domain/drizzle/0001_site_visits.sql` |
+| Database | the `app.visits` table and its migration | `application/domain/src/modules/visits/db/schema.ts`, `application/domain/drizzle/<next number>_site_visits.sql` |
 | API | `Visit` (`defineEntity`), `ConfirmVisit` and `CancelVisit` (`defineCommand`), `VisitsModule` | `application/domain/src/modules/visits/server/` |
 | Views | `visit.list`, `visit.card` | `application/domain/src/modules/visits/views/` |
 | Notifications | two templates, two notifications | `application/domain/src/modules/visits/notifications/` |
@@ -46,7 +46,7 @@ A few facts that matter throughout:
 
 - **The API tests run the compiled app.** A test imports `boot` from `@hykr/api/testing` (compiled) and the application's server from `../../dist/server.js`, because Vitest's esbuild emits no decorator metadata. Build before you test.
 - **`MODEL_MODE=fake` runs a scripted model.** It has no network and costs nothing. `application/api/vitest.config.ts` forces it on for tests, along with `WORKER_INLINE=1`, `THROTTLE=off` and a fresh `BULL_PREFIX`.
-- **The framework never imports the application.** The application passes its domain in: `application/api/src/server.ts` hands each layer's `index` to `defineServer({ domain, module, views, notifications, agent, ... })`, and `application/mobile/src/catalog.ts` builds the app's catalog and registry from the same exports. `pnpm lint:deps` enforces the line with the rule `framework-never-imports-application`. Each step below therefore ends with a one-line change to the layer's `index.ts`.
+- **The framework never imports the application.** The application passes its modules in: `application/api/src/server.ts` gives `defineServer({ modules })` the list in `application/domain/src/modules/index.ts`, and `application/mobile/src/catalog.ts` builds the app's catalog and registry from every module's specs and views (`application/domain/src/contracts/index.ts`, `src/views/index.ts`). `pnpm lint:deps` enforces the line with the rule `framework-never-imports-application`. Each layer of the module is a folder, and the module's own `index.ts` bundles them (step 3 and step 6).
 
 ---
 
@@ -135,7 +135,7 @@ export const VisitSpec = entitySpec({
 |---|---|
 | `label` | The word in messages, for example `No such site visit` on a 404. |
 | `fieldLabels` | Names for each field on the approval preview, in each of the application's languages. `Labels` needs `en`; a language left out reads in English. |
-| `description` | Opens the `list-visits` tool's description (the get and create tools get generic text such as "Get one site visit by id." and "Create a site visit."), and appears in OpenAPI. |
+| `description` | Opens the `list-visits` tool's description (the get and create tools get generic text such as "Get one site visit by id." and "Create a site visit."). |
 | `list` | The list grammar for both HTTP and the tools (see the table below). Every name must be a column. Nothing checks this at startup: the first request that filters or sorts on a misspelt field fails with `List config names "x", which is not a column` (a 500). |
 | `expose` | `'all'` gives a route and an agent tool. `'human'` gives a route behind `HumanOnlyGuard` and no tool. `'internal'` gives neither. |
 | `views` | The registered views (step 4) used to show tool results. |
@@ -278,13 +278,13 @@ Generate the migration. `pnpm db:generate` runs `basecamp db generate`, which ru
 ```bash
 pnpm db:generate --name site_visits
 #   visits 11 columns 2 indexes 3 fks
-#   [✓] Your SQL migration file ➜ drizzle/0001_site_visits.sql 🚀
+#   [✓] Your SQL migration file ➜ drizzle/0009_site_visits.sql 🚀    (the journal's next number)
 pnpm db:migrate      # the framework's migrations, then the application's
 ```
 
-The generated file, `application/domain/drizzle/0001_site_visits.sql`, is a plain `CREATE TABLE "app"."visits"` with three foreign keys and two indexes. Commit it together with `drizzle/meta/0001_snapshot.json` and the updated `_journal.json`. The framework's own tables are not in this folder: they ship with `@hykr/db` and `pnpm db:migrate` applies them first.
+The generated file, `application/domain/drizzle/<n>_site_visits.sql`, is a plain `CREATE TABLE "app"."visits"` with three foreign keys and two indexes. Commit it together with `drizzle/meta/<n>_snapshot.json` and the updated `_journal.json`: every module shares this one journal. The framework's own tables are not in this folder: they ship with `@hykr/db` and `pnpm db:migrate` applies them first.
 
-> **Pitfall: shared databases and drizzle's bookkeeping.** The migrator records each applied application migration in `drizzle.__app_migrations`, with its timestamp. If several branches (or agents) each generate a `0001_…` and apply them to one database, the later merge can skip or collide. On a shared dev database, apply your migration from your own branch only. Expect to regenerate after you rebase onto someone else's migration. `pnpm db:migrate` refuses to run when a migration would be skipped (never applied, but older than the last one applied), and names it: delete it and generate it again, or recreate the database.
+> **Pitfall: one journal, several branches.** The migrator records each applied application migration in `drizzle.__app_migrations`, with its timestamp. If two branches each generate the next number and both are applied to one database, the later merge can skip or collide. On a shared dev database, apply your migration from your own branch only. After you rebase onto someone else's migration, run `pnpm --dir application exec basecamp db rebase --base <branch>`: it drops your branch's migrations and generates them again on top (developer guide 5.2; [Working on modules in parallel](modules.md)). `pnpm db:migrate` refuses to run when a migration would be skipped (never applied, but older than the last one applied), and names it: generate it again, or recreate the database.
 
 ---
 
@@ -332,7 +332,7 @@ export const Visit = defineEntity(VisitSpec, {
 });
 ```
 
-**Why not `BUSINESS_ACCESS`?** The sample `application/domain/src/server/access.ts` gives `staff: 'own'`. A customer's visit is owned by the business's default owner, so a staff member with `'own'` would never see the visits they need to confirm. Visits belong to the whole team, so every team role gets `'tenant'`. A `Grant` is one of four values (`framework/policy/src/access.ts`):
+**Why not `BUSINESS_ACCESS`?** The sample `application/domain/src/server/access.ts` gives `staff: 'own'`. A customer's visit is owned by the business's default owner, so a staff member with `'own'` would never see the visits they need to confirm. Visits belong to the whole team, so every team role gets `'tenant'`. A grant is one of these (`framework/policy/src/access.ts`, developer guide 6.2):
 
 | Grant | Rows it reaches |
 |---|---|
@@ -340,8 +340,9 @@ export const Visit = defineEntity(VisitSpec, {
 | `'customer'` | Rows where the customer column equals `p.customerId`. |
 | `'tenant'` | Every row in the business. |
 | `{ grant: 'granted' }` | Rows granted to the person one by one (`POST /api/grants`). |
+| `{ grant: 'participant', as }` | Rows a party the person belongs to is on, in those participant roles (`POST /api/participants`). |
 
-Any id outside your grants is a **404, never a 403**.
+A key may also be a capability the application defines (`{ 'visits.read_all': 'tenant' }`), which is how a role a business makes for itself reaches rows. Any id outside your grants is a **404, never a 403**.
 
 **Rules and `ctx.via`.** Rules run in two places:
 
@@ -350,20 +351,30 @@ Any id outside your grants is a **404, never a 403**.
 
 A command passes `via` (`{ via: 'visit.confirm' }`), so the rule can tell a command from a plain `PATCH`. This is the same pattern as the meeting rule `use_close_meeting`.
 
-> **Pitfall: an entity rule cannot park a write.** `checkRules()` and `decide()` act only on `decision === 'deny'`. If a rule returns `needsApproval(...)`, nothing happens. For an entity's CRUD actions, approval comes only from `spec.approval[action]`. For anything conditional on the row, such as "only when confirmed", use a command whose `authorize` returns `needsApproval`.
+> **Pitfall: an entity rule parks plain writes only.** A rule that returns `needsApproval(...)` parks a CRUD write (`PATCH /api/visits/:id`), but inside a command only its `deny` counts (`checkRules` in `framework/core/src/entity/define-entity.ts`): the command's own `authorize` decides whether the command waits. So for anything conditional on the row that a command does, such as "a confirmed visit's cancel waits", return `needsApproval` from the command's `authorize`, as below.
 
 ### The commands: load, authorize, summarize, run
 
+Who is "the team" is a capability, never a list of role names (developer guide 6.4). The module
+declares its own, with the roles that hold it by default, next to its specs (the app can check
+it too), and contributes it in its `index.ts` (below), so the server knows it:
+
+```ts
+// application/domain/src/modules/visits/contracts/visit.ts (import defineCapability from @hykr/contracts)
+/** The team's part in visits: confirm them, cancel them at once, and decide a customer's cancel. */
+export const ManageVisits = defineCapability({
+  name: 'visits.manage',
+  label: { en: 'Manage site visits', hi: 'साइट विज़िट संभालें', te: 'సైట్ విజిట్‌లను నిర్వహించండి' },
+  roles: ['owner', 'admin', 'ops', 'staff'],
+});
+```
+
 ```ts
 // application/domain/src/modules/visits/server/visit.commands.ts
-import type { Principal } from '@hykr/contracts';
 import { allow, defineCommand, deny, type NamedEvent, needsApproval } from '@hykr/core';
-import { CancelVisitSpec, ConfirmVisitSpec } from '../contracts/index.js';
+import { can } from '@hykr/policy';
+import { CancelVisitSpec, ConfirmVisitSpec, ManageVisits } from '../contracts/index.js';
 import { Visit } from './visit.entity.js';
-
-const STAFF = ['owner', 'admin', 'ops', 'staff'];
-/** Someone on the business's team (not only a customer of it). */
-const isStaff = (p: Principal) => (p.roles ?? []).some((r) => STAFF.includes(r));
 
 /** visit.confirmed: notifications send the confirmation and schedule the reminder on it. */
 export class VisitConfirmed implements NamedEvent {
@@ -381,7 +392,7 @@ export const ConfirmVisit = defineCommand(ConfirmVisitSpec, {
   resource: { type: 'visit', id: (input) => input.visitId },
   load: (tx, p, input) => Visit.repo.get(tx, p, input.visitId), // scoped: 404 if not theirs
   authorize: (p, visit, input) => {
-    if (!isStaff(p)) return deny('staff_only', 'Only the team can confirm a visit');
+    if (!can(p, ManageVisits.name)) return deny('staff_only', 'Only the team can confirm a visit');
     if (visit.status !== 'requested')
       return deny('not_requested', `This visit is ${visit.status}, not waiting to be confirmed`);
     if (new Date(input.startsAt).getTime() <= Date.now())
@@ -391,7 +402,11 @@ export const ConfirmVisit = defineCommand(ConfirmVisitSpec, {
   summarize: (input, visit) => `Confirm the site visit "${visit.title}" for ${input.startsAt}`,
   run: async ({ tx, principal, input, loaded: visit, via }) => {
     const confirmed = await Visit.repo.update(
-      tx, principal, visit, { status: 'confirmed', startsAt: input.startsAt }, via,
+      tx,
+      principal,
+      visit,
+      { status: 'confirmed', startsAt: input.startsAt },
+      via,
     );
     return {
       value: confirmed,
@@ -409,15 +424,15 @@ export const CancelVisit = defineCommand(CancelVisitSpec, {
       return deny('already_final', `This visit is already ${visit.status}`);
     if (visit.status === 'requested')
       return allow('not_confirmed_yet', 'Nobody is booked yet: it goes at once');
-    if (isStaff(p) && p.actor.kind === 'user')
+    if (can(p, ManageVisits.name) && p.actor.kind === 'user')
       return allow('staff_cancels', 'The team cancels its own visit');
     return needsApproval(
       'confirmed_visit_cancel',
       'This visit is confirmed: the team must approve cancelling it',
     );
   },
-  // Who decides when it is parked: whoever holds ApproveCancels (below), never the requester.
-  approval: { by: { capability: ApproveCancels.name } },
+  // Who decides when it is parked: whoever holds ManageVisits, never the requester.
+  approval: { by: { capability: ManageVisits.name } },
   summarize: (_input, visit) => `Cancel the site visit "${visit.title}" at ${visit.address}`,
   run: async ({ tx, principal, loaded: visit, via }) => {
     const cancelled = await Visit.repo.update(tx, principal, visit, { status: 'cancelled' }, via);
@@ -430,6 +445,11 @@ export const CancelVisit = defineCommand(CancelVisitSpec, {
 });
 ```
 
+`can(p, name)` (`@hykr/policy`) reads the capabilities the server worked out for the person's
+roles in this business, its own roles included: a business that makes a role of its own and
+gives it `visits.manage` lets its holders confirm visits, with no change here. A WhatsApp
+customer holds the contact's roles, which do not have it.
+
 Every command write goes through `runWrite` in `framework/core/src/write/pipeline.ts`, in this order:
 
 1. **Validate.** The input is parsed again with the full `spec.input`.
@@ -440,16 +460,7 @@ Every command write goes through `runWrite` in `framework/core/src/write/pipelin
 6. **Allow.** `run` executes. There is one audit row per `touched` entry, plus one for the command. The caller gets `{ status: 'done', value }`.
 7. **Events.** Each `NamedEvent` is stored in the event outbox (`app.domain_events`) in the same transaction, then published in-process only **after commit**. The worker relays the stored row to event subscribers (`defineSubscriber`, developer guide section 5.10).
 
-Who decides a parked cancel? For a command, `approval` is an `ApproverRule` (`{ by, channels, minAssurance, level }`). It says **who** decides. Whether the command parks at all is decided by `authorize` (and the application's approval levels, developer guide 5.8.1). People are chosen by capability, never by role name. The module declares its own, with the roles that hold it by default, and contributes it (`defineModule({ ..., contributes: { capabilities: [ApproveCancels] } })`):
-
-```ts
-/** Approve cancelling a confirmed visit: the whole team, by default. */
-export const ApproveCancels = defineCapability({
-  name: 'visits.cancel.approve',
-  label: { en: 'Approve cancelled visits', hi: 'रद्द विज़िट मंज़ूर करें', te: 'రద్దు చేసిన విజిట్‌లను అనుమతించండి' },
-  roles: ['owner', 'admin', 'ops', 'staff'],
-});
-```
+Who decides a parked cancel? For a command, `approval` is an `ApproverRule` (`{ by, channels, minAssurance, level }`). It says **who** decides. Whether the command parks at all is decided by `authorize` (and the application's approval levels, developer guide 5.8.1). People are chosen by capability, never by role name: here, the holders of `visits.manage`.
 
 Without `by`, `decidersFor` in `framework/core/src/write/approvals.ts` behaves like this:
 
@@ -483,11 +494,16 @@ export class VisitsModule {}
 
 ```
 
-The module's `index.ts` hands it to the framework (`defineModule`; step 6 adds the views, notifications and agent), and `application/domain/src/modules/index.ts` lists it, one line, so `server.ts` passes it to `defineServer`:
+The module's `index.ts` hands it to the framework (`defineModule`; steps 4 to 6 add the views, notifications and agent), and `application/domain/src/modules/index.ts` lists it, one line, so `server.ts` passes it to `defineServer`:
 
 ```ts
 // application/domain/src/modules/visits/index.ts
-export const visits = defineModule({ ...visitsSpec, server: VisitsModule, tables });
+export const visits = defineModule({
+  ...visitsSpec,
+  server: VisitsModule,
+  tables,
+  contributes: { capabilities: [ManageVisits] },
+});
 ```
 
 Build and typecheck the application's API and everything it depends on (`application/domain` and the framework):
@@ -515,6 +531,8 @@ The build also gives you:
 - approval replay after restarts (`commandHandler` registers the op by name)
 
 ### Try it with curl
+
+The specs name the views `visit.list` and `visit.card`, which step 4 declares, and `defineServer` refuses to start while a spec names a view nobody declares. To try the API at this point, leave `views` out of `VisitSpec` and `view` out of the two command specs until then.
 
 Start the API with `pnpm dev`, which runs the API and the worker. After a build you can instead run `pnpm exec basecamp start api` and `pnpm exec basecamp start worker` in `application/`. The worker runs the queue processors that send WhatsApp messages and notifications: the API process registers `ChannelsModule.forRoot({ processors: config.workerInline })` (`framework/api/src/app.module.ts`), so with `start api` alone the curl calls below work but nothing consumes the queues. Then:
 
@@ -911,9 +929,9 @@ export const visitScripts = [
 ];
 ```
 
-The `list-visits` script is what eval case 17 (`my site visits`) and the app's `my site visits` suggestion rely on.
+The `list-visits` script is what eval case 2 (`my site visits`) and the app's `my site visits` suggestion rely on.
 
-- **Don't use `written()` for a customer's parked request.** The helper (`framework/agents/src/fake/engine.ts`) answers a parked English write with "I've asked for **your** approval…". That is right for an owner's own assistant, but wrong for a customer whose request goes to the team.
+- **Don't use `written()` for a customer's parked request.** The helper (`@hykr/agents/script`; its line is `parkedLine` in `framework/agents/src/parked-line.ts`) answers a parked English write with "I've asked for **your** approval…". That is right for an owner's own assistant, but wrong for a customer whose request goes to the team.
 - **WhatsApp adds the team line.** `InboundProcessor.converse` appends `approval.askedTeam` ("I've asked the team to confirm. I'll tell you here when they do.") to any reply whose approval someone other than the person writing decides. Your own reply should explain *why* the cancel waits, not repeat that.
 - **The scripted model reads the system prompt.** It finds the language and surfaces with regexes. `Reply in <Language>.` comes from `framework/agents/src/assistant.ts` and `Surfaces: …` from `buildInstructions` in `framework/agents/src/version.ts`. Your rules can add lines, but if you edit either wording, scripted tests can break silently.
 
@@ -958,12 +976,14 @@ The evals call a **running** API (`API_INTERNAL_URL`, default `http://localhost:
 | `noRetryAfterRefusal` | The model does not try again after a refusal. |
 
 ```bash
-pnpm eval              # basecamp eval assistant, against the running API
-# PASS  16. asks for a site visit with what it is for and where  "book a site visit for Kitchen tiles at …"
-# PASS  17. lists visits  "my site visits"
-# PASS  18. cancels a requested visit at once, using an id from the list  "cancel my site visit for Kitchen tiles"
-# PASS  19. doesn't cancel a visit that isn't there  "cancel my site visit for a boat"
-# 19/19 turns passed. Scores and traces are in Studio.
+cd application && pnpm exec basecamp eval --module visits    # this module's cases, a fresh user
+# Evaluating the assistant (visits) with scripted model, acting for a fresh user
+# PASS  1. asks for a site visit with what it is for and where  "book a site visit for Kitchen tiles at …"
+# PASS  2. lists visits  "my site visits"
+# PASS  3. cancels a requested visit at once, using an id from the list  "cancel my site visit for Kitchen tiles"
+# PASS  4. doesn't cancel a visit that isn't there  "cancel my site visit for a boat"
+# 4/4 turns passed. Scores and traces are in Studio.
+pnpm eval                                                    # every module's, at the root
 ```
 
 `pnpm eval --live` (`basecamp eval --live`) runs the same cases against the deployment's default model (`AGENT_MODEL`: it needs `OPENROUTER_API_KEY` for an OpenRouter model, or `MODEL_PROVIDERS`). Add `--model <provider>/<model>` to run them on another configured model.
@@ -1038,8 +1058,11 @@ export const visits = defineAppModule({
 // application/mobile/src/modules/index.ts: one line per module
 export { visits } from './visits';
 
+// application/mobile/src/modules/visits/routes.ts: the module's route components
+export { Visits as VisitsRoute } from './screens/Visits';
+
 // application/mobile/src/app/visits/index.tsx: Expo Router's route file, one line
-export { Visits as default } from '@/modules/visits/screens/Visits';
+export { VisitsRoute as default } from '@/modules/visits/routes';
 ```
 
 The shell merges the modules when it starts. A destination outside `/visits`, a record type or a
@@ -1124,9 +1147,10 @@ async function reminderAt(visitId: string) {
   return server.app?.get(NotifyService).scheduledFor(`visit.reminder:${visitId}`);
 }
 
+/** Two days ahead at midday UTC: clear of quiet hours, which would move the reminder. */
 const inTwoDays = () => {
   const d = new Date(Date.now() + 2 * 86_400_000);
-  d.setUTCSeconds(0, 0);
+  d.setUTCHours(12, 0, 0, 0);
   return d.toISOString();
 };
 ```
@@ -1260,7 +1284,7 @@ Run everything with `pnpm dev`. It watch-builds the framework and runs `basecamp
 
    | Where | What you see |
    |---|---|
-   | http://localhost:3000/admin/queues | Bull Board. Sign in as owner or admin first. |
+   | http://localhost:3000/admin/queues | Bull Board, for a platform operator holding `platform.queues` (`pnpm --dir application exec basecamp operator add <email>`, developer guide 6.6). Sign in to the app first. |
    | `GET /api/history?resourceType=visit&resourceId=<id>` | The visit's history. Only ops and admin see the whole business's rows. Everyone else, the owner included, sees only what they or their own assistant did, so the owner does not see the create and cancel rows from Meera's assistant. |
    | `audit.events` in pgAdmin at http://localhost:5050 | The full audit trail, including a customer's actions. |
 
@@ -1283,8 +1307,8 @@ FROM audit.events WHERE run_id = '<run-id>' ORDER BY at;
 6. **Tests run `dist/`.** Run `pnpm turbo run build --filter=@application/api...` before `vitest run`.
 7. **Templates are versioned forever.** Changing a body means a new `_vN`, then `templates:sync`.
 8. **The scripted model's wording matters.** Keep the start of `help` (`07-off-topic.yaml`). Write your own reply for parked customer requests rather than using `written()`.
-9. **One database, many processes.** `OutboxRelay` relays only the `app.outbox` rows of its own `BULL_PREFIX`, and each test run uses a fresh prefix, so tests and a dev worker don't take each other's rows. Two processes with the same prefix on one database do: two `pnpm dev` workers from different checkouts, both on the default `bull`, run each other's jobs with their own code. Give each checkout its own `BULL_PREFIX`, or better, its own database. Migrations too: apply them from one branch per database.
-10. **A fresh worktree or clone needs `pnpm install` and a `.env`.** Copy `application/.env.example` to `.env` at the repository root. The `basecamp` command loads the nearest `.env` at or above `application/`, and the tests read it with `loadEnv('test', '../..')`.
+9. **One database, many processes.** Every row a write leaves for the worker carries the process's `BULL_PREFIX`: the sends in `app.outbox` (relayed by `OutboxRelay`) and the stored events in `app.domain_events` (relayed to the subscribers, notifications among them, by the events feature). A process relays only its own prefix's rows, and each test run uses a fresh prefix, so tests and a dev worker don't take each other's rows. Two processes with the same prefix on one database do: two `pnpm dev` workers from different checkouts, both on the default `bull`, run each other's jobs with their own code. Give each checkout its own `BULL_PREFIX`, or better, its own database ([Working on modules in parallel](modules.md)). Migrations too: apply them from one branch per database.
+10. **A fresh worktree or clone needs `pnpm install` and a `.env`.** Copy `application/.env.example` to `.env` at the repository root. The `basecamp` command loads the nearest `.env` at or above `application/`, and both Vitest configs load it into their process.
 11. **Quiet hours move reminders.** `topic: 'reminders'` is rescheduled out of quiet hours. `service` is not. The golden runner disables quiet hours for its business, but your dev business keeps the defaults.
 
 ---
@@ -1295,11 +1319,11 @@ FROM audit.events WHERE run_id = '<run-id>' ORDER BY at;
 - [ ] **Contracts index:** the entity is in the module's `moduleSpec({ entities })` under its plural, and the commands in `commands`. The module has its line in `application/domain/src/contracts/index.ts`.
 - [ ] **Database:** the table in the module's `db/schema.ts`, named after the module, has `id()`, `tenantColumn()`, an owner column, `customerColumn()`, `createdBy`, `createdAt` and `updatedAt`. The migration was generated with `pnpm db:generate --name <name>` and applied with `pnpm db:migrate`. The SQL, the snapshot and the journal in `application/domain/drizzle/` are committed.
 - [ ] **API entity:** `defineEntity` with `table`, `owner`, `customer`, `access` and `rules` (deny-only, `ctx.via` for command-only fields).
-- [ ] **API commands:** `defineCommand` with `resource`, a scoped `load`, `authorize` (`allow`, `deny`, `needsApproval`), `summarize`, a `run` that passes `via` and returns `touched` and `events`, and `approval: { by: { capability } }` when the team decides (a capability the module declares).
+- [ ] **API commands:** `defineCommand` with `resource`, a scoped `load`, `authorize` (`allow`, `deny`, `needsApproval`; who may by `can(p, capability)`, never a role name), `summarize`, a `run` that passes `via` and returns `touched` and `events`, and `approval: { by: { capability } }` when the team decides (a capability the module declares and contributes).
 - [ ] **Nest:** a module in the module's `server/` with `entityController`, `entityHandlers`, `commandController` and `commandHandler`, passed to `defineModule({ server })`, and the module listed in `application/domain/src/modules/index.ts`.
 - [ ] **Views:** `defineView` list and card with `text`, `speak`, `labels.noun` and `labels.empty`. Registered in the module's views and in `application/domain/src/views/index.ts`, with a view test.
 - [ ] **Notifications:** `defineTemplate` (versioned name, en/hi/te, an example) and `defineNotification` (`send.on` or `schedule`, `cancelOn`, `topic`, `to`, `channels`, `dedupe`). Passed to the module's `defineModule({ templates, notifications })`. `pnpm templates:sync` and `pnpm templates:check` pass.
-- [ ] **Assistant:** the module's rules, scripts and eval cases in its `AgentModule`; the persona and the `help` prefix kept in `server.ts` (and `channel.does` extended); the module listed before any module whose script would take its turns. `pnpm eval` (or `basecamp eval --module visits`) passes with the API running.
+- [ ] **Assistant:** the module's rules, scripts and eval cases in its `AgentModule`; the persona and the `help` prefix kept in `server.ts` (and `channel.does` extended); the module listed before any module whose script would take its turns. `basecamp eval --module visits` (and `pnpm eval`) passes with the API running.
 - [ ] **App:** an app module in `application/mobile/src/modules/<name>/` (`defineAppModule`: a nav item, `bindView` for each view, `hrefFor`), listed in `src/modules/index.ts`, and a one-line route in `src/app/<name>/`. `pnpm turbo run typecheck --filter=@application/mobile` passes.
 - [ ] **Tests:** an e2e test in `application/api/test/domain/` and a golden YAML in `application/api/test/whatsapp/conversations/`. Both pass with `cd application/api && pnpm vitest run <file>`.
 - [ ] **Repository checks:** `pnpm turbo run build typecheck test`, `pnpm lint` and `pnpm lint:deps` all pass.
