@@ -1542,8 +1542,9 @@ who hears about it are the application's. The sample's `orders` module uses ever
   records the caller reads (`&open=true`: only those whose record is still in the state, i.e.
   still late); `<SlaBadge>` shows a record's, `<OverdueList>` the late ones (Today). The list is
   a keyset page, `{ items, nextCursor }` (pass `cursor` for the next), earliest due first. Which
-  records are readable is decided in SQL, from each entity's own list scope (`listWhere`), so a
-  page costs the same however many timers the business keeps. A clock is shown only where its
+  records are readable is decided in SQL, from each entity's own list scope (`listWhere`): a
+  reader who reaches at most 1,000 records of an entity reads only their timers, one who reaches
+  more walks the timers in due order with one primary-key probe each. A clock is shown only where its
   record is: the assistant sees none on an entity whose `get` is not exposed to it, nobody sees an
   `internal` entity's, and a reader who cannot see the state field (field policy, a read
   projector) sees none of that record's (docs/decisions/S3.md).
@@ -3247,6 +3248,7 @@ These are not built. Each has a workaround for now.
 | Editing `businessHours` and `sla` settings | Nothing in the API changes them yet: set them in `app.tenants.settings` with SQL. Half days and per-branch calendars are not supported. |
 | Escalations that ask a person | An SLA's escalation transition runs as the system principal, which cannot park; one that would wait is refused and kept on the clock. Notify the people instead (`escalate.notify`). |
 | SLA lists of shared entities | `GET /api/sla` leaves out the clocks of a shared entity (`defineSharedEntity`) when the deployment has a platform business: its list runs two queries, so its scope is not one WHERE. Read a record's clocks with `GET /api/sla/<plural>/:id`. |
+| A cap on SLA list walks | A reader who reaches more than 1,000 records of an entity but few of its timers in the asked status makes `GET /api/sla` probe each of those timers once (about 2 ms per thousand). Fewer than 1,000 records in reach read only their own timers. |
 | `If-Match` beyond entity writes | Only an entity's `PATCH` and `DELETE` check it (section 5.29); transitions and commands refuse it. Send the version in a command's input when it takes one. Reads send no `ETag` (the version is in the body). |
 | Files captured offline | The outbox queues records, not files: a photo needs the network (B1's presign, upload, confirm). |
 | Offline conflicts per field | A queued change conflicts when anything in the record changed since the person saw it; there is no per-field merge. A list refetched on reconnect shows the server's rows until the outbox has sent the person's changes. |
