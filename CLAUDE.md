@@ -217,9 +217,10 @@ audited `on_behalf_of`), never through a role.
 - Every read leaves through `def.toRead(row, p)`, projected for the principal (entity plugins' `project`,
   then read projectors). Never return a repo row from a controller or service as is.
 - A command's `approval.by` says who decides, by capability (`{ capability }`), a named person (`{ userId }`) or
-  an amount band in the business's settings (`{ band }`), never by role name. Without it, the person decides
-  on their own assistant's request (a customer's goes to holders of `approvals.decide`). Nobody decides
-  their own request otherwise.
+  an amount band in the business's settings (`{ band }`), never by role name. Without it, a member of the
+  team decides on their own assistant's request; anyone outside it (a contact, a participant, a member
+  holding only the contact's roles) asks holders of `approvals.decide`. Nobody decides their own request
+  otherwise.
 - What an approval level means is the application's: it declares its levels (`defineApprovalLevel`,
   contributed as `approvalLevels`) and which writes reach them (`defineLevelRule`, `levelRules`); thresholds
   and per-band approvers are tenant settings (`approvals`). A write whose level gives an undo window answers

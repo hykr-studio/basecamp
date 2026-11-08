@@ -2,10 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { priceOf as modelPrice, type TokenUsage } from '@hykr/agents';
 import {
   type CreditPurchase,
-  CreditsManageCapability,
   type CreditsStatus,
   type CreditsThresholdRow,
-  capabilitiesOf,
   type LedgerEntry,
   type MeterStatus,
   type UsageRefusal,
@@ -71,7 +69,9 @@ const OWNER = { feature: 'credits' };
 /**
  * credits.threshold: a cap (the budget, 'credits', or a meter's limit) passed a level this
  * period. Stored in the outbox and published, so the application's notification and any
- * subscriber can tell the people who manage the credits.
+ * subscriber can tell the people who manage the credits. It names nobody: a notification
+ * addresses `{ capability: 'credits.manage' }`, whose holders dispatch finds with the business's
+ * roles when it sends.
  */
 export class CreditsThreshold implements NamedEvent {
   readonly eventName = 'credits.threshold';
@@ -521,7 +521,6 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       .onConflictDoNothing()
       .returning();
     if (!added.length) return [];
-    const recipients = await this.managersOf(tx, tenantId);
     const events = added.map(
       (r) =>
         new CreditsThreshold({
@@ -532,7 +531,6 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
           usedPercent: r.usedPercent,
           threshold: r.threshold,
           periodStart: period.start.toISOString(),
-          recipients,
         }),
     );
     await recordEvents(tx, {
@@ -542,18 +540,6 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
     for (const r of added)
       log.log(`business=${tenantId} ${r.cap} reached ${r.level} (${r.usedPercent}%)`);
     return events;
-  }
-
-  /** The people whose roles hold `credits.manage` in this business. */
-  private async managersOf(conn: Conn, tenantId: string): Promise<string[]> {
-    const members = await conn
-      .select({ userId: schema.memberships.userId, roles: schema.memberships.roles })
-      .from(schema.memberships)
-      .where(eq(schema.memberships.tenantId, tenantId));
-    return members
-      .filter((m) => capabilitiesOf(m.roles).includes(CreditsManageCapability.name))
-      .map((m) => m.userId)
-      .sort();
   }
 
   /**

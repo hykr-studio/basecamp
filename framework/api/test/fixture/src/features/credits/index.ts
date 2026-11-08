@@ -12,6 +12,7 @@ import {
 import {
   type Contributions,
   type CreditPurchaseInput,
+  CreditsManageCapability,
   type CreditsThresholdRow,
   moduleSpec,
 } from '@hykr/contracts';
@@ -51,12 +52,15 @@ const words = (row: CreditsThresholdRow) =>
     ? `The ${row.cap} cap is reached (${row.usedPercent}%): what it covers is paused.`
     : `The ${row.cap} cap is at ${row.usedPercent}% (alert at ${row.threshold}%).`;
 
-/** The alert, by email, to whoever manages the business's credits. */
+/**
+ * The alert, by email, to whoever manages the business's credits: the members whose roles hold
+ * `credits.manage` there, the business's own roles and edits included.
+ */
 export const CreditsAlert = defineNotification<CreditsThresholdRow>({
   key: 'credit_checks.alert',
   topic: 'service',
   send: { on: ['credits.threshold'] },
-  to: (row) => row.recipients.map((userId) => ({ userId })),
+  to: () => [{ capability: CreditsManageCapability.name }],
   channels: ['email'],
   email: {
     subject: (row) => `[credits] ${row.cap} ${row.level}`,

@@ -1,5 +1,5 @@
 // The credits alerts in this application's words: the alert level and the pause each get their
-// own message, to the people the framework names, in their language.
+// own message, to whoever holds credits.manage in the business, in their language.
 import type { CreditsThresholdRow } from '@hykr/contracts';
 import { describe, expect, it } from 'vitest';
 import { CreditsLowNotification, CreditsOutNotification } from './index.js';
@@ -12,7 +12,6 @@ const row = (over: Partial<CreditsThresholdRow> = {}): CreditsThresholdRow => ({
   usedPercent: 81.5,
   threshold: 80,
   periodStart: '2030-01-01T00:00:00.000Z',
-  recipients: ['u1', 'u2'],
   ...over,
 });
 
@@ -28,8 +27,9 @@ describe('the credits alerts', () => {
     expect(CreditsOutNotification.when?.(row({ level: 'pause' }))).toBe(true);
   });
 
-  it('go to the people who manage the credits', () => {
-    expect(CreditsLowNotification.to(row())).toEqual([{ userId: 'u1' }, { userId: 'u2' }]);
+  it("go to the people who manage the credits, by capability (the business's roles decide who)", () => {
+    for (const n of [CreditsLowNotification, CreditsOutNotification])
+      expect(n.to(row())).toEqual([{ capability: 'credits.manage' }]);
   });
 
   it('say which cap, how much, in the reader’s language', () => {

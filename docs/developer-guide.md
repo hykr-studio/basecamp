@@ -702,13 +702,19 @@ type ApprovalRule =
 `by` chooses people by capability, never by role name:
 - `'requester'`: the person the request is for (their own assistant's request);
 - `{ capability }`: anyone in the business holding it, except the requester;
-- `{ userId }`: one named person, a member of the business who is not the requester (otherwise the
-  holders of `approvals.decide` decide instead);
+- `{ userId }`: one named person, a member of the business's team who is not the requester: their
+  membership's roles, as the business has them (its own roles and edits; a name it lacks counts for
+  nothing), include one beyond a contact's and a participant's (otherwise the holders of
+  `approvals.decide` decide instead);
 - `{ band }`: the approver the business's settings name for the amount's band (below).
 
-Who decides, when nothing sets `by`: the person the request is for, if they are a user and not only a
-customer. Otherwise the holders of `approvals.decide` (by default the `owner` and `ops` roles; an
-application gives its own roles the capability, or names its own capability on its levels). Nobody
+Who decides, when nothing sets `by`: the person the request is for, if they are on the business's
+team: a member (`standing: 'member'`, set by the server) holding a role beyond the ones the framework
+hands outsiders (`givenRoles('contact')` and `givenRoles('participant')`; `teamRoles` in
+`@hykr/contracts`). Anyone outside it (a contact, a participant, support access, an operator, a member
+holding only the contact's role) asks the holders of `approvals.decide` (by default the `owner` and
+`ops` roles; an application gives its own roles the capability, or names its own capability on its
+levels). No role name decides it, so an application that renames its outsider role keeps the rule. Nobody
 decides their own request unless the policy sends it back to them: a request decided by a capability
 is never decidable by its requester. The requester can still open it (`GET /api/approvals/:id`, with
 `canDecide: false`); `POST .../approve` answers 403 `own_request`.
@@ -2780,9 +2786,10 @@ Every business's use of what costs money is metered, priced and, when its plan s
 - **Budget and wallet.** On credits, a period's spending uses the allowance first, then the
   prepaid wallet (`app.credit_wallets`, every change a row in `app.credit_ledger`). Used per cent is
   spent over spent plus what is left. At `alertAt` of a cap (the budget or a meter's limit) the
-  named event `credits.threshold` (`{ cap, level: 'alert' | 'pause', usedPercent, recipients }`,
-  recipients holding `credits.manage`) is stored in the outbox and published, once per period and
-  level; the application's notification words it. At `pauseAt` the business is paused.
+  named event `credits.threshold` (`{ cap, level: 'alert' | 'pause', usedPercent, threshold }`) is
+  stored in the outbox and published, once per period and level; the application's notification
+  words it and addresses `{ capability: 'credits.manage' }`, which dispatch expands with the
+  business's roles (its own and its edits) when it sends. At `pauseAt` the business is paused.
 - **What a pause refuses** (402, rules `credits_exhausted`, `usage_limit_reached`,
   `credits_suspended`): assistant turns and back-office drafts (the `credits` turn hook), new voice
   sessions (and a session's `maxSeconds` is cut to what is left), outbound messages of a

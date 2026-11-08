@@ -157,6 +157,24 @@ export function givenRoles(name: RoleDefaultName): string[] {
   return name === 'participant' ? givenRoles('contact') : [...FRAMEWORK_DEFAULTS[name]];
 }
 
+/**
+ * The roles the framework hands people outside a business's team: a contact's and a
+ * participant's, as the application names them (the framework's: `customer`).
+ */
+export function outsiderRoles(): Set<string> {
+  return new Set([...givenRoles('contact'), ...givenRoles('participant')]);
+}
+
+/**
+ * The roles among these that make someone part of a business's team: those no outsider is
+ * given. Pass the roles the business has (`standingIn(...).roles`): a name it does not have
+ * makes nobody part of anything. Empty: they are outside, whatever their membership says.
+ */
+export function teamRoles(names: readonly string[]): string[] {
+  const outside = outsiderRoles();
+  return [...new Set(names)].filter((n) => !outside.has(n));
+}
+
 /** The framework's own capabilities, with the roles that had each one before. */
 export const FrameworkCapabilities = {
   /** The back office: take a WhatsApp conversation from the assistant and reply. */
@@ -266,7 +284,9 @@ export function declaredLabel(roleName: string): Labels | undefined {
 
 /**
  * What these declared roles allow (application overrides applied). Unknown roles add nothing.
- * Sorted, each once. A business's own roles and edits: `standingIn` (settings/roles.ts).
+ * Sorted, each once. Code's declarations only: what someone may do in one business (its own
+ * roles and its edits) is `standingIn` (settings/roles.ts), and who holds a capability there
+ * comes from `rolesOfBusiness`.
  */
 export function capabilitiesOf(roleNames: readonly string[]): string[] {
   const out = new Set<string>();

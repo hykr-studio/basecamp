@@ -7,7 +7,7 @@ import type { Approver } from './authorize.js';
 import { reserveRoutes } from './catalog.js';
 import { createHookRegistry } from './framework/registry.js';
 import type { Principal } from './principal.js';
-import { capabilities, capabilitiesOf, defineCapability, roles } from './roles.js';
+import { capabilities, defineCapability } from './roles.js';
 
 declare module './framework/module.js' {
   interface Contributions {
@@ -112,14 +112,6 @@ export function checkApprovalLevels(): void {
         `Approval level "${level.name}" is decided by "${by.capability}", which nobody defines`,
       );
   }
-}
-
-/** The registered roles that hold this capability (their own list, or the capability's). */
-export function rolesWith(capability: string): string[] {
-  return roles
-    .all()
-    .map((r) => r.name)
-    .filter((name) => capabilitiesOf([name]).includes(capability));
 }
 
 /** The framework's capabilities for deciding, with the roles that decided before. */
