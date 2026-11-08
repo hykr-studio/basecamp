@@ -319,6 +319,7 @@ Inside `application/` (or any application), the `basecamp` command does the rest
   journal, per-module tests and evals.
 - [DOMAIN.md](DOMAIN.md): what each module and application layer exports.
 - `docs/decisions/`: the decisions and open questions of each unit of work.
+  [Its README](docs/decisions/README.md) indexes them and lists every open question in one table.
 
 ## Notes
 
