@@ -1420,13 +1420,18 @@ does not change a business's setup.
   shared (a catalog) is application data.
 - **Time zone.** A business's periods (number series years, credit periods and caps, summary
   buckets), business and quiet hours, document dates, invites and agent schedules are in its time
-  zone: its own `timeZone` setting, else the deployment's `DEFAULT_TIME_ZONE` (an IANA zone,
-  checked at start), else UTC. The framework assumes no zone of its own. Read it with
-  `tenantZone(settings)` or `tenantZoneOf(conn, tenantId)` (`@hykr/core`), never `settings.timeZone`
-  directly: a stored name the process does not know falls back instead of failing.
-  `PUT /api/settings/time-zone { timeZone }` (`settings.timeZone`, `api.command(SetTimeZoneSpec,
-  …)`) sets it (400 `time_zone_invalid` for a name that is not a zone; null goes back to the
-  deployment's) and answers `{ timeZone, effective }`; `GET /api/money` gives the effective zone.
+  zone: its own `timeZone` setting, else the deployment's `DEFAULT_TIME_ZONE`, else UTC. The
+  framework assumes no zone of its own. A zone is `UTC` or an IANA Area/Location name that Intl
+  and Postgres both read the same way (`isTimeZone`, then `zoneName` against
+  `pg_timezone_names`), never an offset or an abbreviation: Postgres reads `+05:30` as UTC-05:30
+  and `IST` as Israel's, so periods computed in SQL would disagree with those computed in JS.
+  `DEFAULT_TIME_ZONE` is checked at start, against Postgres too. Read a business's zone with
+  `tenantZone(settings)` or `tenantZoneOf(conn, tenantId)` (`@hykr/core`), never
+  `settings.timeZone` directly: a stored name the process cannot use falls back instead of
+  failing. `PUT /api/settings/time-zone { timeZone }` (`settings.timeZone`,
+  `api.command(SetTimeZoneSpec, …)`) sets it, stored as Postgres spells it (400
+  `time_zone_invalid` otherwise; null goes back to the deployment's), and answers
+  `{ timeZone, effective }`; `GET /api/money` gives the effective zone.
   Periods already started (a number taken, a credit period, an SLA clock) keep theirs. A WhatsApp
   contact the framework makes starts in its business's zone, and a chat turn or a linking code
   that names no zone uses it too.
