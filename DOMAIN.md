@@ -274,8 +274,9 @@ which document's PDF, who signs (`by`), the words they agree to (`statement`), w
 code to the signer's own WhatsApp number or email, binds the acceptance to that PDF's hash and
 the record's version (so the entity must be versioned), and keeps append-only, hash-chained
 evidence. The sample's `orders` module ships `OrderAcceptance`: an approved order's customer
-accepts its PDF once; the order stays `approved`, which is frozen (no transition: `when` limits
-it to approved orders).
+accepts its PDF, which moves the order to `accepted` (the system transition `accept`; frozen) and,
+in `accepted`, stores `order.placed`: the order with its lines, for the business's webhook
+endpoints. `when` limits it to approved orders (an accepted one is `order_accepted`).
 
 ## Sharing by link and public forms
 
@@ -475,6 +476,9 @@ From the contracts declaration alone:
   (`SECRETS_KEY`); inbound `/webhooks/<connector>/<connection>`, verified and stored once, whose
   events the application's `connectorHandlers` handle as the business's system principal. An
   entity keeps its events inside with `traits: { webhooks: false }` (developer guide, 5.14).
+  The sample's `orders` module contributes a connector (`orders-supplier`: a supplier's system
+  reports an order fulfilled) and its handler, and keeps each line's cost out of `order.placed`
+  for an endpoint without `orders.cost.read`.
 - The WhatsApp channel (`framework/api/src/channels`, `framework/channels`): the webhook, the queues
   (`/admin/queues` in development) and the worker, contacts and linking by code, consent and the
   keywords (STOP, START, HELP, talk to a person, delete my data: a privacy request) in every

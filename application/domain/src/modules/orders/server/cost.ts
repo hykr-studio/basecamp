@@ -21,14 +21,17 @@ const withoutCost = (item: unknown) => {
 
 /**
  * A line's cost is hidden from anyone without orders.cost.read, wherever an item leaves the
- * server: item reads, a save's result (its items are read as order items) and a save waiting
- * for approval (its input).
+ * server: item reads, a save's result (its items are read as order items), a save waiting
+ * for approval (its input), and an order that carries its lines (its order.placed event, to a
+ * webhook endpoint, in the delivery log, to an agent).
  */
 export const costHidden: ReadProjector = {
   name: 'orders.cost-hidden',
   project: (type, value, p: Principal) => {
     if (can(p, OrdersCostRead.name)) return value;
     if (type === 'orderItem') return withoutCost(value) as Record<string, unknown>;
+    if (type === 'order' && Array.isArray(value.items))
+      return { ...value, items: value.items.map(withoutCost) };
     const input = value.input as { items?: unknown[] } | undefined;
     if (type === 'approval' && value.action === 'order.save' && Array.isArray(input?.items))
       return { ...value, input: { ...input, items: input.items.map(withoutCost) } };

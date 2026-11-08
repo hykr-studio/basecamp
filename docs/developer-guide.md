@@ -1230,7 +1230,12 @@ contributes: {
   `openConnection(db, tenantId, id)`, and makes any request to a business-given address with
   `safeRequest(url, init, outboundPolicy())`.
 
-The fixture's `framework/api/test/fixture/src/features/integrations/` uses each part.
+The fixture's `framework/api/test/fixture/src/features/integrations/` uses each part. So does the
+sample's `orders` module (`docs/decisions/H5.md`): accepting an order stores `order.placed`, the
+order with its lines, and its read projector `costHidden` takes each line's cost out for an
+endpoint not given `orders.cost.read`; its connector `orders-supplier` (`server/connector.ts`,
+HMAC-signed, credentials `{ secret, partyId }` with the party public) takes a supplier's
+`order.fulfilled` and fulfils the accepted order that party supplies, as the system principal.
 
 ### 5.15 Places: points, addresses and geofences
 
@@ -1850,7 +1855,8 @@ export const OrderAcceptance = defineAcceptance<OrderDocumentData>({
   by: 'customer',                       // or { capability: '…' }, or (p, row) => boolean
   channels: ['whatsapp', 'email'],      // where codes may go, in order
   when: (row) => (row.status === 'approved' ? null : { rule: 'order_not_approved', reason: '…' }),
-  // transition: 'accept',              // optional: the record's move when accepted (expose: 'system')
+  transition: 'accept',                 // optional: the record's move when accepted (expose: 'system')
+  accepted: async ({ tx, row }) => ({ events: [await orderPlaced(tx, row)] }), // optional: more work
 });
 ```
 
@@ -1883,7 +1889,9 @@ export const OrderAcceptance = defineAcceptance<OrderDocumentData>({
   moved along `transition` (as the business's system principal, with `via: '<entity>.transition'`)
   and `accepted(ctx)` runs (more work of the module's, returning touched rows and events). The
   stored events are `acceptance.recorded` (ids, the PDF's version and hash) and the transition's.
-  Without a transition, a signer accepts a PDF once.
+  Without a transition, a signer accepts a PDF once. The sample's orders move to `accepted`
+  (frozen), and `accepted` stores `order.placed`, the order with its lines, for the business's
+  webhook endpoints (section 5.14).
 - **Evidence** (`audit.acceptances`): who signed, the code's challenge, channel, address, sent
   and verified times, the request's IP (`req.ip`), `x-forwarded-for` as sent, user agent and the
   device the client reports, the record and its version, the PDF's id, version, hash and file
@@ -3231,6 +3239,7 @@ These are not built. Each has a workaround for now.
 | Webhook delivery order, auto-pause, alerts | Deliveries of one record can arrive out of order; an endpoint that keeps failing is not paused and nobody is told. |
 | One inbound URL per connector | Each connection has its own URL. Routing a provider's single URL by its account id is not built (decisions B10, 20). |
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
+| The sample's supplier reports | `orders-supplier` takes only `order.fulfilled`, for an accepted order its party supplies; a supplier's acknowledgement or dispatch has no state, and nothing answers the supplier's system. An order is placed (`order.placed`) only when its customer accepts it. |
 | OAuth connectors | Business connections store credentials as given; only the calendar's per-person Google connection has an OAuth flow and token refresh (section 5.24). |
 | Other calendars (Microsoft 365, CalDAV), a calendar other than the primary one | Only Google, into each person's primary calendar. Others subscribe to their ICS feed. |
 | Changes made in Google written back | Sync is one way; a move or deletion in Google is stored as `calendar.event_moved` / `calendar.event_removed` for a module's subscriber to act on (the sample's meetings do). |
@@ -3255,7 +3264,6 @@ These are not built. Each has a workaround for now.
 | Share pages on a business's domain | The URL a link answers is `APP_URL`'s; a verified domain (section 5.18) is not used for it, though the page shows the business's branding. |
 | An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
 | Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders allow cancelling an approved order, accepted or not). |
-| An accepted order's state | The sample's `OrderAcceptance` has no transition (the orders entity files were not B8's to edit): an accepted order stays `approved`, which is frozen, and only its acceptances tell it from one that is not accepted. |
 | The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set Express's `trust proxy` (not done by the framework). |
 | Acceptance tools for the assistant | The assistant can neither ask for a code nor accept (on purpose), and has no tool to read acceptances yet. |
 | Retiring `channel.link_codes` | Linking codes now live in `channel.otp_challenges`; the old table stays, unused, until a migration may drop it. |

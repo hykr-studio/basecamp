@@ -1,6 +1,7 @@
 import { defineAcceptance } from '@hykr/api';
 import type { Labels } from '@hykr/i18n';
 import type { OrderDocumentData } from './document.js';
+import { orderPlaced } from './placed.js';
 
 const L = {
   label: { en: 'Accept the order', hi: 'ऑर्डर स्वीकार करें', te: 'ఆర్డర్‌ను అంగీకరించండి' },
@@ -17,9 +18,10 @@ const words = (text: string, vars: Record<string, string>) =>
 /**
  * An approved order is accepted by its customer, with a one-time code to their WhatsApp number
  * (else their email), against the order's PDF (orders.order): exactly that PDF, of the order as
- * it is now. The order stays `approved`, which is frozen already (it is the contract, and only a
- * submitted order is revised), the evidence is kept, and the customer accepts that PDF once. It
- * has no transition: the order's states are not this module file's to change (decisions B8, 24).
+ * it is now. Accepting moves the order to `accepted` (the system transition `accept`, in the same
+ * transaction), which is frozen: it is the contract. And it places the order: `order.placed`,
+ * with its lines, for the business's webhook endpoints (its supplier, its books). An accepted
+ * order is not accepted again, whatever PDF of it is made later (docs/decisions/H5.md).
  */
 export const OrderAcceptance = defineAcceptance<OrderDocumentData>({
   name: 'orders.order',
@@ -33,8 +35,12 @@ export const OrderAcceptance = defineAcceptance<OrderDocumentData>({
     }),
   by: 'customer',
   channels: ['whatsapp', 'email'],
-  when: (row) =>
-    row.status === 'approved'
-      ? null
-      : { rule: 'order_not_approved', reason: 'Only an approved order is accepted' },
+  transition: 'accept',
+  when: (row) => {
+    if (row.status === 'approved') return null;
+    if (row.status === 'accepted')
+      return { rule: 'order_accepted', reason: 'This order is accepted already' };
+    return { rule: 'order_not_approved', reason: 'Only an approved order is accepted' };
+  },
+  accepted: async ({ tx, row }) => ({ events: [await orderPlaced(tx, row)] }),
 });
