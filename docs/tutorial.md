@@ -755,7 +755,7 @@ How the pieces connect:
 - **`schedule.at`.** Returning `null`, or a time in the past, cancels any scheduled job. `cancelOn` removes it. A new time replaces it, and the `dedupe` key makes that work.
 - **Topics.**
   - `service`: on until STOP, and it ignores quiet hours.
-  - `reminders`: on until STOP or "stop reminders", and moved out of quiet hours. The defaults are `21:00`–`09:00`, `Asia/Kolkata`.
+  - `reminders`: on until STOP or "stop reminders", and moved out of quiet hours. The defaults are `21:00`–`09:00`, in the business's time zone (its own, else the deployment's `DEFAULT_TIME_ZONE`, else UTC).
   - `marketing`: needs an explicit yes.
 - **Send-time checks.** At send time, the dispatcher checks, in order:
   1. that the contact is reachable

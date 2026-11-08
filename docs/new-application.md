@@ -1215,7 +1215,10 @@ browser agent's read tools, `creditsPlugin` for the credits screen) to `<AppShel
 `+not-found.tsx` also serves the framework plugins' screens. The scaffold's `account` module words
 the credits alerts and `.env.example`'s `CREDITS_CONFIG` sets the prices and the plan every
 business starts on (developer guide, section 7.6): change both for your product, or remove
-`CREDITS_CONFIG` to measure usage without caps. Rename the app in `mobile/app.json` (`name`, `slug`,
+`CREDITS_CONFIG` to measure usage without caps. `.env.example` also gives every business that
+sets none the sample's currency, time zone and privacy contact (`DEFAULT_CURRENCY=INR`,
+`DEFAULT_TIME_ZONE=Asia/Kolkata`, `DEFAULT_GRIEVANCE_CONTACT`): set your market's, or leave them
+unset for the framework's neutral ones (no currency, UTC, no contact). Rename the app in `mobile/app.json` (`name`, `slug`,
 `scheme`, the iOS `bundleIdentifier` and the Android `package`). If you change `scheme`, change
 it in `_layout.tsx` too.
 

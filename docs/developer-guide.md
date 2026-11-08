@@ -1142,8 +1142,8 @@ sample's `orders` module uses every part.
 - **Number series.** `defineNumberSeries({ name, format: 'ORD/{fy}/{seq:4}', reset: 'fiscal' })`,
   contributed as `numberSeries`. In a command's `run`, `nextNumber(tx, p, series)` takes the next
   number in the write's own transaction: a write that fails gives it back, and a parked write takes
-  none until it is approved. Periods follow the business's time zone and `fyStartMonth`. Never
-  delete a numbered record: cancel it.
+  none until it is approved. Periods follow the business's time zone (`tenantZone`, below) and
+  `fyStartMonth`. Never delete a numbered record: cancel it.
 - **Records with a parent.** Give a child spec `traits.parent: { entity, field, nest?, position? }`
   (`nest`: its own field pointing at the node above, for groups and lines to any depth), list its
   `field` as filterable `'id'`, put `nest` and `position` in its update schema, and serve it with
@@ -1418,6 +1418,18 @@ does not change a business's setup.
   are read-only to them (403 `shared_read_only`). A business overrides one by creating its own row
   with `sharedId` (once: 409 `shared_override_exists`), and then reads its own instead. What is
   shared (a catalog) is application data.
+- **Time zone.** A business's periods (number series years, credit periods and caps, summary
+  buckets), business and quiet hours, document dates, invites and agent schedules are in its time
+  zone: its own `timeZone` setting, else the deployment's `DEFAULT_TIME_ZONE` (an IANA zone,
+  checked at start), else UTC. The framework assumes no zone of its own. Read it with
+  `tenantZone(settings)` or `tenantZoneOf(conn, tenantId)` (`@hykr/core`), never `settings.timeZone`
+  directly: a stored name the process does not know falls back instead of failing.
+  `PUT /api/settings/time-zone { timeZone }` (`settings.timeZone`, `api.command(SetTimeZoneSpec,
+  …)`) sets it (400 `time_zone_invalid` for a name that is not a zone; null goes back to the
+  deployment's) and answers `{ timeZone, effective }`; `GET /api/money` gives the effective zone.
+  Periods already started (a number taken, a credit period, an SLA clock) keep theirs. A WhatsApp
+  contact the framework makes starts in its business's zone, and a chat turn or a linking code
+  that names no zone uses it too.
 - **Wording.** The application rewords framework phrases and notifications without declaring them
   again: `defineServer({ wording: { phrases: { en: { 'channel.handoff': '…' } }, notifications:
   [overrideNotification('approval.request', { channels, whatsapp, email })] } })`. A phrase must
@@ -2011,11 +2023,13 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
   the application's), the kinds it reviews (`review`), its own periods (`retention`, every one it
   sets; a name that no rule or target has, or a deployment one, is 400 `privacy_settings_invalid`),
   its own processors (`processors`) and its contact as fiduciary (`grievanceContact`,
-  `privacyUrl`; null for the default). A field left out stays; a list replaces the stored one. It
+  `privacyUrl`; null for the default: the deployment's `DEFAULT_GRIEVANCE_CONTACT`, else none). A field left out stays; a list replaces the stored one. It
   is audited with the business's before and after, and `settings.changed` drops every cached copy.
   `GET /api/privacy/settings` reads them (`privacy.manage`, people only).
 - **The register.** `GET /api/privacy/register?lang=hi`, for anyone in the business: the business as
-  fiduciary (name, `grievanceContact`, `privacyUrl`), how requests are answered, the processors
+  fiduciary (name, `grievanceContact`, `privacyUrl`; the contact is the business's, else the
+  deployment's, else null, and WhatsApp's HELP then says no contact is named), how requests are
+  answered, the processors
   (the application's and the business's own), every entity's personal data and what erasure does
   to it, and every retention rule with its period here (`days`) and the application's
   (`defaultDays`).
@@ -3291,7 +3305,8 @@ These are not built. Each has a workaround for now.
 | Checking who asks before a copy is released | A signed-in person's own request runs as they are; there is no OTP step, and the copy is not sent on WhatsApp or by email. The team downloads it for a contact. |
 | A privacy tool for the assistant | Requests are filed by people (the app, the back office, WhatsApp's keyword). |
 | A team filing's request id on its approval | A privacy request the team files that waits for an approval names a provisional request id on the approval (`resource_id`); the request gets its own id when the approval runs it. Find it by its person (`GET /api/privacy/requests`). |
-| A business's privacy contact before it sets one | Until the privacy team sets `grievanceContact` (the Privacy screen, `PATCH /api/privacy/settings`), the register and WhatsApp's HELP show the framework's placeholder contact. Nothing asks a new business for it. |
+| A business's privacy contact before it sets one | Until the privacy team sets `grievanceContact` (the Privacy screen, `PATCH /api/privacy/settings`), the register and WhatsApp's HELP show the deployment's `DEFAULT_GRIEVANCE_CONTACT`, or say that none is named. Nothing asks a new business for it. |
+| Editing a business's time zone on a screen | `PUT /api/settings/time-zone` sets it, but neither the back office's Settings screen nor the app edits it yet. |
 | Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
 | A business's phrases on WhatsApp and voice | The app shows a business's own phrases, and `tenantPhrase` reads them on the server, but the WhatsApp replies and voice still use the application's. A business's notification wording covers email only (WhatsApp templates are approved per application). |
 | Switched-off records elsewhere | A flag that is off hides its routes, tools, writes and destinations, not records already in history, approvals or stored events. A screen opened by its URL loads but its calls answer 404. |
