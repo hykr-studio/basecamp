@@ -7,7 +7,7 @@ import type { Approver } from './authorize.js';
 import { reserveRoutes } from './catalog.js';
 import { createHookRegistry } from './framework/registry.js';
 import type { Principal } from './principal.js';
-import { capabilities, capabilitiesOf, defineCapability, roles } from './roles.js';
+import { capabilities, defineCapability } from './roles.js';
 
 declare module './framework/module.js' {
   interface Contributions {
@@ -114,14 +114,6 @@ export function checkApprovalLevels(): void {
   }
 }
 
-/** The registered roles that hold this capability (their own list, or the capability's). */
-export function rolesWith(capability: string): string[] {
-  return roles
-    .all()
-    .map((r) => r.name)
-    .filter((name) => capabilitiesOf([name]).includes(capability));
-}
-
 /** The framework's capabilities for deciding, with the roles that decided before. */
 export const ApprovalCapabilities = {
   /**
@@ -136,6 +128,8 @@ export const ApprovalCapabilities = {
       te: 'వ్యాపార అభ్యర్థనలను నిర్ణయించండి',
     },
     roles: ['owner', 'ops'],
+    // Support access never decides (B19).
+    supportable: false,
   }),
   /** Approve a marketing message sent to a customer by hand (notify.send). */
   marketing: defineCapability({
@@ -146,6 +140,8 @@ export const ApprovalCapabilities = {
       te: 'మార్కెటింగ్ సందేశాలను అనుమతించండి',
     },
     roles: ['owner', 'admin'],
+    // Support access never decides (B19).
+    supportable: false,
   }),
 } as const;
 

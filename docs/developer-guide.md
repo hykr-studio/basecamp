@@ -702,15 +702,19 @@ type ApprovalRule =
 `by` chooses people by capability, never by role name:
 - `'requester'`: the person the request is for (their own assistant's request);
 - `{ capability }`: anyone in the business holding it, except the requester;
-- `{ userId }`: one named person, a member of the business on its team who is not the requester
-  (otherwise the holders of `approvals.decide` decide instead);
+- `{ userId }`: one named person, a member of the business's team who is not the requester: their
+  membership's roles, as the business has them (its own roles and edits; a name it lacks counts for
+  nothing), include one beyond a contact's and a participant's (otherwise the holders of
+  `approvals.decide` decide instead);
 - `{ band }`: the approver the business's settings name for the amount's band (below).
 
-Who decides, when nothing sets `by`: the person the request is for, if they are a user on the
-business's team. Someone outside it decides nothing of their own: a participant, or a person holding
-only the roles the framework hands contacts and participants (`roleDefaults`, `customer` by default).
-Their requests go to the holders of `approvals.decide` (by default the `owner` and `ops` roles; an
-application gives its own roles the capability, or names its own capability on its levels). Nobody
+Who decides, when nothing sets `by`: the person the request is for, if they are on the business's
+team: a member (`standing: 'member'`, set by the server) holding a role beyond the ones the framework
+hands outsiders (`givenRoles('contact')` and `givenRoles('participant')`; `teamRoles` in
+`@hykr/contracts`). Anyone outside it (a contact, a participant, support access, an operator, a member
+holding only the contact's role) asks the holders of `approvals.decide` (by default the `owner` and
+`ops` roles; an application gives its own roles the capability, or names its own capability on its
+levels). No role name decides it, so an application that renames its outsider role keeps the rule. Nobody
 decides their own request unless the policy sends it back to them: a request decided by a capability
 is never decidable by its requester. The requester can still open it (`GET /api/approvals/:id`, with
 `canDecide: false`); `POST .../approve` answers 403 `own_request`.
@@ -1207,7 +1211,14 @@ with it.
   contributed as `connectors`. A business adds a connection (`POST /api/integrations/connections
   { connector, credentials? }`; credentials are checked and sealed, generated ones returned once).
   The sender posts to `/webhooks/<connector>/<connection id>`: verified with that connection's
-  credentials, each event stored once (a redelivery is a no-op) and queued. In the worker, each
+  credentials, each event stored once (a redelivery is a no-op) and queued. An event is stored
+  under its id only when the connector says its ids are signed (`inbound.signedIds`); otherwise
+  under a hash of the signed body (`bodyKey`, `sha256:<hex>`), so a captured request posted
+  again under a fresh id is still one event. The id it came with is kept as `senderId`
+  (unverified, for the log). For a sender that signs its id and a timestamp, `hmacConnector`
+  takes `idHeader`, `timestampHeader`, `signedIds: true` and `signedContent(req, { id, timestamp
+  })` (what it signs, such as `<timestamp>.<id>.<body>`); it then refuses a fresh id under an old
+  signature and a request more than `toleranceSec` (300) from now. In the worker, each
   `connectorHandlers` entry whose `on` matches runs as `systemPrincipal({ tenantId, job:
   'integrations.<connector>', runId: <stored event id> })`:
 
@@ -1230,7 +1241,8 @@ contributes: {
   `ctx.write(op, input)` is `runWrite` with an idempotency key per event, handler and call. A
   4xx refusal (another business's record is a 404) fails the event for good; other errors retry.
   `GET /api/integrations/connections/:id/inbound` is the log. A connector whose sender posts
-  no body (Google Calendar's push notices) sets `inbound.bodyless`; its `verify` reads headers.
+  no body (Google Calendar's push notices) sets `inbound.bodyless`; its `verify` reads headers,
+  and it must set `signedIds` (there is no body to key by).
 - **Server code** that calls a sender back opens a connection's credentials with
   `openConnection(db, tenantId, id)`, and makes any request to a business-given address with
   `safeRequest(url, init, outboundPolicy())`.
@@ -2118,7 +2130,10 @@ export const BriefForm = definePublicForm({
   target's links; `POST /api/shares/:id/revoke` (its maker, or `shares.manage`). A link always
   ends: `shares.defaultDays` (7) unless asked, at most `shares.maxDays` (90) or the declaration's
   `maxDays`. Deleting a record revokes its links in the same write. Every write is audited
-  (`share.create`, `share.revoke`).
+  (`share.create`, `share.revoke`). A link made through the platform keeps its standing
+  (`onBehalfOf`, `support:<grantId>`). It never outlives that support access: it ends with it at
+  the latest, it is revoked when the access is, and it opens nothing (410 `link_revoked`) while
+  that standing is not in force (section 6.6).
 - **Recipients.** `to: { contactId } | { customerId } | { email } | { recordCustomer: true }`
   (the record's own customer, when it has one). It is where the link's code goes, and who the
   guest is: a contact recipient is the guest's subject, and its customer record the guest's.
@@ -2398,7 +2413,12 @@ give it rows in an entity's `access` and capabilities here.
 role (the framework's or another module's) or replaces its whole capability set. `roleDefaults:
 [{ name: 'creator' | 'contact', roles }]` names the roles the framework hands out: to whoever creates a
 business (`owner` by default; sign-up and `ensureDefaultTenant`) and to a WhatsApp contact without an
-account (`customer`). A capability with `grantable: false` is given only by code.
+account (`customer`). A capability with `grantable: false` is given only by code. One with
+`supportable: true` may be held by a platform operator's support access when a business consents
+(section 6.6). The default is false. Say true only for reading, or for writing the business's own
+records: never for what changes who reaches the business, lets its data leave, or acts after the
+access ends. Of the table above, `backoffice.use`, `customers.message`, `history.all`,
+`members.read`, `credits.view`, `memory.*` and `acceptances.evidence` are supportable.
 
 **A business's own roles.** Each business shapes its roles from the registered capabilities, without a
 deploy, in its `roles` settings section: `defined` (roles it made: name, label, capabilities) and `edits`
@@ -2539,15 +2559,18 @@ audited there with `on_behalf_of = operator:<id>`.
   `GET /api/support-access`, `POST …/:id/consent { minutes?, access? }` (shorter, or read only),
   `…/decline`, `…/revoke`; the operator ends it with `DELETE /api/platform/support/:id`. While it
   lasts, the operator sends `x-tenant-id` and stands there as `support` (`/api/me`'s `as`): the
-  roles named decide which rows, only the capabilities named are held (never the framework's that
-  change who reaches the business, such as `members.manage`, nor any an application lists as
-  `supportWithheld`), read-only access answers GET only (403 `support_read_only`), it never decides
+  roles named decide which rows, only the capabilities named are held, and only those declared
+  `supportable: true` (section 6.4; 400 `capability_withheld` otherwise, and never one an
+  application lists as `supportWithheld`), read-only access answers GET only (403
+  `support_read_only`), it never decides
   an approval (403 `support_cannot_decide`), and it ends at once when revoked, ended, expired or
   the operator is disabled. Every write is audited as the operator with `on_behalf_of =
   support:<grant>`; every request, reads included and refusals too (a write a guard refused under
   read-only access is logged with its 403), is logged for the business
   (`GET /api/support-access/:id/activity`). A business says whether operators may ask, and for how
-  long at most, in its `support` settings (`PUT /api/support-access/settings`).
+  long at most, in its `support` settings (`PUT /api/support-access/settings`). Nothing made under
+  it outlasts it: a standing provider's `stillStands` says whether the standing a thing was made
+  under is still in force, and a share link made under support reaches nothing once it is not.
 - **Platform scope.** An operator holding `platform.shared` who asks for the platform's business
   (`PLATFORM_TENANT_ID`, section 5.18) without being its member works there with the capability
   `shared.publish` only. A shared entity lets operators maintain its rows by naming it in its
@@ -2752,15 +2775,19 @@ Every business's use of what costs money is metered, priced and, when its plan s
 
 - **Meters.** `tokens` (a turn's input and output, the model as variant), `tool_calls` (one per
   tool a turn called), `messages` (a WhatsApp message the provider accepted, its template's
-  category as variant) and `voice_seconds` (a reported voice session). Each use is a row in
+  category as variant), `voice_seconds` (a reported voice session) and `embedding_tokens` (memory
+  recall and indexing, the embedding model as variant; section 7.7). Each use is a row in
   `app.usage_events`, added to its period's counter (`app.usage_counters`). A feature or module adds
-  a meter with `defineMeter({ name, unit, per })` (contributed as `meters`) and records with
-  `CreditsService.record({ tenantId, meter, quantity, source, ref })`; `ref` makes a retried
-  report count once. Turns without a business (Studio) are not metered.
+  a meter with `defineMeter({ name, unit, per, fallbackPrice? })` (contributed as `meters`) and
+  records with `CreditsService.record({ tenantId, meter, quantity, source, ref })`, or
+  `metering()?.record(...)` from code that must not depend on the feature; `ref` makes a retried
+  report count once. Before calling something costly, ask `metering()?.check({ tenantId, meter })`
+  and refuse when it answers. Turns without a business (Studio) are not metered.
 - **Prices** come from `CREDITS_CONFIG` (JSON): `currency`, `prices` by `<meter>` or
   `<meter>.<variant>` in credits per pricing unit (tokens per million, voice per minute),
-  `markupPercent` on a model's own `MODEL_PROVIDERS` price (used when no `tokens` price is set and
-  the currencies match), and `defaults`, the plan every business starts on. Malformed JSON stops
+  `markupPercent` on a model's own `MODEL_PROVIDERS` price (used when no `tokens` or
+  `embedding_tokens` price is set and the currencies match), and `defaults`, the plan every
+  business starts on. Malformed JSON stops
   the start. Unset, uses are metered at no cost and nothing is capped.
 - **The plan** is the settings section `credits`: `enforce`, `allowance` (credits per period),
   `period` (`day`, `week`, `month` in the business's time zone), `alertAt` (80) and `pauseAt`
@@ -2770,13 +2797,15 @@ Every business's use of what costs money is metered, priced and, when its plan s
 - **Budget and wallet.** On credits, a period's spending uses the allowance first, then the
   prepaid wallet (`app.credit_wallets`, every change a row in `app.credit_ledger`). Used per cent is
   spent over spent plus what is left. At `alertAt` of a cap (the budget or a meter's limit) the
-  named event `credits.threshold` (`{ cap, level: 'alert' | 'pause', usedPercent, recipients }`,
-  recipients holding `credits.manage`) is stored in the outbox and published, once per period and
-  level; the application's notification words it. At `pauseAt` the business is paused.
+  named event `credits.threshold` (`{ cap, level: 'alert' | 'pause', usedPercent, threshold }`) is
+  stored in the outbox and published, once per period and level; the application's notification
+  words it and addresses `{ capability: 'credits.manage' }`, which dispatch expands with the
+  business's roles (its own and its edits) when it sends. At `pauseAt` the business is paused.
 - **What a pause refuses** (402, rules `credits_exhausted`, `usage_limit_reached`,
   `credits_suspended`): assistant turns and back-office drafts (the `credits` turn hook), new voice
-  sessions (and a session's `maxSeconds` is cut to what is left), and outbound messages of a
-  category in `pauseMessages` (recorded as failed, never sent). Replies, codes, approvals, handoffs
+  sessions (and a session's `maxSeconds` is cut to what is left), outbound messages of a
+  category in `pauseMessages` (recorded as failed, never sent), and embeddings (recall answers 402,
+  a turn runs without recall, the indexer leaves rows pending). Replies, codes, approvals, handoffs
   and staff messages always go. A paused business's WhatsApp customer is handed to the team.
   One action may overshoot the cap; the wallet goes below zero by that much.
 - **The operator** is a platform operator holding `platform.credits` (section 6.6), signed in:
@@ -2837,6 +2866,13 @@ call. What survives reaches the model as context lines, which it reads as data. 
 `recall-memory` do the same on request; an `about` record the caller cannot read is a 404.
 Recall's embedding gets one try and 4 s (1.5 s on a voice turn): past that the turn runs without
 recall and the API answers 503 `recall_unavailable`, so a slow provider never holds a turn.
+
+**Credits.** Every embedding is an `embedding_tokens` use (section 7.6), checked before the provider
+is called and recorded after (`source` `memory.recall` or `memory.index`; a provider that reports no
+usage is charged a token per four characters). A business its credits refuse (paused, or its
+`embedding_tokens` limit reached) gets 402 `credits_paused` from the recall API, runs its turns
+without recall, and its index waits: pending rows are left as they are and looked at again every
+5 s, then embedded once the business may again (`docs/decisions/S4.md`).
 
 **The index.** `app.memory_index` keeps one vector per source and no text. A write hook marks every
 touched record of a trait entity (commands included, from `touched`) in the write's transaction; the
@@ -3245,12 +3281,13 @@ These are not built. Each has a workaround for now.
 | Suspending a business, plans and prices | Operators make, rename and switch flags of a business, and set its credits (section 7.6). Nothing suspends or deletes one; billing is the application's. |
 | Bull Board in production | It is mounted outside production only, for operators holding `platform.queues`. |
 | Support in history and events | `audit.events.on_behalf_of` marks support and operator writes, but the history screen does not label them, and stored events carry only the actor. Read a grant's activity (`GET /api/support-access/:id/activity`) or the audit. |
-| Support capabilities an application withholds | The framework withholds its own access-changing capabilities from support access; an application lists its own as `supportWithheld`, or support may hold them when a business consents. |
+| Support access and capabilities | Support access holds only capabilities declared `supportable: true` where they are defined (an application's own included); an application keeps a framework one from it with `supportWithheld`. Links made under support before this rule have no `on_behalf_of` and last until they expire. |
 | Integration screens | Endpoints, connections and the delivery log have an HTTP API only (`/api/integrations/*`): no app or back-office screen, and no typed `@hykr/api-client` methods. |
 | Webhooks for approvals and other non-entity records | Only entity events are sent (their read schema projects them). |
 | Webhook delivery order, auto-pause, alerts | Deliveries of one record can arrive out of order; an endpoint that keeps failing is not paused and nobody is told. |
 | One inbound URL per connector | Each connection has its own URL. Routing a provider's single URL by its account id is not built (decisions B10, 20). |
-| Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. |
+| Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. A retention period for inbound events would also have to keep their keys: a sender that signs no timestamp can have an old request posted again, and only its stored key drops it (decisions S2). |
+| Inbound senders without signed ids | Their events are keyed by the body, so two events with byte-identical bodies are one, and a batch regrouped on retry stores its events again. Sign the ids (`signedContent`, `signedIds`) to avoid both (decisions S2). |
 | The sample's supplier reports | `orders-supplier` takes only `order.fulfilled`, for an accepted order its party supplies; a supplier's acknowledgement or dispatch has no state, and nothing answers the supplier's system. An order is placed (`order.placed`) only when its customer accepts it. |
 | OAuth connectors | Business connections store credentials as given; only the calendar's per-person Google connection has an OAuth flow and token refresh (section 5.24). |
 | Other calendars (Microsoft 365, CalDAV), a calendar other than the primary one | Only Google, into each person's primary calendar. Others subscribe to their ICS feed. |
@@ -3314,7 +3351,7 @@ These are not built. Each has a workaround for now.
 | Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |
 | Buying credits | No purchase provider ships: register a `CreditPurchaseProvider` from a payment connector and call `CreditsService.settlePurchase` from its verified webhook. |
 | Credits mid-turn | A turn, a voice session or a message is checked before it starts; one may take a business past its cap. Tool calls are not refused in the middle of a turn. |
-| Metering everything | The guardrail's model calls, embeddings, WhatsApp voice-note transcription and voice sessions whose worker never reported an end are not metered. Call `CreditsService.record` from the feature. |
+| Metering everything | The guardrail's model calls, WhatsApp voice-note transcription, voice sessions whose worker never reported an end and embedding calls that fail or time out are not metered. Call `CreditsService.record` from the feature. |
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |

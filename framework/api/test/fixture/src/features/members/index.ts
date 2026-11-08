@@ -3,7 +3,10 @@
 // a `projects` module whose `cost` only some capabilities read, rows reached through record grants
 // (a project, and its steps through `via`) and through a capability key, a command whose output
 // hides the cost too, a notification whose words name the cost (H1), and requests decided by
-// someone outside the team (H1). Only the members test's server (`membersServer`) adds the module.
+// someone outside the team (H1, X1): a client (a contact's and a participant's role here) has
+// projects of its own, an assistant's delete waits with nobody named, a review waits for the
+// person it names, and a costly reprice waits for the approver the business names for its amount
+// band. Only the members test's server (`membersServer`) adds the module.
 import { defineModule, defineServer } from '@hykr/api';
 import {
   type Contributions,
@@ -23,6 +26,7 @@ import {
   entityController,
   entityHandlers,
   needsApproval,
+  type WriteHook,
 } from '@hykr/core';
 import { defineNotification, type Row } from '@hykr/notifications';
 import type { Access } from '@hykr/policy';
@@ -68,8 +72,8 @@ export const ProjectSpec = entitySpec({
     search: ['title'],
     pageSize: { default: 50, max: 100 },
   },
-  // The assistant's changes wait for an owner or a crew member; its deletes for the default
-  // decider (the person, unless they are outside the team).
+  // The assistant's changes wait for an owner or a crew member. Its deletes name nobody: the
+  // person decides their own assistant's, unless they are outside the team.
   approval: {
     update: { when: (p) => p.actor.kind === 'agent', by: { capability: ApproveProjects.name } },
     delete: (p) => p.actor.kind === 'agent',
@@ -131,8 +135,8 @@ export const projectsSpec = moduleSpec({
 });
 
 /**
- * Owners and admins every project; crew their own and the projects granted to them; a capability key
- * every project.
+ * Owners and admins every project; crew their own and the projects granted to them; a client
+ * their own; a capability key every project.
  */
 const PROJECT_ACCESS: Access = {
   read: {
@@ -240,6 +244,23 @@ export const ProjectToldNotification = defineNotification<ProjectRow>({
   dedupe: (p) => `fixture.project-told:${p.id}`,
 });
 
+/** A reprice to at least this cost waits for the business's approver of the `projects` band. */
+export const COSTLY = 1_000_000;
+
+/** The business's settings name who decides a costly reprice (`approvals.bands.projects`). */
+export const CostlyReprice: WriteHook = {
+  name: 'fixture.projects.costly',
+  decide: ({ op, input }) => {
+    const cost = (input as { cost?: number } | null)?.cost ?? 0;
+    return op.name === RepriceProjectSpec.name && cost >= COSTLY
+      ? needsApproval('fixture_costly', 'A costly project waits for its approver', {
+          amount: { minor: cost, currency: 'EUR' },
+          approver: { by: { band: 'projects' } },
+        })
+      : null;
+  },
+};
+
 @Module({
   controllers: [
     entityController(ProjectDef),
@@ -291,6 +312,7 @@ export const membersContributions: Partial<Contributions> = {
     ApproveProjects,
     HearProjects,
   ],
+  writeHooks: [CostlyReprice],
   roles: [Crew, Estimator, Client],
   // The application relabels the framework's staff and replaces what it may do.
   roleOverrides: [

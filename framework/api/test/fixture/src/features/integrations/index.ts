@@ -1,7 +1,8 @@
 // The integration bus (B10) as an application uses it: a capability that a read projector needs
 // before a task's due date leaves (so a webhook endpoint sees it only when given it), a write
-// hook that parks an endpoint marked [ask], an entity whose events never leave, an HMAC
-// connector for a sender of its own, and handlers that act on tasks as the business's system.
+// hook that parks an endpoint marked [ask], an entity whose events never leave, two HMAC
+// connectors (one signs its body only, one its id and a timestamp too), and handlers that act on
+// tasks as the business's system.
 // Only the integrations e2e test boots `integrationsApp`.
 import {
   type ConnectorHandler,
@@ -112,13 +113,35 @@ export const memosModule = defineModule({
 
 /* ── Inbound: a sender of the fixture's own, and handlers ──────────────────── */
 
-/** Signs the raw body: `x-fixture-signature: sha256=<hex>`, its event id in `x-fixture-event`. */
+/**
+ * Signs the raw body only: `x-fixture-signature: sha256=<hex>`, its event id in `x-fixture-event`,
+ * which the signature leaves out. So its events are stored under a hash of the body.
+ */
 export const fixtureSender = hmacConnector({
   name: 'fixture-sender',
   label: { en: 'Fixture sender', hi: 'फ़िक्स्चर प्रेषक', te: 'ఫిక్స్చర్ పంపేవారు' },
   header: 'x-fixture-signature',
   prefix: 'sha256=',
   idHeader: 'x-fixture-event',
+});
+
+/**
+ * Signs `<timestamp>.<id>.<body>`: `x-fixture-signature: sha256=<hex>`, with `x-fixture-event`
+ * and `x-fixture-timestamp` (seconds). Its ids are signed, and a request goes stale in 300 s.
+ */
+export const fixtureSignedSender = hmacConnector({
+  name: 'fixture-signed',
+  label: {
+    en: 'Fixture signed sender',
+    hi: 'फ़िक्स्चर हस्ताक्षरित प्रेषक',
+    te: 'ఫిక్స్చర్ సంతకం చేసే పంపేవారు',
+  },
+  header: 'x-fixture-signature',
+  prefix: 'sha256=',
+  idHeader: 'x-fixture-event',
+  timestampHeader: 'x-fixture-timestamp',
+  signedIds: true,
+  signedContent: (req, { id, timestamp }) => `${timestamp}.${id}.${req.rawBody}`,
 });
 
 /** What the handlers saw, for the tests (the app runs in the test's process). */
@@ -150,6 +173,7 @@ export const handlers: ConnectorHandler[] = [
   // 'task.complete' { taskId }: the task is done, written as the business's system.
   completeTask('fixture.complete-task', 'standard-webhooks', ['task.complete']),
   completeTask('fixture.sender-done', 'fixture-sender', ['done']),
+  completeTask('fixture.signed-done', 'fixture-signed', ['done']),
   // Fails once for now, then works: the event is retried, the handler runs again.
   defineConnectorHandler({
     name: 'fixture.flaky',
@@ -168,7 +192,7 @@ export const integrationsContributions: Partial<Contributions> = {
   capabilities: [TaskDates],
   readProjectors: [taskDates],
   writeHooks: [askFirst],
-  connectors: [fixtureSender],
+  connectors: [fixtureSender, fixtureSignedSender],
   connectorHandlers: handlers,
 };
 

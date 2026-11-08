@@ -1,0 +1,2 @@
+ALTER TABLE "app"."share_links" ADD COLUMN "on_behalf_of" text;--> statement-breakpoint
+CREATE INDEX "share_links_behalf_idx" ON "app"."share_links" USING btree ("on_behalf_of") WHERE "app"."share_links"."on_behalf_of" is not null;

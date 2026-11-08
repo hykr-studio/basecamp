@@ -35,8 +35,10 @@ const L = {
 /**
  * The orders module's connector (B10): a supplier's own system, one connection per supplier.
  * It signs the raw body with HMAC-SHA256 (`x-supplier-signature: sha256=<hex>`, checked in
- * constant time) and names each event (`x-supplier-event`, so a redelivery is stored once). The
- * body is `{ type, data }`. The business gives the shared secret and the supplier's party when it
+ * constant time) and names each event (`x-supplier-event`). The signature does not cover that
+ * id, so the server keeps it as the sender's id only and stores each event once by its signed
+ * body (decisions S2): a redelivery, or a replay under a fresh id, is stored once. The body is
+ * `{ type, data }`. The business gives the shared secret and the supplier's party when it
  * adds the connection (`POST /api/integrations/connections`); the party is shown back, never
  * the secret. Posts go to /webhooks/orders-supplier/<connection id>.
  */

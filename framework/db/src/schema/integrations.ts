@@ -121,7 +121,7 @@ export const integrationConnections = app.table(
   (table) => [index('integration_connections_tenant_idx').on(table.tenantId, table.connector)],
 );
 
-/** One event an outside system sent, stored once per connection and sender's id. */
+/** One event an outside system sent, stored once per connection and key. */
 export const integrationInbound = app.table(
   'integration_inbound',
   {
@@ -131,8 +131,13 @@ export const integrationInbound = app.table(
       .notNull()
       .references(() => integrationConnections.id, { onDelete: 'cascade' }),
     connector: text('connector').notNull(),
-    /** The sender's id for the event. */
+    /**
+     * The key the event is stored under, once per connection: the sender's id when the
+     * connector signs it, else a hash of the signed body (`bodyKey`, `sha256:<hex>`).
+     */
     externalId: text('external_id').notNull(),
+    /** The id the sender gave when it is not the key: unverified, for the log only. */
+    senderId: text('sender_id'),
     type: text('type').notNull(),
     data: jsonb('data'),
     /** 'pending' | 'processing' | 'processed' | 'ignored' | 'failed'. */

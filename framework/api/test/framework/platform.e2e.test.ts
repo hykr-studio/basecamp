@@ -2,9 +2,12 @@
 // consents to (time-boxed, read-only unless allowed, every request logged, every write audited on
 // behalf of the operator), making a business for a person, platform-managed flags, platform scope
 // for shared records, the routing hook for inbound requests, and the usage report across
-// businesses. The fixture's src/features/platform adds issues, parts and the router.
+// businesses. Support access holds only capabilities declared supportable, and a share link made
+// under it ends with it (S1). The fixture's src/features/platform adds issues (shareable), parts
+// and the router.
 import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
+import { type CapabilityDef, capabilities } from '@hykr/contracts';
 import { configureSharedRecords } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PlatformRoutingService } from '../../dist/index.js';
@@ -13,6 +16,7 @@ import {
   asAssistant,
   boot,
   eventually,
+  type Json,
   makeOperator,
   me,
   Person,
@@ -628,6 +632,192 @@ describe('support access', () => {
     await root.call('PATCH', `/api/platform/operators/${helperId}`, { enabled: true });
     expect((await as(helper, A)('GET', '/api/issues')).status).toBe(200);
     await helper.call('DELETE', `/api/platform/support/${yes}`);
+  });
+});
+
+// docs/decisions/S1.md: support access holds only what is declared supportable, and what it makes
+// ends with it.
+describe('support access leaves nothing behind its time box', () => {
+  let ticket = '';
+  const request = (body: Record<string, unknown>) =>
+    helper.call('POST', '/api/platform/support', {
+      tenantId: A,
+      reason: 'Check a shared issue',
+      roles: ['admin'],
+      capabilities: [],
+      access: 'write',
+      minutes: 60,
+      ...body,
+    });
+  /** A write grant the business consented to. */
+  const consented = async () => {
+    const asked = await request({});
+    expect(asked.status).toBe(201);
+    const id = asked.body.value.id as string;
+    const res = await as(ana, A)('POST', `/api/support-access/${id}/consent`, {});
+    expect(res.body.value).toMatchObject({ status: 'active' });
+    return id;
+  };
+  /** As a grant stored before these capabilities were withheld would hold them. */
+  const storedWith = (id: string, caps: string[]) =>
+    pool.query('update app.platform_support_grants set capabilities = $2 where id = $1', [
+      id,
+      caps,
+    ]);
+  /** A link opened by someone with no session at all. */
+  const opened = async (token: string) => {
+    const res = await fetch(`${server.base}/api/share/${token}`);
+    return { status: res.status, body: await res.json() };
+  };
+  const shareTicket = (p: Person) =>
+    as(p, A)('POST', '/api/shares', { target: { entity: 'issue', id: ticket }, expiresInDays: 90 });
+  /**
+   * The link support would make if a capability that makes links were ever declared supportable:
+   * the guard below must hold even then.
+   */
+  async function linkUnderSupport(): Promise<Json> {
+    const def = capabilities.get('shares.create') as CapabilityDef;
+    def.supportable = true;
+    try {
+      const made = await shareTicket(helper);
+      expect(made.status).toBe(201);
+      return made.body.value;
+    } finally {
+      def.supportable = false;
+    }
+  }
+
+  beforeAll(async () => {
+    ticket = (await issueIn(ana, A, 'Shared tap', 'private')).id;
+  });
+
+  it('every capability of the framework says whether support may hold it', () => {
+    // A new one that says nothing is never held (the default), but its author must decide.
+    const unsaid = capabilities
+      .all()
+      .filter((c) => !c.name.startsWith('fixture.') && c.grantable !== false)
+      .filter((c) => typeof c.supportable !== 'boolean')
+      .map((c) => c.name);
+    expect(unsaid).toEqual([]);
+  });
+
+  it('never holds a capability not declared supportable, even when asked', async () => {
+    for (const capability of [
+      'shares.create',
+      'shares.manage',
+      'privacy.manage',
+      'agents.manage',
+      'data.export',
+      'approvals.decide',
+      // The application's, declared without `supportable`.
+      'fixture.issue.close',
+    ]) {
+      const res = await request({ capabilities: [capability] });
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ error: 'capability_withheld' });
+    }
+    // The application's, declared supportable.
+    const fine = await request({ capabilities: ['fixture.issue.note'] });
+    expect(fine.status).toBe(201);
+    await helper.call('DELETE', `/api/platform/support/${fine.body.value.id}`);
+  });
+
+  it('share links: never made; a link made under it ends when it is revoked', async () => {
+    const id = await consented();
+    await storedWith(id, ['shares.create', 'shares.manage']);
+    expect((await as(helper, A)('GET', '/api/me')).body).toMatchObject({
+      as: 'support',
+      capabilities: [],
+    });
+    const refused = await shareTicket(helper);
+    expect(refused.status).toBe(403);
+    expect(refused.body).toMatchObject({ rule: 'shares_create' });
+    // The business's own link to the same record.
+    const theirs = (await shareTicket(ana)).body.value;
+    expect(theirs.onBehalfOf).toBeNull();
+
+    const link = await linkUnderSupport();
+    expect(link.onBehalfOf).toBe(`support:${id}`);
+    const grant = (await helper.call('GET', `/api/platform/support/${id}`)).body;
+    // Asked for 90 days, it lasts no longer than the access.
+    expect(Date.parse(link.expiresAt)).toBeLessThanOrEqual(Date.parse(grant.endsAt));
+    expect(Date.parse(link.expiresAt)).toBeGreaterThan(Date.now());
+    const open = await opened(link.token);
+    expect(open.status).toBe(200);
+    expect(open.body.record).toMatchObject({ entity: 'issue', id: ticket });
+
+    // The owner revokes the access: its link goes with it, in the same write, audited.
+    const revoked = await as(ana, A)('POST', `/api/support-access/${id}/revoke`);
+    expect(revoked.body.value).toMatchObject({ status: 'revoked' });
+    const gone = await opened(link.token);
+    expect(gone.status).toBe(410);
+    expect(gone.body).toMatchObject({ error: 'link_revoked' });
+    const { rows } = await pool.query(
+      'select revoked_by, on_behalf_of from app.share_links where id = $1',
+      [link.id],
+    );
+    expect(rows[0]).toEqual({ revoked_by: 'support.ended', on_behalf_of: `support:${id}` });
+    expect(
+      (await audits(A, 'shareLink.update')).find((a) => a.resource_id === link.id),
+    ).toMatchObject({ actor_kind: 'user', actor_id: ana.id, outcome: 'committed' });
+    const listed = (await as(ana, A)('GET', `/api/shares?entity=issue&id=${ticket}`)).body.items;
+    expect(listed.find((l: { id: string }) => l.id === link.id)).toMatchObject({
+      status: 'revoked',
+      onBehalfOf: `support:${id}`,
+    });
+    // The business's own link is the business's: it keeps working.
+    expect((await opened(theirs.token)).status).toBe(200);
+  });
+
+  it('a link made under it reaches nothing while its operator is disabled, or once it is over', async () => {
+    const id = await consented();
+    await storedWith(id, ['shares.create']);
+    const link = await linkUnderSupport();
+    expect((await opened(link.token)).status).toBe(200);
+    await root.call('PATCH', `/api/platform/operators/${helperId}`, { enabled: false });
+    expect((await opened(link.token)).status).toBe(410);
+    await root.call('PATCH', `/api/platform/operators/${helperId}`, { enabled: true });
+    expect((await opened(link.token)).status).toBe(200);
+    // Its time is up: nothing is written, the link still has days left, and it opens nothing.
+    await pool.query(
+      "update app.platform_support_grants set ends_at = now() - interval '1 second' where id = $1",
+      [id],
+    );
+    expect((await helper.call('GET', `/api/platform/support/${id}`)).body.status).toBe('ended');
+    const gone = await opened(link.token);
+    expect(gone.status).toBe(410);
+    expect(gone.body).toMatchObject({ error: 'link_revoked' });
+  });
+
+  it("personal data: another person's requests, archives and filings stay out of reach", async () => {
+    // The owner's own copy of their data, with its archive.
+    const filed = await as(ana, A)('POST', '/api/privacy/requests', { kind: 'export' });
+    expect(filed.body.status).toBe('done');
+    const requestId = filed.body.value.id as string;
+    const done = await eventually(async () => {
+      const r = (await as(ana, A)('GET', `/api/privacy/requests/${requestId}`)).body;
+      return r?.status === 'completed' ? r : undefined;
+    }, 20_000);
+    const archive = done.files[0] as string;
+    expect((await as(ana, A)('GET', `/api/files/${archive}`)).status).toBe(200);
+
+    const id = await consented();
+    await storedWith(id, ['privacy.manage']);
+    const theOperator = as(helper, A);
+    expect((await theOperator('GET', '/api/me')).body.capabilities).toEqual([]);
+    expect((await theOperator('GET', `/api/privacy/requests/${requestId}`)).status).toBe(404);
+    expect((await theOperator('GET', `/api/files/${archive}`)).status).toBe(404);
+    const list = (await theOperator('GET', '/api/privacy/requests')).body.items;
+    expect(list.map((r: { id: string }) => r.id)).not.toContain(requestId);
+    for (const kind of ['export', 'erase']) {
+      const res = await theOperator('POST', '/api/privacy/requests', {
+        kind,
+        for: { userId: ana.id },
+      });
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ rule: 'needs_privacy_manage' });
+    }
+    await helper.call('DELETE', `/api/platform/support/${id}`);
   });
 });
 

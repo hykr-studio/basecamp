@@ -94,6 +94,7 @@ export const PartyCapabilities = {
       te: 'వ్యాపారం కలిసి పనిచేసే వ్యక్తులు, సంస్థలను చూడండి',
     },
     roles: ['owner', 'admin', 'ops', 'staff'],
+    supportable: true,
   }),
   /** Add and change parties, their people, and who participates in a record. */
   manage: defineCapability({
@@ -104,6 +105,7 @@ export const PartyCapabilities = {
       te: 'రికార్డులపై వ్యక్తులు, సంస్థలను నిర్వహించండి',
     },
     roles: ['owner', 'admin', 'ops'],
+    supportable: false,
   }),
 } as const;
 

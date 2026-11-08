@@ -62,4 +62,5 @@ export const SupportConsentCapability = defineCapability({
     te: 'ప్లాట్‌ఫామ్ సహాయాన్ని వ్యాపారంలో పని చేయనివ్వండి',
   },
   roles: ['owner'],
+  supportable: false,
 });

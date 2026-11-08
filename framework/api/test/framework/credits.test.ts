@@ -1,6 +1,6 @@
 // Credits arithmetic, without a server: CREDITS_CONFIG, the effective plan, prices, the budget
 // and limits, overrides and headroom.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { assess, headroomOf, refusalFor } from '../../dist/features/credits/budget.js';
 import {
   CreditsConfigError,
@@ -9,7 +9,7 @@ import {
   priceFor,
   resolvePlan,
 } from '../../dist/features/credits/config.js';
-import { FrameworkMeters } from '../../dist/features/credits/meters.js';
+import { FrameworkMeters, modelInputPrice } from '../../dist/features/credits/meters.js';
 import { providerFor } from '../../dist/features/credits/writes.js';
 
 const config = parseCreditsConfig(
@@ -194,6 +194,74 @@ describe('what a pause refuses', () => {
     });
     // Even a pause never stops the messages that always go.
     expect(refusalFor(stop, FrameworkMeters.messages, 'utility')).toBeNull();
+  });
+});
+
+describe('embedding tokens', () => {
+  const embeddings = FrameworkMeters.embeddingTokens;
+
+  it('pause with the budget, the operator and their own limit; a turn’s limits leave them', () => {
+    const paused = assess(plan({ enforce: true }), counters(100), null);
+    expect(refusalFor(paused, embeddings, 'gw/embed')?.rule).toBe('credits_exhausted');
+    const stop = assess(plan({ override: { mode: 'pause', reason: 'unpaid' } }), [], null);
+    expect(refusalFor(stop, embeddings)?.rule).toBe('credits_suspended');
+    const limited = assess(
+      plan({ enforce: true, allowance: 1000, limits: { embedding_tokens: 50 } }),
+      [{ meter: 'embedding_tokens', quantity: 50, cost: 0 }],
+      null,
+    );
+    expect(refusalFor(limited, embeddings)).toMatchObject({
+      rule: 'usage_limit_reached',
+      cap: 'embedding_tokens',
+    });
+    expect(refusalFor(limited, FrameworkMeters.tokens)).toBeNull();
+    const turns = assess(
+      plan({ enforce: true, allowance: 1000, limits: { tokens: 10, tool_calls: 1 } }),
+      [
+        { meter: 'tokens', quantity: 10, cost: 0 },
+        { meter: 'tool_calls', quantity: 1, cost: 10 },
+      ],
+      null,
+    );
+    expect(refusalFor(turns, embeddings)).toBeNull();
+  });
+
+  describe('unpriced, the model’s own input price plus the markup', () => {
+    const saved = process.env.MODEL_PROVIDERS;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.MODEL_PROVIDERS;
+      else process.env.MODEL_PROVIDERS = saved;
+    });
+
+    it('in the credits currency only; an unknown or unpriced model costs nothing', () => {
+      process.env.MODEL_PROVIDERS = JSON.stringify([
+        {
+          id: 'gw',
+          baseUrl: 'http://gw.example.test/v1',
+          apiKey: 'k',
+          models: [
+            { id: 'embed', kind: 'embedding', price: { currency: 'XXX', inputPerMillion: 50 } },
+            { id: 'other', kind: 'embedding', price: { currency: 'XTS', inputPerMillion: 50 } },
+            { id: 'free', kind: 'embedding' },
+          ],
+        },
+      ]);
+      const marked = { ...plan(), markupPercent: 20 };
+      expect(embeddings.fallbackPrice?.('gw/embed', marked)).toBe(60);
+      expect(embeddings.fallbackPrice?.('gw/embed', plan())).toBe(50);
+      expect(embeddings.fallbackPrice?.('gw/other', marked)).toBeUndefined();
+      expect(embeddings.fallbackPrice?.('gw/free', marked)).toBeUndefined();
+      expect(embeddings.fallbackPrice?.('gw/missing', marked)).toBeUndefined();
+      expect(embeddings.fallbackPrice?.(null, marked)).toBeUndefined();
+      // No credits currency: nothing is in it.
+      const noCurrency = resolvePlan(parseCreditsConfig('{}'), undefined);
+      expect(modelInputPrice('gw/embed', noCurrency)).toBeUndefined();
+      // 1,000 tokens at 60 per million: one credit, rounded up.
+      expect(creditsFor(60, 1000, embeddings.per)).toBe(1);
+      // A registry that does not parse prices nothing (it is reported where it is loaded).
+      process.env.MODEL_PROVIDERS = '{';
+      expect(modelInputPrice('gw/embed', marked)).toBeUndefined();
+    });
   });
 });
 

@@ -73,6 +73,7 @@ export const ModelsCapability = defineCapability({
     te: 'అసిస్టెంట్ మోడల్‌లను ఎంచుకోండి',
   },
   roles: ['owner', 'admin'],
+  supportable: false,
 });
 
 /** Which model a turn (or an embedding) would use for this business, or why none may run. */

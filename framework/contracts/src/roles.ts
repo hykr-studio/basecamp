@@ -40,6 +40,14 @@ export interface CapabilityDef {
    * beyond one business (the job queues of every business) must never be a business's choice.
    */
   grantable?: boolean;
+  /**
+   * May a platform operator's support access hold it, when a business consents (B19)? Default
+   * false: only a capability that says true. Say true only for what ends with the time box:
+   * reading, and writing the business's own records. Never for what changes who reaches the
+   * business, lets its data leave, or acts after the access ends (an invitation, a share link, an
+   * export, an erasure, a webhook, an agent).
+   */
+  supportable?: boolean;
 }
 
 /**
@@ -149,6 +157,24 @@ export function givenRoles(name: RoleDefaultName): string[] {
   return name === 'participant' ? givenRoles('contact') : [...FRAMEWORK_DEFAULTS[name]];
 }
 
+/**
+ * The roles the framework hands people outside a business's team: a contact's and a
+ * participant's, as the application names them (the framework's: `customer`).
+ */
+export function outsiderRoles(): Set<string> {
+  return new Set([...givenRoles('contact'), ...givenRoles('participant')]);
+}
+
+/**
+ * The roles among these that make someone part of a business's team: those no outsider is
+ * given. Pass the roles the business has (`standingIn(...).roles`): a name it does not have
+ * makes nobody part of anything. Empty: they are outside, whatever their membership says.
+ */
+export function teamRoles(names: readonly string[]): string[] {
+  const outside = outsiderRoles();
+  return [...new Set(names)].filter((n) => !outside.has(n));
+}
+
 /** The framework's own capabilities, with the roles that had each one before. */
 export const FrameworkCapabilities = {
   /** The back office: take a WhatsApp conversation from the assistant and reply. */
@@ -160,6 +186,7 @@ export const FrameworkCapabilities = {
       te: 'బ్యాక్ ఆఫీస్‌లో పని చేయండి',
     },
     roles: TEAM,
+    supportable: true,
   }),
   /** Send a template to a customer by hand (notify.send). */
   messageCustomers: defineCapability({
@@ -170,6 +197,7 @@ export const FrameworkCapabilities = {
       te: 'కస్టమర్లకు సందేశం పంపండి',
     },
     roles: TEAM,
+    supportable: true,
   }),
   /** The whole business's history, not only what you (or your assistant) did. */
   wholeHistory: defineCapability({
@@ -180,6 +208,7 @@ export const FrameworkCapabilities = {
       te: 'మొత్తం వ్యాపార చరిత్రను చూడండి',
     },
     roles: ['admin', 'ops'],
+    supportable: true,
   }),
   /** Set the business's WhatsApp number. */
   channelSetup: defineCapability({
@@ -190,6 +219,7 @@ export const FrameworkCapabilities = {
       te: 'వ్యాపార WhatsApp నంబర్‌ను సెట్ చేయండి',
     },
     roles: ['owner', 'admin'],
+    supportable: false,
   }),
   /** The business's members and roles, read only (GET /api/members). */
   readMembers: defineCapability({
@@ -200,6 +230,7 @@ export const FrameworkCapabilities = {
       te: 'వ్యాపార సభ్యులను చూడండి',
     },
     roles: TEAM,
+    supportable: true,
   }),
   /** Invite people, change and remove members, define and edit the business's roles. */
   manageMembers: defineCapability({
@@ -210,6 +241,7 @@ export const FrameworkCapabilities = {
       te: 'వ్యక్తులను ఆహ్వానించండి, పాత్రలను నిర్వహించండి',
     },
     roles: ['owner', 'admin'],
+    supportable: false,
   }),
   /** Give a member access to one record (an access rule's `granted` reach), and take it back. */
   grantRecords: defineCapability({
@@ -220,6 +252,7 @@ export const FrameworkCapabilities = {
       te: 'ఒక రికార్డుకు ప్రాప్తిని ఇవ్వండి',
     },
     roles: ['owner', 'admin', 'ops'],
+    supportable: false,
   }),
 } as const;
 
@@ -251,7 +284,9 @@ export function declaredLabel(roleName: string): Labels | undefined {
 
 /**
  * What these declared roles allow (application overrides applied). Unknown roles add nothing.
- * Sorted, each once. A business's own roles and edits: `standingIn` (settings/roles.ts).
+ * Sorted, each once. Code's declarations only: what someone may do in one business (its own
+ * roles and its edits) is `standingIn` (settings/roles.ts), and who holds a capability there
+ * comes from `rolesOfBusiness`.
  */
 export function capabilitiesOf(roleNames: readonly string[]): string[] {
   const out = new Set<string>();

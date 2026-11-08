@@ -158,5 +158,6 @@ export const CallsCapabilities = {
       te: 'వ్యాపారం యొక్క అన్ని కాల్‌లు చూడండి',
     },
     roles: ['owner', 'admin'],
+    supportable: true,
   }),
 };

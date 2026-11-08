@@ -145,8 +145,8 @@ the framework's `memory` entity, reached by the capabilities `memory.read`, `mem
 `memory.manage`: give your own roles those (developer guide 7.7).
 
 Approvals take an object form, `{ when, by, channels, minAssurance, level }`: who decides (the
-person it is for by default; a request from someone outside the team, a customer or a
-participant, goes to holders of `approvals.decide`; `by` names a capability, a person or an
+person it is for by default; a request from outside the team, such as a customer's or a
+participant's, goes to holders of `approvals.decide`; `by` names a capability, a person or an
 amount band, never a role), and where (`channels: ['app']` for anything irreversible keeps it off
 WhatsApp buttons). Nobody decides their own request unless the policy sends it back to them. The
 deciders hear of it by push, WhatsApp (where they can decide there) or email, and find it in
@@ -365,15 +365,16 @@ module sends on its own initiative is a template, declared in code:
 - **`defineNotification`:** what reaches whom, and when. `schedule: { on, at, cancelOn }`
   follows the entity events (`meeting.created`, `meeting.deleted`) and the module's own: a
   command's event implements `NamedEvent` (`eventName`, `row`) to be one. `to` names the
-  recipients (a user, a customer, a contact, or everyone holding a capability); `channels` is the
-  order to try (`['push', 'whatsapp', 'email']`, `inapp` for the in-app inbox, or a delivery
-  channel a feature registers), `also` the channels it goes to as well (`['inapp']`) and
-  `channelWhen` a channel it skips for a row; `whatsapp` (the template) is needed only when
-  WhatsApp is one of them, `push` (`{ title, body, url? }`) only when push is, `inapp`
-  (`{ title, body, url?, record? }`) only when the inbox is; `onButton` answers its quick replies
-  (snooze). A mention in a comment is the event `comment.mentioned`: a module that wants
-  mentions pushed or emailed declares its own notification on it (the sample's orders module
-  does). A command sends one from its `run` with `queueNotification(tx, def, row, { type })`.
+  recipients (a user, a customer, a contact, a party, or everyone whose roles in the business hold
+  a capability, its own roles included); `channels` is the order to try (`['push', 'whatsapp',
+  'email']`, `inapp` for the in-app inbox, or a delivery channel a feature registers), `also` the
+  channels it goes to as well (`['inapp']`) and `channelWhen` a channel it skips for a row;
+  `whatsapp` (the template) is needed only when WhatsApp is one of them, `push` (`{ title, body,
+  url? }`) only when push is, `inapp` (`{ title, body, url?, record? }`) only when the inbox is;
+  `onButton` answers its quick replies (snooze). A mention in a comment is the event
+  `comment.mentioned`: a module that wants mentions pushed or emailed declares its own
+  notification on it (the sample's orders module does). A command sends one from its `run` with
+  `queueNotification(tx, def, row, { type })`.
 - The framework decides the rest per recipient: consent for the topic, quiet hours and the
   marketing cap (per business), the template in their language or English, and the next
   channel when WhatsApp can't be used or fails for good. The words (template parameters, email,
@@ -503,12 +504,13 @@ From the contracts declaration alone:
   OpenRouter in development) and each business's model policy (`GET /api/models`,
   `PUT /api/models/policy`), which picks every turn's model and fails closed (developer guide,
   section 7.5). The application only configures them in `.env`.
-- Credits and caps: every business's assistant tokens and tool calls, WhatsApp messages and
-  voice seconds metered and priced, a per-period allowance and a prepaid wallet, an alert and a
-  pause as caps fill, an operator's override, and buying credits through a purchase provider
-  (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
-  (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
-  sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+- Credits and caps: every business's assistant tokens and tool calls, WhatsApp messages, voice
+  seconds and memory embeddings metered and priced, a per-period allowance and a prepaid wallet,
+  an alert and a pause as caps fill, an operator's override, and buying credits through a
+  purchase provider (`/api/credits`, developer guide section 7.6). The application configures the
+  prices and plans (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on
+  `credits.threshold` to `{ capability: 'credits.manage' }`; the sample's `account` module) and
+  lists `creditsPlugin` for the app's credits screen.
 - Outside AI clients over MCP (developer guide, section 7.8): an OAuth 2.1 server (Better Auth's
   oauth-provider, with its sign-in and consent pages), the `/mcp` endpoint with two tools per
   module (`<module>_read`, `<module>_write`), scopes per module that the API enforces on every
@@ -543,7 +545,8 @@ From the contracts declaration alone:
   records, a usage report across businesses, and the back office's Operator and Support screens.
   The application adds what is its own: which business takes an inbound request (an
   `inboundRouters` entry: the framework holds no routing rule), operator capabilities of its own,
-  and capabilities support must never hold (`supportWithheld`).
+  which of its capabilities support access may hold (`supportable: true` where it defines them;
+  none by default), and framework ones support must never hold (`supportWithheld`).
 - The framework's tests (`framework/api/test/framework` and `framework/*/src/**/*.test.ts`).
   They use only those platform features and a fixture application of their own
   (`framework/api/test/fixture`), so they pass with no application at all. The golden WhatsApp

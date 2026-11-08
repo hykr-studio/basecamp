@@ -19,6 +19,7 @@ export const ImportsCapability = defineCapability({
     te: 'ఫైళ్ల నుండి రికార్డులను దిగుమతి చేయండి',
   },
   roles: ['owner', 'admin'],
+  supportable: true,
 });
 capabilities.register(ImportsCapability);
 

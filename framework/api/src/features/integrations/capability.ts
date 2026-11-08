@@ -12,4 +12,5 @@ export const IntegrationsCapability = defineCapability({
     te: 'వ్యాపార ఇంటిగ్రేషన్‌లను నిర్వహించండి',
   },
   roles: ['owner', 'admin'],
+  supportable: false,
 });

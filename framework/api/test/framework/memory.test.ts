@@ -1,5 +1,5 @@
 // Memory's pieces that need no server: the any-role access map, the context line, the settings
-// section, the memory spec and its trait.
+// section, the memory spec and its trait, and what an embedding call is metered at.
 import {
   MemoryPolicy,
   MemorySpec,
@@ -16,6 +16,7 @@ import {
   recallTimeoutMs,
   VOICE_RECALL_TIMEOUT_MS,
 } from '../../dist/features/memory/index.js';
+import { EMBEDDING_METER, embeddingTokens } from '../../dist/features/memory/usage.js';
 import { anyRole } from '../../dist/index.js';
 
 const person = (roles: string[]): Principal => ({
@@ -48,6 +49,21 @@ describe('anyRole', () => {
     expect(
       accessFor(person([]), { read: anyRole('tenant'), write: anyRole('tenant') }, 'read'),
     ).toEqual({ kind: 'none' });
+  });
+});
+
+describe('embedding tokens', () => {
+  it('are what the provider reported, rounded up', () => {
+    expect(EMBEDDING_METER).toBe('embedding_tokens');
+    expect(embeddingTokens(7, ['anything at all'])).toBe(7);
+    expect(embeddingTokens(6.2, ['x'])).toBe(7);
+  });
+
+  it('without a report, a token per four characters, at least one per text', () => {
+    // The AI SDK says NaN when the provider reports no usage.
+    expect(embeddingTokens(Number.NaN, ['twelve chars'])).toBe(3);
+    expect(embeddingTokens(undefined, ['thirteen char', '', 'a'])).toBe(4 + 1 + 1);
+    expect(embeddingTokens(0, ['abcd'])).toBe(1);
   });
 });
 

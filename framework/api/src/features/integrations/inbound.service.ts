@@ -1,4 +1,4 @@
-import { checkEvent, type InboundEvent, type InboundRequest } from '@hykr/connectors';
+import { bodyKey, checkEvent, type InboundEvent, type InboundRequest } from '@hykr/connectors';
 import { capabilities as capabilityRegistry, type WriteResult } from '@hykr/contracts';
 import { runWrite, systemPrincipal, type WriteOp } from '@hykr/core';
 import { type Database, integrationConnections, integrationInbound } from '@hykr/db';
@@ -58,9 +58,27 @@ function finalReason(e: unknown): string | null {
 const notFound = () => new NotFoundException({ error: 'not_found', message: 'No such webhook' });
 
 /**
+ * The key each event is stored under. A signed id is its own key. An id the connector cannot
+ * vouch for is kept only as the sender's word: whoever saw the request could post it again
+ * under a fresh one, so the event is keyed by the signed body (and its place in a batch).
+ */
+function keysOf(
+  events: readonly InboundEvent[],
+  rawBody: Buffer,
+  signedIds: boolean | undefined,
+): { key: string; senderId: string | null }[] {
+  if (signedIds) return events.map((e) => ({ key: e.id, senderId: null }));
+  return events.map((e, i) => {
+    const key = bodyKey(rawBody, events.length > 1 ? i : undefined);
+    return { key, senderId: e.id === key ? null : e.id };
+  });
+}
+
+/**
  * Inbound webhooks: `/webhooks/<connector>/<connection>`. The request is verified with the
- * connection's own credentials, each event is stored once and queued, and in the worker each
- * handler that takes it runs as the business's system principal.
+ * connection's own credentials, each event is stored once (by its signed id, or by the signed
+ * body when its id is not signed) and queued, and in the worker each handler that takes it runs
+ * as the business's system principal.
  */
 @Injectable()
 export class InboundService implements OnApplicationBootstrap {
@@ -130,15 +148,18 @@ export class InboundService implements OnApplicationBootstrap {
     } catch (e) {
       throw new BadRequestException({ error: 'unreadable', message: message(e) });
     }
+    const keys = keysOf(events, req.rawBody ?? Buffer.alloc(0), inbound.signedIds);
     let stored = 0;
-    for (const event of events) {
+    for (const [i, event] of events.entries()) {
+      const { key, senderId } = keys[i];
       const [row] = await this.db
         .insert(integrationInbound)
         .values({
           tenantId: connection.tenantId,
           connectionId: connection.id,
           connector: connection.connector,
-          externalId: event.id,
+          externalId: key,
+          senderId,
           type: event.type,
           data: event.data as never,
           queues: config.queuePrefix,
@@ -146,7 +167,7 @@ export class InboundService implements OnApplicationBootstrap {
         .onConflictDoNothing()
         .returning({ id: integrationInbound.id });
       if (!row) {
-        log.log(`duplicate ${connection.connector} event ${event.id}: ignored`);
+        log.log(`duplicate ${connection.connector} event ${key}: ignored`);
         continue;
       }
       stored++;
@@ -236,6 +257,7 @@ export class InboundService implements OnApplicationBootstrap {
       connectionId: row.connectionId,
       connector: row.connector,
       externalId: row.externalId,
+      senderId: row.senderId,
       type: row.type,
       data: row.data,
       receivedAt: row.receivedAt.toISOString(),

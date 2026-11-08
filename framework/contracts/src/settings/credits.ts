@@ -92,6 +92,7 @@ export const CreditsViewCapability = defineCapability({
     te: 'వ్యాపార వినియోగాన్ని చూడండి',
   },
   roles: ['owner', 'admin', 'ops', 'staff'],
+  supportable: true,
 });
 
 /** See amounts, the ledger and purchases, buy credits and set the alert threshold. */
@@ -103,6 +104,7 @@ export const CreditsManageCapability = defineCapability({
     te: 'వ్యాపార క్రెడిట్‌లను నిర్వహించండి',
   },
   roles: ['owner', 'admin'],
+  supportable: false,
 });
 
 /**
@@ -216,7 +218,9 @@ export const CreditGrantInput = z
 
 /**
  * The row of a `credits.threshold` event: a cap (the budget or a meter) passed a level this
- * period. `recipients`: the people whose roles hold `credits.manage`, for a notification's `to`.
+ * period. It names nobody: a notification tells the people who manage the credits with the
+ * recipient `{ capability: CreditsManageCapability.name }`, which notify dispatch expands with
+ * the business's roles (its own, and its edits of declared ones) when it sends.
  */
 export interface CreditsThresholdRow {
   id: string;
@@ -226,6 +230,5 @@ export interface CreditsThresholdRow {
   usedPercent: number;
   threshold: number;
   periodStart: string;
-  recipients: string[];
   [key: string]: unknown;
 }

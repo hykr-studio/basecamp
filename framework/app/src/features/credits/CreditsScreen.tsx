@@ -49,6 +49,7 @@ const METER_NAMES: Readonly<Record<string, MessageKey>> = {
   tool_calls: 'credits.meter.tool_calls',
   messages: 'credits.meter.messages',
   voice_seconds: 'credits.meter.voice_seconds',
+  embedding_tokens: 'credits.meter.embedding_tokens',
 };
 
 function Meters({ status }: { status: CreditsStatus }) {

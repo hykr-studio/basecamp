@@ -64,6 +64,7 @@ export const MemoryRead = defineCapability({
     te: 'వ్యాపార జ్ఞాపకాలు చదవండి',
   },
   roles: MEMBERS,
+  supportable: true,
 });
 
 /** Add to the business's memory, and change or delete your own memories. */
@@ -75,6 +76,7 @@ export const MemoryWrite = defineCapability({
     te: 'వ్యాపార జ్ఞాపకాలకు జోడించండి',
   },
   roles: MEMBERS,
+  supportable: true,
 });
 
 /** Change or delete anyone's memories. */
@@ -86,6 +88,7 @@ export const MemoryManage = defineCapability({
     te: 'ఎవరి జ్ఞాపకాలనైనా మార్చండి లేదా తొలగించండి',
   },
   roles: ['owner', 'admin'],
+  supportable: true,
 });
 
 /** What recall finds: a record that is memory (an entity with the trait), or the person's words. */

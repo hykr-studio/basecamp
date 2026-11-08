@@ -1,9 +1,10 @@
 /**
  * The credits alerts, in this application's words: the framework raises `credits.threshold`
  * when a cap (the business's credits, or a meter's limit) reaches its alert or pause level, and
- * these tell the people who manage the credits, on WhatsApp, else by email.
+ * these tell the people who manage the credits (whoever holds `credits.manage` in the business,
+ * by its own roles too), on WhatsApp, else by email.
  */
-import type { CreditsThresholdRow } from '@hykr/contracts';
+import { CreditsManageCapability, type CreditsThresholdRow } from '@hykr/contracts';
 import { type Labels, type Lang, pick } from '@hykr/i18n';
 import { defineNotification, defineTemplate, type Reader } from '@hykr/notifications';
 import { z } from 'zod';
@@ -42,6 +43,11 @@ const CAPS: Record<string, Labels> = {
   tool_calls: { en: 'Assistant actions', hi: 'असिस्टेंट के काम', te: 'అసిస్టెంట్ చర్యలు' },
   messages: { en: 'WhatsApp messages', hi: 'WhatsApp संदेश', te: 'WhatsApp సందేశాలు' },
   voice_seconds: { en: 'Voice minutes', hi: 'वॉइस मिनट', te: 'వాయిస్ నిమిషాలు' },
+  embedding_tokens: {
+    en: 'Memory search tokens',
+    hi: 'मेमोरी खोज टोकन',
+    te: 'మెమరీ శోధన టోకెన్‌లు',
+  },
 };
 
 const what = (row: CreditsThresholdRow, lang: Lang) =>
@@ -58,6 +64,9 @@ const OUT: Record<Lang, (what: string) => string> = {
   te: (w) => `${w} అయిపోయాయి: అసిస్టెంట్ ఆగిపోయింది`,
 };
 
+/** The people who manage the business's credits, found with its roles when the alert is sent. */
+const managers = () => [{ capability: CreditsManageCapability.name }];
+
 const lowParams = (row: CreditsThresholdRow, r: Reader) => ({
   what: what(row, r.lang),
   percent: String(Math.floor(row.usedPercent)),
@@ -69,7 +78,7 @@ export const CreditsLowNotification = defineNotification<CreditsThresholdRow>({
   topic: 'service',
   send: { on: ['credits.threshold'] },
   when: (row) => row.level === 'alert',
-  to: (row) => row.recipients.map((userId) => ({ userId })),
+  to: managers,
   channels: ['whatsapp', 'email'],
   whatsapp: { template: CreditsLow, params: lowParams },
   email: {
@@ -89,7 +98,7 @@ export const CreditsOutNotification = defineNotification<CreditsThresholdRow>({
   topic: 'service',
   send: { on: ['credits.threshold'] },
   when: (row) => row.level === 'pause',
-  to: (row) => row.recipients.map((userId) => ({ userId })),
+  to: managers,
   channels: ['whatsapp', 'email'],
   whatsapp: { template: CreditsOut, params: (row, r) => ({ what: what(row, r.lang) }) },
   email: {

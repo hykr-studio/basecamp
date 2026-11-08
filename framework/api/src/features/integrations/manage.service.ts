@@ -351,6 +351,7 @@ export class IntegrationsService implements OnModuleInit {
     return rows.map((r) => ({
       id: r.id,
       externalId: r.externalId,
+      senderId: r.senderId,
       type: r.type,
       data: r.data,
       status: r.status,
