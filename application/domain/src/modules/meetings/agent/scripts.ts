@@ -8,19 +8,23 @@ import {
   runData,
   sameTitle,
   say,
+  sayIn,
   startOfDay,
+  verbs,
   written,
 } from '@hykr/agents/script';
+import { pick } from '@hykr/i18n';
 
 /**
  * The scripted model's knowledge of the meetings module (for tests, CI and demos without a key):
- *   today                           list-meetings + list-todos for today → summary
+ *   today (आज, ఈరోజు)               list-meetings + list-todos for today → summary (spoken: one line)
  *   close <meeting>\n<summary>\n- item …   list-meetings → close-meeting (the run waits for approval;
  *                                   once approved it goes on: list-todos of the meeting → how many)
  *   close this one\n<notes>        on a meeting: close-meeting on it (likewise)
  *   move <meeting> to <YYYY-MM-DD>  list-meetings → reschedule-meeting
  *   invite <email> to <meeting>     list-meetings → send-calendar-invite (to others: approval)
  *   open <meeting>                  list-meetings → canvas-open; without a canvas, get-meeting
+ *   <meeting> खोलो / తెరువు           the same, answered in Hindi or Telugu
  *   plan my week                    canvas-compose (week, to-dos due, meetings to prepare);
  *                                   without a canvas, the three lists, then one line
  *   only overdue                    canvas-patch on the page's to-do block; without one, list-todos
@@ -40,6 +44,11 @@ const first = (text: string) => text.split('\n')[0]?.trim() ?? '';
 
 /** "this one", "this meeting", "it": the meeting on screen. */
 const THIS = /^(?:this(?: one| meeting)?|it)\.?$/i;
+
+/** "today" in each of the product's languages. */
+const TODAY = new RegExp(`^(?:${verbs('today', 'आज', 'ఈరోజు', 'ఈ రోజు')})$`, 'iu');
+/** "<meeting> खोलो", "<meeting> తెరువు": open, the verb last as Hindi and Telugu put it. */
+const OPEN_LAST = new RegExp(`^(.+?)\\s+(?:${verbs('खोलो', 'खोलें', 'తెరువు', 'తెరవండి')})$`, 'iu');
 
 const closeCall = (meetingId: string, intent: { summary: string; items: string[] }) =>
   call('close-meeting', {
@@ -111,7 +120,7 @@ export const meetingsScripts = [
   }),
   defineScript({
     name: 'today',
-    match: (text) => (/^today$/i.test(first(text)) ? true : undefined),
+    match: (text) => (TODAY.test(first(text)) ? true : undefined),
     step: (_, turn) => {
       const meetings = turn.result('list-meetings');
       if (!meetings) {
@@ -135,17 +144,24 @@ export const meetingsScripts = [
           hour: '2-digit',
           minute: '2-digit',
         });
-      const m = items(meetings).map((x) => `- ${x.title} at ${at(x.startsAt)}`);
-      const t = items(todos).map((x) => `- ${x.title}${dueText(x.dueOn)}`);
-      return [
-        say(
-          [
-            `Today: ${plural(m.length, 'meeting')}, ${plural(t.length, 'to-do')} due or overdue.`,
-            ...m,
-            ...(t.length ? ['To-dos:', ...t] : []),
-          ].join('\n'),
-        ),
-      ];
+      const [nm, nt] = [items(meetings).length, items(todos).length];
+      const gist = pick(
+        {
+          en: `Today: ${plural(nm, 'meeting')}, ${plural(nt, 'to-do')} due or overdue.`,
+          hi: `आज: ${nm} मीटिंग, ${nt} काम बाकी।`,
+          te: `ఈరోజు: ${nm} మీటింగ్‌లు, ${nt} పనులు మిగిలి ఉన్నాయి.`,
+        },
+        turn.lang,
+      );
+      // Spoken: the gist; the lists are on screen.
+      if (turn.spoken) return [say(gist)];
+      const en = turn.lang === 'en';
+      const m = items(meetings).map((x) =>
+        en ? `- ${x.title} at ${at(x.startsAt)}` : `- ${x.title} (${at(x.startsAt)})`,
+      );
+      const t = items(todos).map((x) => `- ${x.title}${en ? dueText(x.dueOn) : ''}`);
+      const label = pick({ en: 'To-dos:', hi: 'काम:', te: 'పనులు:' }, turn.lang);
+      return [say([gist, ...m, ...(t.length ? [label, ...t] : [])].join('\n'))];
     },
   }),
   defineScript({
@@ -235,6 +251,8 @@ export const meetingsScripts = [
   defineScript({
     name: 'open-meeting',
     match: (text) => {
+      const last = OPEN_LAST.exec(first(text))?.[1];
+      if (last) return last;
       const m = /^(?:open|show) (?:the )?(.+?)\.?$/i.exec(first(text));
       return m && !/^(today|list)$/i.test(m[1]) ? m[1] : undefined;
     },
@@ -242,14 +260,26 @@ export const meetingsScripts = [
       const meetings = turn.result('list-meetings');
       if (!meetings) return [call('list-meetings', { q: title })];
       const meeting = items(meetings).find((m) => sameTitle(m.title, title)) ?? items(meetings)[0];
-      if (!meeting) return [say(`I couldn't find "${title}".`)];
+      if (!meeting)
+        return [
+          sayIn(turn, {
+            en: `I couldn't find "${title}".`,
+            hi: `"${title}" नहीं मिली।`,
+            te: `"${title}" దొరకలేదు.`,
+          }),
+        ];
+      const name = `"${meeting.title}"`;
       if (turn.surfaces.includes('canvas')) {
         if (!turn.result('canvas-open'))
           return [call('canvas-open', { screen: 'meeting.detail', params: { id: meeting.id } })];
-        return [say(`Opened ${meeting.title}.`)];
+        if (turn.lang === 'en') return [say(`Opened ${meeting.title}.`)];
+        return [
+          sayIn(turn, { en: `Opened ${name}.`, hi: `${name} खोल दी।`, te: `${name} తెరిచాను.` }),
+        ];
       }
       if (!turn.result('get-meeting')) return [call('get-meeting', { id: meeting.id })];
-      return [say(`Here is ${meeting.title}.`)];
+      if (turn.lang === 'en') return [say(`Here is ${meeting.title}.`)];
+      return [sayIn(turn, { en: `Here is ${name}.`, hi: `यह रही ${name}।`, te: `ఇదిగో ${name}.` })];
     },
   }),
   defineScript({

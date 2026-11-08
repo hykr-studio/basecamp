@@ -4,7 +4,7 @@
  * module's eval turns: defineServer checks it at boot.
  */
 import type { AgentModule } from '@hykr/agents/script';
-import { evalCases } from './evals.js';
+import { evalCases, voiceEvalCases } from './evals.js';
 import { ordersScripts } from './scripts.js';
 
 export const ordersAgent: AgentModule = {
@@ -14,4 +14,15 @@ export const ordersAgent: AgentModule = {
   ],
   scripts: ordersScripts,
   evalCases,
+  voiceEvalCases,
+  // The business counts in one currency, and has one order for the lists and totals to find.
+  evalSetup: async (api) => {
+    await api('PATCH', '/api/settings/sections/money', {
+      value: { currency: 'INR', fyStartMonth: 4 },
+    });
+    await api('POST', '/api/orders/save', {
+      title: 'Eval kitchen',
+      items: [{ ref: '1', kind: 'line', title: 'Cabinet', quantity: 2, unitPrice: '1500' }],
+    });
+  },
 };

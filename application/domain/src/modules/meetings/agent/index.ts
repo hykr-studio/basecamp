@@ -3,7 +3,7 @@
  * moves. The application keeps the persona (application/api/src/server.ts).
  */
 import type { AgentModule } from '@hykr/agents/script';
-import { evalCases } from './evals.js';
+import { evalCases, voiceEvalCases } from './evals.js';
 import { meetingsScripts } from './scripts.js';
 
 export const meetingsAgent: AgentModule = {
@@ -13,6 +13,7 @@ export const meetingsAgent: AgentModule = {
   ],
   scripts: meetingsScripts,
   evalCases,
+  voiceEvalCases,
   // The close and open cases need a meeting to find.
   evalSetup: async (api) => {
     await api('POST', '/api/meetings', {
