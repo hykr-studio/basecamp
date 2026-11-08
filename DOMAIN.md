@@ -306,6 +306,13 @@ sample's `orders` module does, developer guide 5.20):
   which a record (and its lines) no longer changes. **Revisions** (`revisionColumns()`,
   `reviseWithChildren` in the module's own command) copy a record and its lines as v2.
 
+The sample's orders go `draft`, `submitted`, `approved`, then `accepted` once the customer
+accepts the PDF (the system transition `accept`, run by `OrderAcceptance`), then `fulfilled`:
+by the team (an approved order too, one accepted on paper) or by the supplier's system through
+the `orders-supplier` connector (an accepted order only). An order can be `cancelled` until it is
+fulfilled, and a submitted one `expired` or `superseded` by its next revision. Every state after
+`draft` is frozen.
+
 A state column can also get a CHECK in the module's `sql/post` hook (the sample's
 `orders-states.sql`); keep it in step with the states.
 

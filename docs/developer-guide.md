@@ -3227,7 +3227,7 @@ These are not built. Each has a workaround for now.
 | WhatsApp turns with share links | `RenderTurn.pages` is still not filled: links to a customer still point at the app (`APP_URL`), which needs an account. |
 | Share pages on a business's domain | The URL a link answers is `APP_URL`'s; a verified domain (section 5.18) is not used for it, though the page shows the business's branding. |
 | An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
-| Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders allow cancelling an approved order, accepted or not). |
+| Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders can be cancelled when approved or accepted). |
 | The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set Express's `trust proxy` (not done by the framework). |
 | Acceptance tools for the assistant | The assistant can neither ask for a code nor accept (on purpose), and has no tool to read acceptances yet. |
 | Retiring `channel.link_codes` | Linking codes now live in `channel.otp_challenges`; the old table stays, unused, until a migration may drop it. |
