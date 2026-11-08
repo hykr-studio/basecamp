@@ -46,8 +46,22 @@ export const Processors = [
   }),
 ];
 
-/** A request is answered within 30 days, unless a business sets its own deadline. */
-export const PrivacyPolicy = definePrivacyPolicy({ name: 'app', respondWithinDays: 30 });
+/**
+ * A request is answered within 30 days, unless a business sets its own deadline. What stays when
+ * someone is forgotten says why on the register: an order's acceptance is the business's proof
+ * of what the customer agreed to.
+ */
+export const PrivacyPolicy = definePrivacyPolicy({
+  name: 'app',
+  respondWithinDays: 30,
+  keepReasons: {
+    acceptance_evidence: {
+      en: 'Kept as proof of what was agreed, for as long as either side may need to show it',
+      hi: 'जो तय हुआ उसके प्रमाण के रूप में रखा जाता है, जब तक किसी भी पक्ष को इसे दिखाना पड़ सकता है',
+      te: 'ఏం అంగీకరించారో దానికి రుజువుగా ఉంచుతాం, ఏ పక్షానికైనా చూపించాల్సిన అవసరం ఉన్నంత కాలం',
+    },
+  },
+});
 
 /** How long the framework's own records of people are kept here. */
 export const RetentionPeriods: RetentionPeriod[] = [

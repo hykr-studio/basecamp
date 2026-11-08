@@ -258,6 +258,14 @@ function FileRequest() {
   );
 }
 
+/** What erasure does to a kind of personal data, and why it stays when it does. */
+const onErasure = (x: { erase: string; keepReason: string | null; keepBasis: string | null }) =>
+  x.erase === 'keep'
+    ? `kept on erasure (${x.keepBasis ?? x.keepReason})`
+    : x.erase === 'anonymise'
+      ? 'anonymised on erasure'
+      : 'deleted on erasure';
+
 /** Who holds the business's personal data, what, for how long. */
 function Register() {
   const register = useQuery({
@@ -290,8 +298,12 @@ function Register() {
       <Text className="text-body font-heading text-text">Personal data</Text>
       {r.records.map((x) => (
         <Text key={x.entity} className="text-small text-text">
-          {x.label}: {x.fields.map((f) => f.label).join(', ')} ·{' '}
-          {x.erase === 'keep' ? `kept on erasure (${x.keepReason})` : `${x.erase}d on erasure`}
+          {x.label}: {x.fields.map((f) => f.label).join(', ')} · {onErasure(x)}
+        </Text>
+      ))}
+      {r.parts.map((x) => (
+        <Text key={x.name} className="text-small text-text">
+          {x.label} · {onErasure(x)}
         </Text>
       ))}
       <Text className="text-body font-heading text-text">Kept for</Text>

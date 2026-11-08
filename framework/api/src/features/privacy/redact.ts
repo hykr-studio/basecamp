@@ -1,19 +1,20 @@
 // Audit redaction (B18): the server keeps copies of records (audit rows' before and after, stored
 // events, approvals' inputs and cards, notifications' rows, messages' notification rows, the
-// replies kept for idempotent retries). When a record is erased or blanked for personal data, its
-// personal fields leave every copy; the rows stay, with their ids, so the trail of who did what
-// stays whole. Derived data goes too: the record's files, and its memory vectors. A privacy
-// filing about the person loses the email or number it named them by, and its note. Nothing
-// here loads Nest.
+// replies kept for idempotent retries, and each feature's own: `recordCopies`). When a record is
+// erased or blanked for personal data, its personal fields leave every copy; the rows stay, with
+// their ids, so the trail of who did what stays whole. Derived data goes too: the record's
+// files, and its memory vectors. A privacy filing about the person loses the email or number it
+// named them by, and its note. Nothing here loads Nest.
 
 import { FilePrivacyRequestSpec, fileFieldsOf } from '@hykr/contracts';
 import type { Tx } from '@hykr/core';
 import { entityDef } from '@hykr/core';
 import { approvals, events as auditEvents, idempotencyKeys } from '@hykr/db';
 import { and, eq, or, type SQL, sql } from 'drizzle-orm';
+import type { ErasedRecords } from '../../hooks.js';
 import { eraseFilesOn } from '../files/privacy.js';
 import { forgetRecords } from '../memory/privacy.js';
-import type { ErasedRecords } from './registry.js';
+import { recordCopies } from './registry.js';
 
 const list = (xs: readonly string[]) =>
   sql.join(
@@ -26,7 +27,7 @@ const keys = (xs: readonly string[]) => sql`ARRAY[${list(xs)}]::text[]`;
 const without = (col: SQL, ks: SQL) =>
   sql`case when jsonb_typeof(${col}) = 'object' then ${col} - ${ks} else ${col} end`;
 
-/** How many copies lost something, by where they are. */
+/** How many copies lost something, by where they are (and each feature's own, `recordCopies`). */
 export interface Redacted {
   audit: number;
   events: number;
@@ -37,6 +38,7 @@ export interface Redacted {
   memory: number;
   /** Replies kept for idempotent retries. */
   replies: number;
+  [where: string]: number;
 }
 
 const rowsOf = (r: unknown) => (r as { rowCount?: number | null }).rowCount ?? 0;
@@ -124,6 +126,10 @@ export async function redactCopies(
       ...(set.deleted ? {} : { fields: fileFields }),
     });
     out.memory += await forgetRecords(tx, { tenantId, resourceType: set.type, ids: set.ids });
+    // Each feature's own copies (webhook bodies, payloads).
+    for (const copies of recordCopies.all())
+      for (const [where, n] of Object.entries(await copies.redact({ tx, tenantId, set })))
+        out[where] = (out[where] ?? 0) + n;
   }
   return out;
 }

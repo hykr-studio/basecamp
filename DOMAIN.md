@@ -508,13 +508,15 @@ From the contracts declaration alone:
   asks a business for a copy of what it keeps about them, or to be forgotten (in the app, on
   WhatsApp, or through the team, `privacy.manage`), answered by a deadline; the copy is one zip of
   their data from every part; erasure deletes, blanks or keeps each declared record as its module
-  says, runs every feature's erasure, clears the framework's and Mastra's records of the person
-  and takes their personal fields out of the audit trail's and events' copies; a daily runner
+  says, runs every feature's erasure (calendars, calls, webhooks, acceptance codes, MCP grants;
+  acceptance evidence is kept and counted), clears the framework's and Mastra's records of the
+  person and takes their personal fields out of the audit trail's, events' and webhooks' copies; a daily runner
   expires personal data after its period; the register lists the business, its processors, its
   personal data and its periods. The framework has no period, purpose or processor of its own:
   the sample's notes are a customer's personal data, deleted two years after their last change,
-  and `application/domain/src/server/privacy.ts` gives its processors, a 30-day deadline and its
-  periods; its account module tells the privacy team when a request waits or is late.
+  and `application/domain/src/server/privacy.ts` gives its processors, a 30-day deadline, its
+  periods and the words for why kept data stays (`keepReasons`); its account module tells the
+  privacy team when a request waits or is late.
 - Each business's setup: feature flags, custom field definitions (`app.custom_fields`), branding
   and verified web addresses (`app.tenant_domains`), shared records and wording (`/api/settings`,
   `/api/features`, `/api/custom-fields`, the back office's Settings screen, `settingsPlugin` in the

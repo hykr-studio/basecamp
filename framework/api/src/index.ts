@@ -226,22 +226,26 @@ export {
 } from './features/platform/index.js';
 export {
   ARCHIVE_FIELD,
+  definePersonalDataPart,
   definePrivacyPolicy,
   defineProcessor,
-  type ErasedRecords,
   type Identities,
   identitiesOf,
+  type PersonalDataPart,
   type PrivacyPolicy,
   PrivacyService,
   type ProcessorDef,
+  personalDataParts,
   personalEntities,
   personalEntityProblems,
   privacyPolicies,
   processors,
+  type RecordCopies,
   type Redacted,
   type RetentionPeriod,
   type RetentionTarget,
   type RunOutcome,
+  recordCopies,
   redactCopies,
   retentionPeriods,
   retentionTargets,
@@ -259,7 +263,9 @@ export {
   type DeliveryRequest,
   deliveryChannels,
   type EntityPlugin,
+  type ErasedRecords,
   type ErasureContributor,
+  type ErasureResult,
   type EventFeed,
   type ExportContributor,
   entityPlugins,
@@ -274,6 +280,7 @@ export {
   identityProviders,
   inboundHooks,
   type Jobs,
+  type KeptData,
   type LevelRule,
   levelRules,
   type NotificationMeta,
@@ -301,7 +308,11 @@ export {
 export { type Metering, metering, setMetering, type UsageInput } from './metering.js';
 export { defineModule, type ModuleDef } from './module.js';
 export { type ModelGate, TurnRefused } from './modules/chat/turn-hooks.js';
-export { eraseWithContributors, exportPersonalData } from './privacy/contributors.js';
+export {
+  type ContributorsErasure,
+  eraseWithContributors,
+  exportPersonalData,
+} from './privacy/contributors.js';
 export { defineQueue, defineSchedule, JOBS, registerQueue } from './queues/define.js';
 export {
   type Basecamp,

@@ -4,15 +4,19 @@ export { ARCHIVE_FIELD, PrivacyService, type RunOutcome } from './privacy.servic
 export { personalEntities, personalEntityProblems } from './records.js';
 export { type Redacted, redactCopies } from './redact.js';
 export {
+  definePersonalDataPart,
   definePrivacyPolicy,
   defineProcessor,
-  type ErasedRecords,
+  type PersonalDataPart,
   type PrivacyPolicy,
   type ProcessorDef,
+  personalDataParts,
   privacyPolicies,
   processors,
+  type RecordCopies,
   type RetentionPeriod,
   type RetentionTarget,
+  recordCopies,
   retentionPeriods,
   retentionTargets,
 } from './registry.js';

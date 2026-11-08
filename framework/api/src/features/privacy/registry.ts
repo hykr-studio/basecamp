@@ -4,6 +4,7 @@
 import { createHookRegistry, type PrivacyRequestKind, RETENTION_NAME } from '@hykr/contracts';
 import type { Tx } from '@hykr/core';
 import type { Labels } from '@hykr/i18n';
+import type { ErasedRecords } from '../../hooks.js';
 
 declare module '@hykr/contracts' {
   interface Contributions {
@@ -11,6 +12,8 @@ declare module '@hykr/contracts' {
     privacyPolicies: readonly PrivacyPolicy[];
     retentionTargets: readonly RetentionTarget[];
     retentionPeriods: readonly RetentionPeriod[];
+    recordCopies: readonly RecordCopies[];
+    personalDataParts: readonly PersonalDataPart[];
   }
 }
 
@@ -60,13 +63,21 @@ export interface PrivacyPolicy {
   respondWithinDays?: number;
   /** A person's own requests of these kinds wait for someone with `privacy.manage`. */
   review?: readonly PrivacyRequestKind[];
+  /**
+   * Why data kept on erasure may stay, in the application's words, by keep reason (a trait's
+   * `keepReason`, a part's): the register shows them. The framework names codes only.
+   */
+  keepReasons?: Readonly<Record<string, Labels>>;
 }
 
-/** A policy, checked: whole days. */
+/** A policy, checked: whole days, and words in English for each keep reason. */
 export function definePrivacyPolicy(def: PrivacyPolicy): PrivacyPolicy {
   const days = def.respondWithinDays;
   if (days !== undefined && !(Number.isSafeInteger(days) && days >= 1 && days <= 365))
     throw new Error(`Privacy policy ${def.name}: respondWithinDays is 1 to 365 whole days`);
+  for (const [code, words] of Object.entries(def.keepReasons ?? {}))
+    if (!words?.en?.trim())
+      throw new Error(`Privacy policy ${def.name}: say why "${code}" is kept`);
   return def;
 }
 
@@ -80,17 +91,6 @@ export const privacyPolicies = createHookRegistry<PrivacyPolicy>(
 export const privacyPolicy = (): PrivacyPolicy | undefined => privacyPolicies.all()[0];
 
 /* ── Retention ────────────────────────────────────────────────────────────── */
-
-/** Records a target or an erasure changed, whose copies (audit, events) lose these fields. */
-export interface ErasedRecords {
-  /** The resource type audit and events name them by: the entity's name. */
-  type: string;
-  ids: readonly string[];
-  /** The fields to take out of their copies. */
-  fields: readonly string[];
-  /** The records are gone (all their files go), not only blanked. */
-  deleted?: boolean;
-}
 
 /**
  * Data that goes after a period: a framework table (raw payloads, conversation messages), an
@@ -142,6 +142,54 @@ export const retentionPeriods = createHookRegistry<RetentionPeriod>(
   'retention period',
   (p) => p.target,
   { collects: 'retentionPeriods' },
+);
+
+/* ── Copies and parts ─────────────────────────────────────────────────────── */
+
+/**
+ * A feature's own copies of records (a webhook body, a payload), redacted with the server's: when
+ * records are erased or blanked, by an erasure or a retention rule, `redactCopies` hands each set
+ * to every one of these after the audit, event and approval copies.
+ */
+export interface RecordCopies {
+  /** Unique: 'integrations'. */
+  name: string;
+  /** Take these records' fields out of its copies in this business. Counts by where they are. */
+  redact(a: { tx: Tx; tenantId: string; set: ErasedRecords }): Promise<Record<string, number>>;
+}
+
+export const recordCopies = createHookRegistry<RecordCopies>('record copies', (c) => c.name, {
+  collects: 'recordCopies',
+});
+
+/**
+ * Personal data a framework feature keeps outside the declared entities (its own tables), and
+ * what erasure does to it: listed on the register beside the entities'.
+ */
+export interface PersonalDataPart {
+  /** Unique, owner-prefixed: 'calendar.invites'. */
+  name: string;
+  label: Labels;
+  /** What it holds about the person, by column. */
+  fields: readonly string[];
+  erase: 'delete' | 'anonymise' | 'keep';
+  /** Why it stays (`erase: 'keep'`): a code; the application's policy says it in words. */
+  keepReason?: string;
+}
+
+/** A part, checked: a kept part says why. */
+export function definePersonalDataPart(def: PersonalDataPart): PersonalDataPart {
+  if (!RETENTION_NAME.test(def.name))
+    throw new Error(`Personal data part "${def.name}": lower case words joined by "."`);
+  if (def.erase === 'keep' && !def.keepReason)
+    throw new Error(`Personal data part ${def.name}: erase 'keep' needs a keepReason`);
+  return def;
+}
+
+export const personalDataParts = createHookRegistry<PersonalDataPart>(
+  'personal data part',
+  (p) => definePersonalDataPart(p).name,
+  { collects: 'personalDataParts' },
 );
 
 /**
