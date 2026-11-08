@@ -329,16 +329,19 @@ describe('the supplier reports back: orders-supplier', () => {
   const inboundRows = async () =>
     (
       await pool.query(
-        `select id, external_id, type, status, handled, error from app.integration_inbound
-          where connection_id = $1 order by received_at`,
+        `select id, external_id, sender_id, type, status, handled, error
+          from app.integration_inbound where connection_id = $1 order by received_at`,
         [conn.id],
       )
     ).rows;
-  /** The stored event, once its handler has run. */
-  const handledRow = (externalId: string) =>
+  /**
+   * The stored event, once its handler has run. `x-supplier-event` is not signed, so it is kept
+   * as the sender's id and the event is keyed by its signed body (decisions S2).
+   */
+  const handledRow = (senderId: string) =>
     eventually(async () =>
       (await inboundRows()).find(
-        (r) => r.external_id === externalId && ['processed', 'failed'].includes(r.status),
+        (r) => r.sender_id === senderId && ['processed', 'failed'].includes(r.status),
       ),
     );
 
@@ -469,12 +472,16 @@ describe('the supplier reports back: orders-supplier', () => {
     const res = await post(conn.path, r.raw, r.headers);
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('ok');
-    // A redelivery of the same event is stored once.
+    // A redelivery of the same event is stored once, and so is the same signed body posted
+    // again under a fresh (unsigned) event id: it is keyed by the body.
     expect((await post(conn.path, r.raw, r.headers)).status).toBe(200);
+    const replay = { ...r.headers, 'x-supplier-event': `evt_${randomUUID()}` };
+    expect((await post(conn.path, r.raw, replay)).status).toBe(200);
     const row = await handledRow(r.id);
     expect(row).toMatchObject({ status: 'processed', type: 'order.fulfilled' });
+    expect(row.external_id).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(row.handled).toEqual({ 'orders.supplier-fulfilled': 'done' });
-    expect((await inboundRows()).filter((x) => x.external_id === r.id)).toHaveLength(1);
+    expect((await inboundRows()).filter((x) => x.external_id === row.external_id)).toHaveLength(1);
     expect((await orderOf(owner, accepted.id)).status).toBe('fulfilled');
     const { rows: audit } = await pool.query(
       `select outcome, actor_kind, actor_id, channel, run_id from audit.events
@@ -490,8 +497,12 @@ describe('the supplier reports back: orders-supplier', () => {
         run_id: row.id,
       },
     ]);
-    // Reported again (a new event), the fulfilled order does not move: it is not accepted now.
-    const again = report({ type: 'order.fulfilled', data: { orderId: accepted.id } });
+    // Reported again (a new event, so a different body), the fulfilled order does not move: it
+    // is not accepted now.
+    const again = report({
+      type: 'order.fulfilled',
+      data: { orderId: accepted.id, reportedAt: new Date().toISOString() },
+    });
     expect((await post(conn.path, again.raw, again.headers)).status).toBe(200);
     expect((await handledRow(again.id)).handled['orders.supplier-fulfilled']).toMatch(
       /^failed: order_not_accepted/,
