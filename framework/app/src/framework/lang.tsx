@@ -4,7 +4,7 @@ import { createContext, type ReactNode, useContext, useMemo, useState } from 're
 type LangState = { lang: Lang; setSpoken: (lang: Lang | undefined) => void };
 const LangContext = createContext<LangState>({ lang: 'en', setSpoken: () => {} });
 
-/** The device's language, if the product speaks it. */
+/** The device's language, if the application speaks it (its `languages`); else English. */
 const deviceLang = (): Lang => langOf(Intl.DateTimeFormat().resolvedOptions().locale);
 
 /**

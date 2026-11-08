@@ -8,9 +8,9 @@ import { reserveRoutes } from '../catalog.js';
 import { PageSpec } from '../framework/present.js';
 import { createHookRegistry } from '../framework/registry.js';
 import type { EntitySpec } from '../framework/spec.js';
+import { LabelsShape, Lang } from '../languages.js';
 import { defineCapability } from '../roles.js';
 import { BrandColors } from '../settings/branding.js';
-import { Lang } from '../voice.js';
 import { OtpChannel } from './acceptance.js';
 
 // /api/shares (the team's) and /api/share/:token (a guest's).
@@ -150,8 +150,6 @@ export const FormFieldType = z.enum([
   'money',
 ]);
 export type FormFieldType = z.infer<typeof FormFieldType>;
-
-const LabelsShape = z.object({ en: z.string(), hi: z.string(), te: z.string() });
 
 /** One question of a public form, as the share page draws it. */
 export const FormField = z.object({

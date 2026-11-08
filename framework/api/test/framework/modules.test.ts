@@ -64,8 +64,14 @@ const mod = (name: string, extra: Partial<ModuleDef> = {}): ModuleDef =>
     ...extra,
   });
 
+// The fixture's languages: the modules below have words in Hindi and Telugu.
 const server = (...modules: ModuleDef[]) =>
-  defineServer({ name: 'Test', persona: 'You test.', modules });
+  defineServer({
+    name: 'Test',
+    persona: 'You test.',
+    languages: fixture.definition.languages,
+    modules,
+  });
 
 /** The problems defineServer reports for these modules. */
 function problems(run: () => unknown): readonly string[] {

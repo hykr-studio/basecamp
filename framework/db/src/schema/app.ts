@@ -188,7 +188,8 @@ export const threadMessages = app.table(
     })
       .notNull()
       .default('app'),
-    lang: text('lang', { enum: ['en', 'hi', 'te'] }),
+    /** The language the turn was in: one of the application's (`defineLanguages`). */
+    lang: text('lang'),
     runId: text('run_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     /** Insertion order: two messages in the same millisecond still read in the order saved. */

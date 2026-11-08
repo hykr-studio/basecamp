@@ -12,7 +12,7 @@ import {
 } from '@hykr/contracts';
 import { TenantConfigService, tenantZone } from '@hykr/core';
 import { toolsFor } from '@hykr/core/tools';
-import { LANG_ENGLISH_NAMES } from '@hykr/i18n';
+import { englishName } from '@hykr/i18n';
 import { subjectKeyOf, userIdOf } from '@hykr/policy';
 import { RequestContext } from '@mastra/core/request-context';
 import { Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
@@ -308,7 +308,7 @@ export class ChatService implements OnApplicationBootstrap {
     const transcript = conversation
       .map((m) => `${m.role === 'user' ? 'Customer' : 'Business'}: ${m.text}`)
       .join('\n');
-    const message = `Draft a reply to this customer for the business to send. Write only the message, short and polite${lang ? `, in ${LANG_ENGLISH_NAMES[lang]}` : ''}.\n\n${transcript}`;
+    const message = `Draft a reply to this customer for the business to send. Write only the message, short and polite${lang ? `, in ${englishName(lang)}` : ''}.\n\n${transcript}`;
     // A draft spends tokens too: it passes the same hooks, with no thread.
     const info: TurnInfo = {
       kind: 'draft',

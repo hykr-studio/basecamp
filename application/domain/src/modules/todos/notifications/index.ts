@@ -1,5 +1,5 @@
 /** The to-dos module's WhatsApp template and its reminder on the day a to-do is due. */
-import { type Lang, pick } from '@hykr/i18n';
+import { type PerLang, pick } from '@hykr/i18n';
 import { defineNotification, defineTemplate, type Row } from '@hykr/notifications';
 import { z } from 'zod';
 
@@ -23,7 +23,7 @@ type TodoRow = Row & {
   customerId: string | null;
 };
 
-const SUBJECT: Record<Lang, (title: string) => string> = {
+const SUBJECT: PerLang<(title: string) => string> = {
   en: (title) => `Reminder: ${title}`,
   hi: (title) => `रिमाइंडर: ${title}`,
   te: (title) => `రిమైండర్: ${title}`,
@@ -52,7 +52,7 @@ export const TodoDueNotification = defineNotification<TodoRow>({
   },
   whatsapp: { template: TodoDue, params: (t) => ({ title: t.title }) },
   email: {
-    subject: (t, r) => SUBJECT[r.lang](t.title),
+    subject: (t, r) => pick(SUBJECT, r.lang)(t.title),
     body: (t, r) => `${t.title} ${pick(DUE, r.lang)}.`,
   },
   dedupe: (t) => `todo.due:${t.id}`,

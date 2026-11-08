@@ -4,8 +4,9 @@
 // without a deploy. The resolver reads these per request through TenantConfigService. Roles
 // have their own writer (/api/members/roles); `members` is changed through the generic settings
 // writer by whoever manages members (docs/decisions/H2.md).
-import { LANGS, type Labels } from '@hykr/i18n';
+import type { Labels } from '@hykr/i18n';
 import { z } from 'zod';
+import { Lang, LangCode, typedLabels } from '../languages.js';
 import { ROLE_NAME } from '../principal.js';
 import {
   CAPABILITY_NAME,
@@ -20,18 +21,16 @@ import {
 import { defineSettingsSection } from './sections.js';
 
 /**
- * A label a business types: English required, the other languages fall back to it. Shorter
- * than code labels: it names a role in a list.
+ * A label a business types: English required, the other languages optional. Shorter than code
+ * labels: it names a role in a list.
  */
-export const BusinessLabel = z
-  .object({
-    en: z.string().trim().min(1).max(60),
-    hi: z.string().trim().max(60).optional(),
-    te: z.string().trim().max(60).optional(),
-  })
-  .transform(
-    (l): Labels => Object.fromEntries(LANGS.map((lang) => [lang, l[lang] || l.en])) as Labels,
-  );
+const roleWords = z.string().trim().max(60);
+
+/** A business's label as stored. */
+export const BusinessLabel = typedLabels(LangCode, roleWords);
+
+/** A business's label as a person writes it: only the application's languages. */
+export const BusinessLabelInput = typedLabels(Lang, roleWords);
 
 /** A capability name as stored: checked against the registry when used, never when parsed. */
 const CapabilityName = z.string().regex(CAPABILITY_NAME);

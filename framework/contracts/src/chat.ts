@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { PageSpec, Present, Surfaces } from './framework/present.js';
-import { Channel, Lang } from './voice.js';
+import { Lang, LangCode } from './languages.js';
+import { Channel } from './voice.js';
 
 export const ChatRole = z.enum(['user', 'assistant']);
 export type ChatRole = z.infer<typeof ChatRole>;
@@ -122,7 +123,7 @@ export const ThreadMessage = z.object({
   metadata: z.object({
     runId: z.string().nullable(),
     channel: Channel,
-    lang: Lang.nullable(),
+    lang: LangCode.nullable(),
     createdAt: z.iso.datetime(),
   }),
 });

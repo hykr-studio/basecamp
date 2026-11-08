@@ -19,7 +19,7 @@ import {
   tenantOf,
 } from '@hykr/core';
 import { type Database, privacyRequests } from '@hykr/db';
-import { LANGS, type Lang } from '@hykr/i18n';
+import { isLang, type Lang } from '@hykr/i18n';
 import { can, subjectOf } from '@hykr/policy';
 import {
   Controller,
@@ -138,7 +138,7 @@ export class PrivacyController {
     @CurrentPrincipal() p: Principal,
     @Query('lang') lang?: string,
   ): Promise<PrivacyRegister> {
-    const l: Lang = LANGS.includes(lang as Lang) ? (lang as Lang) : 'en';
+    const l: Lang = isLang(lang) ? lang : 'en';
     return this.privacy.register(p, l);
   }
 }

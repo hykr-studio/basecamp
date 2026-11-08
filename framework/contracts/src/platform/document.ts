@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { CreatedBy, commandSpec } from '../framework/spec.js';
-import { Lang } from '../voice.js';
+import { LabelsShape, Lang, LangCode } from '../languages.js';
 
 /**
  * Documents (PDFs) of records, as `/api/documents` shows them. An application declares each kind
@@ -64,7 +64,7 @@ export const DocumentInfo = z.object({
   version: z.number().int(),
   /** The record's version it was made from (a versioned entity): what an acceptance binds to. */
   recordVersion: z.number().int().nullable().optional(),
-  lang: Lang,
+  lang: LangCode,
   status: DocumentStatus,
   /** The file's name: 'A-0001.pdf'. */
   name: z.string(),
@@ -90,7 +90,7 @@ export type DocumentInfo = z.infer<typeof DocumentInfo>;
 export const DocumentKindInfo = z.object({
   name: z.string(),
   entity: z.string(),
-  label: z.object({ en: z.string(), hi: z.string(), te: z.string() }),
+  label: LabelsShape,
   channels: z.array(DocumentChannel),
 });
 export type DocumentKindInfo = z.infer<typeof DocumentKindInfo>;
@@ -102,7 +102,7 @@ export const RenderDocumentInput = z.object({
     .max(100)
     .describe('The kind of document, as list-documents or the record names it'),
   id: z.string().min(1).max(100).describe('The id of the record it is about'),
-  lang: Lang.optional().describe('Its language: en, hi or te. Default: en'),
+  lang: Lang.optional().describe("Its language, one the application speaks. Default: 'en'"),
 });
 export type RenderDocumentInput = z.input<typeof RenderDocumentInput>;
 

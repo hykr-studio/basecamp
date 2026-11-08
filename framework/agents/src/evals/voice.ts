@@ -1,4 +1,4 @@
-// Spoken turns in English, Hindi and Telugu, scored on three things: the right tools with the
+// Spoken turns in the application's languages, scored on three things: the right tools with the
 // title as said, an answer in the turn's language, and at most two sentences.
 // `basecamp eval voice [--module <m>]` (scripted model) or `basecamp eval voice --live`.
 //

@@ -2,7 +2,7 @@
  * The framework's own notifications: a request waiting for someone's decision, its outcome told
  * back to the customer who asked, and a person mentioned in a comment. Any domain gets them.
  */
-import { type Lang, t } from '@hykr/i18n';
+import { type Labels, pick, t } from '@hykr/i18n';
 import { defineNotification, type Row } from '../define-notification.js';
 import { ApprovalOutcome, ApprovalRequest } from './templates.js';
 
@@ -33,7 +33,7 @@ export const decidableOnWhatsApp = (a: Pick<ApprovalRow, 'approverChannels' | 'm
 const pathOf = (a: Pick<ApprovalRow, 'id'>) => `/approvals/${encodeURIComponent(a.id)}`;
 const summaryOf = (a: Pick<ApprovalRow, 'summary'>) => (a.summary ?? '').slice(0, 200);
 
-const OUTCOME: Record<string, Record<Lang, string>> = {
+const OUTCOME: Record<string, Labels> = {
   approved: { en: 'approved', hi: 'मंज़ूर हुआ', te: 'అనుమతించబడింది' },
   rejected: { en: 'not approved', hi: 'मंज़ूर नहीं हुआ', te: 'అనుమతించబడలేదు' },
   expired: { en: 'not decided in time', hi: 'समय पर तय नहीं हुआ', te: 'సమయానికి నిర్ణయించబడలేదు' },
@@ -99,7 +99,7 @@ export const ApprovalOutcomeNotification = defineNotification<ApprovalRow>({
     template: ApprovalOutcome,
     params: (a, r) => ({
       summary: summaryOf(a),
-      outcome: OUTCOME[a.status]?.[r.lang] ?? a.status,
+      outcome: OUTCOME[a.status] ? pick(OUTCOME[a.status], r.lang) : a.status,
     }),
   },
   dedupe: (a) => `approval.outcome:${a.id}`,

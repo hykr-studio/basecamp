@@ -35,7 +35,7 @@ import {
   user,
   writeAudit,
 } from '@hykr/db';
-import { type Lang, pick } from '@hykr/i18n';
+import { type Labels, type Lang, pick } from '@hykr/i18n';
 import {
   HttpException,
   Inject,
@@ -852,9 +852,7 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
         module: catalog.moduleOf(def.name) ?? null,
         purpose: trait.purpose ? pick(trait.purpose, lang) : null,
         fields: trait.fields.map((f) => {
-          const label = (
-            def.spec.fieldLabels as Record<string, Parameters<typeof pick>[0]> | undefined
-          )?.[f];
+          const label = (def.spec.fieldLabels as Record<string, Labels> | undefined)?.[f];
           return { name: f, label: label ? pick(label, lang) : f };
         }),
         erase: trait.erase,

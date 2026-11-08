@@ -9,6 +9,7 @@ import {
   verbs,
   written,
 } from '@hykr/agents/script';
+import { pick } from '@hykr/i18n';
 
 const ADD = verbs('add', 'जोड़ो', 'జోడించు');
 const DELETE = verbs('delete', 'हटाओ', 'తొలగించు');
@@ -23,11 +24,14 @@ const scripts = [
       const r = turn.result('create-task');
       if (!r) return [call('create-task', { title })];
       const added = (t: { title: string }) =>
-        ({
-          en: `Added ${quoted(t.title)}.`,
-          hi: `${quoted(t.title)} जोड़ दिया।`,
-          te: `${quoted(t.title)} జోడించాను.`,
-        })[turn.lang];
+        pick(
+          {
+            en: `Added ${quoted(t.title)}.`,
+            hi: `${quoted(t.title)} जोड़ दिया।`,
+            te: `${quoted(t.title)} జోడించాను.`,
+          },
+          turn.lang,
+        );
       return [say(written(r, added, turn))];
     },
   }),
@@ -41,7 +45,7 @@ const scripts = [
           say(
             written(
               r,
-              () => ({ en: 'Deleted.', hi: 'हटा दिया।', te: 'తొలగించాను.' })[turn.lang],
+              () => pick({ en: 'Deleted.', hi: 'हटा दिया।', te: 'తొలగించాను.' }, turn.lang),
               turn,
             ),
           ),

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { commandSpec } from '../framework/spec.js';
-import { Lang } from '../voice.js';
+import { LabelsShape, Lang, LangCode } from '../languages.js';
 
 /**
  * Accepting a record's document (a PDF) with a one-time code, and the evidence each acceptance
@@ -17,7 +17,7 @@ export type OtpChannel = z.infer<typeof OtpChannel>;
 export const AcceptanceMethod = z.enum(['otp', 'esign']);
 export type AcceptanceMethod = z.infer<typeof AcceptanceMethod>;
 
-const label = z.object({ en: z.string(), hi: z.string(), te: z.string() });
+const label = LabelsShape;
 
 /** One kind of acceptance an entity has, as `GET /api/acceptances/kinds?entity=` lists it. */
 export const AcceptanceKindInfo = z.object({
@@ -62,7 +62,7 @@ export const AcceptanceInfo = z.object({
   }),
   /** The words agreed to, in the language they were shown in. */
   statement: z.string(),
-  lang: Lang,
+  lang: LangCode,
   signer: z.object({
     kind: z.enum(['user', 'contact']),
     userId: z.string().nullable(),
@@ -128,7 +128,7 @@ export const AcceptanceStatus = z.object({
   }),
   /** What they would agree to, in the language asked for. */
   statement: z.string(),
-  lang: Lang,
+  lang: LangCode,
   /** Where a code would go, per channel the signer has, masked. */
   channels: z.array(z.object({ channel: OtpChannel, sentTo: z.string() })),
   esign: z.string().nullable(),
@@ -155,7 +155,7 @@ export const AcceptanceChallenge = z.object({
   sentTo: z.string(),
   expiresAt: z.iso.datetime(),
   statement: z.string(),
-  lang: Lang,
+  lang: LangCode,
 });
 export type AcceptanceChallenge = z.infer<typeof AcceptanceChallenge>;
 

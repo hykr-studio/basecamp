@@ -1,15 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { LANGS } from './lang.js';
 import { defineMessages, mergeMessages } from './messages/define.js';
 import * as parts from './messages/index.js';
 import { catalogs, t } from './messages.js';
 
 describe('message parts', () => {
-  it('each part has the same keys in every language', () => {
+  it('each translation the framework ships has every key of its part, and no other', () => {
     for (const [name, part] of Object.entries(parts)) {
       const keys = Object.keys(part.en).sort();
-      for (const lang of LANGS)
-        expect(Object.keys(part[lang]).sort(), `${name}.${lang}`).toEqual(keys);
+      for (const [lang, phrases] of Object.entries(part))
+        expect(Object.keys(phrases ?? {}).sort(), `${name}.${lang}`).toEqual(keys);
     }
   });
 
@@ -26,18 +25,16 @@ describe('message parts', () => {
     expect(t('te', 'channel.choose')).toBe('ఎంచుకోండి');
   });
 
-  it('merging two parts with one key throws', () => {
+  it('merging two parts with one key throws; a partial translation merges', () => {
     const a = defineMessages({
-      en: { 'x.same': 'A' },
+      en: { 'x.same': 'A', 'x.other': 'O' },
       hi: { 'x.same': 'अ' },
-      te: { 'x.same': 'అ' },
+      te: { 'x.same': 'అ', 'x.other': 'ఒ' },
     });
-    const b = defineMessages({
-      en: { 'x.same': 'B' },
-      hi: { 'x.same': 'ब' },
-      te: { 'x.same': 'బ' },
-    });
+    const b = defineMessages({ en: { 'x.same': 'B' } });
     expect(() => mergeMessages([a, b])).toThrow(/x\.same/);
-    expect(mergeMessages([a]).te['x.same']).toBe('అ');
+    const merged = mergeMessages([a]);
+    expect(merged.te['x.same']).toBe('అ');
+    expect(merged.hi['x.other']).toBeUndefined();
   });
 });

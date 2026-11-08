@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { LANG_ENGLISH_NAMES, LANGS } from '@hykr/i18n';
+import { englishName, languages } from '@hykr/i18n';
 import type { AgentDomain } from './agent-domain.js';
 
 /** The agent's identity at the API (x-agent-id) and in audit rows: one per deployment. */
@@ -62,7 +62,7 @@ export function agentVersion(instructions: string, model: string) {
     instructions,
     VOICE_RULES.screen,
     VOICE_RULES.noScreen,
-    ...LANGS.map((l) => LANG_ENGLISH_NAMES[l]),
+    ...languages().codes.map(englishName),
   ];
   const hash = createHash('sha256').update(prompt.join('\n')).digest('hex').slice(0, 8);
   return `${AGENT_ID}@${model}#${hash}`;

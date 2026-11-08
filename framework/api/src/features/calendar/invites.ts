@@ -23,7 +23,7 @@ import {
   toJson,
 } from '@hykr/core';
 import { calendarInvites, type Database, memberships, tenants, user, writeAudit } from '@hykr/db';
-import { type Lang, t, whenText } from '@hykr/i18n';
+import { isLang, type Lang, t, whenText } from '@hykr/i18n';
 import { can, subjectOf } from '@hykr/policy';
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
@@ -512,7 +512,7 @@ export class InvitesService {
       .where(eq(tenants.id, row.tenantId));
     const name = business?.name ?? '';
     const timeZone = tenantZone(business?.settings);
-    const lang = (['en', 'hi', 'te'].includes(row.lang) ? row.lang : 'en') as Lang;
+    const lang: Lang = isLang(row.lang) ? row.lang : 'en';
     const ics = icsCalendar({
       method,
       prodId: '-//Basecamp//Calendar invites//EN',

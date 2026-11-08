@@ -27,8 +27,7 @@ export function useCustomFields(entity: string): CustomField[] {
 /** A field's label in the reader's language (English when it has none). */
 export function useFieldLabel() {
   const { lang } = useLang();
-  return (f: Pick<CustomField, 'label'>) =>
-    pick({ hi: f.label.en, te: f.label.en, ...f.label }, lang);
+  return (f: Pick<CustomField, 'label'>) => pick(f.label, lang);
 }
 
 const shown = (value: unknown) =>

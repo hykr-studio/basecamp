@@ -222,7 +222,7 @@ export class InboundProcessor extends WorkerHost {
         answered.add(m);
       } else if (payload.startsWith('ntf:')) {
         const reply = await this.notify.tapped(contact.id, payload, m.replyTo);
-        await say(reply ? reply[lang] : t(lang, 'said.failed'));
+        await say(reply ? pick(reply, lang) : t(lang, 'said.failed'));
         answered.add(m);
       }
     }
@@ -501,8 +501,8 @@ export class InboundProcessor extends WorkerHost {
   }
 
   /**
-   * The language to answer in: the script they wrote in (Hindi or Telugu stick to the
-   * contact), else the contact's own.
+   * The language to answer in: the application's language whose letters they wrote in (one
+   * other than English sticks to the contact), else the contact's own.
    */
   private async languageOf(contact: Contact, text: string): Promise<Lang> {
     const written = scriptOf(text);

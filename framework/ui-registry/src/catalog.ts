@@ -1,5 +1,5 @@
 import { assertNoProblems, type EntitySpec, PLATFORM_MODULE } from '@hykr/contracts';
-import type { Lang } from '@hykr/i18n';
+import type { Labels, Lang, Languages, Noun } from '@hykr/i18n';
 import type { ScreenDef, ViewDef } from './define-view.js';
 import { platformScreens, platformViews } from './platform/index.js';
 import { createRegistry } from './registry.js';
@@ -54,22 +54,45 @@ export function createUiRegistry(...parts: readonly (UiPart | undefined)[]) {
   });
 }
 
+/** A view's words, each with the name a problem calls it by. */
+function wordsOf(view: ViewDef): [string, Labels | Noun][] {
+  const { title, empty, noun } = view.labels;
+  return [
+    ...(title ? [['title', title] as [string, Labels]] : []),
+    ...(empty ? [['empty', empty] as [string, Labels]] : []),
+    ...(noun ? [['noun', noun] as [string, Noun]] : []),
+  ];
+}
+
+const filled = (words: string | readonly string[] | undefined) =>
+  words !== undefined && (typeof words === 'string' ? [words] : words).every((w) => w.trim());
+
 /**
- * Every word a view declares exists, non-empty, in every language. The types make a missing
- * language fail to compile; this catches an empty one, which would otherwise fall back to
- * English without anyone noticing. An application runs it in its own tests.
+ * Every word a view declares, in each of these languages: what is missing or empty. A missing
+ * language reads in English, so nothing fails; an application that wants each of its languages
+ * complete runs this in its own tests (`missingLabels(views, languages.codes)`).
  */
-export function emptyLabels(views: readonly ViewDef[], langs: readonly Lang[]): string[] {
+export function missingLabels(views: readonly ViewDef[], langs: readonly Lang[]): string[] {
   const problems: string[] = [];
-  for (const view of views) {
-    const { title, empty, noun } = view.labels;
-    for (const lang of langs) {
-      if (title && !title[lang].trim()) problems.push(`${view.name} title (${lang})`);
-      if (empty && !empty[lang].trim()) problems.push(`${view.name} empty (${lang})`);
-      if (noun)
-        for (const form of noun[lang])
-          if (!form.trim()) problems.push(`${view.name} noun (${lang})`);
-    }
-  }
+  for (const view of views)
+    for (const [what, words] of wordsOf(view))
+      for (const lang of langs)
+        if (!filled(words[lang])) problems.push(`${view.name} ${what} (${lang})`);
+  return problems;
+}
+
+/**
+ * Words in a language the application does not declare: a typo ('hu' for 'hi') or a language
+ * it does not speak, either way never shown. `defineServer` reports them before it serves.
+ */
+export function languageProblems(views: readonly ViewDef[], set: Languages): string[] {
+  const problems: string[] = [];
+  for (const view of views)
+    for (const [what, words] of wordsOf(view))
+      for (const lang of Object.keys(words))
+        if (!set.has(lang))
+          problems.push(
+            `The view ${view.name}'s ${what} is in "${lang}", not one of the languages`,
+          );
   return problems;
 }

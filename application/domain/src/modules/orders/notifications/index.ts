@@ -4,7 +4,7 @@
  * breach (contracts ORDER_STATES); this is how they hear it. Someone named in a comment on an
  * order hears of it too.
  */
-import { type Labels, moneyText, pick } from '@hykr/i18n';
+import { type Labels, type Lang, moneyText, pick } from '@hykr/i18n';
 import {
   type CommentMentionRow,
   defineNotification,
@@ -82,8 +82,8 @@ const MENTIONED: Labels = {
 };
 const SOMEONE: Labels = { en: 'Someone', hi: 'किसी', te: 'ఎవరో' };
 
-const said = (m: CommentMentionRow, lang: keyof Labels) =>
-  MENTIONED[lang].replace('{name}', m.author.name ?? SOMEONE[lang]);
+const said = (m: CommentMentionRow, lang: Lang) =>
+  pick(MENTIONED, lang).replace('{name}', m.author.name ?? pick(SOMEONE, lang));
 
 /**
  * Someone named in a comment on an order hears of it on their phone, else by email, with a

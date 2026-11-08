@@ -1,8 +1,9 @@
 import { createHmac } from 'node:crypto';
+import { defineLanguages, resetLanguages, setLanguages } from '@hykr/i18n';
 import { describe, expect, it } from 'vitest';
 import { PermanentError, RetryableError } from './adapter.js';
 import { signApproval, verifyApproval } from './approval-token.js';
-import { keywordOf } from './keywords.js';
+import { keywordOf, keywordProblems } from './keywords.js';
 import { render } from './render.js';
 import { split } from './split.js';
 import { createWhatsAppAdapter, toGraph } from './whatsapp/adapter.js';
@@ -391,6 +392,34 @@ describe('keywords', () => {
     expect(keywordOf('talk to a person')).toBe('human');
     expect(keywordOf('నా డేటా తొలగించు')).toBe('delete_my_data');
     expect(keywordOf('please stop the meeting at 4')).toBeUndefined();
+  });
+
+  it("adds each declared language's words, and refuses words for no keyword", () => {
+    expect(keywordOf('σταμάτα')).toBeUndefined();
+    const greek = defineLanguages({
+      el: {
+        name: 'Ελληνικά',
+        english: 'Greek',
+        keywords: { stop: ['Σταμάτα'], help: ['βοήθεια'] },
+      },
+    });
+    setLanguages(greek);
+    try {
+      expect(keywordOf('σταμάτα!')).toBe('stop');
+      expect(keywordOf('Βοήθεια')).toBe('help');
+      // The framework's own words still match.
+      expect(keywordOf('रोकें')).toBe('stop');
+      expect(keywordProblems(greek)).toEqual([]);
+      expect(
+        keywordProblems(
+          defineLanguages({
+            el: { name: 'Ελληνικά', english: 'Greek', keywords: { halt: ['x'] } },
+          }),
+        )[0],
+      ).toMatch(/"halt", which is not a keyword/);
+    } finally {
+      resetLanguages();
+    }
   });
 });
 

@@ -1,5 +1,4 @@
-import { localeOf } from './format.js';
-import type { Lang } from './lang.js';
+import { type Lang, localeOf } from './lang.js';
 
 /**
  * Words for amounts of money, in the person's language, from whole minor units and an ISO 4217

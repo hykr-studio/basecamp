@@ -59,6 +59,26 @@ describe('basecamp module add', () => {
     expect(result.todo.join('\n')).toContain('basecamp db generate --name orders');
   });
 
+  it("writes English words only, and names the application's other languages to add", () => {
+    const result = moduleAdd({
+      root,
+      db: 'domain',
+      name: 'orders',
+      languages: ['Hindi', 'Telugu'],
+    });
+    const view = read('domain/src/modules/orders/views/order.ts');
+    expect(view).toContain("title: { en: 'Orders' },");
+    expect(view).toContain("noun: { en: ['order', 'orders'] },");
+    expect(view).not.toMatch(/\b(hi|te):/);
+    expect(read('domain/src/modules/orders/contracts/order.ts')).toContain(
+      "title: { en: 'Title' },",
+    );
+    expect(result.todo.join('\n')).toContain('other languages (Hindi, Telugu)');
+    // Not known (the server is not built): the step still says to add them.
+    const other = moduleAdd({ root, db: 'domain', name: 'invoices' });
+    expect(other.todo.join('\n')).toContain('other languages, if it has any,');
+  });
+
   it('registers it: one sorted import and one list entry per barrel, above the marker', () => {
     moduleAdd({ root, db: 'domain', name: 'orders' });
     expect(read('domain/src/modules/index.ts')).toBe(

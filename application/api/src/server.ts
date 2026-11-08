@@ -3,6 +3,7 @@
 // `basecamp dev` and `basecamp start` run the API and the worker from this file.
 
 import { migrations } from '@application/domain/db';
+import { languages } from '@application/domain/languages';
 import { modules } from '@application/domain/modules';
 import { contributions } from '@application/domain/server';
 import { defineServer } from '@hykr/api';
@@ -12,6 +13,8 @@ export const server = defineServer({
   persona:
     'You are a meetings assistant. You help the user plan meetings, keep notes, and track action items.',
   help: 'I can add, list, complete or delete to-dos, show today, and close or move meetings.',
+  // English, Hindi and Telugu (the app speaks the same ones).
+  languages,
   // On WhatsApp, in the welcome and in HELP.
   channel: {
     does: {

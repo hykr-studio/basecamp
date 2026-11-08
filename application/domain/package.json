@@ -16,6 +16,10 @@
       "types": "./dist/db/index.d.ts",
       "default": "./dist/db/index.js"
     },
+    "./languages": {
+      "types": "./dist/languages.d.ts",
+      "default": "./dist/languages.js"
+    },
     "./modules": {
       "types": "./dist/modules/index.d.ts",
       "default": "./dist/modules/index.js"

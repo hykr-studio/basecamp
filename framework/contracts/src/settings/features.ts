@@ -4,6 +4,7 @@
 import type { Labels } from '@hykr/i18n';
 import { z } from 'zod';
 import { createHookRegistry } from '../framework/registry.js';
+import { LabelsShape } from '../languages.js';
 
 declare module '../framework/module.js' {
   interface Contributions {
@@ -130,8 +131,8 @@ export function gatedOff(
 /** One flag as a business sees it (GET /api/features). */
 export const FeatureState = z.object({
   key: z.string(),
-  label: z.record(z.string(), z.string()),
-  description: z.record(z.string(), z.string()).nullable(),
+  label: LabelsShape,
+  description: LabelsShape.nullable(),
   managedBy: z.enum(['platform', 'tenant']),
   on: z.boolean(),
   gates: z.object({

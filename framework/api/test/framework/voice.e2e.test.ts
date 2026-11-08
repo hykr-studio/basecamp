@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { boot, Person, pool, server, shutdown } from '../../dist/testing.js';
 // The framework's fixture application, compiled (Nest's DI needs the decorator metadata).
 import { fixture } from '../fixture/dist/index.js';
+import { fixtureLanguages } from '../fixture/dist/languages.js';
 
 const asha = new Person('Asha Voice');
 const kiran = new Person('Kiran Voice');
@@ -32,7 +33,7 @@ afterAll(shutdown);
 describe('voice sessions', () => {
   it('a person gets a token for one room in their thread, with the voice worker dispatched', async () => {
     const res = await asha.call('POST', '/api/voice/session', {
-      lang: 'te-IN',
+      lang: 'te',
       timeZone: 'Asia/Kolkata',
     });
     expect(res.status).toBe(201);
@@ -53,11 +54,13 @@ describe('voice sessions', () => {
     expect(claims.video?.roomAdmin).toBeFalsy();
     const dispatch = claims.roomConfig?.agents?.[0];
     expect(dispatch?.agentName).toBe('voice');
+    // The application's languages travel with it: the worker does not load the application.
     expect(JSON.parse(dispatch?.metadata ?? '{}')).toEqual({
       threadId,
-      lang: 'te-IN',
+      lang: 'te',
       timeZone: 'Asia/Kolkata',
       maxSeconds: 1200,
+      languages: JSON.parse(JSON.stringify(fixtureLanguages.toWire())),
     });
 
     const { rows } = await pool.query(
@@ -69,9 +72,14 @@ describe('voice sessions', () => {
         actor_kind: 'user',
         actor_id: asha.id,
         channel: 'voice',
-        after: { room, lang: 'te-IN', maxSeconds: 1200 },
+        after: { room, lang: 'te', maxSeconds: 1200 },
       },
     ]);
+  });
+
+  it('refuses a language the application does not speak (and the old speech tags)', async () => {
+    for (const lang of ['el', 'te-IN', 'xx'])
+      expect((await asha.call('POST', '/api/voice/session', { lang })).status).toBe(400);
   });
 
   it("refuses a thread that is not the person's, and anyone who is not a person", async () => {

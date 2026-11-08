@@ -1,15 +1,21 @@
 // Templates as code: created at the provider when missing, their review status recorded, and
 // never edited under the same name. A stand-in provider; the database is the real one.
 import type { ChannelAdapter, RemoteTemplate, TemplateSpec } from '@hykr/channels';
+import { defineLanguages, resetLanguages, setLanguages } from '@hykr/i18n';
 import { defineTemplate } from '@hykr/notifications';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { pool } from '../../dist/testing.js';
+import { fixtureLanguages } from '../fixture/dist/languages.js';
 
 const { TemplateSync } = await import('../../dist/channels/templates/template-sync.js');
 const { sharedDb } = await import('../../dist/infra/db.js');
 
+// The languages templates are synced in: the application's (the fixture's English, Hindi and
+// Telugu), as the runtime installs them when it serves.
+beforeAll(() => setLanguages(fixtureLanguages));
 afterAll(async () => {
+  resetLanguages();
   await sharedDb.pool.end();
   await pool.end();
 });
@@ -67,6 +73,33 @@ describe('templates:sync', () => {
       { language: 'hi', status: 'APPROVED', rejected_reason: null },
       { language: 'te', status: 'REJECTED', rejected_reason: 'INVALID_FORMAT' },
     ]);
+  });
+
+  it('creates only the declared languages a template has words in', async () => {
+    const { adapter } = provider();
+    const plain = defineTemplate({
+      name: `test_plain_${Date.now()}_v1`,
+      category: 'utility',
+      params: z.object({ what: z.string() }),
+      body: { en: 'Plain: {{what}}.', te: 'సాదా: {{what}}.' },
+      example: { what: 'x' },
+    });
+    const report = await new TemplateSync(sharedDb.db, adapter, 'http://app', [plain]).run({
+      create: true,
+    });
+    // No Hindi words: a Hindi contact gets the English one.
+    expect(report.created).toEqual([`${plain.name}/en`, `${plain.name}/te`]);
+    // An application that does not speak Telugu never creates it.
+    setLanguages(defineLanguages({ hi: { name: 'हिंदी', english: 'Hindi' } }));
+    try {
+      const other = defineTemplate({ ...plain, name: `test_plain_${Date.now()}_v2` });
+      const second = await new TemplateSync(sharedDb.db, provider().adapter, 'http://app', [
+        other,
+      ]).run({ create: true });
+      expect(second.created).toEqual([`${other.name}/en`]);
+    } finally {
+      setLanguages(fixtureLanguages);
+    }
   });
 
   it('changing an approved template under the same name fails: bump the version', async () => {

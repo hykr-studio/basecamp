@@ -6,7 +6,7 @@ import {
   VOICE_LANG_TOPIC,
   type VoiceLang,
 } from '@hykr/contracts';
-import { type Lang, scriptOf } from '@hykr/i18n';
+import { type Lang, scriptOf, speechTagOf } from '@hykr/i18n';
 import { useQueryClient } from '@tanstack/react-query';
 import type { UIMessage } from 'ai';
 import * as Speech from 'expo-speech';
@@ -176,7 +176,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
   const readAloud = useCallback((text: string, as: Lang) => {
     Speech.stop();
     Speech.speak(text, {
-      language: `${as}-IN`,
+      language: speechTagOf(as),
       onStart: () => setReadingAloud(true),
       onDone: () => setReadingAloud(false),
       onStopped: () => setReadingAloud(false),
@@ -369,7 +369,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       unblockAudio();
       setLangState(next);
       setSpoken(langOfVoice(next));
-      listener.current?.setLang(`${langOfVoice(next) ?? 'en'}-IN`);
+      listener.current?.setLang(speechTagOf(langOfVoice(next) ?? 'en'));
       void roomRef.current?.localParticipant
         .sendText(next, { topic: VOICE_LANG_TOPIC })
         .catch(() => {});
@@ -402,7 +402,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!live || hears !== 'text' || !canListen()) return;
     const l = listen(
-      `${langOfVoice(langRef.current) ?? 'en'}-IN`,
+      speechTagOf(langOfVoice(langRef.current) ?? 'en'),
       (text, final) => (final ? void sendRef.current(text) : userSaidRef.current(text, false)),
       (error) => setProblem(error === 'not-allowed' ? 'voice.noMic' : 'voice.failed'),
     );

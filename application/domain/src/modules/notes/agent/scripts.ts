@@ -1,4 +1,5 @@
 import { call, defineScript, say, written } from '@hykr/agents/script';
+import { pick } from '@hykr/i18n';
 
 /**
  * The scripted model's knowledge of the notes module (tests, CI and demos without a key):
@@ -21,11 +22,14 @@ export const notesScripts = [
       const r = turn.result('create-note');
       if (!r) return [call('create-note', { title, photos })];
       const kept = (n: { title: string }) =>
-        ({
-          en: `Saved the photo on the note "${n.title}".`,
-          hi: `फ़ोटो नोट "${n.title}" में सहेज दी।`,
-          te: `ఫోటోను "${n.title}" నోట్‌లో సేవ్ చేశాను.`,
-        })[turn.lang];
+        pick(
+          {
+            en: `Saved the photo on the note "${n.title}".`,
+            hi: `फ़ोटो नोट "${n.title}" में सहेज दी।`,
+            te: `ఫోటోను "${n.title}" నోట్‌లో సేవ్ చేశాను.`,
+          },
+          turn.lang,
+        );
       return [say(written(r, kept, turn))];
     },
   }),

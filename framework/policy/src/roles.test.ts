@@ -119,8 +119,9 @@ describe("a business's own roles and edits", () => {
     ]);
     expect(standingIn(['unit_buyer'], settings).capabilities).toEqual(['unit.cost.read']);
     const views = rolesOfBusiness(settings);
+    // English only: another language reads it in English (pick), nothing is copied in.
     expect(views.find((r) => r.name === 'unit_buyer')).toMatchObject({
-      label: { en: 'Purchaser', hi: 'Purchaser', te: 'Purchaser' },
+      label: { en: 'Purchaser' },
       source: 'application',
       edited: true,
     });

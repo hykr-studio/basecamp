@@ -4,6 +4,7 @@ export * from './catalog.js';
 export * from './channel-rules.js';
 export * from './chat.js';
 export * from './framework/index.js';
+export * from './languages.js';
 export * from './parties.js';
 export * from './platform/inbox.js';
 export * from './platform/index.js';

@@ -38,7 +38,7 @@ export const contacts = channel.table(
     /** The channel's id for the person: a WhatsApp wa_id (E.164 digits, no +). */
     address: text('address').notNull(),
     profileName: text('profile_name'),
-    /** BCP 47 (en, hi, te-IN): the language replies and templates use; its language is read. */
+    /** BCP 47 ('en', 'de-AT'): the language replies and templates use; its language is read. */
     locale: text('locale').notNull().default('en'),
     /**
      * The person's IANA zone: their business's when the contact is made (`tenantZone` in

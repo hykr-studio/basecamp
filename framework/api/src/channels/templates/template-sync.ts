@@ -1,7 +1,12 @@
 import type { ChannelAdapter, RemoteTemplate } from '@hykr/channels';
 import { type Database, schema } from '@hykr/db';
-import { LANGS, type Lang } from '@hykr/i18n';
-import { contentHash, type TemplateDef, toTemplateSpec } from '@hykr/notifications';
+import type { Lang } from '@hykr/i18n';
+import {
+  contentHash,
+  type TemplateDef,
+  templateLanguages,
+  toTemplateSpec,
+} from '@hykr/notifications';
 import { and, eq } from 'drizzle-orm';
 import { runtime } from '../../runtime.js';
 
@@ -17,7 +22,9 @@ export type SyncReport = {
 const key = (name: string, lang: string) => `${name}/${lang}`;
 
 /**
- * Keeps the provider's templates in step with the code. For every template and language:
+ * Keeps the provider's templates in step with the code. For every template and each of the
+ * application's languages it has words in (`templateLanguages`; a contact in another gets the
+ * English one):
  * missing → create it (pending review); same content → nothing; changed content under the same
  * name → refuse ("bump the version": an edit would take an approved template out of service);
  * and record what the provider says (approved, rejected and why, paused).
@@ -41,7 +48,7 @@ export class TemplateSync {
     for (const t of await this.wa.templates.list()) remote.set(key(t.name, t.language), t);
 
     for (const def of this.defs)
-      for (const lang of LANGS) {
+      for (const lang of templateLanguages(def)) {
         const hash = contentHash(def, lang);
         const [local] = await this.db
           .select()

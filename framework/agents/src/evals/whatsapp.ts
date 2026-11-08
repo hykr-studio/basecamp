@@ -2,7 +2,8 @@
 // the language the person writes in. Scored on the right tools and the reply's language.
 // `basecamp eval whatsapp [--module <m>]` (scripted model) or `basecamp eval whatsapp --live`.
 //
-// The framework's own cases, then each module's Hindi and Telugu turns typed instead of said.
+// The framework's own cases, then each module's turns in its other languages (not English),
+// typed instead of said.
 // Needs the API running.
 import type { Surface } from '@hykr/contracts';
 import type { Lang } from '@hykr/i18n';

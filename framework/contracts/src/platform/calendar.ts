@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { commandSpec } from '../framework/spec.js';
+import { Lang } from '../languages.js';
 import { defineCapability } from '../roles.js';
-import { Lang } from '../voice.js';
 
 /**
  * Calendars, as `/api/calendar/*` shows them: a person's connections to their own calendars
@@ -164,7 +164,7 @@ export const SendInviteInput = z.object({
   entity: z.string().min(1).max(100).describe("The record's kind (an entity name)"),
   id: z.string().min(1).max(100).describe("The record's id"),
   to: z.array(InviteRecipient).min(1).max(20).describe('Whom to invite'),
-  lang: Lang.optional().describe('The email in en, hi or te. Default: en'),
+  lang: Lang.optional().describe("The email's language, one the application speaks. Default: 'en'"),
 });
 export type SendInviteInput = z.input<typeof SendInviteInput>;
 

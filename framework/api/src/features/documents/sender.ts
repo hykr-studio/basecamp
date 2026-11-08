@@ -11,7 +11,7 @@ import {
   user,
   writeAudit,
 } from '@hykr/db';
-import { langOf } from '@hykr/i18n';
+import { langOf, pick } from '@hykr/i18n';
 import type { Reader } from '@hykr/notifications';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
@@ -191,7 +191,7 @@ export class DocumentSender {
           to: contact.address,
           mediaId,
           filename: doc.fileName,
-          caption: fill(template.body[to.reader.lang], params),
+          caption: fill(pick(template.body, to.reader.lang), params),
         };
     const [messageId] = await this.service(OutboundService).queue(
       { tenantId: doc.tenantId, contactId: contact.id, from },

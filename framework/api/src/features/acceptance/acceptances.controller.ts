@@ -127,7 +127,10 @@ export class AcceptancesController {
   ): Promise<AcceptanceStatus> {
     const parsed = lang ? Lang.safeParse(lang) : undefined;
     if (parsed && !parsed.success)
-      throw new BadRequestException({ error: 'bad_query', message: 'lang is en, hi or te' });
+      throw new BadRequestException({
+        error: 'bad_query',
+        message: "lang is not one of the application's languages",
+      });
     return this.acceptances.status(p, documentId, parsed?.data);
   }
 

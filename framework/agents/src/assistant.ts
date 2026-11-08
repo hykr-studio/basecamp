@@ -1,7 +1,7 @@
 import type { Catalog } from '@hykr/contracts';
 import { drawsComponents, type Surface } from '@hykr/contracts';
 import { type ToolKit, type ToolSet, withContributions } from '@hykr/core/tools';
-import { isLang, LANG_ENGLISH_NAMES } from '@hykr/i18n';
+import { englishName, isLang } from '@hykr/i18n';
 import { Agent, type ToolsInput } from '@mastra/core/agent';
 import { PromptInjectionDetector, UnicodeNormalizer } from '@mastra/core/processors';
 import type { AgentDomain } from './agent-domain.js';
@@ -107,7 +107,7 @@ export const fillIn =
       .replace(
         '{language}',
         isLang(lang)
-          ? `Reply in ${LANG_ENGLISH_NAMES[lang]}.`
+          ? `Reply in ${englishName(lang)}.`
           : 'Reply in the language the user writes in.',
       )
       .replace('{voice}', spoken ? voiceRule : '')

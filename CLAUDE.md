@@ -240,8 +240,12 @@ audited `on_behalf_of`), never through a role.
   which waits for every open transaction.
 - WhatsApp templates (`defineTemplate`) are versioned forever. To change the wording, add `_v2`;
   `templates:sync` refuses an edit to an approved template.
-- Every user-facing word is `Labels` (`{ en, hi, te }`), which won't compile with a language missing. A list
-  view that can be spoken needs `noun` and `empty`.
+- Every user-facing word is `Labels`: `en` always, plus any of the application's languages
+  (`defineLanguages` in `application/domain/src/languages.ts`, given to `defineServer({ languages })`
+  and `<AppShell config={{ languages }}>`). A language left out reads in English, so it compiles;
+  `defineServer` refuses a key that is not a declared language, and the sample's views test
+  (`missingLabels`) keeps its Hindi and Telugu complete. Read a word with `pick(labels, lang)`,
+  never `labels[lang]`. A list view that can be spoken needs `noun` and `empty`.
 - The scripted model (`MODEL_MODE=fake`, `framework/agents/src/fake`, with each module's scripts in
   `application/domain/src/modules/<name>/agent/scripts.ts`) is what tests and CI use. Its replies are asserted
   in golden files, so its wording matters. The first matching script wins, earlier modules first, and

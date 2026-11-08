@@ -1,5 +1,5 @@
 import type { CommandSpec } from '@hykr/contracts';
-import { type Lang, scriptCounts } from '@hykr/i18n';
+import { type Lang, type Languages, languages, scriptCounts } from '@hykr/i18n';
 import { createScorer } from '@mastra/core/evals';
 import { extractAgentResponseMessages, mergeToolInvocations } from '@mastra/evals/scorers/utils';
 
@@ -149,30 +149,33 @@ const MIN_LETTERS = 3;
 
 const reply = (output: AgentOutput) => extractAgentResponseMessages(output).join('\n').trim();
 
+/**
+ * The language an answer is written in, among the application's (by their letters), or
+ * 'mixed'. Titles stay as the person said them, so an answer in another language may hold
+ * English words (a list of English titles may even be most of it). So: a language other than
+ * English needs real words in its letters (a few, not a stray sign) and none in any other such
+ * language's; English needs none in any of theirs. Quoted titles never count.
+ */
+export function replyLanguage(text: string, set: Languages = languages()): Lang | 'mixed' {
+  const own = text.replace(/"[^"]*"|“[^”]*”|‘[^’]*’/g, '');
+  const counts = scriptCounts(own, set);
+  const others = Object.entries(counts).filter(([lang, n]) => lang !== 'en' && n > 0);
+  if (others.length === 1 && others[0][1] >= MIN_LETTERS) return others[0][0];
+  return others.length === 0 && (counts.en ?? 0) > 0 ? 'en' : 'mixed';
+}
+
 /** "Reply in {language}": the answer is written in the turn's script. */
 export const repliesInLanguage = createScorer({
   id: 'replies-in-language',
   name: 'Answers in the turn’s language',
-  description: 'Hindi in Devanagari, Telugu in Telugu script, English in neither.',
+  description:
+    "Each of the application's languages in its own letters, and English in no other language's.",
   type: 'agent',
 })
   .preprocess(({ run }) => {
     const text = reply(run.output);
     const want = (run.groundTruth as VoiceExpected | undefined)?.lang ?? 'en';
-    // Titles stay as the person said them, so a Telugu answer may hold English words (a list
-    // of English titles may even be most of it). So: an Indian language needs real words in
-    // its script (a few letters, not a stray sign) and none in the other's; English needs
-    // none in either. Quoted titles never count.
-    const own = text.replace(/"[^"]*"|“[^”]*”|‘[^’]*’/g, '');
-    const { hi, te, en } = scriptCounts(own);
-    const got =
-      te >= MIN_LETTERS && hi === 0
-        ? 'te'
-        : hi >= MIN_LETTERS && te === 0
-          ? 'hi'
-          : hi === 0 && te === 0 && en > 0
-            ? 'en'
-            : 'mixed';
+    const got = replyLanguage(text);
     return { want, got, text };
   })
   .generateScore(({ results }) => {
