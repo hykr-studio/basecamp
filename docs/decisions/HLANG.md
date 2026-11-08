@@ -38,14 +38,16 @@ framework had, so nothing it shows or says changes.
 | 10 | Voice: the session's language travels as a code (`'te'`, was `'te-IN'`); the speech provider and the device's recognizer and reader are asked for the language's `speech` tag. The language chip cycles through Auto and the declared languages, named in their own script. | Task ("voice ... language detection", "the apps"); the region was a provider and market detail. |
 | 11 | The voice worker never imports the application: the API puts the set on the session's dispatch (`VoiceDispatch.languages`: code, names, locale, speech tag, the letters' source and flags), and the worker's `LangState` uses it. | Framework rule (the worker reaches the API only over HTTP); default (the dispatch is already the API's trusted word to the worker). |
 | 12 | Templates: `body` needs English; another language is optional. `basecamp templates sync` creates, per template, the declared languages it has a body for. A send uses the contact's language when the template has it and it is approved, else English (the existing fallback). A template's checks run on each language it has. | Task (threading); Meta needs a template per language, so a language without words is not created. |
-| 13 | `defineServer` checks the language keys it can see against the declared set and reports each as a `ModulesError` problem: view and screen labels, templates (body, footer, buttons), `channel.does`, the modules' voice eval cases, and keyword names. An undeclared key is a typo or a language the application does not speak. | Task ("views and the registry validation"); existing pattern (one validation pass at boot). |
+| 13 | `defineServer` checks the language keys it can see against the declared set and reports each as a `ModulesError` problem: the modules' view labels (`languageProblems` in `@hykr/ui-registry`), entity field labels, templates (body, footer, buttons), `channel.does`, the modules' voice eval cases, and keyword names (`keywordProblems` in `@hykr/channels`). An undeclared key is a typo or a language the application does not speak. The framework's own words (platform views, its templates) are not checked: they ship translations an application may not speak. | Task ("views and the registry validation"); existing pattern (one validation pass at boot). |
 | 14 | `missingLabels(views, langs)` (`@hykr/ui-registry`, was `emptyLabels`) lists every view title, empty line and noun missing or empty in a language. The sample's views test runs it with its own languages, so its Hindi and Telugu stay complete. | Task ("Keep the sample app on en, hi and te so that nothing it shows changes"). |
 | 15 | Evals: each case's language must be declared (decision 13); the WhatsApp suite replays the non-English voice cases; `repliesInLanguage` decides the reply's language from the declared languages' letters: one non-English language with real words and no other's, or English with no other's, else mixed. | Task ("evals"). |
 | 16 | `basecamp module add` writes English words only (`{ en: 'Orders' }`), not English copies under each language. Its "Next" list names the application's other languages to translate into, read from the built server's definition when there is one. | Task ("the module scaffold"); default (an English copy under `hi` hides a missing translation from `missingLabels`). |
-| 17 | Labels a business types (role labels, `wording.phrases`): any well-formed code is kept when stored settings are read, and the writers refuse a language the application does not declare (`label_language` / phrase problems). | Default: settings never fail to read because a language was dropped; a write is checked. |
+| 17 | Labels a business types (role labels, custom field labels, `wording.phrases`): the stored shapes (`BusinessLabel`, the custom field's read label, `SomeLabels`) keep any well-formed code, so settings never fail to read because a language was dropped; the input shapes (`BusinessLabelInput`, `FieldLabel`, `SomeLabelsInput`, built with `typedLabels(Lang, …)`) refuse a language the application does not declare with a 400, and `phraseProblems` says so too. Response shapes that carry labels (`LabelsShape`) need English only. A business's role label no longer gets English copied under each language: it reads in English where it has none. | Default: fail closed on input, never on stored data. |
 | 18 | `app.chat_messages.lang` loses its TypeScript enum (`text('lang')`): the column was already plain text, so there is no migration. | Default. |
 | 19 | The sample declares its languages in `application/domain/src/languages.ts` (`@application/domain/languages`): English (`en-GB`, speech `en-IN`), Hindi (`hi-IN`) and Telugu (`te-IN`), with the letter ranges and names the framework had. `application/api/src/server.ts` and `application/mobile/src/app/_layout.tsx` pass it. The sample's per-language tables (`Record<Lang, …>`) become `PerLang` read with `pick`. | Task ("Sample demo: the sample app keeps en, hi and te"). |
 | 20 | The fixture declares English, Hindi and Telugu (its WhatsApp, voice and scripted-model tests use them); `features/languages` adds a fixture app that also speaks Greek, which the framework has no phrases for, to prove an application's own language end to end. | Default: a language unlike the sample's (another script, no framework translation). |
+| 22 | The voice worker leaves a room whose dispatch carries a language set it cannot read (as it leaves any dispatch it cannot parse); the language chip pins only a language of the session's set, anything else is ignored. One Sarvam speaker speaks every language, in the language's speech tag. | Default: fail closed, as the worker already does for a dispatch it did not expect. |
+| 23 | Two hot files changed by one line each, only because what they called was removed: `inbound.processor.ts` (`pick(reply, lang)` for a notification button's reply, and the comment on the language a contact writes in) and `chat.service.ts` (`englishName(lang)` in the draft-a-reply prompt). | Plan (hot-file table); the removal of `LANG_ENGLISH_NAMES` and the optional languages of `Labels`. |
 | 21 | Removed exports: `LANGS`, `LANG_NAMES`, `LANG_ENGLISH_NAMES`, `DEVANAGARI`, `TELUGU`, `emptyLabels`. Their replacements are `languages().codes`, `languageName`, `englishName`, a language's `letters`, and `missingLabels`. | Plan ("Break APIs freely"). |
 
 ## Assumptions to review
@@ -69,7 +71,7 @@ framework had, so nothing it shows or says changes.
   type LanguageDef = { name; english; locale?; speech?; letters?: RegExp; keywords?: Record<string, string[]> }
   defineLanguages(defs: { en?: Partial<LanguageDef> } & Record<string, LanguageDef>): Languages
   interface Languages { codes; get(code); has(code); scriptOf(text); scriptCounts(text); toWire() }
-  setLanguages(set) / languages() / resetLanguages()
+  setLanguages(set) / languages() / resetLanguages()   // one set per process
   languagesFromWire(wire): Languages
   isLang(v), langOf(tag), pick(table, lang), languageName(lang), englishName(lang),
   localeOf(lang), speechTagOf(lang), scriptOf(text, set?), scriptCounts(text, set?)
@@ -81,7 +83,9 @@ framework had, so nothing it shows or says changes.
 
 @hykr/api     defineServer({ ..., languages })      // installed by setRuntime
 @hykr/app     <AppShell config={{ ..., languages }}>  // installed by configure()
-@hykr/ui-registry   missingLabels(views, langs), languageProblems(views, screens, set)
+@hykr/ui-registry   missingLabels(views, langs), languageProblems(views, set)
+@hykr/channels      KEYWORDS, keywordOf(text) (framework words + each language's), keywordProblems(set)
+@hykr/notifications templateLanguages(def, set?)
 
 application/domain/src/languages.ts
   export const languages = defineLanguages({ en: {...}, hi: {...}, te: {...} })
@@ -89,23 +93,38 @@ application/domain/src/languages.ts
 
 ## Test plan
 
-- `@hykr/i18n` unit tests: a set with a language the framework has no phrases for (fallback to
-  English, the application's override in it), detection order and shared scripts, locales and
-  speech tags, the wire round trip, `defineLanguages` refusals, `pick` and `count` fallbacks,
-  `defineMessages` with a partial translation.
-- `@hykr/voice-worker`: `LangState` with a set from the wire (pinned speech tags, detection
-  among the declared languages only).
-- `@hykr/channels`: a declared language's keywords; the framework's words still match.
-- `@hykr/agents`: the scripted model's pinned language and the scorer with another language.
-- `@hykr/ui-registry`: `missingLabels`, `languageProblems`.
-- `@hykr/api` unit: `defineServer` refuses undeclared language keys (views, templates,
-  `channel.does`, eval cases, keyword names).
-- Fixture e2e `languages.e2e.test.ts`: a Greek WhatsApp message is answered with the
-  application's Greek phrase (and English where it has none), sticks to the contact, its STOP
-  keyword stops; a chat turn in an undeclared language is a 400; a voice session's dispatch
-  carries the set and refuses an undeclared language; another business's thread stays a 404.
+- `@hykr/i18n` (`languages.test.ts`, `i18n.test.ts`, `overrides.test.ts`, `messages.test.ts`):
+  English first and its defaults, the declared order, refusals (bad code, missing name, unknown
+  field, bad locale), a global pattern used statelessly, English alone until a set is installed,
+  locales and speech tags (English's for an undeclared language), detection by letters with the
+  other languages first, `pick` and `count` fallbacks, the wire round trip, a partial
+  translation, an override in a language the framework has no words for and the refusal of an
+  undeclared one, the shipped translations complete.
+- `@hykr/voice-worker`: `LangState` over a set from the wire: pinned speech tags, a language
+  outside the set never pinned nor heard.
+- `@hykr/channels`: a declared language's keywords; the framework's words still match;
+  `keywordProblems`.
+- `@hykr/agents` (`languages.test.ts`, `paused.test.ts`): the scripted model's pinned language
+  by English name, only for declared languages; the agent version follows the set;
+  `replyLanguage`; the paused sentence in a declared language.
+- `@hykr/ui-registry`: `missingLabels`, `languageProblems`. `@hykr/notifications`: an
+  English-only template, `templateLanguages`, buttons in English for a language without words.
+- `@hykr/cli`: `module add` writes English words and names the other languages.
+- `@hykr/app`: the voice chip's choices from `configure({ languages })`.
+- `@hykr/api` unit (`languages.test.ts`): the declaration kept (English alone without one), and
+  every undeclared key refused in one ModulesError (views, field labels, templates,
+  `channel.does`, voice eval cases, keyword names).
+- Fixture e2e (`languages.e2e.test.ts`, a fixture that also speaks Greek): a Greek WhatsApp
+  message is known by its letters, sticks to the contact, stops on the application's Greek
+  keyword with the application's Greek words and reads in English where it gave none; Hindi
+  still gets the framework's translation; a chat turn in an undeclared language is a 400 and the
+  message keeps its language; another person's thread is a 404; a business words phrases and
+  names roles in Greek but not in French, and another business does not see them; a voice
+  session pinned to Greek carries the set to the worker, French is a 400.
+- `voice.e2e.test.ts`: the dispatch carries the fixture's set; a speech tag ('te-IN') or an
+  undeclared code is a 400.
 - The existing suites (voice, WhatsApp golden, templates, views, evals in fake mode) keep
-  passing with the sample's declaration.
+  passing with the sample's declaration; `views.test.ts` checks the sample's three languages.
 
 ## Deferred
 
