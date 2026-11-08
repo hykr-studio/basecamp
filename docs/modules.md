@@ -57,8 +57,9 @@ pnpm turbo run build typecheck --filter=@application/api... --filter=@applicatio
 
 ## 2. What a module owns
 
-Everything under `application/domain/src/modules/<name>/` and `application/mobile/src/modules/<name>/`,
-plus its route files under `application/mobile/src/app/<name>/`. Inside the running application
+Everything under `application/domain/src/modules/<name>/` and
+`application/mobile/src/modules/<name>/`, plus its route files under
+`application/mobile/src/app/<name>/`. Inside the running application
 it also owns names, and `defineServer` refuses two modules (or a module and the framework) with
 the same one:
 
@@ -110,10 +111,10 @@ its evals alone (section 6).
   `@application/domain/modules/<name>/contracts` and `/views`. Another app module is used through
   its `index.tsx` only (not checked by a rule yet: guide 14).
 
-`pnpm lint:deps` enforces all but the last, with the rules `module-imports-public-parts`,
-`module-<name>-imports-its-dependencies` (generated from each module's `dependsOn`),
-`module-not-to-aggregates`, `no-module-cycles`, `domain-specs-and-views-are-isomorphic` and
-`apps-read-only-isomorphic-domain`.
+`pnpm lint:deps` enforces them, except the one about another app module's `index.tsx`, with the
+rules `module-imports-public-parts`, `module-<name>-imports-its-dependencies` (generated from
+each module's `dependsOn`), `module-not-to-aggregates`, `no-module-cycles`,
+`domain-specs-and-views-are-isomorphic` and `apps-read-only-isomorphic-domain`.
 
 What no single module owns lives in `application/domain/src/server/` (who reaches which rows,
 the approval levels, the privacy policy), `application/domain/src/languages.ts`,
@@ -134,8 +135,8 @@ Each list ends with a `// basecamp module add: …` line, and `module add` puts 
 it and the import in sorted order, so every entry stays on its own line. `.gitattributes` merges
 these files with `merge=union`: two branches that each added a module merge (or rebase) without a
 conflict, both lines kept. After such a merge run `pnpm format` (it puts the lines back in
-order) and the build; a union merge never removes a line, so a module removed on one branch and
-renamed on another needs a look.
+order) and the build. A union merge keeps both sides of any hunk the branches both changed, so
+when one branch renames a module another removed, both lines stay: read the lists after it.
 
 The same holds for the framework's own barrels (one line per feature, script set or message
 file), listed in `.gitattributes`.
@@ -226,8 +227,9 @@ In this repository, `scripts/wt.sh` does it for a git worktree: `wt.sh init <id>
 the template database `app_tpl` (the base branch's schema, `wt.sh tpl` rebuilds it), and a `.env`
 with its own `BULL_PREFIX`; `wt.sh resetdb <id>` recreates the database; `wt.sh test <id>
 [turbo args]` runs tests with at most two suites at once on the machine; `wt.sh check <id>` fails
-when the branch commits generated migrations (when an integrator generates them at merge) or
-`framework/` holds product vocabulary; `wt.sh rm <id>` removes the worktree and its database.
+when the branch commits generated migrations (in this repository's parallel runs, the integrator
+generates them at merge) or `framework/` holds product vocabulary; `wt.sh rm <id>` removes the
+worktree and its database.
 
 ## 8. Before you hand a module over
 
