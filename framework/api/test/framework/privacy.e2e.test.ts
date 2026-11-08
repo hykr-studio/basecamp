@@ -566,14 +566,21 @@ describe('retention', () => {
        values ($1, 'fixture.old', '{}', now() - interval '3 days', now() - interval '3 days')`,
       [tenantId],
     );
+    // A send an undo withdrew (H1) is never passed on, and goes too.
+    await pool.query(
+      `insert into app.outbox (tenant_id, key, payload, created_at, cancelled_at)
+       values ($1, 'fixture.withdrawn', '{}', now() - interval '3 days', now() - interval '3 days')`,
+      [tenantId],
+    );
     const ran = await privacy().runRetention({ tenantId });
-    expect(ran['outbox.relayed']).toBeGreaterThanOrEqual(1);
+    expect(ran['outbox.relayed']).toBeGreaterThanOrEqual(2);
     expect(ran).not.toHaveProperty('chat.messages');
     expect(
       (
-        await pool.query(`select 1 from app.outbox where tenant_id = $1 and key = 'fixture.old'`, [
-          tenantId,
-        ])
+        await pool.query(
+          `select 1 from app.outbox where tenant_id = $1 and key in ('fixture.old', 'fixture.withdrawn')`,
+          [tenantId],
+        )
       ).rows,
     ).toEqual([]);
   });
