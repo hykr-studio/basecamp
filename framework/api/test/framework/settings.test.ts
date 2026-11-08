@@ -14,9 +14,11 @@ import {
   listQuerySchema,
   phraseProblems,
 } from '@hykr/contracts';
+import { resetLanguages, setLanguages } from '@hykr/i18n';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { originLookup } from '../../dist/features/settings/domains.js';
+import { fixtureLanguages } from '../fixture/dist/languages.js';
 
 describe('feature flags', () => {
   const a = defineFeatureFlag({
@@ -179,12 +181,24 @@ describe('the custom list filter', () => {
 });
 
 describe("a business's phrases", () => {
-  it('must be framework phrases and keep their placeholders', () => {
-    expect(phraseProblems({ 'channel.handoff': { en: 'Within {replyTime}.' } })).toEqual([]);
-    expect(phraseProblems({ 'channel.handoff': { hi: 'जल्द' } })).toEqual([
-      expect.stringMatching(/placeholders \{replyTime\}/),
+  it('must be framework phrases, in the application’s languages, and keep their placeholders', () => {
+    setLanguages(fixtureLanguages);
+    try {
+      expect(phraseProblems({ 'channel.handoff': { en: 'Within {replyTime}.' } })).toEqual([]);
+      expect(phraseProblems({ 'channel.handoff': { hi: 'जल्द' } })).toEqual([
+        expect.stringMatching(/placeholders \{replyTime\}/),
+      ]);
+      expect(phraseProblems({ 'no.such': { en: 'x' } })).toEqual(['"no.such" is not a phrase']);
+      expect(phraseProblems({ 'channel.handoff': { fr: 'Bientôt {replyTime}.' } })).toEqual([
+        `"channel.handoff" (fr): not one of the application's languages`,
+      ]);
+    } finally {
+      resetLanguages();
+    }
+    // English alone: Hindi words are refused too.
+    expect(phraseProblems({ 'channel.handoff': { hi: 'जल्द {replyTime}' } })).toEqual([
+      `"channel.handoff" (hi): not one of the application's languages`,
     ]);
-    expect(phraseProblems({ 'no.such': { en: 'x' } })).toEqual(['"no.such" is not a phrase']);
   });
 });
 

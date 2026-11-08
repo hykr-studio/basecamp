@@ -171,10 +171,11 @@ describe("a business's own roles", () => {
     expect(defined.status).toBe(200);
     expect(defined.body.value).toMatchObject({
       name: 'site_lead',
-      label: { en: 'Site lead', hi: 'Site lead', te: 'Site lead' },
       source: 'business',
       capabilities: ['fixture.projects.all', 'members.read'],
     });
+    // English only: the other languages read it in English, nothing is copied under them.
+    expect(defined.body.value.label).toEqual({ en: 'Site lead' });
     const project = await newProject({ title: 'Lead sees every project', cost: 100 });
     expect((await inAna(lead)('GET', `/api/projects/${project.id}`)).status).toBe(404);
 
@@ -195,7 +196,8 @@ describe("a business's own roles", () => {
       capabilities: ['members.read'],
       label: { en: 'Lead', hi: 'लीड' },
     });
-    expect(edited.body.value).toMatchObject({ label: { en: 'Lead', hi: 'लीड', te: 'Lead' } });
+    // Telugu was not given: it reads in English, nothing is copied.
+    expect(edited.body.value.label).toEqual({ en: 'Lead', hi: 'लीड' });
     expect((await inAna(lead)('GET', `/api/projects/${project.id}`)).status).toBe(404);
     expect(await audits('roles.edit')).toHaveLength(1);
   });
