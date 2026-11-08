@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   bigserial,
   check,
   index,
@@ -204,7 +205,8 @@ export const threadMessages = app.table(
 /**
  * Notifications to send, written in the same transaction as the business change that causes
  * them: if it rolls back, nothing is sent; if the process stops after commit, a relay still
- * delivers them.
+ * delivers them. A write that can be undone holds its sends until its window closes
+ * (`available_at`); undoing it withdraws them (`cancelled_at`).
  */
 export const outbox = app.table(
   'outbox',
@@ -216,6 +218,17 @@ export const outbox = app.table(
     payload: jsonb('payload').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     relayedAt: timestamp('relayed_at', { withTimezone: true }),
+    /** Not passed on before this time: the undo window of the write that wrote it. */
+    availableAt: timestamp('available_at', { withTimezone: true }).defaultNow().notNull(),
+    /** Withdrawn before it was passed on: the write was undone in its window. */
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    /** The undo window (`app.undo_windows`) that holds it, if any. */
+    undoId: text('undo_id'),
+    /**
+     * The top-level transaction that wrote it (`pg_current_xact_id()`, savepoints included), so
+     * the write that wrote it finds it again before it commits.
+     */
+    xact: bigint('xact', { mode: 'number' }).default(sql`(pg_current_xact_id()::text)::bigint`),
   },
   (table) => [index('outbox_pending_idx').on(table.id).where(sql`${table.relayedAt} is null`)],
 );

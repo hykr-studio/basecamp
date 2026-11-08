@@ -799,14 +799,18 @@ and the orders module names `irreversible` on its own decision for an order abov
 
 A write that runs with an undo window (its level's `undoMs`, or the decision's own) answers
 `{ status: 'done', value, undo: { id, until } }` when it was for a person and touched only entities.
-Its events wait in the outbox until `until`. `POST /api/undo/:id` (people only, the person it was for;
+Its events wait in the outbox until `until`, and so does every send it wrote to `app.outbox` (the
+`notify.held-sends` write hook sets `available_at` and `undo_id` on its transaction's rows).
+Notifications are scheduled from the stored events, so nothing is scheduled or sent before the window
+closes. `POST /api/undo/:id` (people only, the person it was for;
 `api.undo(id)`, `useUndo()` in the app) reverses it through `runWrite`: a created row is deleted, an
 updated one gets its changed fields back, a deleted one is put back as it was (same id). Every row is
-audited (`rule: 'undo_own_write'`), the held events get `cancelled_at`, and the reversal stores no
-events, so subscribers never see the write. It refuses when the row changed since (409
-`changed_since`), when an event was already passed on (409 `too_late`), after the window (403
-`undo_window_closed`) and the second time (409 `already_undone`); another person's or business's
-undo is a 404. A command can be undone only when its `touched` rows carry `before` and `after`.
+audited (`rule: 'undo_own_write'`), the held events and sends get `cancelled_at`, and the reversal
+stores no events, so subscribers and recipients never see the write. It refuses when the row changed
+since (409 `changed_since`), when an event or a send was already passed on (409 `too_late`), after the
+window (403 `undo_window_closed`) and the second time (409 `already_undone`); another person's or
+business's undo is a 404. A command can be undone only when its `touched` rows carry `before` and
+`after`.
 
 #### 5.8.3 Durable runs: the assistant waits, then goes on
 
@@ -932,7 +936,9 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   (id `<subscriber>--<stored event id>`, so a repeat runs once), then sets `relayed_at`. `handle`
   runs on the shared `events` queue; `queue` adds the envelope to your own queue. The envelope has
   the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
-  (F3) before it leaves the server. The in-process `EventBus` is not relayed.
+  (F3) before it leaves the server. The in-process `EventBus` is not relayed. Notifications are one
+  of these subscribers (`notify.events`, on its own queue, one event at a time per worker): an event
+  some notification names schedules, sends or cancels it.
 - **Turn hooks.** Every chat turn, back-office draft, resumed run (`kind: 'resume'`, section
   5.8.3) and agent run (`kind: 'agent'`, section 5.26) passes `turnHooks` (`gateTurn`): first a check that the deployment has a model (503
   `model_not_configured`), then the hooks, then the business's model policy chooses the turn's model
@@ -951,7 +957,8 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   `whatsapp` and `email`; add the name to `NotificationChannels` (`@hykr/notifications`) by declaration
   merging. `whatsapp` is required only when WhatsApp is a channel. `sent` ends the fallback order;
   `unavailable` or a final failure moves on; a failure for now retries that channel. A failure found
-  later goes to `NotifyService.fallback(meta)`. An unregistered channel stops the start.
+  later goes to `NotifyService.fallback(meta)`. An unregistered channel stops the start. A channel
+  gets `req.row` as the recipient may read it (build the words from it) and `req.meta.row` as stored.
 - **Push.** `push` is the framework's own delivery channel (`features/push`, decisions in
   `docs/decisions/A9B15.md`). A notification that lists it needs `push: { title, body, url? }`. The
   app's `pushPlugin()` registers the device's Expo token (`POST /api/push/tokens`) for the person and
@@ -2945,8 +2952,10 @@ export const MeetingReminder = defineTemplate({
 | `schedule` | `{ on: [events], at: (row) => Date \| null, cancelOn?: [events] }` |
 | `send` | `{ on: [events] }`: send now |
 | `when` | `(row) => boolean`: checked at send time |
-| `to` | `(row) => [{ userId } \| { customerId } \| { contactId } \| { roles }]` |
+| `to` | `(row) => [{ userId } \| { customerId } \| { contactId } \| { capability, except? } \| { partyId } \| { participantsOf, as? }]` |
 | `channels` | Fallback order, e.g. `['push', 'whatsapp', 'email']`; also any registered delivery channel (section 5.10) |
+| `also` | Channels it goes to as well, whatever the fallback order does, e.g. `['inapp']` (the in-app inbox keeps it however it reached the person) |
+| `channelWhen` | `{ [channel]: (row) => boolean }`: a channel used only when it holds for the row, else the next one |
 | `whatsapp` | `{ template, params(row, reader) }`. Required when `'whatsapp'` is a channel (and for `onButton`, `approval`). |
 | `email` | `{ subject, body }`. Required when `'email'` is in `channels`. |
 | `push` | `{ title(row, reader), body(row, reader), url?(row) }`: what the phone shows, and the app path a tap opens. Required when `'push'` is in `channels`. |
@@ -2955,7 +2964,11 @@ export const MeetingReminder = defineTemplate({
 | `approval` | `(row) => approvalId`: the quick replies `approve` and `reject` decide that approval |
 | `dedupe` | Required. `(row) => string`: one pending schedule per key |
 
-Event names are `<entity>.created|updated|deleted`, your commands' `NamedEvent`s, `approval.requested` / `approval.decided`, and `comment.mentioned` (section 5.21).
+Event names are `<entity>.created|updated|deleted`, your commands' `NamedEvent`s, `approval.requested` / `approval.decided`, and `comment.mentioned` (section 5.21). They come from the stored events (`app.domain_events`), so a notification is scheduled only once its write committed, still after a crash, and only once an undoable write's window closed.
+
+Who receives a notification (`to`, `when`, `dedupe`, `approval`, `schedule.at`, `channelWhen`) reads the row as stored. What it says (`whatsapp.params`, `email`, `push`, `inapp`) reads the row as each recipient may: the dispatcher resolves the recipient in the business (a person who left gets nothing) and passes the record through its read schema, field policy and read projectors, as `eventFor` does. A field the recipient may not read is not there, and neither are the record's columns its read schema does not show (its owner, its customer); keys that are the event's own (the SLA on `<entity>.sla.breached`) stay, and so do `id` and `tenantId`.
+
+The framework's `approval.request` asks a request's deciders (never its requester) by push, else on WhatsApp with Approve and Reject (only where the request may be decided there: its channels allow WhatsApp and it asks for no more than a number), else by email, and always keeps it in their in-app inbox. Each opens `/approvals/<id>`; `Reader.appUrl` (the deployment's `APP_URL`) gives an email its link. Change its order with `overrideNotification('approval.request', { channels, also })`.
 
 Add the template and notification to the module's `<name>Notifications` (the module's `index.ts` passes them to `defineModule`). Template names and notification keys are unique across modules. Then run:
 
@@ -2971,17 +2984,18 @@ A template that carries a PDF has `header: { type: 'document' }`; the documents 
 when it sends (section 5.19). With `WA_APP_ID` set, `templates:sync` creates it with a sample PDF,
 as Meta's review asks.
 
-The usual way to send is an event plus `schedule` or `send.on`. `NotifyService.notify(def, row, tx)` (`framework/api/src/channels/notify/notify.service.ts`) is an instance method inside `@hykr/api`, not an export; a `defineCommand` `run` gets only `{ tx, principal, input, loaded, via }` and has no service to call. To send from inside a command, insert into the outbox with the command's transaction, as `framework/api/src/channels/notify/send-template.command.ts` does (`schema` from `@hykr/db`):
+The usual way to send is an event plus `schedule` or `send.on`. To send from inside a command, write it to the outbox with the command's transaction, naming the record's type (so each recipient's words read it as they may):
 
 ```ts
-await tx.insert(schema.outbox).values({
-  tenantId: principal.tenantId ?? '',
-  key: def.key,
-  payload: { row, dedupe: def.dedupe(row) },
-});
+import { queueNotification } from '@hykr/api';
+
+run: async ({ tx, loaded }) => {
+  await queueNotification(tx, OrderShipped, loaded, { type: 'order' });
+  // …
+}
 ```
 
-Either way the send is part of the write, so a rollback sends nothing. The outbox relay runs only in the queue worker, or in the API with `WORKER_INLINE=1`.
+Either way the send is part of the write, so a rollback sends nothing, and a write that can be undone holds it until its window closes (section 5.8.2). The outbox relay runs only in the queue worker, or in the API with `WORKER_INLINE=1`.
 
 ### 8.3 Voice
 
@@ -3097,7 +3111,7 @@ Contribute a `dataExportSources` entry, `{ name, rows(ctx) }`, that yields only 
 | Write `description`s and `examples` for the model | Leave them vague | They are the tool descriptions the model reads |
 | Add a new version of a template (`_v2`) | Edit an approved template | Providers re-review templates; `templates:sync` refuses the edit |
 | Add words in all three languages | Hard-code English in views | `Labels` will not compile without them; the channels speak three languages |
-| Use the outbox to send from a write (events plus `schedule`/`send.on`, or `tx.insert(schema.outbox)` inside a command) | Call WhatsApp or SMTP directly | A rollback must send nothing, and a crash after commit must still send |
+| Use the outbox to send from a write (events plus `schedule`/`send.on`, or `queueNotification(tx, …)` inside a command) | Call WhatsApp or SMTP directly | A rollback must send nothing, a crash after commit must still send, and an undo must withdraw it |
 | Let 404 mean "not yours" | Return 403 for someone else's id | No hint that a record exists |
 
 ---
@@ -3184,7 +3198,6 @@ These are not built. Each has a workaround for now.
 | Missing | What to do now |
 |---|---|
 | Emailing an invitation | `POST /api/members/invites` returns the code; the inviter shares it. Notifications have no recipient by address yet. |
-| Field policy in notification parameters | A module's `params(row)` gets the raw row. Leave hidden fields out of templates another role receives. |
 | Agent tools for members and grants | `/api/members` and `/api/grants` are people-only routes. |
 | Seed data | Create data through the API or the app. Maestro's demo assumes data exists. |
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
@@ -3281,9 +3294,9 @@ These are not built. Each has a workaround for now.
 | Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it, or the `memory` settings, yet. |
 | Memory timings | The indexer gives the embedding provider 30 s per batch and takes over a claim after 120 s; recall gives it 4 s per turn (1.5 s on voice). All are constants in `features/memory/` (`indexer.ts`, `recall.service.ts`), not deployment settings. |
 | Durable runs | A run waits only for approvals (no questions, timers or webhooks). An agent's run (section 5.26) is resumed in its agent's thread. A decision after WhatsApp's 24-hour window sends nothing there (the app shows it), and a request a continuation parks again is approved in the app, not with buttons. A resume a turn hook refuses (credits) runs no model and is not tried again. If the person keeps chatting meanwhile, the resumed run does not see those messages. A run parked before a deploy goes on under the new instructions and tools. A run whose resume never comes keeps the parked step's tokens unmetered. |
-| Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. Approval requests go out on WhatsApp only. |
-| Undo | Sends written to `app.outbox` inside an undoable write go out at once, and notifications scheduled from in-process events are not held either. Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates of an undoable write wait with its events until the window closes. |
-| Notifications from stored events | `NotifyService` still schedules notifications from the in-process `EventBus` after commit, so a crash between commit and scheduling loses a reminder. Subscribers get stored events (section 5.10). |
+| Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. A request decided in the app only never goes to WhatsApp (no template without buttons): push or email instead. Its inbox item stays when it is decided. A team member whose request someone else decided is not notified of the outcome (the app shows it). |
+| Undo | Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates, notifications and sends of an undoable write wait with its events until the window closes. Outbox rows of a second write in the same transaction are held with the first undoable one. |
+| Notifications to people who cannot open the record | A notification's words leave out what its recipient may not read, but `to` alone decides who gets it: nothing checks that they may read the record. |
 | A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
 | Model fallback, speech under the policy | A provider that fails fails the turn (no other model is tried). Speech (Sarvam) is configured per deployment, outside the model policy. |
 | Buying credits | No purchase provider ships: register a `CreditPurchaseProvider` from a payment connector and call `CreditsService.settlePurchase` from its verified webhook. |
