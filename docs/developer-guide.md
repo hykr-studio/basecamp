@@ -2924,7 +2924,10 @@ has the extension (`framework/db/sql/pre/memory.sql` creates it when offered), o
 **Settings.** The section `memory`: `{ recall: true, conversation: true, limit: 5, minScore: 0.3 }`.
 `recall: false` stops recall before turns (and keeping what people say); `recall-memory` still
 searches. `conversation: false` leaves people's words out everywhere. A business without an
-embedding model its policy allows gets no recall, and its turns still run.
+embedding model its policy allows gets no recall, and its turns still run. Its owners and admins
+(`settings.manage`) change the section with `PATCH /api/settings/sections/memory { value }`
+(section 5.18; `limit` 0 to 10, `minScore` 0 to 1), or as JSON on the back office's Settings
+screen.
 
 A trait's `text` sees the record as the reader may see it, so a field hidden from them is missing:
 write it to cope (`n.body?.trim()`). A trait that throws drops that record from recall.
