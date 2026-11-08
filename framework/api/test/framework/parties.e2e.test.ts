@@ -495,6 +495,11 @@ describe('the participant grant', () => {
       title: 'Asked by assistant',
     });
     expect(parked.body.status).toBe('needs_approval');
+    // A participant is outside the team: the business decides, never the participant (X1).
+    expect(parked.body.approval).toMatchObject({
+      decider: { by: 'capability', capability: 'approvals.decide' },
+      canDecide: false,
+    });
     expect((await audits('case.update', 'needs_approval')).length).toBeGreaterThanOrEqual(1);
   });
 

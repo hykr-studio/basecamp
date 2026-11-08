@@ -1,4 +1,5 @@
-// Roles, members, invitations, per-record grants and field policy (A4). The fixture's
+// Roles, members, invitations, per-record grants and field policy (A4), and who decides for
+// someone outside the team when the application names its own outsider role (X1). The fixture's
 // src/features/members adds a `projects` module (a cost only some capabilities read, steps that
 // follow their project's grants, a command hiding the cost), its own roles and capabilities, an
 // override of the framework's staff, and the roles a creator and a contact get.
@@ -25,9 +26,10 @@ import {
   pool,
   seedContact,
   server,
+  setTenantSettings,
   shutdown,
 } from '../../dist/testing.js';
-import { membersServer } from '../fixture/dist/features/members/index.js';
+import { COSTLY, membersServer } from '../fixture/dist/features/members/index.js';
 
 const ana = new Person('Ana Members');
 const crew = new Person('Crew Members');
@@ -696,5 +698,125 @@ describe('field policy', () => {
       'gadget: field policy on "name": "nobody.has_this" is not a capability',
       'gadget: field policy on "size": the read schema has no such field',
     ]);
+  });
+});
+
+describe('who decides for someone outside the team (X1)', () => {
+  // A contact and a participant are this application's `fixture_client`, not `customer`.
+  const pat = new Person('Pat Outside Members'); // a participant: a member of one of Ana's parties
+  const cleo = new Person('Cleo Outside Members'); // a member holding only the client's role
+  const mona = new Person('Mona Outside Members'); // crew: on the team
+  const ghost = new Person('Ghost Outside Members'); // a member holding a role nobody declared
+  const desk = new Person('Desk Outside Members'); // a role the business made
+
+  const forAssistant = (who: Person) =>
+    asAssistant(`user:${who.id}`, { 'x-tenant-id': tenantId, 'x-channel': 'app' });
+  const ownProject = async (who: Person, title: string) => {
+    const made = await inAna(who)('POST', '/api/projects', { title });
+    expect(made.status).toBe(200);
+    return made.body.value.id as string;
+  };
+  const business = { by: 'capability', capability: 'approvals.decide' };
+
+  beforeAll(async () => {
+    for (const p of [pat, cleo, mona, ghost, desk]) await p.signUp();
+    const party = (await ana.call('POST', '/api/parties', { kind: 'person', name: 'Pat' })).body
+      .value;
+    const invited = await ana.call('POST', `/api/parties/${party.id}/members`, {
+      email: pat.email,
+    });
+    expect(
+      (await pat.call('POST', '/api/parties/join', { token: invited.body.value.token })).status,
+    ).toBe(200);
+    await addMember(cleo, tenantId, ['fixture_client']);
+    await addMember(mona, tenantId, ['fixture_crew']);
+    await addMember(ghost, tenantId, ['fixture_ghost']);
+    const role = await ana.call('POST', '/api/members/roles', {
+      name: 'decision_desk',
+      label: { en: 'Decision desk' },
+      capabilities: ['members.read'],
+    });
+    expect(role.status).toBe(200);
+    await addMember(desk, tenantId, ['decision_desk']);
+  });
+
+  it("a participant's assistant's request waits for the business, never for the participant", async () => {
+    const mine = (await inAna(pat)('GET', '/api/me')).body;
+    expect(mine).toMatchObject({ as: 'participant', roles: ['fixture_client'] });
+    const id = await ownProject(pat, 'Pat asks');
+    const parked = await forAssistant(pat)('DELETE', `/api/projects/${id}`);
+    expect(parked.body.status).toBe('needs_approval');
+    const approval = parked.body.approval;
+    expect(approval).toMatchObject({ decider: business, canDecide: false });
+    const audited = await audits('project.delete', 'needs_approval');
+    expect(audited.map((a) => a.resource_id)).toContain(id);
+    // They see what they asked for, and may not decide it; another business sees nothing.
+    expect((await inAna(pat)('GET', `/api/approvals/${approval.id}`)).body.canDecide).toBe(false);
+    const own = await inAna(pat)('POST', `/api/approvals/${approval.id}/approve`);
+    expect(own.status).toBe(403);
+    expect(own.body.rule).toBe('own_request');
+    expect((await stranger.call('GET', `/api/approvals/${approval.id}`)).status).toBe(404);
+    expect((await stranger.call('POST', `/api/approvals/${approval.id}/approve`)).status).toBe(404);
+    // The business decides it.
+    expect((await ana.call('POST', `/api/approvals/${approval.id}/approve`)).body.status).toBe(
+      'approved',
+    );
+    expect((await inAna(pat)('GET', `/api/projects/${id}`)).status).toBe(404);
+  });
+
+  it("a member holding only the client's role is outside too; a team member decides their own", async () => {
+    const theirs = await ownProject(cleo, 'Cleo asks');
+    const asked = await forAssistant(cleo)('DELETE', `/api/projects/${theirs}`);
+    expect(asked.body.status).toBe('needs_approval');
+    expect(asked.body.approval).toMatchObject({ decider: business, canDecide: false });
+    expect(
+      (await inAna(cleo)('POST', `/api/approvals/${asked.body.approval.id}/approve`)).status,
+    ).toBe(403);
+
+    const crews = await ownProject(mona, 'Mona asks');
+    const own = await forAssistant(mona)('DELETE', `/api/projects/${crews}`);
+    expect(own.body.approval).toMatchObject({
+      decider: { by: 'requester', userId: mona.id },
+      canDecide: true,
+    });
+    expect(
+      (await inAna(mona)('POST', `/api/approvals/${own.body.approval.id}/approve`)).body.status,
+    ).toBe('approved');
+  });
+
+  it("a band's named approver decides only when on the team, by the business's roles", async () => {
+    const project = await newProject({ title: 'Costly project', cost: 10 });
+    const nameApprover = (userId: string) =>
+      setTenantSettings(tenantId, {
+        approvals: { bands: { projects: [{ approver: { userId } }] } },
+      });
+    const reprice = async (cost: number) => {
+      const res = await ana.call('POST', `/api/projects/${project.id}/reprice`, { cost });
+      expect(res.body.status).toBe('needs_approval');
+      return res.body.approval;
+    };
+    try {
+      // Outside the team: the client's role only, a role nobody has, or no membership at all.
+      for (const who of [cleo, ghost, pat]) {
+        await nameApprover(who.id);
+        expect((await reprice(COSTLY)).decider).toEqual(business);
+      }
+      // A declared team role, and a role the business made, decide alone.
+      await nameApprover(desk.id);
+      const desks = await reprice(COSTLY + 1);
+      expect(desks.decider).toEqual({ by: 'person', userId: desk.id });
+      expect((await inAna(desk)('GET', `/api/approvals/${desks.id}`)).body.canDecide).toBe(true);
+      await nameApprover(mona.id);
+      const monas = await reprice(COSTLY + 2);
+      expect(monas.decider).toEqual({ by: 'person', userId: mona.id });
+      expect((await inAna(mona)('POST', `/api/approvals/${monas.id}/approve`)).body.status).toBe(
+        'approved',
+      );
+      expect((await ana.call('GET', `/api/projects/${project.id}`)).body.cost).toBe(COSTLY + 2);
+      const parked = await audits('project.reprice', 'needs_approval');
+      expect(parked.length).toBeGreaterThanOrEqual(5);
+    } finally {
+      await setTenantSettings(tenantId, { approvals: null });
+    }
   });
 });

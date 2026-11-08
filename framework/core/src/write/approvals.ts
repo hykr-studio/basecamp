@@ -17,7 +17,9 @@ import {
   levelOf,
   Money,
   type Principal,
+  standingIn,
   type TenantConfig,
+  teamRoles,
 } from '@hykr/contracts';
 import { approvals, type Database, membershipOf, writeAudit } from '@hykr/db';
 import { subjectOf, userIdOf } from '@hykr/policy';
@@ -191,11 +193,19 @@ type Layer = Pick<ApproverRule, 'by' | 'channels' | 'minAssurance'>;
 const business = (): ApproverBy => ({ capability: DECIDE });
 
 /**
+ * Is this principal on the business's team? A member (standing set by the server) holding a
+ * role beyond those the framework hands outsiders. A contact, a participant, support access,
+ * an operator, and a member holding only a contact's or participant's roles are outside. Its
+ * roles are the ones the resolver found the business has.
+ */
+const onTeam = (p: Principal) => p.standing === 'member' && teamRoles(p.roles ?? []).length > 0;
+
+/**
  * Who decides a parked action, most specific first: the decision's approver (an amount band's
  * named person), the operation's approval rule, then its level's policy. The first that says
  * `by` decides who; `channels` likewise; `minAssurance` is the strongest any of them asks.
- * Nobody says: the person it is for decides their own (assistant's) request, and a customer's
- * (or a contact's) goes to the business, the holders of `approvals.decide`.
+ * Nobody says: a member of the team decides their own (assistant's) request, and anyone outside
+ * it (a contact, a participant, a customer) asks the business, the holders of `approvals.decide`.
  */
 async function decidersFor(
   tx: Tx,
@@ -205,7 +215,6 @@ async function decidersFor(
   settings: () => Promise<TenantConfig>,
 ): Promise<Deciders> {
   const self = userIdOf(p);
-  const customer = (p.roles ?? []).length > 0 && (p.roles ?? []).every((r) => r === 'customer');
   const by = layers.find((l) => l?.by !== undefined)?.by;
   const channels = layers.find((l) => l?.channels !== undefined)?.channels;
   const assurances = layers.flatMap((l) => (l?.minAssurance ? [l.minAssurance] : []));
@@ -214,7 +223,7 @@ async function decidersFor(
     null,
   );
 
-  let who: ApproverBy = by ?? (self && !customer ? 'requester' : business());
+  let who: ApproverBy = by ?? (self && onTeam(p) ? 'requester' : business());
   if (typeof who === 'object' && 'band' in who) {
     // The business's settings name who decides each amount band; no band fits: the business.
     const named = bandApprover(await settings(), who.band, amount);
@@ -225,12 +234,14 @@ async function decidersFor(
   }
   if (who === 'requester' && !self) who = business();
   if (typeof who === 'object' && 'userId' in who) {
-    // A named person decides alone: never the requester, and only a member of this business.
+    // A named person decides alone: never the requester, and only a member of this business's
+    // team, by the roles it has (its own and its edits; a name it lacks counts for nothing).
     const member =
       who.userId !== self && p.tenantId
         ? await membershipOf(tx, who.userId, p.tenantId)
         : undefined;
-    if (!member?.roles.some((r) => r !== 'customer')) who = business();
+    const held = member ? standingIn(member.roles, await settings()).roles : [];
+    if (!teamRoles(held).length) who = business();
   }
   if (typeof who === 'object' && 'capability' in who && !capabilities.has(who.capability))
     throw new Error(`An approval is decided by "${who.capability}", which nobody defines`);
