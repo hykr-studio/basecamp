@@ -116,6 +116,12 @@ describe('personal data in the sample', () => {
         }),
       ]),
     );
+    // Acceptance evidence stays when someone is forgotten, with the application's reason.
+    expect(reg.parts.find((x: Json) => x.name === 'acceptance.evidence')).toMatchObject({
+      erase: 'keep',
+      keepReason: 'acceptance_evidence',
+      keepBasis: expect.stringContaining('प्रमाण'),
+    });
     const period = (name: string) => reg.retention.find((r: Json) => r.name === name)?.days;
     expect(period('notes.personal')).toBe(730);
     expect(period('channel.inbound-payloads')).toBe(30);

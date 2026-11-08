@@ -13,6 +13,7 @@ import { INBOUND_QUEUE, type InboundJob, InboundService } from './inbound.servic
 import { IntegrationsController, WebhooksController } from './integrations.controller.js';
 import { IntegrationsService } from './manage.service.js';
 import { webhookable } from './payload.js';
+import { integrationCopies, integrationsErasure, integrationsParts } from './privacy.js';
 
 /** Each try of a delivery; the sweeper's job too. Retries are scheduled by the service. */
 export const DeliverQueue = defineQueue<DeliverJob, string | number>({
@@ -74,5 +75,8 @@ export const integrationsFeature = defineFeature({
     schedules: [SweepSchedule],
     subscribers: [WebhookFanOut],
     readProjectors: [SealedOffCards],
+    erasureContributors: [integrationsErasure],
+    recordCopies: [integrationCopies],
+    personalDataParts: integrationsParts,
   },
 });

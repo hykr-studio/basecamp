@@ -15,6 +15,7 @@ import type { LiveResource } from '../live/resources.js';
 import { PrivacyFilingHook, privacyCommands } from './commands.js';
 import { PrivacyController } from './privacy.controller.js';
 import { ARCHIVE_FIELD, PrivacyService } from './privacy.service.js';
+import { definePersonalDataPart } from './registry.js';
 import { reachesRequest } from './requests.js';
 import { frameworkTargets } from './targets.js';
 
@@ -91,6 +92,18 @@ export const PrivacyLive: LiveResource = {
   },
 };
 
+/** The outside clients (MCP) a person allowed: deleted when they are forgotten (framework.ts). */
+export const McpGrants = definePersonalDataPart({
+  name: 'mcp.grants',
+  label: {
+    en: 'Outside apps allowed to act for the person',
+    hi: 'व्यक्ति की ओर से काम करने की अनुमति वाले बाहरी ऐप',
+    te: 'వ్యక్తి తరఫున పనిచేయడానికి అనుమతించిన బయటి యాప్‌లు',
+  },
+  fields: ['consents', 'tokens'],
+  erase: 'delete',
+});
+
 export const privacyFeature = defineFeature({
   name: 'privacy',
   controllers: [PrivacyController, ...privacyCommands.map((c) => commandController(c))],
@@ -109,5 +122,6 @@ export const privacyFeature = defineFeature({
     fileHolders: [PrivacyArchives],
     liveResources: [PrivacyLive],
     writeHooks: [PrivacyFilingHook],
+    personalDataParts: [McpGrants],
   },
 });

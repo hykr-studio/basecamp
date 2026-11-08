@@ -48,7 +48,13 @@ import { EventBus } from '@nestjs/cqrs';
 import { and, asc, eq, inArray, isNull, lte, ne, or } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ErasedContact, PrivacyIntake } from '../../channels/maintenance/erasure.js';
-import { eraseWithContributors, exportPersonalData } from '../../privacy/contributors.js';
+import type { Jobs, ServerContext } from '../../hooks.js';
+import {
+  type ContributorsErasure,
+  eraseWithContributors,
+  exportPersonalData,
+} from '../../privacy/contributors.js';
+import { JOBS } from '../../queues/define.js';
 import { runtime } from '../../runtime.js';
 import { jsonOf } from '../export/csv.js';
 import { ZipWriter } from '../export/zip.js';
@@ -65,6 +71,8 @@ import {
 } from './records.js';
 import { type FiledAbout, redactCopies, redactFilings } from './redact.js';
 import {
+  personalDataParts,
+  privacyPolicy,
   processors,
   type RetentionTarget,
   registryProblems,
@@ -475,6 +483,8 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
   /** Forget the person in this business, in one transaction. */
   private async runErase(row: RequestRow): Promise<RunOutcome> {
     let confirm: ErasedContact | undefined;
+    // What contributors do outside the database, once the erasure has committed.
+    const afterCommit: ContributorsErasure['afterCommit'] = [];
     await this.systemWrite({
       tenantId: row.tenantId,
       name: 'privacy.erase',
@@ -497,11 +507,20 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
           const runs = await runsOf(tx, ids);
           const records = await eraseRecords(tx, ids);
           const features: Record<string, number> = {};
-          for (const subject of subjectsOf(ids))
-            for (const [name, n] of Object.entries(
-              await eraseWithContributors({ subject, tenantId, tx }),
-            ))
+          const erased = [...records.erased];
+          const kept: Record<string, { kept: number; keepReason: string }> = {};
+          for (const subject of subjectsOf(ids)) {
+            const done = await eraseWithContributors({ subject, tenantId, tx });
+            for (const [name, n] of Object.entries(done.counts))
               features[name] = (features[name] ?? 0) + n;
+            erased.push(...done.erased);
+            for (const k of done.kept)
+              kept[k.name] = {
+                kept: (kept[k.name]?.kept ?? 0) + k.count,
+                keepReason: k.keepReason,
+              };
+            afterCommit.push(...done.afterCommit);
+          }
           const framework = await eraseFramework(tx, ids);
           framework.contacts = await deleteContacts(tx, ids);
           for (const contactId of ids.contactIds)
@@ -526,7 +545,7 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
                 .limit(1)
             : [];
           const assistant = await eraseMastra(tx, ids, runs, elsewhere.length === 0);
-          const redacted = await redactCopies(tx, tenantId, records.erased);
+          const redacted = await redactCopies(tx, tenantId, erased);
           // Their requests (as a person and as each contact) stay as the business's evidence,
           // without notes or archives.
           const earlier = await tx
@@ -563,6 +582,7 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
           outcome = {
             records: records.outcome,
             features,
+            kept,
             framework,
             assistant: { rows: assistant, runs: runs.length },
             redacted,
@@ -592,6 +612,21 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
         };
       },
     });
+    // Looked up as used (not jobs.service.ts at import: it would read the configuration early).
+    const ref = this.ref;
+    const ctx: ServerContext = {
+      get: (token) => ref.get(token, { strict: false }),
+      db: this.db,
+      get jobs() {
+        return ref.get<Jobs>(JOBS, { strict: false });
+      },
+    };
+    for (const after of afterCommit)
+      await after(ctx).catch((e: unknown) =>
+        log.warn(
+          `after erasing for request ${row.id}: ${e instanceof Error ? e.message : String(e)}`,
+        ),
+      );
     return { status: 'completed', performed: true, ...(confirm ? { confirm } : {}) };
   }
 
@@ -781,6 +816,9 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
       .where(eq(tenants.id, tenantId));
     const policy = effectivePolicy(settings);
     const { catalog } = runtime();
+    const words = privacyPolicy()?.keepReasons ?? {};
+    const basisOf = (reason: string | null | undefined) =>
+      reason && words[reason] ? pick(words[reason], lang) : null;
     return {
       fiduciary: {
         tenantId,
@@ -820,7 +858,16 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
         }),
         erase: trait.erase,
         keepReason: trait.keepReason ?? null,
+        keepBasis: basisOf(trait.keepReason),
         retention: trait.retention?.name ?? null,
+      })),
+      parts: personalDataParts.all().map((x) => ({
+        name: x.name,
+        label: pick(x.label, lang),
+        fields: [...x.fields],
+        erase: x.erase,
+        keepReason: x.keepReason ?? null,
+        keepBasis: basisOf(x.keepReason),
       })),
       retention: this.targets().map((x) => ({
         name: x.name,

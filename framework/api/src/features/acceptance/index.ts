@@ -4,6 +4,7 @@ import { AcceptanceService } from './acceptance.service.js';
 import { AcceptancesController } from './acceptances.controller.js';
 import { AcceptanceEvidenceCapability } from './capability.js';
 import { AcceptanceCodes } from './codes.js';
+import { acceptanceErasure, acceptanceExport, acceptanceParts } from './privacy.js';
 import './routes.js';
 import { AcceptanceStart } from './start.js';
 
@@ -32,5 +33,8 @@ export const acceptanceFeature = defineFeature({
   contributes: {
     subscribers: [AcceptanceCodeRequested],
     capabilities: [AcceptanceEvidenceCapability],
+    erasureContributors: [acceptanceErasure],
+    exportContributors: [acceptanceExport],
+    personalDataParts: acceptanceParts,
   },
 });

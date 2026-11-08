@@ -13,6 +13,7 @@ import { defineSubscriber } from '../events/subscriber.js';
 import { defineFeature } from '../feature.js';
 import { CallsService, DIAL_QUEUE, type DialJob } from './calls.service.js';
 import { DialCall, LogCall, UpdateCall } from './commands.js';
+import { callsErasure, callsExport, callsParts } from './privacy.js';
 
 /** A record's calls, the ones the person may see, one call, and whether calls can be placed. */
 @Controller('api/calls')
@@ -93,5 +94,8 @@ export const callsFeature = defineFeature({
     queues: [CallsDialQueue],
     subscribers: [CallRequested],
     toolContributions: [callsTools],
+    erasureContributors: [callsErasure],
+    exportContributors: [callsExport],
+    personalDataParts: callsParts,
   },
 });

@@ -1989,12 +1989,30 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
   `features/<kind>` (every export contributor) and their earlier requests.
 - **Erasure** is one transaction, through `runWrite` as the system principal (audited
   `privacy.erase` and `privacy.erased`): declared records deleted, anonymised or counted as kept;
-  every erasure contributor (files, comments, memory, documents, jobs, parties, push, inbox, the
-  WhatsApp channel's trail); threads, pages, links, pending approvals, the membership, customer
-  records and contacts; the `mastra` and `mastra_obs` rows of their runs; their earlier archives.
+  every erasure contributor (files, comments, memory, documents, jobs, parties, push, inbox,
+  calendars, calls, the integration bus, acceptance, the WhatsApp channel's trail); threads, pages,
+  links, pending approvals, the outside clients (MCP) the person allowed here, the membership,
+  customer records and contacts; the `mastra` and `mastra_obs` rows of their runs; their earlier
+  archives. A contributor returns `{ count, erased?, kept?, afterCommit? }` (`ErasureResult`):
+  records whose copies are redacted like declared ones, data it keeps on purpose
+  (`outcome.kept`, with a `keepReason` code), and work outside the database once the erasure has
+  committed (a calendar's grant revoked at Google; best effort). The later features
+  (`docs/decisions/H4.md`) do the following:
+  - Calendars: the person's connections and their tokens, event links and push channel, their
+    feeds, their sign-ins and the invites sent to them are deleted, then cleaned up at Google.
+  - Calls: a contact's number, the call's notes and its error leave each call with them; a member
+    is unlinked from their calls and loses their own number on them.
+  - The integration bus: stored webhook bodies and inbound payloads lose values that are the
+    person's email or number.
+  - Acceptance: their one-time codes go; the evidence stays (append-only), counted as kept.
+  - MCP: their consents and tokens for the business are deleted, or all of them when the account
+    goes.
   **Audit redaction** then takes the erased records' personal fields out of `audit.events`
   before and after, `app.domain_events`, `app.approvals` (and its summary), `app.outbox` and
   `channel.messages` copies, keeping every row and id, and erases their files and memory vectors.
+  Each feature's own copies follow (`recordCopies`): the integration bus takes the fields out of
+  the records' stored webhook bodies, drops the receivers' answers to them, and empties an
+  inbound event whose handler wrote one of them. Retention redacts the same way.
   The replies kept for idempotent retries (`app.idempotency`) lose them too. The privacy filings
   about the person (the approvals that held one, their audit rows, kept replies) lose their note,
   and name the person by id instead of the email or number they were filed with; a filing that
@@ -2025,8 +2043,12 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
 - **The register.** `GET /api/privacy/register?lang=hi`, for anyone in the business: the business as
   fiduciary (name, `grievanceContact`, `privacyUrl`), how requests are answered, the processors
   (the application's and the business's own), every entity's personal data and what erasure does
-  to it, and every retention rule with its period here (`days`) and the application's
-  (`defaultDays`).
+  to it, the framework features' own (`parts`, contributed as `personalDataParts` with
+  `definePersonalDataPart`: calendars, calls, webhooks, acceptance evidence and codes, MCP
+  grants), and every retention rule with its period here (`days`) and the application's
+  (`defaultDays`). What stays on erasure carries its `keepReason` code and, when the
+  application's policy gives words for it (`definePrivacyPolicy({ keepReasons: { <code>: Labels }
+  })`), its `keepBasis`: acceptance evidence is `acceptance_evidence`.
 - **Screens.** The back office's Privacy screen (`/privacy`, with `privacy.manage`): requests with
   their deadlines, process, refuse, download, file one received by email or phone, the business's
   privacy settings (deadline, review, periods, processors, contact), the register.
@@ -3298,6 +3320,9 @@ These are not built. Each has a workaround for now.
 | Copies erasure does not reach | BullMQ's kept jobs (`removeOnComplete`, `removeOnFail`) still hold their data until they are trimmed; other people's conversation messages that quoted the person stay; backups are the deployment's. |
 | Checking who asks before a copy is released | A signed-in person's own request runs as they are; there is no OTP step, and the copy is not sent on WhatsApp or by email. The team downloads it for a contact. |
 | A privacy tool for the assistant | Requests are filed by people (the app, the back office, WhatsApp's keyword). |
+| Retention of the later features' logs | Webhook deliveries, attempts and inbound events, the call log and calendar invites have no retention target: they stay until erasure, or until their endpoint or connection is deleted (`docs/decisions/H4.md`). |
+| Approvals naming an erased person | An approval someone else's assistant left waiting (an invite to the person, a call to their number) keeps their email or number in its summary and input until it is decided or expires. |
+| Inbound payloads in a sender's own shape | Erasure nulls values that are the person's email or number and empties events whose handler wrote an erased record. A name, or a number written another way, stays until a connector gives its own redactor. |
 | A team filing's request id on its approval | A privacy request the team files that waits for an approval names a provisional request id on the approval (`resource_id`); the request gets its own id when the approval runs it. Find it by its person (`GET /api/privacy/requests`). |
 | A business's privacy contact before it sets one | Until the privacy team sets `grievanceContact` (the Privacy screen, `PATCH /api/privacy/settings`), the register and WhatsApp's HELP show the framework's placeholder contact. Nothing asks a new business for it. |
 | Sorting or searching on custom fields | Custom fields filter only. Sort and search on the entity's own columns. |
