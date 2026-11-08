@@ -106,8 +106,9 @@ nothing ran.
   migrated, started, and passed assistant 33/33, voice 39/39, WhatsApp 30/30, with one
   `@better-auth/core` (1.7.7) and one `better-call` (1.4.0). Studio served its UI on 4000 and
   its server on 4111.
-- Full CI in the worktree after the changes: see the unit's final report (the run is the last
-  step).
+- Full CI in the worktree after the changes (`fa27cd2f`, empty database): passed. Framework
+  e2e 71 files and 1168 tests, application e2e 28 files and 166 tests (golden WhatsApp
+  skipped), domain 4 files and 12 tests, every unit suite; 36 of 36 turbo tasks.
 
 A note for whoever runs builds in parallel: a source edit made while a turbo run is building
 is compiled into an output stored under the hash of the sources from before the edit. The
