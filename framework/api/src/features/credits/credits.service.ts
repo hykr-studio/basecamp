@@ -346,6 +346,24 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * What a use costs when its reporter did not say: the price for '<meter>.<variant>' or
+   * '<meter>', else the meter's own fallback (a model's price), else nothing (logged once).
+   */
+  private costOf(plan: CreditsPlanResolved, def: MeterDef, use: UsageInput): number {
+    const price =
+      priceFor(plan.prices, def.name, use.variant) ?? def.fallbackPrice?.(use.variant, plan);
+    if (price !== undefined) return creditsFor(price, use.quantity, def.per);
+    const key = `price:${def.name}.${use.variant ?? ''}`;
+    if (def.fallbackPrice && plan.currency && !this.warned.has(key)) {
+      this.warned.add(key);
+      log.warn(
+        `${def.name}${use.variant ? ` of ${use.variant}` : ''} has no price in ${plan.currency}: its uses cost nothing (set CREDITS_CONFIG.prices.${def.name})`,
+      );
+    }
+    return 0;
+  }
+
+  /**
    * Record uses, in one transaction: each a usage row (once per `ref`) added to its period's
    * counter, priced; for a business on credits, the part past the allowance debited from the
    * wallet (locked, so uses never race), and every level now reached stored and announced once.
@@ -402,12 +420,7 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       let spent = Number(spentBefore);
       for (const use of uses) {
         const def = this.meter(use.meter) as MeterDef;
-        const cost =
-          use.cost ??
-          (() => {
-            const price = priceFor(plan.prices, def.name, use.variant);
-            return price === undefined ? 0 : creditsFor(price, use.quantity, def.per);
-          })();
+        const cost = use.cost ?? this.costOf(plan, def, use);
         const [row] = await tx
           .insert(usageEvents)
           .values({
