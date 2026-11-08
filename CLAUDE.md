@@ -16,7 +16,8 @@ The long-form references are `docs/developer-guide.md` (architecture, every prim
 section 14 "Not ready yet"), `docs/tutorial.md` (one feature end to end), `docs/new-application.md` (a
 new product from scratch), `docs/modules.md` (modules in parallel: boundaries, the one journal, the
 rebase procedure) and `DOMAIN.md` (what each application layer must export). Decisions per unit of
-work are in `docs/decisions/`. Read the relevant one before a non-trivial change.
+work are in `docs/decisions/` (its README indexes them and holds the assumptions register). Read the
+relevant one before a non-trivial change.
 
 ## Commands
 
