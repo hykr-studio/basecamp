@@ -8,6 +8,7 @@ import {
   type Principal,
   type PublicBranding,
   SettingsCapability,
+  type SettingsSectionView,
   type TenantDomain,
 } from '@hykr/contracts';
 import {
@@ -20,12 +21,14 @@ import {
   TenantConfigService,
 } from '@hykr/core';
 import { schema } from '@hykr/db';
+import { can } from '@hykr/policy';
 import {
   Controller,
   Get,
   Headers,
   Inject,
   NotFoundException,
+  Param,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -34,6 +37,7 @@ import { asc, eq } from 'drizzle-orm';
 import { domainView } from './commands.js';
 import { isDomainOrigin, verifiedTenantOf } from './domains.js';
 import { FeatureGates, flagsOn } from './gates.js';
+import { capabilityRule, sectionView, settingsTarget, settingsTargets } from './sections.js';
 
 const list = (xs: readonly string[] | undefined) => [...(xs ?? [])];
 
@@ -92,6 +96,48 @@ export class SettingsController {
       .where(eq(d.tenantId, p.tenantId ?? ''))
       .orderBy(asc(d.createdAt));
     return rows.map(domainView);
+  }
+
+  /**
+   * The sections the generic writer changes that this person may change (`general` first), each
+   * with its value (defaults applied), read fresh from the business's row.
+   */
+  @Get('settings/sections')
+  @UseGuards(PrincipalGuard, HumanOnlyGuard)
+  async sections(@CurrentPrincipal() p: Principal): Promise<SettingsSectionView[]> {
+    const settings = await this.stored(p);
+    return settingsTargets()
+      .filter((t) => can(p, t.capability))
+      .map((t) => sectionView(t, settings));
+  }
+
+  /** One of them: 404 when nothing by that name is changed here, 403 without its capability. */
+  @Get('settings/sections/:section')
+  @UseGuards(PrincipalGuard, HumanOnlyGuard)
+  async section(
+    @CurrentPrincipal() p: Principal,
+    @Param('section') key: string,
+  ): Promise<SettingsSectionView> {
+    const target = settingsTarget(key);
+    if (!target)
+      throw new NotFoundException({
+        error: 'not_found',
+        message: `No settings section "${key}" is changed here`,
+      });
+    requireCapability(p, target.capability, { rule: capabilityRule(target.capability) });
+    return sectionView(target, await this.stored(p));
+  }
+
+  /** The business's stored settings, as they are now (not the cached copy). */
+  private async stored(p: Principal): Promise<Record<string, unknown>> {
+    if (!p.tenantId) throw new NotFoundException({ error: 'not_found', message: 'No business' });
+    const t = schema.tenants;
+    const [row] = await this.options.db
+      .select({ settings: t.settings })
+      .from(t)
+      .where(eq(t.id, p.tenantId));
+    if (!row) throw new NotFoundException({ error: 'not_found', message: 'No business' });
+    return (row.settings as Record<string, unknown> | null) ?? {};
   }
 
   /**

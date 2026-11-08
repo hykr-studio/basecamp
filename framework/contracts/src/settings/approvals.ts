@@ -48,7 +48,9 @@ declare module './sections.js' {
   }
 }
 
-export const ApprovalSettingsSection = defineSettingsSection('approvals', ApprovalSettings);
+export const ApprovalSettingsSection = defineSettingsSection('approvals', ApprovalSettings, {
+  editable: true,
+});
 
 type WithApprovals = Pick<TenantConfig, 'approvals'> | { approvals?: ApprovalSettings };
 

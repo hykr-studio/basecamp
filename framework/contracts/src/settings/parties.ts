@@ -18,4 +18,6 @@ export const PartiesSettings = z
   .default({ unknownSenders: 'customer' });
 export type PartiesSettings = z.infer<typeof PartiesSettings>;
 
-export const partiesSettings = defineSettingsSection('parties', PartiesSettings);
+export const partiesSettings = defineSettingsSection('parties', PartiesSettings, {
+  editable: true,
+});

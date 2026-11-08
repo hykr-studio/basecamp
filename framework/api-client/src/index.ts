@@ -48,6 +48,8 @@ import {
   type DocumentInfo,
   type DocumentKindInfo,
   type DocumentRecipient,
+  type EditableSettingsKey,
+  type EditableSettingsValue,
   EditCommentSpec,
   type EditPartyInput,
   type EditRoleInput,
@@ -115,6 +117,8 @@ import {
   SendDocumentSpec,
   type SendInviteInput,
   SendInviteSpec,
+  type SettingsPatch,
+  type SettingsSectionView,
   type SlaListInput,
   type SlaTimer,
   StartImportSpec,
@@ -835,9 +839,35 @@ export function createApiClient(opts: ApiClientOptions) {
     /**
      * The business's setup (A11). Changes go through `command(SetFeatureSpec | UpdateBrandingSpec
      * | UpdateWordingSpec | AddDomainSpec | VerifyDomainSpec | RemoveDomainSpec, input)`, custom
-     * fields through `entity(CustomFieldSpec)`.
+     * fields through `entity(CustomFieldSpec)`, and every editable section (approvals, money,
+     * businessHours, sla, memory, shares, files, parties, members, and `general`: the time zone,
+     * quiet hours, reply time and marketing limit) through `updateSection` (H2).
      */
     settings: {
+      /** The editable sections this person may change (`general` first), with their values. */
+      sections: () => call<SettingsSectionView[]>('GET', '/api/settings/sections'),
+      /** One editable section, defaults applied (its capability needed). */
+      section: <K extends EditableSettingsKey>(key: K) =>
+        call<SettingsSectionView & { key: K; value: EditableSettingsValue<K> | null }>(
+          'GET',
+          `/api/settings/sections/${encodeURIComponent(key)}`,
+        ),
+      /**
+       * Change one editable section with a merge patch: an object changes key by key, `null`
+       * restores a key's default, anything else (a list too) replaces. 400 `settings_invalid`
+       * lists the problems.
+       */
+      updateSection: <K extends EditableSettingsKey>(
+        key: K,
+        patch: SettingsPatch<EditableSettingsValue<K>>,
+        write: string | WriteOptions = newKey(),
+      ) =>
+        call<WriteResult<{ key: K; value: EditableSettingsValue<K> }>>(
+          'PATCH',
+          `/api/settings/sections/${encodeURIComponent(key)}`,
+          { value: patch },
+          write,
+        ),
       /** Flags on, what is off, branding and the business's phrases: what the apps need. */
       get: () => call<ClientSettings>('GET', '/api/settings'),
       /** Every declared flag, on or off here, and who switches it. */

@@ -269,7 +269,9 @@ A business's setup (developer guide, section 5.18, `framework/api/src/features/s
 flags (`defineFeatureFlag`, contributed as `featureFlags`; off unless the business's settings store
 `true`, and a flag naming something that does not exist stops the start), custom fields (trait
 `customFields`), branding and verified domains, shared records (`defineSharedEntity`,
-`PLATFORM_TENANT_ID`) and wording overrides (`defineServer({ wording })`, never a second declaration).
+`PLATFORM_TENANT_ID`), wording overrides (`defineServer({ wording })`, never a second declaration),
+and every settings section declared `editable` plus the base `general` (time zone, quiet hours),
+changed with `PATCH /api/settings/sections/:section` (a merge patch; checks are `settingsChecks`).
 
 Extension points (developer guide, section 5.9): spec `traits`, `contributes` lists collected by
 registries (`createHookRegistry`, in `framework/core/src/hooks.ts` and `framework/api/src/hooks.ts`),
