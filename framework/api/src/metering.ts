@@ -15,8 +15,13 @@ export interface UsageInput {
   quantity: number;
   /** The model for tokens and embedding tokens, a template's category for messages. */
   variant?: string | null;
-  /** A cost already worked out (credits); otherwise the business's prices give it. */
+  /**
+   * A cost already worked out (credits); otherwise the business's prices give it. A `tokens` use
+   * is priced as model tokens: `tokens.<variant>`, then `tokens`, then the model's own price.
+   */
   cost?: number;
+  /** For `tokens`: how many were input and output, for a model's own prices. Default: all input. */
+  tokens?: { inputTokens?: number; outputTokens?: number };
   /** Whom it was for: 'user:<id>' or 'contact:<id>'. */
   subject?: string | null;
   runId?: string | null;

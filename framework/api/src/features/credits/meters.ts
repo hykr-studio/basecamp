@@ -67,7 +67,10 @@ export const meters = createHookRegistry<MeterDef>('meter', (m) => defineMeter(m
 
 /** The framework's meters. The credits feature contributes them. */
 export const FrameworkMeters = {
-  /** The assistant's model tokens, input and output; the variant is the model's ref. */
+  /**
+   * Model tokens, input and output: the assistant's turns, the guardrail's calls and embeddings
+   * (memory recall and indexing). The variant is the model's ref.
+   */
   tokens: defineMeter({ name: 'tokens', unit: 'token', per: 1_000_000 }),
   /** Tools the assistant called in a turn. */
   toolCalls: defineMeter({ name: 'tool_calls', unit: 'call' }),
@@ -111,8 +114,10 @@ export interface PurchaseStarted {
 
 /**
  * How credits are paid for: a payment connector (B10) registers one. The framework records the
- * purchase and calls `start` once; the connector's confirmation (its verified webhook) calls
- * `CreditsService.settlePurchase(id, { status, ref })`. No provider ships with the framework.
+ * purchase and calls `start` once; the connector's confirmation (its verified webhook's handler)
+ * calls `CreditsService.settlePurchase({ tenantId, provider, purchaseId }, { status, ref })` with
+ * the connection's own business, so it settles only that business's purchases made with it. No
+ * provider ships with the framework.
  */
 export interface CreditPurchaseProvider {
   /** Unique: the connector's name. */

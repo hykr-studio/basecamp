@@ -20,8 +20,6 @@ import {
 import { threadMessages, threads } from '@hykr/db';
 import { subjectKeyOf, subjectOf } from '@hykr/policy';
 import {
-  HttpException,
-  HttpStatus,
   Inject,
   Injectable,
   Logger,
@@ -34,6 +32,7 @@ import { embed } from 'ai';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { TurnGate, TurnInfo, TurnOutcome } from '../../hooks.js';
 import { UsageRefused } from '../../metering.js';
+import { creditsPaused } from '../credits/agent-guard.js';
 import { ModelPolicyService, ModelRefused } from '../models/model-policy.service.js';
 import { type Candidate, keepMessage, nearest, recentMessages } from './store.js';
 import { embeddingRefusal, embeddingTokens, recordEmbedding } from './usage.js';
@@ -112,6 +111,12 @@ export interface EmbedOptions {
   subject?: string | null;
   channel?: string | null;
   runId?: string | null;
+  /**
+   * The use's key, for an embedding that must count once however often it is reported (the
+   * recall before a turn: one per run). Without it every embedding counts: the recall API and
+   * the assistant's recall-memory tool make a new one for each call (H3).
+   */
+  ref?: string | null;
 }
 
 let service: RecallService | undefined;
@@ -197,6 +202,7 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
       subject: opts.subject ?? null,
       channel: opts.channel ?? null,
       runId: opts.runId ?? null,
+      ref: opts.ref ?? null,
     });
     return { model: ref, vector: made.embedding };
   }
@@ -216,17 +222,15 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
     let embedded = req.embedded;
     if (!embedded) {
       try {
+        // No ref: each call embeds again and counts, even several in the run of one turn.
         embedded = await this.embed(tenantId, req.query, {
           subject: subjectKeyOf(p),
           channel: p.channel ?? null,
+          runId: p.runId ?? null,
         });
       } catch (e) {
         if (e instanceof ModelRefused) return { items: [], model: null };
-        if (e instanceof UsageRefused)
-          throw new HttpException(
-            { error: 'credits_paused', rule: e.refusal.rule, reason: e.refusal.reason },
-            HttpStatus.PAYMENT_REQUIRED,
-          );
+        if (e instanceof UsageRefused) throw creditsPaused(e.refusal);
         log.warn(`Recall in business ${tenantId} failed: ${reason(e)}`);
         throw new ServiceUnavailableException({
           error: 'recall_unavailable',
@@ -362,6 +366,8 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
         subject: subjectKeyOf(p),
         channel: turn.channel ?? null,
         runId: turn.runId,
+        // Once per run, however often the turn's recall is made.
+        ref: `memory.recall:${turn.runId}`,
       });
       if (policy.conversation && turn.threadId)
         this.made.set(turn.runId, { ...embedded, at: Date.now() });
@@ -378,6 +384,7 @@ export class RecallService implements OnModuleInit, OnModuleDestroy {
         context: items.map((item) => contextLine(item, entityDef(item.type)?.spec.label)),
       };
     } catch (e) {
+      // Refused by the caps (the credits hook decides the turn itself), or no embedding model.
       if (e instanceof UsageRefused) log.debug(`run=${turn.runId} no recall: ${e.refusal.rule}`);
       else if (!(e instanceof ModelRefused))
         log.warn(`run=${turn.runId} recall failed: ${reason(e)}`);

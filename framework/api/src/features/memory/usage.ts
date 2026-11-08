@@ -41,6 +41,11 @@ export async function recordEmbedding(use: {
   subject?: string | null;
   channel?: string | null;
   runId?: string | null;
+  /**
+   * The use's key: a use with a key counts once (one row per business, meter and key). None:
+   * every call counts.
+   */
+  ref?: string | null;
 }): Promise<void> {
   await metering()?.record({
     tenantId: use.tenantId,
@@ -51,5 +56,6 @@ export async function recordEmbedding(use: {
     subject: use.subject ?? null,
     channel: use.channel ?? null,
     runId: use.runId ?? null,
+    ref: use.ref ?? null,
   });
 }

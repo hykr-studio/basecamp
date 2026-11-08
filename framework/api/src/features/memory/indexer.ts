@@ -107,8 +107,8 @@ async function textOf(tx: Conn, row: Row): Promise<Omit<Ready, 'row'> | null> {
  * change retries them); a provider error or timeout retries with backoff, then fails. A business
  * whose credits refuse embeddings now (paused, or its `embedding_tokens` limit reached) embeds
  * nothing: its rows are released as they were, still pending, and the business is left out of the
- * claims for `PAUSED_RECHECK_MS` before it is checked again. Each batch's tokens are recorded
- * against its business.
+ * claims for `PAUSED_RECHECK_MS` before it is checked again (`wake` sooner). Each batch's tokens
+ * are recorded against its business, once per batch.
  */
 @Injectable()
 export class MemoryIndexer implements OnModuleInit, OnApplicationShutdown {
@@ -132,6 +132,15 @@ export class MemoryIndexer implements OnModuleInit, OnApplicationShutdown {
     this.stopped = true;
     clearInterval(this.timer);
     this.stop.abort();
+  }
+
+  /**
+   * Look at a business its credits refused (or every one) again on the next batch, rather than
+   * after PAUSED_RECHECK_MS: for a caller that knows it has credits again.
+   */
+  wake(tenantId?: string) {
+    if (tenantId) this.paused.delete(tenantId);
+    else this.paused.clear();
   }
 
   /** Embed until nothing is pending (one batch at a time); errors are logged. */
@@ -222,6 +231,8 @@ export class MemoryIndexer implements OnModuleInit, OnApplicationShutdown {
       tokens: embeddingTokens(made.usage?.tokens, values),
       source: 'memory.index',
       channel: 'background',
+      // One use per business and batch.
+      ref: `memory.index:${claim}`,
     });
     for (const [i, r] of ready.entries())
       await settle(db, r.row.id, claim, {
@@ -273,8 +284,8 @@ const claimed = (id: string, claim: string) =>
 
 /**
  * Up to `BATCH` of this process's pending rows, past their backoff and not claimed by a live run,
- * none of the businesses in `skip`, claimed with `claim` in a transaction of their own that
- * commits at once.
+ * none of the businesses in `skip` (refused by their credits a moment ago), claimed with `claim`
+ * in a transaction of their own that commits at once.
  */
 export function claimRows(
   db: Database,

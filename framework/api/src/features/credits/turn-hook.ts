@@ -77,7 +77,6 @@ async function after(svc: CreditsService, turn: TurnInfo, outcome: TurnOutcome) 
   const usage = outcome.usage;
   const tokens =
     (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0) || (usage?.totalTokens ?? 0);
-  const plan = tokens > 0 ? await svc.planOf(p.tenantId).catch(() => undefined) : undefined;
   await svc.record([
     ...(usage && tokens > 0
       ? [
@@ -86,7 +85,8 @@ async function after(svc: CreditsService, turn: TurnInfo, outcome: TurnOutcome) 
             meter: FrameworkMeters.tokens.name,
             quantity: tokens,
             variant: turn.model ?? null,
-            ...(plan ? { cost: svc.tokenCost(plan.plan, turn.model, usage) } : {}),
+            // Priced by the model: its input and output, as the service prices every model call.
+            tokens: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
           },
         ]
       : []),
