@@ -18,6 +18,8 @@ export const approvalMessages = defineMessages({
     'approval.askedTeam': "I've asked the team to confirm. I'll tell you here when they do.",
     'approval.someoneElse': 'Someone else decides this one. You can follow it in the app: {url}',
     'approval.someoneElseDecides': 'Someone else decides this. You can follow it here.',
+    'approval.requestSubject': 'Waiting for your approval: {summary}',
+    'approval.requestBody': '{summary}\n\nApprove or reject it in the app: {url}',
   },
   hi: {
     'approval.waiting': 'आपकी मंज़ूरी का इंतज़ार',
@@ -35,6 +37,8 @@ export const approvalMessages = defineMessages({
     'approval.askedTeam': 'मैंने टीम से पुष्टि करने को कहा है। जब वे करेंगे, मैं आपको यहाँ बताऊँगा।',
     'approval.someoneElse': 'इसे कोई और तय करेगा। आप ऐप में इसे देख सकते हैं: {url}',
     'approval.someoneElseDecides': 'इसे कोई और तय करेगा। आप इसे यहाँ देख सकते हैं।',
+    'approval.requestSubject': 'आपकी मंज़ूरी का इंतज़ार: {summary}',
+    'approval.requestBody': '{summary}\n\nऐप में मंज़ूर या अस्वीकार करें: {url}',
   },
   te: {
     'approval.waiting': 'మీ అనుమతి కోసం వేచి ఉంది',
@@ -52,5 +56,7 @@ export const approvalMessages = defineMessages({
     'approval.askedTeam': 'నేను టీమ్‌ను నిర్ధారించమని అడిగాను. వారు చేసినప్పుడు ఇక్కడ చెబుతాను.',
     'approval.someoneElse': 'దీన్ని వేరొకరు నిర్ణయిస్తారు. మీరు దీన్ని యాప్‌లో చూడవచ్చు: {url}',
     'approval.someoneElseDecides': 'దీన్ని వేరొకరు నిర్ణయిస్తారు. మీరు దీన్ని ఇక్కడ చూడవచ్చు.',
+    'approval.requestSubject': 'మీ అనుమతి కోసం వేచి ఉంది: {summary}',
+    'approval.requestBody': '{summary}\n\nయాప్‌లో అనుమతించండి లేదా తిరస్కరించండి: {url}',
   },
 });

@@ -363,16 +363,21 @@ module sends on its own initiative is a template, declared in code:
 - **`defineNotification`:** what reaches whom, and when. `schedule: { on, at, cancelOn }`
   follows the entity events (`meeting.created`, `meeting.deleted`) and the module's own: a
   command's event implements `NamedEvent` (`eventName`, `row`) to be one. `to` names the
-  recipients (a user, a customer, a contact, or everyone with a role); `channels` is the order
-  to try (`['push', 'whatsapp', 'email']`, `inapp` for the in-app inbox, or a delivery channel a
-  feature registers); `whatsapp` (the template) is needed only when WhatsApp is one of them,
-  `push` (`{ title, body, url? }`) only when push is, `inapp` (`{ title, body, url?, record? }`)
-  only when the inbox is; `onButton` answers its quick replies (snooze). A mention in a comment
-  is the event `comment.mentioned`: a module that wants mentions pushed or emailed declares its
-  own notification on it (the sample's orders module does).
+  recipients (a user, a customer, a contact, or everyone holding a capability); `channels` is the
+  order to try (`['push', 'whatsapp', 'email']`, `inapp` for the in-app inbox, or a delivery
+  channel a feature registers), `also` the channels it goes to as well (`['inapp']`) and
+  `channelWhen` a channel it skips for a row; `whatsapp` (the template) is needed only when
+  WhatsApp is one of them, `push` (`{ title, body, url? }`) only when push is, `inapp`
+  (`{ title, body, url?, record? }`) only when the inbox is; `onButton` answers its quick replies
+  (snooze). A mention in a comment is the event `comment.mentioned`: a module that wants
+  mentions pushed or emailed declares its own notification on it (the sample's orders module
+  does). A command sends one from its `run` with `queueNotification(tx, def, row, { type })`.
 - The framework decides the rest per recipient: consent for the topic, quiet hours and the
   marketing cap (per business), the template in their language or English, and the next
-  channel when WhatsApp can't be used or fails for good. No module code sends a message.
+  channel when WhatsApp can't be used or fails for good. The words (template parameters, email,
+  push, inbox) are built from the record as that recipient may read it, so a field they may
+  not read is not there. Notifications come from the stored events, so an undoable write's wait
+  for its window, and an undone write's never go. No module code sends a message.
 
 Live updates need nothing from a module: every committed event about a record reaches the
 people who may read it (as ids), and the app refetches. A feature with records that are not
@@ -477,8 +482,10 @@ From the contracts declaration alone:
   keywords (STOP, START, HELP, talk to a person, delete my data: a privacy request) in every
   language, erasure, voice notes, approvals by signed button, and handoff to a person with the
   back office (`framework/back-office`, `/api/backoffice`).
-- The framework's templates and notifications: login codes, approval requests and outcomes,
-  staff replies after the 24-hour window, and a mention in a comment (in the in-app inbox). The agent tools `send-template` (a template to a
+- The framework's templates and notifications: login codes, approval requests (to their deciders
+  by push, WhatsApp where it can decide, or email, and always in the in-app inbox, each opening
+  `/approvals/<id>`) and outcomes, staff replies after the 24-hour window, and a mention in a
+  comment (in the in-app inbox). The agent tools `send-template` (a template to a
   customer; marketing waits for approval) and `request-human`.
 - Durable runs: an assistant run whose write waits for approval is suspended and stored (Mastra,
   in the `mastra` schema), and resumed in the worker when the request is decided, in the same

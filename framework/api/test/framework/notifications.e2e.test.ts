@@ -1,8 +1,10 @@
-// Notifications: scheduled from what happens to records, sent as approved templates, moved
-// to email when WhatsApp can't be used or fails for good. A stand-in Cloud API, Mailpit for
-// email, the real queues (inline).
-import { createHmac } from 'node:crypto';
+// Notifications: scheduled from what happens to records (the stored events), sent as approved
+// templates, moved to email when WhatsApp can't be used or fails for good. A stand-in Cloud API,
+// Mailpit for email, the real queues (inline).
+import { createHmac, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
+import type { DomainEventEnvelope } from '@hykr/contracts';
+import { CORE_OPTIONS, type CoreOptions, recordEvents, systemPrincipal } from '@hykr/core';
 import { contentHash } from '@hykr/notifications';
 import { getQueueToken } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
@@ -355,5 +357,63 @@ describe('notifications', () => {
       params: { title: 'x' },
     });
     expect(other.status).toBe(404);
+  });
+});
+
+describe('notifications from stored events (H1)', () => {
+  const store = async (name: string, row: Record<string, unknown>) => {
+    const options = server.app?.get(CORE_OPTIONS, { strict: false }) as CoreOptions;
+    await options.db.transaction((tx) =>
+      recordEvents(tx, {
+        principal: systemPrincipal({ tenantId, job: 'notifications.test' }),
+        events: [{ eventName: name, resourceType: 'visit', row }],
+      }),
+    );
+  };
+  const visitRow = (id: string, startsAt: Date) => ({
+    id,
+    tenantId,
+    title: 'Stored only',
+    startsAt: startsAt.toISOString(),
+    endsAt: new Date(startsAt.getTime() + 30 * 60_000).toISOString(),
+    ownerId: ana.id,
+    customerId: null,
+  });
+
+  it('a stored event schedules its reminder, with nothing published in-process', async () => {
+    const id = randomUUID();
+    const startsAt = new Date(Date.now() + 120 * 60_000);
+    // As if the process stopped right after the commit: the event is in the outbox only.
+    await store('visit.created', visitRow(id, startsAt));
+    const job = await eventually(() => jobFor(`visit.reminder:${id}`));
+    expect(job.timestamp + (job.opts.delay ?? 0)).toBeCloseTo(startsAt.getTime() - 30 * 60_000, -4);
+  });
+
+  it('an older event never moves a reminder back to an earlier schedule', async () => {
+    const { NotifyService } = await import('../../dist/channels/notify/notify.service.js');
+    const notify = server.app?.get(NotifyService);
+    const id = randomUUID();
+    const first = new Date(Date.now() + 120 * 60_000);
+    const later = new Date(Date.now() + 240 * 60_000);
+    const envelope = (name: string, at: Date, occurredAt: string) =>
+      ({
+        id: randomUUID(),
+        name,
+        tenantId,
+        resourceType: 'visit',
+        resourceId: id,
+        row: visitRow(id, at),
+        actor: { kind: 'system', id: 'test' },
+        subject: null,
+        occurredAt,
+      }) as DomainEventEnvelope;
+    // The reschedule is applied first (the create was relayed late, or by another worker).
+    await notify?.onStored(envelope('visit.rescheduled', later, new Date().toISOString()));
+    await notify?.onStored(
+      envelope('visit.created', first, new Date(Date.now() - 60_000).toISOString()),
+    );
+    expect(await latest(`visit.reminder:${id}`)).toBe(
+      new Date(later.getTime() - 30 * 60_000).toISOString(),
+    );
   });
 });

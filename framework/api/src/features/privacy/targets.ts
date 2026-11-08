@@ -10,7 +10,7 @@ import {
   threadMessages,
   threads,
 } from '@hykr/db';
-import { and, eq, inArray, isNotNull, lt, not, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, lt, not, or, sql } from 'drizzle-orm';
 import { eraseFilesOn } from '../files/privacy.js';
 import { expireTraces } from './mastra.js';
 import type { RetentionTarget } from './registry.js';
@@ -55,7 +55,7 @@ export const ChatMessages: RetentionTarget = {
   },
 };
 
-/** Stored events already passed on (each holds a copy of its record). */
+/** Stored events already passed on, or withdrawn by an undo (each holds a copy of its record). */
 export const RelayedEvents: RetentionTarget = {
   name: 'events.relayed',
   label: { en: 'Events passed on', hi: 'आगे भेजे गए इवेंट', te: 'పంపిన ఈవెంట్‌లు' },
@@ -69,7 +69,7 @@ export const RelayedEvents: RetentionTarget = {
             .where(
               and(
                 eq(domainEvents.tenantId, tenantId),
-                isNotNull(domainEvents.relayedAt),
+                or(isNotNull(domainEvents.relayedAt), isNotNull(domainEvents.cancelledAt)),
                 lt(domainEvents.occurredAt, before),
               ),
             )
@@ -78,7 +78,7 @@ export const RelayedEvents: RetentionTarget = {
       : { count: 0 },
 };
 
-/** Notifications already sent on (each holds a copy of its record). */
+/** Notifications already sent on, or withdrawn by an undo (each holds a copy of its record). */
 export const RelayedOutbox: RetentionTarget = {
   name: 'outbox.relayed',
   label: { en: 'Notifications sent', hi: 'भेजी गई सूचनाएँ', te: 'పంపిన నోటిఫికేషన్‌లు' },
@@ -92,7 +92,7 @@ export const RelayedOutbox: RetentionTarget = {
             .where(
               and(
                 eq(outbox.tenantId, tenantId),
-                isNotNull(outbox.relayedAt),
+                or(isNotNull(outbox.relayedAt), isNotNull(outbox.cancelledAt)),
                 lt(outbox.createdAt, before),
               ),
             )

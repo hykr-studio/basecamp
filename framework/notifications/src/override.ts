@@ -5,11 +5,12 @@ import type { Lang } from '@hykr/i18n';
 import { defineNotification, type NotificationDef, type Row } from './define-notification.js';
 
 /**
- * What an override may change: the channels, the WhatsApp template (another template the catalog
- * holds: approved wording is never edited, it is replaced) and the email.
+ * What an override may change: the channels (the chain and `also`), the WhatsApp template
+ * (another template the catalog holds: approved wording is never edited, it is replaced), the
+ * email, the push and the in-app inbox's words.
  */
 export type NotificationPatch = Partial<
-  Pick<NotificationDef<Row>, 'channels' | 'whatsapp' | 'email'>
+  Pick<NotificationDef<Row>, 'channels' | 'also' | 'whatsapp' | 'email' | 'push' | 'inapp'>
 >;
 
 export interface NotificationOverride {

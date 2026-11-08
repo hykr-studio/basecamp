@@ -14,6 +14,7 @@ import {
   checkApprovalLevels,
   type Decider,
   type DecisionDetails,
+  givenRoles,
   levelOf,
   Money,
   type Principal,
@@ -191,11 +192,24 @@ type Layer = Pick<ApproverRule, 'by' | 'channels' | 'minAssurance'>;
 const business = (): ApproverBy => ({ capability: DECIDE });
 
 /**
+ * The roles the framework hands people outside the team: a contact's and a participant's, as the
+ * application names them (`roleDefaults`; the framework's own is `customer`).
+ */
+const outsiderRoles = () => new Set([...givenRoles('contact'), ...givenRoles('participant')]);
+
+/** Does a person hold no role but those handed to people outside the team? */
+const onlyOutside = (roles: readonly string[]) => {
+  const outside = outsiderRoles();
+  return !roles.some((r) => !outside.has(r));
+};
+
+/**
  * Who decides a parked action, most specific first: the decision's approver (an amount band's
  * named person), the operation's approval rule, then its level's policy. The first that says
  * `by` decides who; `channels` likewise; `minAssurance` is the strongest any of them asks.
  * Nobody says: the person it is for decides their own (assistant's) request, and a customer's
- * (or a contact's) goes to the business, the holders of `approvals.decide`.
+ * (or a contact's, or a participant's: anyone holding only the roles the framework hands people
+ * outside the team) goes to the business, the holders of `approvals.decide`.
  */
 async function decidersFor(
   tx: Tx,
@@ -205,7 +219,10 @@ async function decidersFor(
   settings: () => Promise<TenantConfig>,
 ): Promise<Deciders> {
   const self = userIdOf(p);
-  const customer = (p.roles ?? []).length > 0 && (p.roles ?? []).every((r) => r === 'customer');
+  // Someone outside the team (a customer, a participant, however the application names their
+  // roles) never decides their own request: the business does.
+  const roles = p.roles ?? [];
+  const customer = p.standing === 'participant' || (roles.length > 0 && onlyOutside(roles));
   const by = layers.find((l) => l?.by !== undefined)?.by;
   const channels = layers.find((l) => l?.channels !== undefined)?.channels;
   const assurances = layers.flatMap((l) => (l?.minAssurance ? [l.minAssurance] : []));
@@ -230,7 +247,7 @@ async function decidersFor(
       who.userId !== self && p.tenantId
         ? await membershipOf(tx, who.userId, p.tenantId)
         : undefined;
-    if (!member?.roles.some((r) => r !== 'customer')) who = business();
+    if (!member || onlyOutside(member.roles)) who = business();
   }
   if (typeof who === 'object' && 'capability' in who && !capabilities.has(who.capability))
     throw new Error(`An approval is decided by "${who.capability}", which nobody defines`);
