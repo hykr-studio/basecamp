@@ -713,7 +713,7 @@ describe('who decides for someone outside the team (X1)', () => {
     asAssistant(`user:${who.id}`, { 'x-tenant-id': tenantId, 'x-channel': 'app' });
   const ownProject = async (who: Person, title: string) => {
     const made = await inAna(who)('POST', '/api/projects', { title });
-    expect(made.status).toBe(200);
+    expect(made.status).toBe(201);
     return made.body.value.id as string;
   };
   const business = { by: 'capability', capability: 'approvals.decide' };
