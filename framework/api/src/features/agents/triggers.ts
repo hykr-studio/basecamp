@@ -1,6 +1,6 @@
 // What a trigger means, without the database: when a schedule fires next, whether an event or a
 // message matches, a condition's moving times, and how a run says what started it.
-import { AgentTrigger, type DomainEventEnvelope } from '@hykr/contracts';
+import { AgentTrigger, type DomainEventEnvelope, isTimeZone } from '@hykr/contracts';
 import { Cron } from 'croner';
 import { matchesEvent } from '../events/subscriber.js';
 
@@ -9,13 +9,7 @@ export const MIN_INTERVAL_MS = 5 * 60_000;
 
 /** An IANA zone this process knows, or undefined. */
 export function knownZone(zone: string | undefined): string | undefined {
-  if (!zone) return undefined;
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: zone });
-    return zone;
-  } catch {
-    return undefined;
-  }
+  return isTimeZone(zone) ? zone : undefined;
 }
 
 /** The cron pattern in a zone, or why it is not one. */

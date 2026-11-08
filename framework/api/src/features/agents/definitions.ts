@@ -9,7 +9,7 @@ import {
   listInputSchema,
   type Principal,
 } from '@hykr/contracts';
-import { entityDef, type Tx, type WriteHook } from '@hykr/core';
+import { entityDef, type Tx, tenantZoneOf, type WriteHook } from '@hykr/core';
 import { agentTriggers, integrationConnections } from '@hykr/db';
 import { can } from '@hykr/policy';
 import { BadRequestException } from '@nestjs/common';
@@ -20,7 +20,7 @@ import { runtime } from '../../runtime.js';
 import { connectorHandlers } from '../integrations/registry.js';
 import { allToolIds, readableIn, unscoped } from './scope.js';
 import { agentTemplates } from './templates.js';
-import { cronProblem, firstDue, keptTriggers, knownZone, resolveWhere } from './triggers.js';
+import { cronProblem, firstDue, keptTriggers, resolveWhere } from './triggers.js';
 
 /** The parts of a definition that say what it does. */
 export const Definition = z.object({
@@ -125,16 +125,6 @@ type Row = {
   template?: string | null;
 };
 
-/** The business's time zone, for schedules without their own. */
-export type ZoneOf = (tenantId: string) => Promise<string>;
-
-let zoneOf: ZoneOf = async () => 'UTC';
-
-/** The agents feature installs how to read a business's zone when it starts. */
-export function setZoneOf(f: ZoneOf) {
-  zoneOf = f;
-}
-
 const storedTriggers = (tx: Tx, agentId: string) =>
   tx.select().from(agentTriggers).where(eq(agentTriggers.agentId, agentId));
 
@@ -193,7 +183,8 @@ export const AgentDefinitions: WriteHook = {
     const changes = Object.keys(given).filter((k) => given[k] !== undefined);
     const p = ctx.principal;
     const tenantId = before?.tenantId ?? p.tenantId ?? '';
-    const zone = knownZone(await zoneOf(tenantId)) ?? 'UTC';
+    // Schedules without their own zone run in the business's (`tenantZone`).
+    const zone = await tenantZoneOf(tx, tenantId);
     if (!before || changes.some((k) => k !== 'status')) {
       const def = Definition.safeParse({
         triggers: given.triggers ?? before?.triggers ?? [],

@@ -1,3 +1,4 @@
+import { tenantZoneOf } from '@hykr/core';
 import { type Database, schema } from '@hykr/db';
 import { Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, sql } from 'drizzle-orm';
@@ -84,7 +85,8 @@ export class ContactsService {
    * (a customer record, with service consent: they wrote to us). With `customer: false` it is
    * only a contact (no customer record): someone the business does not know yet (its
    * `parties.unknownSenders` setting), or an organisation's person it adds to a party
-   * (`wroteIn: false`: no consent is recorded for them). An
+   * (`wroteIn: false`: no consent is recorded for them). A new contact is in its business's
+   * time zone (`tenantZone`) until they say theirs. An
    * existing contact is returned as it is. Safe under concurrency: the unique address index
    * makes a second insert a lookup.
    */
@@ -101,9 +103,10 @@ export class ContactsService {
       return found;
     }
     return this.db.transaction(async (tx) => {
+      const timeZone = await tenantZoneOf(tx, tenantId);
       const [created] = await tx
         .insert(contacts)
-        .values({ tenantId, channel: 'whatsapp', address, profileName })
+        .values({ tenantId, channel: 'whatsapp', address, profileName, timeZone })
         .onConflictDoNothing()
         .returning();
       if (!created) {

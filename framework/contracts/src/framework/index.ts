@@ -24,6 +24,7 @@ export * from './spec.js';
 export * from './states.js';
 export * from './summary.js';
 export * from './tax.js';
+export * from './time-zone.js';
 export * from './traits.js';
 export * from './tree.js';
 export * from './versioned.js';

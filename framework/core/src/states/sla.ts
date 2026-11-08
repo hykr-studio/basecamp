@@ -14,7 +14,6 @@ import {
   type SlaTimer,
   slasIn,
   statesOf,
-  TenantSettings,
 } from '@hykr/contracts';
 import { type Database, schema, slaTimers } from '@hykr/db';
 import { and, type Column, eq, getTableColumns, isNull, lte, sql, type Table } from 'drizzle-orm';
@@ -23,6 +22,7 @@ import type { AnyEntityDef } from '../entity/define-entity.js';
 import { entityDef } from '../entity/registry.js';
 import type { WriteHook } from '../hooks.js';
 import { systemPrincipal } from '../system.js';
+import { tenantZone } from '../tenants/time-zone.js';
 import type { Conn, Tx } from '../tokens.js';
 import { eventQueues, recordEvents } from '../write/events.js';
 import { runWrite } from '../write/pipeline.js';
@@ -40,8 +40,9 @@ export interface SlaConfig {
 
 /**
  * A business's SLA settings, read now in the caller's transaction. A section that does not
- * parse falls back to its default (every hour counts, the module's durations): a bad setting
- * never stops a write, and the clock never runs later than declared.
+ * parse falls back to its default (every hour counts, the module's durations; the zone is
+ * `tenantZone`'s): a bad setting never stops a write, and the clock never runs later than
+ * declared.
  */
 export async function slaConfig(conn: Conn, tenantId: string): Promise<SlaConfig> {
   const [row] = await conn
@@ -49,11 +50,10 @@ export async function slaConfig(conn: Conn, tenantId: string): Promise<SlaConfig
     .from(schema.tenants)
     .where(eq(schema.tenants.id, tenantId));
   const stored = (row?.settings ?? {}) as Record<string, unknown>;
-  const zone = TenantSettings.shape.timeZone.safeParse(stored.timeZone);
   const hours = BusinessHours.safeParse(stored.businessHours);
   const sla = SlaSettings.safeParse(stored.sla);
   return {
-    timeZone: zone.success ? zone.data : TenantSettings.shape.timeZone.parse(undefined),
+    timeZone: tenantZone(stored),
     hours: hours.success ? hours.data : BusinessHours.parse(undefined),
     sla: sla.success ? sla.data : SlaSettings.parse(undefined),
   };

@@ -19,7 +19,7 @@ import {
   type Principal,
   participationProblem,
 } from '@hykr/contracts';
-import { allow, deny, type Tx, type WriteOp } from '@hykr/core';
+import { allow, deny, type Tx, tenantZoneOf, type WriteOp } from '@hykr/core';
 import { contacts, customers, participations, parties, partyMembers, tenants } from '@hykr/db';
 import { can } from '@hykr/policy';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
@@ -248,6 +248,7 @@ export const addMember = (partyId: string) =>
             channel: 'whatsapp',
             address: input.address,
             profileName: input.name,
+            timeZone: await tenantZoneOf(tx, tenantId),
           })
           .onConflictDoNothing();
         const [contact] = await tx

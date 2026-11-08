@@ -31,7 +31,7 @@ import {
   RUN_ID,
   recordEvents,
   systemPrincipal,
-  TenantConfigService,
+  tenantZoneOf,
 } from '@hykr/core';
 import { type Database, schema } from '@hykr/db';
 import { type Lang, pick } from '@hykr/i18n';
@@ -57,12 +57,10 @@ import { serverContext } from '../../queues/jobs.service.js';
 import { runtime } from '../../runtime.js';
 import { matchesEvent } from '../events/subscriber.js';
 import { liveResources } from '../live/resources.js';
-import { setZoneOf } from './definitions.js';
 import { allToolIds, scopesFor } from './scope.js';
 import { agentTemplates, setAgentWebhookSink } from './templates.js';
 import {
   eventMatches,
-  knownZone,
   messageMatches,
   nextDue,
   resolveWhere,
@@ -176,7 +174,6 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
     @Inject(DB) private readonly db: Database,
     @Inject(JOBS) private readonly jobs: Jobs,
     private readonly resolver: PrincipalResolver,
-    private readonly tenants: TenantConfigService,
     @Inject(ModuleRef) ref: ModuleRef,
   ) {
     this.ctx = serverContext(ref);
@@ -185,7 +182,6 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
   onModuleInit() {
     current = this;
     setAgentWebhookSink((e) => this.onWebhook(e));
-    setZoneOf((tenantId) => this.zone(tenantId));
   }
 
   onModuleDestroy() {
@@ -197,13 +193,9 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
     return this.db;
   }
 
-  /** The business's time zone (its settings), or UTC. */
-  async zone(tenantId: string): Promise<string> {
-    try {
-      return knownZone((await this.tenants.get(tenantId)).settings.timeZone) ?? 'UTC';
-    } catch {
-      return 'UTC';
-    }
+  /** The business's time zone (`tenantZone`: its own, else the deployment's, else UTC). */
+  zone(tenantId: string): Promise<string> {
+    return tenantZoneOf(this.db, tenantId);
   }
 
   /* ── Who a run is ────────────────────────────────────────────────────── */

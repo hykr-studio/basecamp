@@ -144,7 +144,7 @@ export const RefusePrivacyRequestSpec = commandSpec({
 /**
  * A business's privacy setup as its privacy team edits it (GET and PATCH /api/privacy/settings):
  * its `privacy` settings and its contact details as the fiduciary. Values as they apply now:
- * an unset deadline or contact shows the application's, or the framework's default.
+ * an unset deadline is the application's; an unset contact the deployment's, else null.
  */
 export const PrivacyConfiguration = z.object({
   /** Its own deadline in days; null: the application's policy (`register.requests` says which). */
@@ -155,8 +155,11 @@ export const PrivacyConfiguration = z.object({
   retention: z.record(z.string(), z.number().int().nullable()),
   /** Its own processors, listed on its register after the application's. */
   processors: z.array(ProcessorRecord),
-  /** Who to contact about personal data: on the register and in WhatsApp's HELP. */
-  grievanceContact: z.string(),
+  /**
+   * Who to contact about personal data: on the register and in WhatsApp's HELP. The business's
+   * own, else the deployment's (DEFAULT_GRIEVANCE_CONTACT); null: none is named.
+   */
+  grievanceContact: z.string().nullable(),
   /** Its privacy notice: in WhatsApp's welcome and on the register. */
   privacyUrl: z.string().nullable(),
 });
@@ -182,7 +185,7 @@ export const ConfigurePrivacyInput = z.object({
     )
     .optional(),
   processors: z.array(ProcessorRecord).max(50).optional(),
-  /** An email, phone number or address; null: the default. */
+  /** An email, phone number or address; null: the deployment's, else none. */
   grievanceContact: z.string().trim().min(3).max(320).nullable().optional(),
   privacyUrl: z
     .url({ protocol: /^https?$/ })
@@ -269,7 +272,8 @@ export const PrivacyRegister = z.object({
   fiduciary: z.object({
     tenantId: z.string(),
     name: z.string(),
-    grievanceContact: z.string(),
+    /** The business's own, else the deployment's; null: none is named. */
+    grievanceContact: z.string().nullable(),
     privacyUrl: z.string().nullable(),
   }),
   /** How requests are answered here. */

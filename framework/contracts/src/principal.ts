@@ -166,12 +166,16 @@ export const Me = z.object({
 export type Me = z.infer<typeof Me>;
 
 /**
- * How a business works on its channels. Every field has a default, so a new business works
- * as is; the business changes them as it grows.
+ * How a business works on its channels. Every field has a default or is optional, so a new
+ * business works as is; the business changes them as it grows. Nothing here is a market's: an
+ * unset zone or contact is the deployment's (DEFAULT_TIME_ZONE, DEFAULT_GRIEVANCE_CONTACT).
  */
 export const TenantSettings = z.object({
-  /** Who to contact about personal data (DPDP grievance officer): named in HELP. */
-  grievanceContact: z.string().default('privacy@example.in'),
+  /**
+   * Who to contact about personal data (the business's grievance or data-protection officer):
+   * on the privacy register and in WhatsApp's HELP. Unset: the deployment's, else none.
+   */
+  grievanceContact: z.string().optional(),
   privacyUrl: z.string().optional(),
   /** What the handoff message promises, e.g. "2 hours". */
   replyTime: z.string().default('2 hours'),
@@ -179,7 +183,12 @@ export const TenantSettings = z.object({
   quietHours: z
     .object({ from: z.string().default('21:00'), to: z.string().default('09:00') })
     .default({ from: '21:00', to: '09:00' }),
-  timeZone: z.string().default('Asia/Kolkata'),
+  /**
+   * The business's IANA time zone: its periods (number series, credits, summaries), business
+   * hours, quiet hours and dates. Read it with `tenantZone` (@hykr/core): unset, or a zone this
+   * process does not know, is the deployment's DEFAULT_TIME_ZONE, else UTC.
+   */
+  timeZone: z.string().optional(),
   /** Marketing messages per customer per week, at most. */
   marketingPerWeek: z.number().int().min(0).default(1),
   /** Features switched on for this business, by key. A key that is absent is off. */

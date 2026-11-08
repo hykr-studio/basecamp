@@ -8,10 +8,12 @@ import {
   domainRecordName,
   type FeatureFlagDef,
   featureFlags,
+  isTimeZone,
   type Principal,
   phraseProblems,
   RemoveDomainSpec,
   SetFeatureSpec,
+  SetTimeZoneSpec,
   SettingsCapability,
   type TenantDomain,
   UpdateBrandingSpec,
@@ -19,7 +21,7 @@ import {
   VerifyDomainSpec,
   Wording,
 } from '@hykr/contracts';
-import { allow, defineCommand, deny, type NamedEvent, type Tx } from '@hykr/core';
+import { allow, defineCommand, deny, type NamedEvent, type Tx, tenantZone } from '@hykr/core';
 import { schema } from '@hykr/db';
 import { can } from '@hykr/policy';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
@@ -194,6 +196,45 @@ export const UpdateWording = defineCommand(UpdateWordingSpec, {
   },
 });
 
+/**
+ * PUT /api/settings/time-zone: the business's own zone (an IANA name this server knows), or null
+ * for the deployment's. Its periods, hours and dates follow it from the next write on: numbers,
+ * credit periods and SLA clocks already started keep theirs.
+ */
+export const SetTimeZone = defineCommand(SetTimeZoneSpec, {
+  resource: { type: 'tenant', id: (_input, loaded: Loaded) => loaded.tenantId },
+  load: async (tx, p) => {
+    const tenantId = tenantOf(p);
+    return { tenantId, settings: await storedSettings(tx, tenantId) };
+  },
+  authorize: (p) => manage(p),
+  summarize: (input) =>
+    input.timeZone ? `Set the time zone to ${input.timeZone}` : "Use the deployment's time zone",
+  run: async ({ tx, input, loaded: { tenantId, settings } }) => {
+    if (input.timeZone !== null && !isTimeZone(input.timeZone))
+      throw new BadRequestException({
+        error: 'time_zone_invalid',
+        message: `"${input.timeZone}" is not a time zone: use an IANA name such as Europe/Berlin`,
+      });
+    const before = typeof settings.timeZone === 'string' ? settings.timeZone : null;
+    const after = input.timeZone;
+    await tx
+      .update(schema.tenants)
+      .set({
+        settings:
+          after === null
+            ? sql`coalesce(${schema.tenants.settings}, '{}'::jsonb) - 'timeZone'`
+            : sql`jsonb_set(coalesce(${schema.tenants.settings}, '{}'::jsonb), '{timeZone}', ${JSON.stringify(after)}::jsonb)`,
+      })
+      .where(eq(schema.tenants.id, tenantId));
+    return {
+      value: { timeZone: after, effective: tenantZone({ timeZone: after }) },
+      touched: [touchedTenant(tenantId, { timeZone: before }, { timeZone: after })],
+      events: [new SettingsChanged(tenantId, 'timeZone')],
+    };
+  },
+});
+
 const domains = schema.tenantDomains;
 
 /** A stored domain as its business sees it. */
@@ -327,6 +368,7 @@ export const settingsCommandDefs = [
   SetFeature,
   UpdateBranding,
   UpdateWording,
+  SetTimeZone,
   AddDomain,
   VerifyDomain,
   RemoveDomain,

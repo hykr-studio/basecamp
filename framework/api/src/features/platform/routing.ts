@@ -17,6 +17,7 @@ import {
   runWrite,
   systemPrincipal,
   type Tx,
+  tenantZoneOf,
   type WriteOp,
 } from '@hykr/core';
 import { contacts, customers, type Database, routedRequests, tenants } from '@hykr/db';
@@ -363,7 +364,13 @@ async function contactIn(
   if (found) return found;
   const [created] = await tx
     .insert(contacts)
-    .values({ tenantId, channel: 'whatsapp', address, profileName: name })
+    .values({
+      tenantId,
+      channel: 'whatsapp',
+      address,
+      profileName: name,
+      timeZone: await tenantZoneOf(tx, tenantId),
+    })
     .onConflictDoNothing()
     .returning();
   if (!created) {

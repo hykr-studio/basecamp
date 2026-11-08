@@ -9,7 +9,6 @@ import {
   FrameworkCapabilities,
   type InviteInfo,
   type Principal,
-  parseTenantSettings,
   SendInviteSpec,
 } from '@hykr/contracts';
 import {
@@ -20,6 +19,7 @@ import {
   needsApproval,
   recordEvents,
   systemPrincipal,
+  tenantZone,
   toJson,
 } from '@hykr/core';
 import { calendarInvites, type Database, memberships, tenants, user, writeAudit } from '@hykr/db';
@@ -511,7 +511,7 @@ export class InvitesService {
       .from(tenants)
       .where(eq(tenants.id, row.tenantId));
     const name = business?.name ?? '';
-    const timeZone = parseTenantSettings(business?.settings ?? {}).timeZone;
+    const timeZone = tenantZone(business?.settings);
     const lang = (['en', 'hi', 'te'].includes(row.lang) ? row.lang : 'en') as Lang;
     const ics = icsCalendar({
       method,

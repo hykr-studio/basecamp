@@ -1,5 +1,6 @@
 import { type ChannelAdapter, type OutboundMessage, signApproval } from '@hykr/channels';
 import { rolesOfBusiness, type TenantConfig } from '@hykr/contracts';
+import { tenantZone } from '@hykr/core';
 import { type Database, schema } from '@hykr/db';
 import { langOf } from '@hykr/i18n';
 import {
@@ -95,8 +96,10 @@ export class DispatchProcessor extends WorkerHost {
     if (!def) return 'unknown notification';
 
     const { settings } = await this.tenants.get(data.tenantId);
+    // Quiet hours and every reader without a zone of their own are in the business's zone.
+    const timeZone = tenantZone(settings);
     if (def.topic !== 'service') {
-      const until = quietUntil(new Date(), { ...settings.quietHours, timeZone: settings.timeZone });
+      const until = quietUntil(new Date(), { ...settings.quietHours, timeZone });
       if (until) {
         await this.notify.schedule(def, data.row, until);
         return `quiet hours: moved to ${until.toISOString()}`;
@@ -107,7 +110,10 @@ export class DispatchProcessor extends WorkerHost {
       ? [data.only.recipient as Recipient]
       : await this.expand(data.tenantId, def.to(data.row as never), settings);
     for (const r of recipients)
-      await this.deliver(def, data, r, data.only?.channels ?? def.channels, settings);
+      await this.deliver(def, data, r, data.only?.channels ?? def.channels, {
+        timeZone,
+        marketingPerWeek: settings.marketingPerWeek,
+      });
   }
 
   private async deliver(

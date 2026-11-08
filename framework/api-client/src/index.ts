@@ -834,8 +834,8 @@ export function createApiClient(opts: ApiClientOptions) {
     },
     /**
      * The business's setup (A11). Changes go through `command(SetFeatureSpec | UpdateBrandingSpec
-     * | UpdateWordingSpec | AddDomainSpec | VerifyDomainSpec | RemoveDomainSpec, input)`, custom
-     * fields through `entity(CustomFieldSpec)`.
+     * | UpdateWordingSpec | SetTimeZoneSpec | AddDomainSpec | VerifyDomainSpec | RemoveDomainSpec,
+     * input)`, custom fields through `entity(CustomFieldSpec)`.
      */
     settings: {
       /** Flags on, what is off, branding and the business's phrases: what the apps need. */
@@ -863,8 +863,11 @@ export function createApiClient(opts: ApiClientOptions) {
     whatsapp: {
       get: () =>
         call<{ address: string; timeZone: string } | null>('GET', '/api/channels/whatsapp'),
-      /** A one-time code to the number (WhatsApp's login_code_v1): proof the person holds it. */
-      sendCode: (phone: string, timeZone: string, lang: 'en' | 'hi' | 'te' = 'en') =>
+      /**
+       * A one-time code to the number (WhatsApp's login_code_v1): proof the person holds it.
+       * `timeZone` is theirs (their device's); undefined: their business's.
+       */
+      sendCode: (phone: string, timeZone: string | undefined, lang: 'en' | 'hi' | 'te' = 'en') =>
         call<{ sentTo: string; expiresInSeconds: number }>('POST', '/api/channels/whatsapp/code', {
           phone,
           timeZone,

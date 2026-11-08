@@ -1,6 +1,6 @@
-// A business's setup (A11): its feature flags, branding, wording and web addresses. Changed by
-// people with `settings.manage` through these commands (no tools: the assistant does not change
-// a business's setup); read by every member.
+// A business's setup (A11): its feature flags, branding, wording, time zone and web addresses.
+// Changed by people with `settings.manage` through these commands (no tools: the assistant does
+// not change a business's setup); read by every member.
 import { z } from 'zod';
 import { commandSpec } from '../framework/spec.js';
 import { capabilities, defineCapability } from '../roles.js';
@@ -62,6 +62,27 @@ export const UpdateWordingSpec = commandSpec({
   verb: { do: 'change the wording', did: 'changed the wording' },
 });
 
+/**
+ * The business's time zone as it is set and as it applies: its own (null: none set) and the one
+ * its periods, hours and dates follow (its own, else the deployment's DEFAULT_TIME_ZONE, else UTC).
+ */
+export const BusinessTimeZone = z.object({
+  timeZone: z.string().nullable(),
+  effective: z.string(),
+});
+export type BusinessTimeZone = z.infer<typeof BusinessTimeZone>;
+
+export const SetTimeZoneSpec = commandSpec({
+  name: 'settings.timeZone',
+  description:
+    "Set the business's time zone (an IANA name such as Europe/Berlin), or null for the deployment's.",
+  input: z.object({ timeZone: z.string().trim().min(1).max(64).nullable() }),
+  output: BusinessTimeZone,
+  http: { method: 'PUT', path: '/api/settings/time-zone' },
+  expose: 'human',
+  verb: { do: 'set the time zone', did: 'set the time zone' },
+});
+
 export const AddDomainSpec = commandSpec({
   name: 'settings.domain.add',
   description: 'Add a web address for the business; it is trusted once verified.',
@@ -97,6 +118,7 @@ export const settingsCommands = [
   SetFeatureSpec,
   UpdateBrandingSpec,
   UpdateWordingSpec,
+  SetTimeZoneSpec,
   AddDomainSpec,
   VerifyDomainSpec,
   RemoveDomainSpec,

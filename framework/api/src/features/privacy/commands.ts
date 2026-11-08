@@ -33,6 +33,7 @@ import { can, subjectOf } from '@hykr/policy';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { and, eq, inArray, type SQL, sql } from 'drizzle-orm';
 import { SettingsChanged } from '../settings/commands.js';
+import { grievanceContactOf } from './contact.js';
 import { recordTargets } from './records.js';
 import { retentionTargets } from './registry.js';
 import {
@@ -322,7 +323,7 @@ export function configurationOf(
     review: [...settings.privacy.review],
     retention: { ...settings.privacy.retention },
     processors: [...settings.privacy.processors],
-    grievanceContact: settings.grievanceContact,
+    grievanceContact: grievanceContactOf(settings),
     privacyUrl: settings.privacyUrl ?? null,
   };
 }
