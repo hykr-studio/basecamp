@@ -27,6 +27,8 @@ export const standardWebhooks = defineConnector<z.infer<typeof Credentials>>({
   credentials: Credentials,
   generate: () => ({ secret: generateWebhookSecret() }),
   inbound: {
+    // `webhook-id` is signed: the content is "<id>.<timestamp>.<body>".
+    signedIds: true,
     verify: (req, creds, now) =>
       verifyWebhook({ secret: creds.secret, headers: req.headers, body: req.rawBody, now }).ok,
     parse: (req) => {

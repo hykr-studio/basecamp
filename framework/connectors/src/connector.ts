@@ -2,6 +2,7 @@
 // what credentials a connection needs (validated, then sealed by the server), which of them may
 // be shown back, and how to verify and read what the system sends. What an event does in the
 // application is a handler's work, on the server; the connector never touches the database.
+import { createHash } from 'node:crypto';
 import type { Labels } from '@hykr/i18n';
 import type { z } from 'zod';
 
@@ -20,7 +21,10 @@ export interface InboundRequest {
 
 /** One event a request carries. */
 export interface InboundEvent {
-  /** The sender's id for it: a redelivery has the same id and is stored once. At most 200. */
+  /**
+   * The sender's id for it: a redelivery has the same id. The server stores the event once
+   * under it only when the connector's `signedIds` says it is signed. At most 200.
+   */
   id: string;
   /** What happened, in the sender's words: 'payment.captured'. At most 200. */
   type: string;
@@ -34,6 +38,14 @@ export interface ConnectorInbound<C> {
    * Default false: a request without a body is refused before `verify`.
    */
   bodyless?: boolean;
+  /**
+   * The ids `parse` returns are covered by what `verify` checks: changing one breaks the
+   * request's proof (the id is in the signed content, or read from the signed body). Default
+   * false: the server then stores each event under `bodyKey(rawBody)` instead, so a captured
+   * request posted again under a fresh id is still one event. A `bodyless` sender has no body
+   * to key by and must set it.
+   */
+  signedIds?: boolean;
   /** Is this request from the sender these credentials belong to? Constant-time checks only. */
   verify(req: InboundRequest, credentials: C, now?: number): boolean;
   /** The events in a verified request. Throw when it cannot be read: the sender gets a 400. */
@@ -59,7 +71,10 @@ export interface Connector<C = unknown> {
 
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
 
-/** A connector, checked: its name, and its public fields are plain field names. */
+/**
+ * A connector, checked: its name, its public fields are plain field names, and a sender that
+ * posts no body says its ids are signed (there is nothing else to key its events by).
+ */
 export function defineConnector<C>(def: Connector<C>): Connector<C> {
   if (!NAME.test(def.name))
     throw new Error(
@@ -68,7 +83,20 @@ export function defineConnector<C>(def: Connector<C>): Connector<C> {
   for (const field of def.publicFields ?? [])
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(field))
       throw new Error(`Connector ${def.name}: "${field}" is not a field name`);
+  if (def.inbound?.bodyless && !def.inbound.signedIds)
+    throw new Error(
+      `Connector ${def.name}: a sender that posts no body has only its ids to key events by: set inbound.signedIds once verify covers them`,
+    );
   return def;
+}
+
+/**
+ * The key of an event whose id is not signed: a hash of the exact bytes received (what the
+ * signature covers), and its place when the request carries several. `sha256:<hex>[:<n>]`.
+ */
+export function bodyKey(rawBody: Buffer | string, index?: number): string {
+  const hash = createHash('sha256').update(rawBody).digest('hex');
+  return index === undefined ? `sha256:${hash}` : `sha256:${hash}:${index}`;
 }
 
 /** One header's value: the first when it was sent more than once. */

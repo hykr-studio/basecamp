@@ -53,6 +53,10 @@ export const googleCalendarConnector = defineConnector<GoogleChannelCredentials>
   generate: () => ({ channelToken: randomBytes(32).toString('base64url') }),
   inbound: {
     bodyless: true,
+    // Google signs nothing: the channel token is all the proof, and whoever has seen one notice
+    // can send any other. So the channel and message number are as good as the request itself,
+    // and the handler only reads the calendar again (a repeated notice changes nothing).
+    signedIds: true,
     verify: (req, creds) => {
       const token = readHeader(req.headers, HEADER.token);
       if (!token || !safeEqual(token, creds.channelToken)) return false;
