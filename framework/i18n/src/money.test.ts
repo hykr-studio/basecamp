@@ -1,5 +1,14 @@
-import { describe, expect, it } from 'vitest';
-import { currencyExponent, moneyText, spokenMoney } from './index.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  currencyExponent,
+  defineLanguages,
+  moneyText,
+  resetLanguages,
+  setLanguages,
+  spokenMoney,
+} from './index.js';
+
+afterEach(resetLanguages);
 
 describe('money words', () => {
   it("knows each currency's minor-unit exponent from Intl", () => {
@@ -19,7 +28,8 @@ describe('money words', () => {
     );
   });
 
-  it("uses the language's grouping", () => {
+  it("uses the language's grouping, in its declared locale", () => {
+    setLanguages(defineLanguages({ hi: { name: 'हिंदी', english: 'Hindi', locale: 'hi-IN' } }));
     expect(moneyText({ minor: 12345678950, currency: 'EUR' }, 'hi')).toContain('12,34,56,789.50');
   });
 

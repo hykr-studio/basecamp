@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { defineLanguages, resetLanguages, setLanguages } from './lang.js';
 import { overridePhrases, resetPhraseOverrides, setTenantPhrases, t } from './messages.js';
 
-afterEach(resetPhraseOverrides);
+afterEach(() => {
+  resetPhraseOverrides();
+  resetLanguages();
+});
 
 describe('phrase overrides (A11)', () => {
   it("the application's words replace the framework's, per language, with placeholders filled", () => {
@@ -26,5 +30,16 @@ describe('phrase overrides (A11)', () => {
     expect(() => overridePhrases({ en: { 'channel.handoff': 'Soon.' } })).toThrow(/placeholders/);
     overridePhrases({ en: { 'channel.choose': 'Pick' } });
     expect(() => overridePhrases({ en: { 'channel.choose': 'Select' } })).toThrow(/twice/);
+  });
+
+  it('words a language the framework has no translation for, and refuses one not declared', () => {
+    expect(() => overridePhrases({ el: { 'channel.choose': 'Επιλέξτε' } })).toThrow(
+      /"el" is not one of the application's languages/,
+    );
+    setLanguages(defineLanguages({ el: { name: 'Ελληνικά', english: 'Greek' } }));
+    overridePhrases({ el: { 'channel.choose': 'Επιλέξτε' } });
+    expect(t('el', 'channel.choose')).toBe('Επιλέξτε');
+    // What it did not word reads in English.
+    expect(t('el', 'approval.approve')).toBe('Approve');
   });
 });
