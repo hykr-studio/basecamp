@@ -1,7 +1,7 @@
 // The integration bus's registries: connectors (kinds of outside systems) and connector handlers
 // (what an inbound event does in the application). Nothing here reads the configuration or
 // loads Nest: safe to import from an application module at load time.
-import type { Connector } from '@hykr/connectors';
+import { type Connector, defineConnector } from '@hykr/connectors';
 import {
   createHookRegistry,
   type Principal,
@@ -36,7 +36,8 @@ export const connectors = createHookRegistry<Connector<any>>(
   (c) => {
     if (RESERVED_CONNECTORS.has(c.name))
       throw new Error(`The connector name "${c.name}" is taken by a channel`);
-    return c.name;
+    // Checked again here: a connector written as a plain object skipped defineConnector.
+    return defineConnector(c).name;
   },
   { collects: 'connectors' },
 );
@@ -48,8 +49,16 @@ export interface InboundEventRecord {
   tenantId: string;
   connectionId: string;
   connector: string;
-  /** The sender's id for it. */
+  /**
+   * The key it is stored under, once per connection: the sender's id when the connector signs
+   * it (`inbound.signedIds`), else a hash of the signed body (`sha256:<hex>`).
+   */
   externalId: string;
+  /**
+   * The id the sender gave, when it is not the key. Not verified: whoever saw the request could
+   * have changed it. For logs and calls back to the sender, never as a key.
+   */
+  senderId: string | null;
   type: string;
   data: unknown;
   receivedAt: string;
