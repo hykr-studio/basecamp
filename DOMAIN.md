@@ -145,9 +145,10 @@ the framework's `memory` entity, reached by the capabilities `memory.read`, `mem
 `memory.manage`: give your own roles those (developer guide 7.7).
 
 Approvals take an object form, `{ when, by, channels, minAssurance, level }`: who decides (the
-person it is for by default; a customer's request goes to holders of `approvals.decide`; `by`
-names a capability, a person or an amount band, never a role), and where (`channels: ['app']` for
-anything irreversible keeps it off WhatsApp buttons). Nobody decides their own request unless the
+person it is for by default; a request from outside the team, such as a customer's or a
+participant's, goes to holders of `approvals.decide`; `by` names a capability, a person or an
+amount band, never a role), and where (`channels: ['app']` for anything irreversible keeps it off
+WhatsApp buttons). Nobody decides their own request unless the
 policy sends it back to them. What each approval level means (does it wait, who decides, how long
 it can be undone) is the application's: the sample declares `read`, `internal`, `external` and
 `irreversible` (`application/domain/src/server/approval-levels.ts`), and the to-dos module maps its
@@ -487,8 +488,9 @@ From the contracts declaration alone:
   voice seconds metered and priced, a per-period allowance and a prepaid wallet, an alert and a
   pause as caps fill, an operator's override, and buying credits through a purchase provider
   (`/api/credits`, developer guide section 7.6). The application configures the prices and plans
-  (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold`; the
-  sample's `account` module) and lists `creditsPlugin` for the app's credits screen.
+  (`CREDITS_CONFIG` in `.env`), words the alerts (a notification on `credits.threshold` to
+  `{ capability: 'credits.manage' }`; the sample's `account` module) and lists `creditsPlugin` for
+  the app's credits screen.
 - Outside AI clients over MCP (developer guide, section 7.8): an OAuth 2.1 server (Better Auth's
   oauth-provider, with its sign-in and consent pages), the `/mcp` endpoint with two tools per
   module (`<module>_read`, `<module>_write`), scopes per module that the API enforces on every
