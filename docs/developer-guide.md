@@ -702,16 +702,24 @@ type ApprovalRule =
 `by` chooses people by capability, never by role name:
 - `'requester'`: the person the request is for (their own assistant's request);
 - `{ capability }`: anyone in the business holding it, except the requester;
-- `{ userId }`: one named person, a member of the business who is not the requester (otherwise the
-  holders of `approvals.decide` decide instead);
+- `{ userId }`: one named person, a member of the business on its team who is not the requester
+  (otherwise the holders of `approvals.decide` decide instead);
 - `{ band }`: the approver the business's settings name for the amount's band (below).
 
-Who decides, when nothing sets `by`: the person the request is for, if they are a user and not only a
-customer. Otherwise the holders of `approvals.decide` (by default the `owner` and `ops` roles; an
+Who decides, when nothing sets `by`: the person the request is for, if they are a user on the
+business's team. Someone outside it decides nothing of their own: a participant, or a person holding
+only the roles the framework hands contacts and participants (`roleDefaults`, `customer` by default).
+Their requests go to the holders of `approvals.decide` (by default the `owner` and `ops` roles; an
 application gives its own roles the capability, or names its own capability on its levels). Nobody
 decides their own request unless the policy sends it back to them: a request decided by a capability
 is never decidable by its requester. The requester can still open it (`GET /api/approvals/:id`, with
 `canDecide: false`); `POST .../approve` answers 403 `own_request`.
+
+A request someone else decides reaches its deciders through the framework's `approval.request`
+notification (section 8.2): by push, else on WhatsApp with signed Approve and Reject buttons (only
+where the request may be decided there, with `APPROVAL_SECRET` set and the decider's number
+linked), else by email, and always in their in-app inbox. Each opens `/approvals/<id>`. A person's
+own assistant asks them in the conversation instead.
 
 Approvals expire after 24 hours by default (`CoreModule.forRoot({ approvalTtlMs })`), or after their
 level's `expiresInMs`. The framework's `approvals` feature runs a sweeper every minute
@@ -2919,7 +2927,7 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
 
 ### 8.1 WhatsApp
 
-You do not write WhatsApp code for a feature. Inbound messages become chat turns on the `text` surface. Your views' `text` decides the words. Approvals become signed buttons when `APPROVAL_SECRET` is set and the approver is the person writing; a request someone else decides goes to them as `approval_request_v1`, and every answer links to `/approvals/<id>` in the app. The framework handles keywords (STOP, START, HELP, talk to a person, delete my data, link my account) in English, Hindi and Telugu, plus consent, the 24-hour window, handoff to a person and erasure.
+You do not write WhatsApp code for a feature. Inbound messages become chat turns on the `text` surface. Your views' `text` decides the words. Approvals become signed buttons when `APPROVAL_SECRET` is set and the approver is the person writing; a request someone else decides reaches them as `approval_request_v1` when push does not and the request may be decided on WhatsApp (section 5.8), and every answer links to `/approvals/<id>` in the app. The framework handles keywords (STOP, START, HELP, talk to a person, delete my data, link my account) in English, Hindi and Telugu, plus consent, the 24-hour window, handoff to a person and erasure.
 
 ### 8.2 Templates and notifications
 

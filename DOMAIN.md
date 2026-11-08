@@ -145,10 +145,12 @@ the framework's `memory` entity, reached by the capabilities `memory.read`, `mem
 `memory.manage`: give your own roles those (developer guide 7.7).
 
 Approvals take an object form, `{ when, by, channels, minAssurance, level }`: who decides (the
-person it is for by default; a customer's request goes to holders of `approvals.decide`; `by`
-names a capability, a person or an amount band, never a role), and where (`channels: ['app']` for
-anything irreversible keeps it off WhatsApp buttons). Nobody decides their own request unless the
-policy sends it back to them. What each approval level means (does it wait, who decides, how long
+person it is for by default; a request from someone outside the team, a customer or a
+participant, goes to holders of `approvals.decide`; `by` names a capability, a person or an
+amount band, never a role), and where (`channels: ['app']` for anything irreversible keeps it off
+WhatsApp buttons). Nobody decides their own request unless the policy sends it back to them. The
+deciders hear of it by push, WhatsApp (where they can decide there) or email, and find it in
+their in-app inbox. What each approval level means (does it wait, who decides, how long
 it can be undone) is the application's: the sample declares `read`, `internal`, `external` and
 `irreversible` (`application/domain/src/server/approval-levels.ts`), and the to-dos module maps its
 writes to `internal` with a level rule. Thresholds and approvers per amount band are each

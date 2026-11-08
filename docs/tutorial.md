@@ -455,8 +455,8 @@ Without `by`, `decidersFor` in `framework/core/src/write/approvals.ts` behaves l
 
 | Requester | Who decides by default |
 |---|---|
-| A person with a user id who is not customer-only | The requester (they approve their own assistant's request). |
-| A customer | Holders of `approvals.decide` (`owner` and `ops` by default) |
+| A person with a user id on the business's team | The requester (they approve their own assistant's request). |
+| A customer, or a participant (anyone holding only the roles contacts and participants are given, `roleDefaults`) | Holders of `approvals.decide` (`owner` and `ops` by default) |
 
 Setting `by` sends every parked cancel to the holders of the capability, including a staff member's own assistant's request, and never to the person who asked: their own request is theirs to look at, not to decide.
 
@@ -751,7 +751,7 @@ Then pass the templates and notifications to the module's `defineModule({ templa
 
 How the pieces connect:
 
-- **Events.** `NotifyService` (`framework/api/src/channels/notify/notify.service.ts`) subscribes to every `NamedEvent` on the event bus. That covers entity events (`visit.updated`) and your own (`visit.confirmed`, `visit.cancelled`). The row is passed as JSON, so dates arrive as ISO strings.
+- **Events.** The framework's `notify.events` subscriber (`framework/api/src/features/notifications/`) gets every stored event (`app.domain_events`) a notification names, once its write has committed, and hands it to `NotifyService` (`framework/api/src/channels/notify/notify.service.ts`). That covers entity events (`visit.updated`) and your own (`visit.confirmed`, `visit.cancelled`). The row is stored as JSON, so dates arrive as ISO strings. `to`, `when` and `schedule.at` read it as stored; `params` reads it as each recipient may (developer guide 8.2).
 - **`schedule.at`.** Returning `null`, or a time in the past, cancels any scheduled job. `cancelOn` removes it. A new time replaces it, and the `dedupe` key makes that work.
 - **Topics.**
   - `service`: on until STOP, and it ignores quiet hours.
@@ -1225,7 +1225,7 @@ steps:
 What the framework did on that path:
 
 - **A new customer.** The first message created a contact, a customer and a `service` consent, then sent the welcome.
-- **The approval request.** The owner's linked number received `approval_request_v1` with signed Approve and Reject buttons. The approval was decided by a capability's holders (not the person who asked), and `channels` allowed WhatsApp.
+- **The approval request.** The owner's linked number received `approval_request_v1` with signed Approve and Reject buttons. The approval was decided by a capability's holders (not the person who asked), and `channels` allowed WhatsApp. The owner has no push token in the test, so WhatsApp was the first channel that reached them; the request is also in their in-app inbox.
 - **The outcome.** Meera received `approval_outcome_v1` because she was the requesting contact.
 
 ```bash
@@ -1255,7 +1255,7 @@ Run everything with `pnpm dev`. It watch-builds the framework and runs `basecamp
      "type":"text","text":{"body":"book a site visit for Kitchen tiles at 12 Road No. 3, Banjara Hills"}}'
    ```
 4. **Confirm it in the app.** Go to **Visits → To confirm**, pick a date and time, and press Confirm. Meera gets `site_visit_confirmed_v1` in whaloc. This needs `pnpm templates:sync` to have run.
-5. **Cancel as the customer.** Meera sends `cancel my site visit`. The approval waits in the app's approvals for owner, admin, ops and staff. It is also sent to WhatsApp as `approval_request_v1` to any team member whose number is linked, but only when `APPROVAL_SECRET` is set. Approve it, and Meera is told.
+5. **Cancel as the customer.** Meera sends `cancel my site visit`. The approval waits in the app's approvals for owner, admin, ops and staff, and in each one's inbox. Each of them is also told once: by push on a phone with the app, else on WhatsApp as `approval_request_v1` (a linked number, and only when `APPROVAL_SECRET` is set), else by email (Mailpit, http://localhost:8025). Approve it, and Meera is told.
 6. **Look behind the scenes:**
 
    | Where | What you see |

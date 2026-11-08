@@ -148,8 +148,9 @@ Other gotchas:
    (`allow` / `deny` / `needs_approval`, tightened by write hooks), then run or park, plus an audit row
    (`audit.events`) and the write's named events (`app.domain_events`, the durable event outbox) in the
    same transaction. In-process events are published after commit. Never write tables directly from a
-   controller or service. Sends from a write go through the outbox (`app.outbox`), never straight to
-   WhatsApp or SMTP.
+   controller or service. Sends from a write go through the outbox (`app.outbox`; in a command's
+   `run`, `queueNotification(tx, def, row, { type })`), never straight to WhatsApp or SMTP. An
+   undoable write's sends and notifications wait for its undo window.
 2. **The assistant is a user.** The Mastra agent (`framework/agents`) has no DB access (`agents-not-to-db`).
    Its tools (generated in `framework/core/src/tools`) call the same HTTP API with
    `x-agent-key` / `x-acting-for` headers, so the same guards, scopes, approvals and audit apply. The agent
@@ -218,8 +219,9 @@ audited `on_behalf_of`), never through a role.
   then read projectors). Never return a repo row from a controller or service as is.
 - A command's `approval.by` says who decides, by capability (`{ capability }`), a named person (`{ userId }`) or
   an amount band in the business's settings (`{ band }`), never by role name. Without it, the person decides
-  on their own assistant's request (a customer's goes to holders of `approvals.decide`). Nobody decides
-  their own request otherwise.
+  on their own assistant's request (a customer's or a participant's goes to holders of
+  `approvals.decide`). Nobody decides their own request otherwise. Deciders hear of a request through
+  the framework's `approval.request` notification (push, WhatsApp, email, and the in-app inbox).
 - What an approval level means is the application's: it declares its levels (`defineApprovalLevel`,
   contributed as `approvalLevels`) and which writes reach them (`defineLevelRule`, `levelRules`); thresholds
   and per-band approvers are tenant settings (`approvals`). A write whose level gives an undo window answers
