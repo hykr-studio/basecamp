@@ -102,8 +102,8 @@ Every write, from any caller, follows these steps in `runWrite`:
 | Audit | One row per touched record, plus one for a command | `audit.events` |
 | Stored events | Each `NamedEvent` (and `approval.requested`) is inserted in `app.domain_events` in the transaction, with the row before, and held back (`available_at`) for the write's undo window when it has one | `write/events.ts` |
 | Undo window | A write that ran with `undoMs`, for a person, touching only entities, records an `app.undo_windows` row; the result carries `undo: { id, until }` | `write/undo.ts` |
-| Write hooks | `afterRun` for a write that ran or parked, in the transaction. Throwing rolls it all back. | `writeHooks` |
-| Events | Published in-process after commit by the CQRS handler | `NamedEvent` |
+| Write hooks | `afterRun` for a write that ran or parked, in the transaction. Throwing rolls it all back. The framework's `notify.held-sends` holds the write's outbox sends for its undo window. | `writeHooks` |
+| Events | Published in-process after commit by the CQRS handler. The worker relays the stored ones to subscribers, notifications among them (section 5.10). | `NamedEvent` |
 
 Every write answers a `WriteResult` (`framework/contracts/src/framework/write.ts`):
 
