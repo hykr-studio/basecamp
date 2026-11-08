@@ -5,19 +5,19 @@
  * privacy requests (`privacy.manage`) in their in-app inbox, else by email.
  */
 import type { PrivacyRequest } from '@hykr/contracts';
-import type { Lang } from '@hykr/i18n';
+import { type PerLang, pick } from '@hykr/i18n';
 import { defineNotification } from '@hykr/notifications';
 
 /** A request as the framework's events carry it (no note), with its business. */
 export type PrivacyRequestRow = Omit<PrivacyRequest, 'note'> & { tenantId: string };
 
-const KIND: Record<Lang, Record<PrivacyRequest['kind'], string>> = {
+const KIND: PerLang<Record<PrivacyRequest['kind'], string>> = {
   en: { export: 'a copy of their data', erase: 'their data erased' },
   hi: { export: 'अपने डेटा की कॉपी', erase: 'अपना डेटा मिटाना' },
   te: { export: 'తమ డేటా కాపీ', erase: 'తమ డేటా తొలగింపు' },
 };
 
-const WAITS: Record<Lang, { title: string; body: (kind: string) => string }> = {
+const WAITS: PerLang<{ title: string; body: (kind: string) => string }> = {
   en: {
     title: 'A privacy request waits for you',
     body: (k) => `Someone asked for ${k}. Review it in the back office.`,
@@ -32,7 +32,7 @@ const WAITS: Record<Lang, { title: string; body: (kind: string) => string }> = {
   },
 };
 
-const LATE: Record<Lang, { title: string; body: (kind: string) => string }> = {
+const LATE: PerLang<{ title: string; body: (kind: string) => string }> = {
   en: {
     title: 'A privacy request is past its deadline',
     body: (k) => `A request for ${k} is still open after its deadline. Answer it now.`,
@@ -57,12 +57,12 @@ export const PrivacyWaitsNotification = defineNotification<PrivacyRequestRow>({
   to: () => PRIVACY_TEAM,
   channels: ['inapp', 'email'],
   inapp: {
-    title: (_row, r) => WAITS[r.lang].title,
-    body: (row, r) => WAITS[r.lang].body(KIND[r.lang][row.kind]),
+    title: (_row, r) => pick(WAITS, r.lang).title,
+    body: (row, r) => pick(WAITS, r.lang).body(pick(KIND, r.lang)[row.kind]),
   },
   email: {
-    subject: (_row, r) => WAITS[r.lang].title,
-    body: (row, r) => WAITS[r.lang].body(KIND[r.lang][row.kind]),
+    subject: (_row, r) => pick(WAITS, r.lang).title,
+    body: (row, r) => pick(WAITS, r.lang).body(pick(KIND, r.lang)[row.kind]),
   },
   dedupe: (row) => `account.privacy_waits:${row.id}`,
 });
@@ -75,12 +75,12 @@ export const PrivacyLateNotification = defineNotification<PrivacyRequestRow>({
   to: () => PRIVACY_TEAM,
   channels: ['inapp', 'email'],
   inapp: {
-    title: (_row, r) => LATE[r.lang].title,
-    body: (row, r) => LATE[r.lang].body(KIND[r.lang][row.kind]),
+    title: (_row, r) => pick(LATE, r.lang).title,
+    body: (row, r) => pick(LATE, r.lang).body(pick(KIND, r.lang)[row.kind]),
   },
   email: {
-    subject: (_row, r) => LATE[r.lang].title,
-    body: (row, r) => LATE[r.lang].body(KIND[r.lang][row.kind]),
+    subject: (_row, r) => pick(LATE, r.lang).title,
+    body: (row, r) => pick(LATE, r.lang).body(pick(KIND, r.lang)[row.kind]),
   },
   dedupe: (row) => `account.privacy_late:${row.id}`,
 });

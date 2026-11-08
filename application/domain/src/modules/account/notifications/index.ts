@@ -5,7 +5,7 @@
  * by its own roles too), on WhatsApp, else by email.
  */
 import { CreditsManageCapability, type CreditsThresholdRow } from '@hykr/contracts';
-import { type Labels, type Lang, pick } from '@hykr/i18n';
+import { type Labels, type Lang, type PerLang, pick } from '@hykr/i18n';
 import { defineNotification, defineTemplate, type Reader } from '@hykr/notifications';
 import { z } from 'zod';
 import { PrivacyLateNotification, PrivacyWaitsNotification } from './privacy.js';
@@ -53,12 +53,12 @@ const CAPS: Record<string, Labels> = {
 const what = (row: CreditsThresholdRow, lang: Lang) =>
   CAPS[row.cap] ? pick(CAPS[row.cap], lang) : row.cap;
 
-const LOW: Record<Lang, (what: string, percent: number) => string> = {
+const LOW: PerLang<(what: string, percent: number) => string> = {
   en: (w, p) => `${w}: ${p}% used`,
   hi: (w, p) => `${w}: ${p}% उपयोग हुआ`,
   te: (w, p) => `${w}: ${p}% వాడారు`,
 };
-const OUT: Record<Lang, (what: string) => string> = {
+const OUT: PerLang<(what: string) => string> = {
   en: (w) => `${w} used up: the assistant is paused`,
   hi: (w) => `${w} खत्म: असिस्टेंट रुका हुआ है`,
   te: (w) => `${w} అయిపోయాయి: అసిస్టెంట్ ఆగిపోయింది`,
@@ -82,9 +82,9 @@ export const CreditsLowNotification = defineNotification<CreditsThresholdRow>({
   channels: ['whatsapp', 'email'],
   whatsapp: { template: CreditsLow, params: lowParams },
   email: {
-    subject: (row, r) => LOW[r.lang](what(row, r.lang), Math.floor(row.usedPercent)),
+    subject: (row, r) => pick(LOW, r.lang)(what(row, r.lang), Math.floor(row.usedPercent)),
     body: (row, r) =>
-      CreditsLow.body[r.lang].replace(
+      pick(CreditsLow.body, r.lang).replace(
         /\{\{(\w+)\}\}/g,
         (_, k: 'what' | 'percent') => lowParams(row, r)[k],
       ),
@@ -102,8 +102,8 @@ export const CreditsOutNotification = defineNotification<CreditsThresholdRow>({
   channels: ['whatsapp', 'email'],
   whatsapp: { template: CreditsOut, params: (row, r) => ({ what: what(row, r.lang) }) },
   email: {
-    subject: (row, r) => OUT[r.lang](what(row, r.lang)),
-    body: (row, r) => CreditsOut.body[r.lang].replace('{{what}}', what(row, r.lang)),
+    subject: (row, r) => pick(OUT, r.lang)(what(row, r.lang)),
+    body: (row, r) => pick(CreditsOut.body, r.lang).replace('{{what}}', what(row, r.lang)),
   },
   dedupe: (row) => `account.credits_out:${row.id}`,
 });

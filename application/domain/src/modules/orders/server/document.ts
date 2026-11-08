@@ -1,6 +1,6 @@
 import { defineDocument } from '@hykr/api';
 import { buildTree, type Money, stateLabel, type TaxLine, type TreeNode } from '@hykr/contracts';
-import { type Labels, moneyText } from '@hykr/i18n';
+import { type Labels, moneyText, pick } from '@hykr/i18n';
 import { ORDER_STATES, type OrderStatus } from '../contracts/index.js';
 import { OrderDocumentTemplate } from '../notifications/index.js';
 import { OrderItem } from './order.entity.js';
@@ -180,9 +180,9 @@ export const OrderDocument = defineDocument<OrderDocumentData>({
       }),
     },
     email: {
-      subject: ({ order }, reader) => `${L.subject[reader.lang]} ${order.number}`,
+      subject: ({ order }, reader) => `${pick(L.subject, reader.lang)} ${order.number}`,
       body: ({ order }, reader) =>
-        words(L.attached[reader.lang], {
+        words(pick(L.attached, reader.lang), {
           number: order.number,
           total: moneyText(order.total, reader.lang),
         }),

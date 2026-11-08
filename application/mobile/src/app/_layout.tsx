@@ -1,4 +1,5 @@
 import '../../global.css';
+import { languages } from '@application/domain/languages';
 import {
   AppShell,
   agentsPlugin,
@@ -26,6 +27,8 @@ const config = {
   studioUrl: process.env.EXPO_PUBLIC_STUDIO_URL,
   // app.json's "scheme": the native session is stored under it.
   scheme: 'agenticstack',
+  // The languages it shows and speaks: the server's (application/api/src/server.ts) too.
+  languages,
 };
 
 /**

@@ -1,5 +1,5 @@
 /** The meetings module's WhatsApp template and its reminder before each meeting. */
-import { type Lang, pick, spokenWhen } from '@hykr/i18n';
+import { type PerLang, pick, spokenWhen } from '@hykr/i18n';
 import { defineNotification, defineTemplate, type Row } from '@hykr/notifications';
 import { z } from 'zod';
 import { HouseholdRole } from '../contracts/participants.js';
@@ -30,7 +30,7 @@ type MeetingRow = Row & {
   ownerId: string;
   customerId: string | null;
 };
-const SUBJECT: Record<Lang, (title: string) => string> = {
+const SUBJECT: PerLang<(title: string) => string> = {
   en: (title) => `Reminder: ${title}`,
   hi: (title) => `रिमाइंडर: ${title}`,
   te: (title) => `రిమైండర్: ${title}`,
@@ -65,7 +65,7 @@ export const MeetingReminderNotification = defineNotification<MeetingRow>({
     params: (m, r) => ({ title: m.title, time: spokenWhen(m.startsAt, r.timeZone, r.lang) }),
   },
   email: {
-    subject: (m, r) => SUBJECT[r.lang](m.title),
+    subject: (m, r) => pick(SUBJECT, r.lang)(m.title),
     body: (m, r) =>
       `${m.title} ${pick(SOON, r.lang)}: ${spokenWhen(m.startsAt, r.timeZone, r.lang)}.`,
   },

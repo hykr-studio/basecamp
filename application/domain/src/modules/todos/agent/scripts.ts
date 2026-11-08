@@ -10,6 +10,7 @@ import {
   verbs,
   written,
 } from '@hykr/agents/script';
+import { pick } from '@hykr/i18n';
 
 /**
  * The scripted model's knowledge of the to-dos module (for tests, CI and demos without a key):
@@ -65,11 +66,14 @@ export const todosScripts = [
       const r = turn.result('create-todo');
       if (!r) return [call('create-todo', { title })];
       const added = (t: { title: string }) =>
-        ({
-          en: `Added ${quoted(t.title)}.`,
-          hi: `${quoted(t.title)} जोड़ दिया।`,
-          te: `${quoted(t.title)} జోడించాను.`,
-        })[turn.lang];
+        pick(
+          {
+            en: `Added ${quoted(t.title)}.`,
+            hi: `${quoted(t.title)} जोड़ दिया।`,
+            te: `${quoted(t.title)} జోడించాను.`,
+          },
+          turn.lang,
+        );
       return [say(written(r, added, turn))];
     },
   }),
@@ -82,11 +86,14 @@ export const todosScripts = [
       const r = turn.result('clear-done-todos');
       if (!r) return [call('clear-done-todos', {})];
       const cleared = (v: { cleared?: number }) =>
-        ({
-          en: `Cleared ${plural(v.cleared ?? 0, 'done to-do')}.`,
-          hi: `${v.cleared ?? 0} पूरे हुए काम हटा दिए।`,
-          te: `${v.cleared ?? 0} పూర్తయిన పనులను తొలగించాను.`,
-        })[turn.lang];
+        pick(
+          {
+            en: `Cleared ${plural(v.cleared ?? 0, 'done to-do')}.`,
+            hi: `${v.cleared ?? 0} पूरे हुए काम हटा दिए।`,
+            te: `${v.cleared ?? 0} పూర్తయిన పనులను తొలగించాను.`,
+          },
+          turn.lang,
+        );
       return [say(written(r, cleared as never, turn))];
     },
   }),
@@ -111,7 +118,7 @@ export const todosScripts = [
       // Typed in Hindi or Telugu: a line in their language before the titles (which are data).
       if (turn.lang === 'en') return [say(list)];
       const lead = { en: 'Your to-dos:', hi: 'आपके काम ये हैं:', te: 'మీ పనులు ఇవి:' };
-      return [say(`${lead[turn.lang]}\n${list}`)];
+      return [say(`${pick(lead, turn.lang)}\n${list}`)];
     },
   }),
   defineScript({
@@ -133,12 +140,15 @@ export const todosScripts = [
       if (r) {
         const said = (t: { title: string }) =>
           verb === 'done'
-            ? {
-                en: `Updated ${quoted(t.title)}.`,
-                hi: `${quoted(t.title)} पूरा हो गया।`,
-                te: `${quoted(t.title)} పూర్తి చేశాను.`,
-              }[turn.lang]
-            : { en: 'Deleted.', hi: 'हटा दिया।', te: 'తొలగించాను.' }[turn.lang];
+            ? pick(
+                {
+                  en: `Updated ${quoted(t.title)}.`,
+                  hi: `${quoted(t.title)} पूरा हो गया।`,
+                  te: `${quoted(t.title)} పూర్తి చేశాను.`,
+                },
+                turn.lang,
+              )
+            : pick({ en: 'Deleted.', hi: 'हटा दिया।', te: 'తొలగించాను.' }, turn.lang);
         return [say(written(r, said, turn))];
       }
       const list = turn.result('list-todos');

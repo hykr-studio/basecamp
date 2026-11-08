@@ -1,20 +1,23 @@
 // The modules' views: their words for channels without a screen, and their wiring.
-import { LANGS } from '@hykr/i18n';
-import { createUiRegistry, emptyLabels } from '@hykr/ui-registry';
-import { describe, expect, it } from 'vitest';
+import { resetLanguages, setLanguages } from '@hykr/i18n';
+import { createUiRegistry, languageProblems, missingLabels } from '@hykr/ui-registry';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Todo } from '../contracts/index.js';
+import { languages } from '../languages.js';
 import { CalendarWeekView, moduleViews, TodoListView } from './index.js';
 
 const registry = createUiRegistry(...moduleViews);
+const views = moduleViews.flatMap((m) => m.views ?? []);
+
+// The application's languages, as the server and the app install them.
+beforeAll(() => setLanguages(languages));
+afterAll(resetLanguages);
 
 describe('the views’ words', () => {
-  it('every view label and noun is filled in for every language', () => {
-    expect(
-      emptyLabels(
-        moduleViews.flatMap((m) => m.views ?? []),
-        LANGS,
-      ),
-    ).toEqual([]);
+  it('every view label and noun is filled in for every language the application speaks', () => {
+    expect(languages.codes).toEqual(['en', 'hi', 'te']);
+    expect(missingLabels(views, languages.codes)).toEqual([]);
+    expect(languageProblems(views, languages)).toEqual([]);
   });
 });
 
