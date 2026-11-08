@@ -42,6 +42,11 @@ const CAPS: Record<string, Labels> = {
   tool_calls: { en: 'Assistant actions', hi: 'असिस्टेंट के काम', te: 'అసిస్టెంట్ చర్యలు' },
   messages: { en: 'WhatsApp messages', hi: 'WhatsApp संदेश', te: 'WhatsApp సందేశాలు' },
   voice_seconds: { en: 'Voice minutes', hi: 'वॉइस मिनट', te: 'వాయిస్ నిమిషాలు' },
+  embedding_tokens: {
+    en: 'Memory search tokens',
+    hi: 'मेमोरी खोज टोकन',
+    te: 'మెమరీ శోధన టోకెన్‌లు',
+  },
 };
 
 const what = (row: CreditsThresholdRow, lang: Lang) =>
