@@ -37,6 +37,12 @@ No framework or sample code changes.
 | 9 | CLAUDE.md keeps every rule it has (agents rely on each), worded shorter, with section pointers into the guide for detail; it gains the module count, `docs/modules.md` and the commands it lacked. | Brief ("kept concise"). |
 | 10 | `scripts/wt.sh` is documented in `docs/modules.md` as this repository's helper for one worktree, database and queue prefix per piece of work, since it is tracked and is the procedure parallel teams here follow. | Default: the parallel guide should name the tool the repository ships for it. |
 | 11 | Plain style, as the rest of the guides: what the code does, the file or symbol that does it, no history of how it got there. | CLAUDE.md; H6 decision 5. |
+| 12 | Fixit's entity becomes `repair` (module `repairs`, `complete-repair`, `/api/repairs`). The replay showed `defineServer` refusing the guide's `jobs` module: B11's long-running jobs reserve `/api/jobs` and own `app.jobs`. The guide says why, so a reader does not name a module after a framework feature. | Replay (decision 4); `reserveRoutes('jobs')` in `framework/api/src/features/jobs`. |
+| 13 | Fixit's step 2 also removes `briefs` and the sample's `sql/post/orders-states.sql` (on a fresh database the hook fails without `app.orders`), keeps `account` (it words the credits and privacy notices) and `server/privacy.ts`, and its `server.ts` passes `languages`: without it the boot refuses every Hindi and Telugu word. Checked on a database migrated from nothing. | Replay (decision 4). |
+| 14 | The two Fixit screenshots are removed: they showed the old entity, and taking new ones needs the Expo web app and a browser, which this unit does not run. The guide's text describes each screen instead. | Default: a picture of a tutorial that no longer builds misleads. |
+| 15 | The guides' files are the files that were built: the Fixit files were extracted from the guide, formatted with Biome, built and tested, then written back into the guide's code blocks. The tutorial's snippets are trimmed excerpts of the replayed module (saved as a patch for the record, not committed). | Decision 4. |
+| 16 | The developer guide's section 10 gains one short recipe per primitive the gaps added, grouped (modules and migrations; approvals and roles; records; documents, links and other systems; the assistant and the account), each pointing at its section. Sections 11 to 13 gain the rules and checks the gaps made true for every feature (capabilities, the boundary, money, module imports, migrations, settings writers, files, model runs; per-module runs, `lint:boundary`, the e2e checks). | Brief ("new primitives with short recipes, rules of the road, testing, definition of done"). |
+| 17 | Section 14 gains two rows found while checking: SQL hooks are application-wide (nothing ties one to its module), and nothing in CI replays the tutorials. | Replay (decision 13); decision 4. |
 
 ## Assumptions to review
 
@@ -59,6 +65,37 @@ None: documentation only.
 - Every path, symbol, route and error code in new or changed text grepped in the merged tree.
 - `pnpm lint`, `pnpm lint:deps`, `scripts/check-boundary.sh` and `scripts/wt.sh check HDOCS`.
 
+### Results
+
+| What | Result |
+|---|---|
+| Tutorial replay (`visits` in the sample, on a throwaway branch) | `basecamp module add visits --entity visit`, the tutorial's files, `pnpm db:generate --name site_visits` (`0009_site_visits.sql`), `pnpm db:migrate`; build and typecheck of `@application/api...` and `@application/mobile`; `pnpm lint:deps` clean; the view test; the 6 e2e tests; `basecamp eval --module visits` 4/4, `pnpm eval` 28/28, `eval voice` 15/15, `eval whatsapp` 14/14; the curl calls of step 3 and the `/api/chat/once` text result of step 4. With `visits` listed after `meetings` and an eval turn "show my visits", `defineServer` refused to start, naming `open-meeting`, as step 6 says |
+| Fixit replay (`repairs` replacing the sample) | Step 2's deletions, the guide's files, `db generate` (`0000_repairs.sql`), build and typecheck (33 tasks), the server loads; on a database created empty and migrated from nothing: 4 e2e tests; `basecamp eval` 3/3, `eval whatsapp` 2/2 |
+| `basecamp module add`, `db generate`, `db rebase` | Run on throwaway branches: two modules generated `0009_*` on two branches; the rebase auto-merged the four lists (union) and conflicted only under `drizzle/meta`; `git checkout --ours -- application/domain/drizzle`, then `basecamp db rebase --base <base>` regenerated `0010_*` on top; run again, it drops and regenerates the same |
+| `basecamp eval --module nope` | Fails: `No module called nope (modules: …)`; a run with no cases fails `No cases ran` |
+| `basecamp import todo …/todos.csv --as <email> --key legacy_id --source legacy --dry-run` | 5 rows, 5 created, nothing written (API with an inline worker and `STORAGE_DRIVER=fs` shared with the CLI) |
+| `basecamp operator add` / `list` / `remove`, `basecamp --help` | As documented; Bull Board answered 200 to the operator |
+| `pnpm templates:check` | Runs; the shared emulator had not been sent `credits_low_v1` and `credits_out_v1` (`templates:sync` was not run: it writes to the shared emulator) |
+| CLAUDE.md's test commands | `framework/core` list-grammar unit test (5), `pnpm --filter @application/domain test` (12; 13 with the replayed visits test), the framework e2e `pages.e2e.test.ts` (9), the application e2e `todo.e2e.test.ts` (8), `fixture:generate` for `par` (no changes) |
+| `cd application/api && pnpm vitest list test/domain/order --filesOnly` | The path filter modules.md documents selects the five order files |
+| `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm lint:deps`, `pnpm lint:boundary` | Pass |
+
+### Not run here
+
+`pnpm infra:up` / `infra:down`, `pnpm dev` and `basecamp dev`, `basecamp studio`, `basecamp start
+worker` / `voice`, `pnpm templates:sync`, the golden WhatsApp conversations (whaloc-test reaches
+the main checkout only), the native apps and Maestro, `pnpm --filter @application/mobile dev`,
+`npm create @hykr/basecamp` from the registry (the CI `consumer` job packs and scaffolds), the
+WhatsApp number claim, and the whole `pnpm test` (representative files were run; no code
+changed).
+
+### Found while checking (code, not changed here)
+
+- `framework/create-basecamp/src/index.ts` (a comment) and `application/package.json`
+  (`description`) still say the sample is meetings, notes and to-dos.
+- The sample's `TodoDueNotification` fixes the time zone (already in section 14).
+
 ## Deferred
 
-- Nothing yet.
+- New screenshots of Fixit (decision 14).
+- A CI job that replays the tutorials (assumption "Replays on the workspace").
