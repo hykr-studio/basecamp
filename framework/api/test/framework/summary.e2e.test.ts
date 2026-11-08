@@ -3,7 +3,16 @@
 // tiles computed from a summary, on the fixture's entries (fixture/src/features/summary).
 import { defaultTimeZone, setDefaultTimeZone } from '@hykr/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { addMember, asAssistant, boot, me, Person, pool, shutdown } from '../../dist/testing.js';
+import {
+  addMember,
+  asAssistant,
+  boot,
+  me,
+  Person,
+  pool,
+  setTenantSettings,
+  shutdown,
+} from '../../dist/testing.js';
 import { summaryServer } from '../fixture/dist/features/summary/index.js';
 
 const owner = new Person('Owner Summary');
@@ -212,6 +221,13 @@ describe("dates, in the deployment's zone while the business sets none", () => {
       expect(await months()).toEqual([{ key: { bookedAt: '2026-11' }, count: 1 }]);
       setDefaultTimeZone(undefined);
       expect(await months()).toEqual([{ key: { bookedAt: '2026-10' }, count: 1 }]);
+      // A stored offset or abbreviation is ignored (Postgres refuses "+0530" and reads "IST" as
+      // Israel's): the deployment's zone again, never a 500.
+      setDefaultTimeZone('Asia/Tokyo');
+      for (const zone of ['+0530', '+05:30', 'IST']) {
+        await setTenantSettings((await me(fresh)).tenantId, { timeZone: zone });
+        expect(await months(), zone).toEqual([{ key: { bookedAt: '2026-11' }, count: 1 }]);
+      }
     } finally {
       setDefaultTimeZone(was === 'UTC' ? undefined : was);
     }

@@ -2,6 +2,7 @@
 // deployment's (DEFAULT_TIME_ZONE), else UTC, and sets its own with PUT /api/settings/time-zone
 // (settings.manage, people only, audited, only in its own business); a business that named no
 // privacy contact shows the deployment's (DEFAULT_GRIEVANCE_CONTACT), else none at all.
+import { execFileSync } from 'node:child_process';
 import { defaultTimeZone, setDefaultTimeZone } from '@hykr/core';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -40,6 +41,26 @@ const audit = async (tenant: string) =>
       [tenant],
     )
   ).rows;
+/** The offsets and abbreviations Intl takes and Postgres refuses or reads as another zone. */
+const misread = ['IST', '+05:30', '+0530'];
+/** What a process started with this DEFAULT_TIME_ZONE says: 'started', or why it stopped. */
+const startWith = (zone: string) => {
+  const config = new URL('../../dist/config.js', import.meta.url).href;
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `const { assertConfig } = await import(${JSON.stringify(config)}); assertConfig();`,
+      ],
+      { env: { ...process.env, DEFAULT_TIME_ZONE: zone }, stdio: 'pipe' },
+    );
+    return 'started';
+  } catch (e) {
+    return String((e as { stderr?: Buffer }).stderr ?? e);
+  }
+};
 /** The UTC hour and minute an instant falls on. */
 const utcClock = (iso: string) => {
   const d = new Date(iso);
@@ -79,6 +100,20 @@ describe("a business's time zone", () => {
     expect(await zoneOf(owner)).toBe('Asia/Tokyo');
     await setTenantSettings(tenantId, { timeZone: 'Europe/Berlin' });
     expect(await zoneOf(owner)).toBe('Europe/Berlin');
+    await setTenantSettings(tenantId, { timeZone: null });
+  });
+
+  it("ignores a stored offset or abbreviation: the deployment's zone, never a 500", async () => {
+    // Postgres refuses "+0530", reads "+05:30" as UTC-05:30 and "IST" as Israel's: the business
+    // follows the deployment's zone in JS and in SQL alike.
+    setDefaultTimeZone('Asia/Tokyo');
+    for (const zone of misread) {
+      await setTenantSettings(tenantId, { timeZone: zone });
+      expect(await zoneOf(owner), zone).toBe('Asia/Tokyo');
+      const credits = await owner.call('GET', '/api/credits');
+      expect(credits.status, zone).toBe(200);
+      expect(utcClock(credits.body.period.start), zone).toBe('15:00');
+    }
     await setTenantSettings(tenantId, { timeZone: null });
   });
 
@@ -151,6 +186,25 @@ describe('PUT /api/settings/time-zone', () => {
     await setTenantSettings(tenantId, { timeZone: null });
   });
 
+  it('refuses an offset or an abbreviation, which Postgres reads otherwise', async () => {
+    await setTenantSettings(tenantId, { timeZone: 'Europe/Berlin' });
+    for (const zone of misread) {
+      const res = await owner.call('PUT', '/api/settings/time-zone', { timeZone: zone });
+      expect(res.status, zone).toBe(400);
+      expect(res.body, zone).toMatchObject({ error: 'time_zone_invalid' });
+    }
+    expect((await stored(tenantId)).timeZone).toBe('Europe/Berlin');
+    await setTenantSettings(tenantId, { timeZone: null });
+  });
+
+  it('stores the zone as Postgres spells it', async () => {
+    const res = await owner.call('PUT', '/api/settings/time-zone', { timeZone: 'europe/berlin' });
+    expect(res.status).toBe(200);
+    expect(res.body.value).toEqual({ timeZone: 'Europe/Berlin', effective: 'Europe/Berlin' });
+    expect((await stored(tenantId)).timeZone).toBe('Europe/Berlin');
+    await setTenantSettings(tenantId, { timeZone: null });
+  });
+
   it('needs settings.manage, and a person: staff and the assistant are refused', async () => {
     await setTenantSettings(tenantId, { timeZone: 'Europe/Berlin' });
     const refused = await staff.call(
@@ -192,6 +246,14 @@ describe('PUT /api/settings/time-zone', () => {
     expect(await zoneOf(owner)).toBe('Europe/Berlin');
     await setTenantSettings(tenantId, { timeZone: null });
     await setTenantSettings(otherTenant, { timeZone: null });
+  });
+});
+
+describe("the deployment's zone, at start", () => {
+  it('refuses an offset or an abbreviation, and starts with a zone', () => {
+    for (const zone of misread)
+      expect(startWith(zone), zone).toContain('DEFAULT_TIME_ZONE must be UTC or an IANA zone name');
+    expect(startWith('Europe/Berlin')).toBe('started');
   });
 });
 
