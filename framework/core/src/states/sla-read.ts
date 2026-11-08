@@ -1,8 +1,8 @@
 // Reading SLA clocks (GET /api/sla, the sla feature in @hykr/api). A clock is shown exactly when
-// its record is in the reader's list of its entity, decided in SQL: one bounded query whatever
-// the number of timers, never a read per record. A clock carries its record's state, so it is
-// kept from whoever may not see that state, and from the assistant where the record's get is not
-// exposed to it. docs/decisions/S3.md.
+// its record is in the reader's list of its entity, decided in SQL, a keyset page at a time:
+// never a read per record, and never a plan whose cost multiplies the timers by the records. A
+// clock carries its record's state, so it is kept from whoever may not see that state, and from
+// the assistant where the record's get is not exposed to it. docs/decisions/S3.md.
 import {
   fieldPolicyOf,
   hiddenFields,
@@ -131,9 +131,30 @@ async function reachOf(def: AnyEntityDef, p: Principal): Promise<SQL | undefined
   }
 }
 
+/**
+ * Up to this many records of an entity in the reader's reach, its timers are read by record (the
+ * resource index); past it, by due time with one primary-key probe per timer.
+ */
+export const SLA_BY_RECORD = 1_000;
+
 interface Branch {
   def: AnyEntityDef;
+  /** The entity's list WHERE for the reader. */
   where: SQL;
+  /** Every record in reach, when there are at most SLA_BY_RECORD. */
+  ids?: string[];
+}
+
+/**
+ * The timers of this branch's records: by record when the reader reaches few, else a probe of
+ * the record per timer. The probe is fenced (`offset 0`) so it stays a per-row lookup by primary
+ * key: a semi-join would let a misestimate (a new business, fresh rows) pick a nested loop that
+ * scans every record in reach for every timer, seconds at 20,000 timers.
+ */
+function reachSql(branch: Branch): SQL {
+  if (branch.ids) return sql`${slaTimers.resourceId} = any(${sql.param(branch.ids)}::text[])`;
+  const idCol = (getTableColumns(branch.def.table) as Record<string, Column>).id;
+  return sql`exists (select 1 from ${branch.def.table} where ${idCol} = ${slaTimers.resourceId} and ${branch.where} offset 0)`;
 }
 
 /**
@@ -170,10 +191,12 @@ async function statesSeen(
 /**
  * The business's clocks in one status on records p reads, earliest due first (then by id), one
  * keyset page at a time. For each entity with a state machine whose clocks p may see, one branch
- * keeps the timers whose record is in p's list of it (`exists` over the entity's own list WHERE);
- * Postgres orders and cuts each branch and merges them, so the work is bounded by the page, not
- * by the timers the business has. Clocks of records whose state p's projection hides are then
- * dropped, so a page can hold fewer than `limit` and still have a next one.
+ * keeps the timers whose record is in p's list of it (the entity's own list WHERE): read by
+ * record when p reaches at most SLA_BY_RECORD of them (none: no timer is read at all), else by
+ * due time with a primary-key probe per timer. Postgres orders and cuts each branch and merges
+ * them. The page's records are then read once more in p's reach, through `toRead`: a clock whose
+ * record left the reach meanwhile, or whose state p's projection hides, is dropped, so a page can
+ * hold fewer than `limit` and still have a next one.
  */
 export async function listSlaTimers(conn: Conn, p: Principal, q: SlaQuery): Promise<SlaPage> {
   const tenantId = tenantOf(p);
@@ -183,7 +206,19 @@ export async function listSlaTimers(conn: Conn, p: Principal, q: SlaQuery): Prom
     if (!statesOf(def.spec) || (q.resourceType && def.name !== q.resourceType)) continue;
     if (!clocksServed(def, p) || stateFieldHidden(def, p)) continue;
     const where = await reachOf(def, p);
-    if (where) branches.set(def.name, { def, where });
+    if (!where) continue;
+    const idCol = (getTableColumns(def.table) as Record<string, Column>).id;
+    const few = (await conn
+      .select({ id: idCol })
+      .from(def.table as Table)
+      .where(where)
+      .limit(SLA_BY_RECORD + 1)) as { id: unknown }[];
+    if (!few.length) continue;
+    branches.set(def.name, {
+      def,
+      where,
+      ...(few.length <= SLA_BY_RECORD ? { ids: few.map((r) => String(r.id)) } : {}),
+    });
   }
   if (!branches.size) return { items: [], nextCursor: null };
 
@@ -197,22 +232,21 @@ export async function listSlaTimers(conn: Conn, p: Principal, q: SlaQuery): Prom
         : isNotNull(slaTimers.endedAt);
   const base = and(eq(slaTimers.tenantId, tenantId), eq(slaTimers.status, q.status), open);
   const cut = q.limit + 1;
-  const selects = [...branches.values()].map(({ def, where }) => {
-    const idCol = (getTableColumns(def.table) as Record<string, Column>).id;
-    return conn
+  const selects = [...branches.values()].map((branch) =>
+    conn
       .select({ id: slaTimers.id, dueAt: slaTimers.dueAt, dueKey: dueKey.as('due_key') })
       .from(slaTimers)
       .where(
         and(
           base,
-          eq(slaTimers.resourceType, def.name),
+          eq(slaTimers.resourceType, branch.def.name),
           after ? afterCursor(after) : undefined,
-          sql`exists (select 1 from ${def.table} where ${idCol} = ${slaTimers.resourceId} and ${where})`,
+          reachSql(branch),
         ),
       )
       .orderBy(asc(slaTimers.dueAt), asc(slaTimers.id))
-      .limit(cut);
-  });
+      .limit(cut),
+  );
   // Each select renders in parentheses: (…) union all (…), ordered and cut once more.
   const merged = sql.join(
     selects.map((s) => sql`${s}`),
