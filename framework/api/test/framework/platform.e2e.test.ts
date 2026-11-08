@@ -691,6 +691,16 @@ describe('support access leaves nothing behind its time box', () => {
     ticket = (await issueIn(ana, A, 'Shared tap', 'private')).id;
   });
 
+  it('every capability of the framework says whether support may hold it', () => {
+    // A new one that says nothing is never held (the default), but its author must decide.
+    const unsaid = capabilities
+      .all()
+      .filter((c) => !c.name.startsWith('fixture.') && c.grantable !== false)
+      .filter((c) => typeof c.supportable !== 'boolean')
+      .map((c) => c.name);
+    expect(unsaid).toEqual([]);
+  });
+
   it('never holds a capability not declared supportable, even when asked', async () => {
     for (const capability of [
       'shares.create',
