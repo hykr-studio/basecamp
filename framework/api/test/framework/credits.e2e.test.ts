@@ -1,7 +1,8 @@
-// Credits and caps (A3): every turn's tokens and tool calls, every WhatsApp message sent and
-// every voice second metered and priced (CREDITS_CONFIG); the operator's plan, override and
-// grants; the 80% alert and the 100% pause; the prepaid wallet with its ledger and purchases
-// through a provider; and who may see and do what.
+// Credits and caps (A3): every turn's tokens and tool calls, every WhatsApp message sent, every
+// voice second and every embedding (memory recall and indexing, S4) metered and priced
+// (CREDITS_CONFIG); the operator's plan, override and grants; the 80% alert and the 100% pause;
+// the prepaid wallet with its ledger and purchases through a provider; and who may see and do
+// what.
 import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { TenantConfigService } from '@hykr/core';
@@ -155,9 +156,19 @@ describe('metering, by default', () => {
     const res = await addTask(ana);
     expect(res.status).toBe(200);
     const all = await uses(ana);
-    expect(all).toHaveLength(2);
+    expect(all).toHaveLength(3);
     const tokens = all.find((u) => u.meter === 'tokens');
     const tools = all.find((u) => u.meter === 'tool_calls');
+    // The turn's recall embedded the message: a word a token with the fake embedding, unpriced.
+    expect(all.find((u) => u.meter === 'embedding_tokens')).toEqual({
+      meter: 'embedding_tokens',
+      variant: 'fake/embedding',
+      quantity: 4,
+      cost: 0,
+      source: 'memory.recall',
+      ref: null,
+      subject: `user:${ana.id}`,
+    });
     expect(tokens).toMatchObject({ meter: 'tokens', variant: 'fake/scripted', source: 'turn' });
     expect(tokens.quantity).toBeGreaterThan(100);
     expect(tokens.cost).toBe(Math.ceil((tokens.quantity * PRICES.tokens) / 1_000_000));
@@ -227,11 +238,11 @@ describe('metering, by default', () => {
     }
   });
 
-  it('a turn without a tool counts its tokens only', async () => {
+  it('a turn without a tool counts its tokens and its recall’s embedding only', async () => {
     const before = (await uses(ana)).length;
     expect((await ana.chat('hello')).status).toBe(200);
     const added = (await uses(ana)).slice(before);
-    expect(added.map((u) => u.meter)).toEqual(['tokens']);
+    expect(added.map((u) => u.meter)).toEqual(['embedding_tokens', 'tokens']);
   });
 });
 
@@ -666,6 +677,159 @@ describe('the operator’s override', () => {
       override: { mode: 'pause', until: new Date(Date.now() - 1000).toISOString(), reason: 'old' },
     });
     expect((await ravi.chat('hello')).status).toBe(200);
+  });
+});
+
+describe('embeddings', () => {
+  const eve = new Person('Eve Credits'); // recall and indexing under credits
+  /** The fake embedding's tokens are its words: one credit each, by the plan's own price. */
+  const EMBEDDING_PRICES = { 'embedding_tokens.fake/embedding': 1_000_000 };
+
+  const recall = (who: Person, q: string) =>
+    who.call('GET', `/api/memory/recall?${new URLSearchParams({ q })}`);
+
+  async function embeddingsOf(person: Person, source?: string) {
+    const { rows } = await pool.query(
+      `select variant, quantity::int, cost::int, source, subject, run_id, channel
+       from app.usage_events where tenant_id = $1 and meter = 'embedding_tokens'
+       and ($2::text is null or source = $2) order by at, id`,
+      [tenant[person.name], source ?? null],
+    );
+    return rows;
+  }
+
+  async function indexRow(id: string) {
+    const { rows } = await pool.query(
+      `select state, attempts, error, model from app.memory_index
+       where source_type = 'memory' and source_id = $1`,
+      [id],
+    );
+    return rows[0];
+  }
+
+  const indexed = (id: string, ms?: number) =>
+    eventually(async () => ((await indexRow(id))?.state === 'ready' ? true : undefined), ms);
+
+  async function remember(person: Person, text: string) {
+    const res = await person.call('POST', '/api/memories', { text });
+    expect(res.status).toBe(201);
+    return res.body.value.id as string;
+  }
+
+  beforeAll(async () => {
+    await eve.signUp();
+    tenant[eve.name] = (await me(eve)).tenantId;
+    expect((await setPlan(eve, { prices: EMBEDDING_PRICES })).status).toBe(200);
+  });
+
+  it('recall through the API is metered for the reader, and priced', async () => {
+    const res = await recall(eve, 'where are the spare keys');
+    expect(res.status).toBe(200);
+    expect(res.body.model).toBe('fake/embedding');
+    expect(await embeddingsOf(eve)).toEqual([
+      expect.objectContaining({
+        variant: 'fake/embedding',
+        quantity: 5,
+        cost: 5,
+        source: 'memory.recall',
+        subject: `user:${eve.id}`,
+        run_id: null,
+      }),
+    ]);
+  });
+
+  it('a turn’s recall is metered with the turn', async () => {
+    expect((await eve.chat('hello there')).status).toBe(200);
+    const turn = (await embeddingsOf(eve)).at(-1);
+    expect(turn).toMatchObject({ quantity: 2, cost: 2, source: 'memory.recall' });
+    expect(turn.run_id).toEqual(expect.any(String));
+  });
+
+  it('a memory written is embedded by the indexer and metered', async () => {
+    const id = await remember(eve, 'The spare keys are in the blue box');
+    await indexed(id);
+    expect(await embeddingsOf(eve, 'memory.index')).toEqual([
+      expect.objectContaining({
+        variant: 'fake/embedding',
+        quantity: 8,
+        cost: 8,
+        subject: null,
+        channel: 'background',
+      }),
+    ]);
+  });
+
+  it('paused by the operator: recall is 402 and spends nothing; new memory waits', async () => {
+    const paused = await operator('PUT', `/${tenant[eve.name]}/override`, {
+      override: { mode: 'pause', reason: 'unpaid invoice' },
+    });
+    expect(paused.status).toBe(200);
+    const before = await uses(eve);
+
+    const refused = await recall(eve, 'where are the spare keys');
+    expect(refused.status).toBe(402);
+    expect(refused.body).toMatchObject({
+      error: 'credits_paused',
+      rule: 'credits_suspended',
+      reason: expect.stringContaining('unpaid invoice'),
+    });
+    // The assistant's recall-memory tool calls the same route, as the person.
+    const asBot = await asAssistant(eve.id)('GET', '/api/memory/recall?q=spare%20keys');
+    expect(asBot.status).toBe(402);
+    expect(asBot.body.rule).toBe('credits_suspended');
+    expect((await eve.chat('hello')).status).toBe(402);
+
+    // Written while paused: the write goes through, its embedding waits. Another business's
+    // memory, written after it, is embedded meanwhile, so the indexer has seen both.
+    const waiting = await remember(eve, 'Deliveries come in by the back gate');
+    const elsewhere = await remember(ana, 'The office is closed on Sundays');
+    await indexed(elsewhere);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(await indexRow(waiting)).toEqual({
+      state: 'pending',
+      attempts: 0,
+      error: null,
+      model: null,
+    });
+    expect(await uses(eve)).toEqual(before);
+
+    // Cleared: the memory is embedded and metered, and recall finds it.
+    expect(
+      (await operator('PUT', `/${tenant[eve.name]}/override`, { override: null })).status,
+    ).toBe(200);
+    await indexed(waiting, 20_000);
+    expect(await embeddingsOf(eve, 'memory.index')).toHaveLength(2);
+    const found = await recall(eve, 'deliveries back gate');
+    expect(found.status).toBe(200);
+    expect(found.body.items.map((i: { text: string }) => i.text)).toContain(
+      'Deliveries come in by the back gate',
+    );
+  });
+
+  it('a limit on embedding tokens refuses recall only; turns run without it', async () => {
+    const used = (await embeddingsOf(eve)).reduce((n, u) => n + u.quantity, 0);
+    expect(
+      (
+        await setPlan(eve, {
+          enforce: true,
+          allowance: 1_000_000,
+          limits: { embedding_tokens: used },
+          prices: EMBEDDING_PRICES,
+        })
+      ).status,
+    ).toBe(200);
+    const limited = await recall(eve, 'spare keys');
+    expect(limited.status).toBe(402);
+    expect(limited.body).toMatchObject({ error: 'credits_paused', rule: 'usage_limit_reached' });
+
+    const before = (await embeddingsOf(eve)).length;
+    expect((await eve.chat('hello')).status).toBe(200);
+    expect(await embeddingsOf(eve)).toHaveLength(before);
+    const status = (await eve.call('GET', '/api/credits')).body;
+    expect(status.paused).toBeNull();
+    expect(
+      status.meters.find((m: { meter: string }) => m.meter === 'embedding_tokens'),
+    ).toMatchObject({ unit: 'token', quantity: used, limit: used, paused: true });
   });
 });
 

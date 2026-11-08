@@ -298,7 +298,13 @@ export {
   type WriteHook,
   writeHooks,
 } from './hooks.js';
-export { type Metering, metering, setMetering, type UsageInput } from './metering.js';
+export {
+  type Metering,
+  metering,
+  setMetering,
+  type UsageInput,
+  UsageRefused,
+} from './metering.js';
 export { defineModule, type ModuleDef } from './module.js';
 export { type ModelGate, TurnRefused } from './modules/chat/turn-hooks.js';
 export { eraseWithContributors, exportPersonalData } from './privacy/contributors.js';

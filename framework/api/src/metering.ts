@@ -7,11 +7,13 @@ import type { UsageRefusal } from '@hykr/contracts';
 /** One use of something metered. */
 export interface UsageInput {
   tenantId: string;
-  /** A registered meter: 'tokens', 'tool_calls', 'messages', 'voice_seconds'. */
+  /**
+   * A registered meter: 'tokens', 'tool_calls', 'messages', 'voice_seconds', 'embedding_tokens'.
+   */
   meter: string;
   /** In the meter's base unit. Zero or less records nothing. */
   quantity: number;
-  /** The model for tokens, a template's category for messages. */
+  /** The model for tokens and embedding tokens, a template's category for messages. */
   variant?: string | null;
   /** A cost already worked out (credits); otherwise the business's prices give it. */
   cost?: number;
@@ -36,6 +38,14 @@ export interface Metering {
   headroom(a: { tenantId: string; meter: string }): Promise<number | undefined>;
   /** Record uses, in one transaction. Never throws: a failure is logged. */
   record(uses: UsageInput | readonly UsageInput[]): Promise<void>;
+}
+
+/** A use the business's caps refuse now: a feature throws it where it would have called out. */
+export class UsageRefused extends Error {
+  constructor(readonly refusal: UsageRefusal) {
+    super(refusal.reason);
+    this.name = 'UsageRefused';
+  }
 }
 
 let current: Metering | undefined;
