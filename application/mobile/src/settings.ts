@@ -6,7 +6,7 @@ import type { AppSettings } from '@hykr/app';
 
 export const settings: AppSettings = {
   title: 'Basecamp',
-  tagline: 'Template app · sample domain: meetings',
+  tagline: 'Sample app: meetings, notes, to-dos, briefs and orders',
   nav: [{ href: '/', label: 'Today', icon: 'sun', match: (p) => p === '/' }],
   home: { href: '/', label: 'Go to Today' },
   suggestions: [{ text: 'today', what: "today's meetings and what is due" }],

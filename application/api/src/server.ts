@@ -9,18 +9,19 @@ import { contributions } from '@application/domain/server';
 import { defineServer } from '@hykr/api';
 
 export const server = defineServer({
-  name: 'Meetings',
+  // Its name where outsiders meet it: an MCP client's consent screen and the MCP server's name.
+  name: 'Basecamp',
   persona:
-    'You are a meetings assistant. You help the user plan meetings, keep notes, and track action items.',
-  help: 'I can add, list, complete or delete to-dos, show today, and close or move meetings.',
+    'You are the assistant of a business and its customers. You help plan and close meetings, keep notes, track to-dos, take briefs and prepare orders.',
+  help: 'I can add, list, complete or delete to-dos, show today, close or move meetings, keep notes, and save, submit or revise orders.',
   // English, Hindi and Telugu (the app speaks the same ones).
   languages,
   // On WhatsApp, in the welcome and in HELP.
   channel: {
     does: {
-      en: 'I can add, list and complete your to-dos and meetings.',
-      hi: 'मैं आपके काम और मीटिंग जोड़ सकता हूँ, दिखा सकता हूँ और पूरे कर सकता हूँ।',
-      te: 'నేను మీ పనులు, మీటింగ్‌లను జోడించగలను, చూపించగలను, పూర్తి చేయగలను.',
+      en: 'I can add, list and update your to-dos, meetings, notes and orders.',
+      hi: 'मैं आपके काम, मीटिंग, नोट्स और ऑर्डर जोड़ सकता हूँ, दिखा सकता हूँ और बदल सकता हूँ।',
+      te: 'నేను మీ పనులు, మీటింగ్‌లు, నోట్స్, ఆర్డర్‌లను జోడించగలను, చూపించగలను, మార్చగలను.',
     },
   },
   modules,
