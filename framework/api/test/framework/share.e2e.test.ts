@@ -208,6 +208,12 @@ describe('making a link', () => {
     expect(tooLong.body).toMatchObject({ rule: 'too_long' });
     const nowhere = await share(owner, { target, otp: 'whatsapp' });
     expect(nowhere.body).toMatchObject({ rule: 'no_whatsapp_number' });
+    expect(nowhere.body.reason).toMatch(/^Name a recipient with a WhatsApp number/);
+    // The record's own customer as the recipient, on a record that has none: said as such (the
+    // app offers no recipient to name then).
+    const noCustomer = await share(owner, { target, to: { recordCustomer: true }, otp: 'email' });
+    expect(noCustomer.body).toMatchObject({ rule: 'no_email' });
+    expect(noCustomer.body.reason).toMatch(/has no customer to send the code to/);
     const uses = await share(owner, { target, maxUses: 3 });
     expect(uses.body).toMatchObject({ rule: 'uses_for_forms' });
     // The business's own limit.

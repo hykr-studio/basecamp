@@ -6,6 +6,8 @@ const ENTITY_ACTIONS: Record<string, Verb> = {
   create: { do: 'create', did: 'created' },
   update: { do: 'change', did: 'changed' },
   delete: { do: 'delete', did: 'deleted' },
+  // A state change (`<entity>.transition`, the states trait): "moved it".
+  transition: { do: 'move', did: 'moved' },
 };
 
 /**

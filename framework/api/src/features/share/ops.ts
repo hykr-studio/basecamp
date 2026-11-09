@@ -257,10 +257,20 @@ export function createOp(): WriteOp<
       if (days > max) return deny('too_long', `A link lasts at most ${max} days here`);
       if (l.policy.otp === 'required' && !input.otp)
         return deny('code_needed', 'A link to this asks for a code: choose WhatsApp or email');
+      // The record's own customer as the recipient: say what is missing on the record, since
+      // there is no recipient to name (the app shows no field for one then).
+      const label = l.resourceType ? (entityDef(l.resourceType)?.spec.label ?? 'record') : 'record';
+      const ofRecord = !!input.to && 'recordCustomer' in input.to;
+      const missing = (what: string) =>
+        !ofRecord
+          ? `Name a recipient with ${what} for the code`
+          : l.recipient
+            ? `This ${label}'s customer has no ${what.replace(/^an? /, '')} for the code`
+            : `This ${label} has no customer to send the code to: share it without a code`;
       if (input.otp === 'whatsapp' && !l.recipient?.whatsapp)
-        return deny('no_whatsapp_number', 'Name a recipient with a WhatsApp number for the code');
+        return deny('no_whatsapp_number', missing('a WhatsApp number'));
       if (input.otp === 'email' && !l.recipient?.email)
-        return deny('no_email', 'Name a recipient with an email for the code');
+        return deny('no_email', missing('an email'));
       if (input.maxUses !== undefined && l.kind !== 'form')
         return deny('uses_for_forms', 'Only a form link counts its answers');
       return allow('shares_create', 'Shares what they reach');

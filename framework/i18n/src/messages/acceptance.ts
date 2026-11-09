@@ -12,7 +12,8 @@ export const acceptanceMessages = defineMessages({
     'acceptance.sendCode': 'Send a code by {channel} to {sentTo}',
     'acceptance.channel.whatsapp': 'WhatsApp',
     'acceptance.channel.email': 'email',
-    'acceptance.codeSent': 'Code sent to {sentTo}. Enter it below.',
+    'acceptance.codeSent':
+      'A code is on its way to {sentTo}: enter it below. If none arrives within a minute, send another.',
     'acceptance.code': '6-digit code',
     'acceptance.accept': 'Accept',
     'acceptance.resend': 'Send another code',
@@ -34,7 +35,8 @@ export const acceptanceMessages = defineMessages({
     'acceptance.sendCode': '{channel} से {sentTo} पर कोड भेजें',
     'acceptance.channel.whatsapp': 'WhatsApp',
     'acceptance.channel.email': 'ईमेल',
-    'acceptance.codeSent': '{sentTo} पर कोड भेजा गया। उसे नीचे डालें।',
+    'acceptance.codeSent':
+      '{sentTo} पर कोड भेजा जा रहा है: उसे नीचे डालें। एक मिनट में न आए तो दूसरा कोड भेजें।',
     'acceptance.code': '6 अंकों का कोड',
     'acceptance.accept': 'स्वीकार करें',
     'acceptance.resend': 'दूसरा कोड भेजें',
@@ -56,7 +58,7 @@ export const acceptanceMessages = defineMessages({
     'acceptance.sendCode': '{channel} ద్వారా {sentTo}కి కోడ్ పంపండి',
     'acceptance.channel.whatsapp': 'WhatsApp',
     'acceptance.channel.email': 'ఈమెయిల్',
-    'acceptance.codeSent': '{sentTo}కి కోడ్ పంపాము. దాన్ని కింద నమోదు చేయండి.',
+    'acceptance.codeSent': '{sentTo}కి కోడ్ పంపుతున్నాము: దాన్ని కింద నమోదు చేయండి. ఒక నిమిషంలో రాకపోతే మరో కోడ్ పంపండి.',
     'acceptance.code': '6 అంకెల కోడ్',
     'acceptance.accept': 'అంగీకరించు',
     'acceptance.resend': 'మరో కోడ్ పంపండి',

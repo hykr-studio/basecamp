@@ -73,7 +73,7 @@ describe('versions', () => {
     const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
     const parked = await asks('PATCH', `/api/tickets/${t.id}`, { title: 'By the assistant' });
     expect(parked.body.status).toBe('needs_approval');
-    expect(parked.body.approval.summary).toContain('(v1, version 1)');
+    expect(parked.body.approval.summary).toContain('(v1, edit 1)');
     await owner.call('PATCH', `/api/tickets/${t.id}`, { title: 'By the owner' });
     const approved = await owner.call('POST', `/api/approvals/${parked.body.approval.id}/approve`);
     expect(approved.body.status).toBe('failed');

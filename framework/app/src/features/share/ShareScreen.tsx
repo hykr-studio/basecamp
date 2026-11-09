@@ -197,6 +197,8 @@ function Fields({ entity, value }: { entity: string; value: Values }) {
   );
 }
 
+const headingOf = (label: string) => label.charAt(0).toUpperCase() + label.slice(1);
+
 /** A child entity's rows, one line each, indented under their parent row when nested. */
 function Children({ group }: { group: SharedRecord['children'][number] }) {
   const spec = getCatalog().entityByName(group.entity);
@@ -209,7 +211,8 @@ function Children({ group }: { group: SharedRecord['children'][number] }) {
   }
   return (
     <View style={{ gap: space.sm }}>
-      <SectionHeading>{spec?.label ?? group.entity}</SectionHeading>
+      {/* A spec's label is written for sentences ("order item"); a heading starts with a capital. */}
+      <SectionHeading>{headingOf(spec?.label ?? group.entity)}</SectionHeading>
       {group.items.map((row) => (
         <View
           key={String(row.id)}

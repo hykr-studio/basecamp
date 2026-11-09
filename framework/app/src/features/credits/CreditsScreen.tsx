@@ -136,7 +136,11 @@ function Buy({ currency }: { currency: string }) {
 
 function Ledger({ currency }: { currency: string }) {
   const { t, lang } = useT();
-  const ledger = useQuery({ queryKey: ['credits', 'ledger'], queryFn: () => api.credits.ledger() });
+  const ledger = useQuery({
+    queryKey: ['credits', 'ledger'],
+    queryFn: () => api.credits.ledger(),
+    refetchInterval: CREDITS_REFRESH_MS,
+  });
   const items: LedgerEntry[] = ledger.data?.items ?? [];
   if (!items.length) return null;
   return (
@@ -161,6 +165,9 @@ function Ledger({ currency }: { currency: string }) {
   );
 }
 
+/** How often the open screen reads the business's use again. */
+const CREDITS_REFRESH_MS = 15_000;
+
 /**
  * The business's credits: how much of this period's caps it used, whether it is paused and why,
  * and, for the people who manage them, the balance, buying more and the history. The API decides
@@ -169,7 +176,13 @@ function Ledger({ currency }: { currency: string }) {
 export function CreditsScreen() {
   useScreenContext({ screen: 'credits' });
   const { t, lang } = useT();
-  const status = useQuery({ queryKey: ['credits'], queryFn: () => api.credits.status() });
+  // Use moves while the screen is open (the assistant's turns, a pause, the operator lifting it):
+  // read it again every little while, not only when the screen is opened.
+  const status = useQuery({
+    queryKey: ['credits'],
+    queryFn: () => api.credits.status(),
+    refetchInterval: CREDITS_REFRESH_MS,
+  });
   const s = status.data;
   const manages = !!s && 'currency' in s;
   return (

@@ -146,7 +146,7 @@ describe("the assistant's transitions wait at their level", () => {
     });
     expect(parked.body.approval.level ?? null).toBeNull();
     expect(parked.body.approval.summary).toBe(
-      'Cancel ticket "Old request" (v1, version 1): open → cancelled',
+      'Cancel ticket "Old request" (v1, edit 1): open → cancelled',
     );
     const [asked] = await audit(t.id, 'ticket.transition');
     expect(asked).toMatchObject({ actor_kind: 'agent', outcome: 'needs_approval' });

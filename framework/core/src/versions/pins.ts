@@ -53,7 +53,10 @@ export function checkPins(targets: readonly PinTarget[], pins: Pins): void {
   }
 }
 
-/** A record's version as people read it: "v2, version 4", or "version 4". Empty when unversioned. */
+/**
+ * A record's version as people read it: "v2, edit 4" (its revision, and how many times that one
+ * was written), or "version 4" without revisions. Empty when unversioned.
+ */
 export function versionNote(def: AnyEntityDef, row: Values | null | undefined): string {
   const trait = versionedOf(def.spec);
   if (!trait || !row) return '';
@@ -61,6 +64,6 @@ export function versionNote(def: AnyEntityDef, row: Values | null | undefined): 
   const rev = revisionFields(trait);
   const revision = rev ? row[rev.number] : undefined;
   return revision !== undefined && revision !== null
-    ? `v${revision}, version ${version}`
+    ? `v${revision}, edit ${version}`
     : `version ${version}`;
 }
