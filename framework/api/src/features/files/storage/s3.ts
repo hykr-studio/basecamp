@@ -15,6 +15,9 @@ import { type StorageDriver, StorageUnavailable } from './driver.js';
 const missing = (e: unknown) =>
   e instanceof S3ServiceException &&
   (e.$metadata?.httpStatusCode === 404 || e.name === 'NotFound' || e.name === 'NoSuchKey');
+/** Creating a bucket this account already has (another process won the race). */
+const ownedAlready = (e: unknown) =>
+  e instanceof S3ServiceException && e.name === 'BucketAlreadyOwnedByYou';
 
 /**
  * The store's own refusal (a missing object, a bad request) is passed on; a store that is down
@@ -56,7 +59,13 @@ export function s3Driver(c: FilesConfig['s3']): StorageDriver {
           await server.send(new HeadBucketCommand({ Bucket }));
         } catch (e) {
           if (!missing(e)) throw e;
-          await server.send(new CreateBucketCommand({ Bucket }));
+          try {
+            await server.send(new CreateBucketCommand({ Bucket }));
+          } catch (made) {
+            // The API and the worker start together and both find it missing: the other one
+            // created it first. Ours, so ready (a bucket someone else owns is still an error).
+            if (!ownedAlready(made)) throw made;
+          }
         }
       });
     },

@@ -259,6 +259,24 @@ describe.skipIf(!reachable)('the S3 driver (local MinIO)', () => {
       .catch(() => {});
   });
 
+  it('two processes starting together both find the bucket missing: both are ready', async () => {
+    const racing = `basecamp-race-${Date.now()}`;
+    const one = () =>
+      s3Driver({
+        endpoint,
+        publicEndpoint: endpoint,
+        region: 'us-east-1',
+        bucket: racing,
+        ...creds,
+      });
+    // The API and the worker, each with its own client: one creates it, the other is told it
+    // already has it, which is not an error.
+    await expect(Promise.all([one().ensureReady(), one().ensureReady()])).resolves.toBeDefined();
+    await new S3Client({ endpoint, region: 'us-east-1', forcePathStyle: true, credentials: creds })
+      .send(new DeleteBucketCommand({ Bucket: racing }))
+      .catch(() => {});
+  });
+
   it('creates its bucket when missing, and a presigned PUT takes only the signed type and size', async () => {
     await driver.ensureReady();
     await driver.ensureReady();
