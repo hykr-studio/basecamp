@@ -14,6 +14,7 @@ import { Text, View } from 'react-native';
 import { colors, space, styles } from '../theme';
 import { dayLabel } from './dates';
 import { type EntityName, entityApi, specs } from './hooks';
+import { childLabels, labelledParts } from './item-parts';
 import { useT } from './lang';
 
 /** The resource as people say it: its label ("to-do"), not its name ("todo"). */
@@ -129,12 +130,17 @@ function ListSummary({ name, items }: { name: string; items: readonly unknown[] 
   );
 }
 
-function Value({ name, value }: { name: string; value: unknown }) {
+/** The fields shown in an item's line on their own terms (its title and due date). */
+const ITEM_OWN = new Set(['title', 'dueOn', 'children']);
+
+function Value({ name, value, type }: { name: string; value: unknown; type?: string }) {
   const { lang } = useT();
   if (isMoney(value)) return <Text style={styles.text}>{moneyText(value, lang)}</Text>;
   if (Array.isArray(value) && value.length > LIST_AT_MOST)
     return <ListSummary name={name} items={value} />;
   if (Array.isArray(value)) {
+    // A record's lines (a child entity's): their quantity, price and so on, as the module calls them.
+    const labels = childLabels(Object.values(specs()), type);
     return (
       <View style={{ gap: 2 }}>
         {value.map((item, i) => {
@@ -145,6 +151,7 @@ function Value({ name, value }: { name: string; value: unknown }) {
                   (item as { dueOn?: string }).dueOn
                     ? `due ${dayLabel((item as { dueOn: string }).dueOn)}`
                     : null,
+                  ...labelledParts(item as Row, labels, lang, ITEM_OWN),
                   ...Object.values(item as Row)
                     .filter(isMoney)
                     .map((m) => moneyText(m, lang)),
@@ -211,7 +218,7 @@ function Fields({
           {refOf(key) && typeof value === 'string' ? (
             <RefValue list={refOf(key) as EntityName} id={value} />
           ) : (
-            <Value name={key} value={value} />
+            <Value name={key} value={value} type={type} />
           )}
         </View>
       ))}
