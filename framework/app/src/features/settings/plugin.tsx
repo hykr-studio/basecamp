@@ -4,14 +4,14 @@
 import type { ClientSettings } from '@hykr/contracts';
 import { setTenantPhrases } from '@hykr/i18n';
 import { useQuery } from '@tanstack/react-query';
-import { Fragment, type ReactNode, useEffect, useMemo, useRef } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef } from 'react';
 import { Image, Text, View } from 'react-native';
 import { Uniwind } from 'uniwind';
 import { create } from 'zustand';
 import { api } from '../../api';
 import type { AppPlugin, NavItem } from '../../framework/app-domain';
 import { colors, fonts, space } from '../../theme';
-import { brandTokens, hideOff } from './tokens';
+import { brandTokens, hideOff, themeSignature } from './tokens';
 
 /** Who is signed in, as the plugin knows it (the shell tells it). */
 const useSignedIn = create<{ userId: string | null }>(() => ({ userId: null }));
@@ -66,16 +66,17 @@ export function useBranding() {
 }
 
 /**
- * Applies the business's branding and phrases, and remounts the app once when they change, so
- * StyleSheet values read the new colours. While they load (or between sign-ins) the last ones
- * stay; at sign-out the product's own theme comes back.
+ * Applies the business's branding and phrases (in render, so the first paint after they arrive
+ * already has them). Drawing the screens again with them is the shell's job, through the
+ * plugin's redraw key; nothing here remounts, so the plugins stay signed in. While they load (or
+ * between sign-ins) the last ones stay; at sign-out the product's own theme comes back.
  */
 function SettingsProvider({ children }: { children: ReactNode }) {
   const settings = useClientSettings();
   const userId = useSignedIn((s) => s.userId);
   const applied = useRef('product');
   if (settings) {
-    const signature = JSON.stringify([settings.branding.colors, settings.phrases]);
+    const signature = themeSignature(settings.branding.colors, settings.phrases);
     if (signature !== applied.current) {
       applyBranding(settings);
       applied.current = signature;
@@ -86,7 +87,19 @@ function SettingsProvider({ children }: { children: ReactNode }) {
     applyBranding(undefined);
     applied.current = 'product';
   }, [userId]);
-  return <Fragment key={applied.current}>{children}</Fragment>;
+  return <>{children}</>;
+}
+
+/**
+ * The shell's redraw key: the business's look and words. Settings that change nothing (the
+ * product's colours, no phrases of its own) keep the product's key, so they redraw nothing;
+ * while they load, the last key stays.
+ */
+function useThemeKey(): string {
+  const settings = useClientSettings();
+  const last = useRef('product');
+  if (settings) last.current = themeSignature(settings.branding.colors, settings.phrases);
+  return last.current;
 }
 
 /** Hides the destinations of what the business switched off. */
@@ -125,5 +138,6 @@ export function settingsPlugin(): AppPlugin {
       return () => useSignedIn.setState({ userId: null });
     },
     useNav: useSettingsNav,
+    useRedrawKey: useThemeKey,
   };
 }

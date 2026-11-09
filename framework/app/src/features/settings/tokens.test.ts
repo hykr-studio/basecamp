@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { brandTokens, hideOff, mix } from './tokens';
+import { brandTokens, hideOff, mix, themeSignature } from './tokens';
+
+describe("a business's look and words, as a key", () => {
+  const none = { primary: null, primaryText: null, rail: null };
+
+  it("is the product's when they change nothing, so the app is not remounted", () => {
+    expect(themeSignature(none, {})).toBe('product');
+    expect(themeSignature(null, null)).toBe('product');
+    expect(themeSignature(undefined, undefined)).toBe('product');
+  });
+
+  it('changes with a colour or a phrase of its own, and only then', () => {
+    const blue = themeSignature({ ...none, primary: '#204080' }, {});
+    expect(blue).not.toBe('product');
+    expect(themeSignature({ ...none, primary: '#204080' }, {})).toBe(blue);
+    expect(themeSignature({ ...none, primary: '#204081' }, {})).not.toBe(blue);
+    const worded = themeSignature(none, { 'chat.placeholder': { en: 'Ask us' } });
+    expect(worded).not.toBe('product');
+    expect(worded).not.toBe(blue);
+  });
+});
 
 describe('brand tokens (A11)', () => {
   it('a primary colour sets its hover and tint; unset colours keep the theme', () => {

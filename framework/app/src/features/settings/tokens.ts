@@ -58,6 +58,22 @@ export function brandTokens(colors: BrandColors | null | undefined): {
   return { tokens, cssVars };
 }
 
+/**
+ * What a business's settings change in how the app looks and speaks, as a key that changes only
+ * when that does: `'product'` when they change nothing (no colour of its own, no phrase). The
+ * settings provider remounts the app on a new key, so a business that changes nothing never
+ * costs a remount.
+ */
+export function themeSignature(
+  colors: BrandColors | null | undefined,
+  phrases: Readonly<Record<string, unknown>> | null | undefined,
+): string {
+  const { tokens } = brandTokens(colors);
+  const words = phrases && Object.keys(phrases).length > 0 ? phrases : null;
+  if (Object.keys(tokens).length === 0 && !words) return 'product';
+  return JSON.stringify([tokens, words]);
+}
+
 /** What a business switched off, as the app's navigation needs it. */
 export type Off = { modules: readonly string[]; nav: readonly string[] };
 

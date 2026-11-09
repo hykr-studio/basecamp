@@ -1088,11 +1088,16 @@ claimed twice, two plugins or two route shapes with one name, a view or screen b
 - `nav`: destinations for its routes;
 - `Brand`: the mark in the rail and the phone's top bar (the first plugin with one draws it);
 - `useNav(items)`: a hook that hides or reorders destinations (each carries its `module`), never
-  adds one.
+  adds one;
+- `useRedrawKey()`: a hook naming what the signed-in screens are drawn with (the business's
+  colours and words). A new key makes the shell draw its layout again from scratch, so values
+  read once (StyleSheet colours) are read again; the person stays where they were (the link they
+  opened is kept and returned to), and the plugins stay signed in. Keep the key the same while
+  nothing visible changes.
 
 The framework's plugins use them: `offlinePlugin()` the provider, sign-in, sign-out, route and
 banner slots; `livePlugin()`, `pushPlugin()` and `webMcpPlugin()` the provider and sign-in;
-`settingsPlugin()` the provider, sign-in, nav filter and brand; `inboxPlugin()`, `exportPlugin`
+`settingsPlugin()` the provider, sign-in, nav filter, brand and redraw key; `inboxPlugin()`, `exportPlugin`
 and `privacyPlugin` routes and nav; `creditsPlugin`, `businessesPlugin` and `agentsPlugin()`
 routes, nav and nav filters; `sharePlugin()` a public, standalone route. A module may bring
 plugins of its own (`defineAppModule({ plugins })`).
@@ -1530,7 +1535,9 @@ does not change a business's setup.
   phrases (`setTenantPhrases`), `tenantPhrase(settings, lang, key)` reads them on the server, and its
   email subject and body (`{field}` from the record) replace the application's at send time.
 - **The apps.** `<AppShell plugins={[settingsPlugin()]} />` (`@hykr/app`) applies the business's
-  colours to the theme, its phrases, and hides what is off; `useFeature`, `useBranding`,
+  colours to the theme, its phrases, and hides what is off (a business that sets no colour or
+  phrase of its own redraws nothing; one that does redraws the screens once, keeping the person's
+  place); `useFeature`, `useBranding`,
   `<BrandMark>`, `useCustomFields(entity)`, `<CustomFieldValues>` and `<CustomFieldInputs>` are for
   screens. `<CustomFieldInputs>` reports patches (`null` clears a value): a create form sends
   `customForCreate(collected)` (`@hykr/contracts`, the cleared ones left out) and remounts the

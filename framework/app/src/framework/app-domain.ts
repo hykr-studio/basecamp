@@ -102,6 +102,14 @@ export interface AppPlugin {
    * returns that it was not given is dropped. Hide a whole module through `item.module`.
    */
   useNav?: (items: readonly NavItem[]) => readonly NavItem[];
+  /**
+   * A hook naming what the signed-in screens are drawn with (the business's colours and words):
+   * when it returns a new key, the shell draws its screens again from scratch, so values read
+   * once (StyleSheet colours) are read again, and brings the person back to where they were.
+   * Only the shell's screens start again: plugins stay signed in. Runs on every render of the
+   * shell, in plugin order; keep the key the same while nothing visible changes.
+   */
+  useRedrawKey?: () => string;
 }
 
 /**

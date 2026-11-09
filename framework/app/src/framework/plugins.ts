@@ -94,3 +94,14 @@ export function useNavFilters(items: readonly NavItem[], plugins: readonly AppPl
   for (const p of plugins) if (p.useNav) out = filterNav(out, p.useNav(out));
   return out;
 }
+
+/**
+ * What the shell's screens are drawn with, as one key: every plugin's redraw key, in plugin
+ * order (`''` without any). A new key draws the screens again. A hook, like `useNavFilters`.
+ */
+export function useRedrawKey(plugins: readonly AppPlugin[]): string {
+  const keys: string[] = [];
+  // biome-ignore lint/correctness/useHookAtTopLevel: the plugins are fixed while the shell is mounted (a new installation remounts it), so these hooks run in the same order on every render
+  for (const p of plugins) if (p.useRedrawKey) keys.push(`${p.name}:${p.useRedrawKey()}`);
+  return keys.join('|');
+}

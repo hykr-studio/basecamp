@@ -9,12 +9,13 @@ import type { Registry } from '@hykr/ui-registry';
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { router, Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -45,7 +46,8 @@ import { isFocused, isHovered } from './framework/hover';
 import { Icon } from './framework/Icon';
 import { LangProvider } from './framework/lang';
 import { forgetSession, lastSession, rememberSession } from './framework/last-session';
-import { SignedIn, useNavFilters, wrapProviders } from './framework/plugins';
+import { keepPlace, useHere, useReturnToKeptPlace } from './framework/place';
+import { SignedIn, useNavFilters, useRedrawKey, wrapProviders } from './framework/plugins';
 import { createShellSession, type Shown } from './framework/shell-session';
 import { ToastProvider } from './framework/Toast';
 import { inApp, webHref } from './framework/web-link';
@@ -298,7 +300,25 @@ function SkipLink() {
   );
 }
 
-function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }) {
+/**
+ * The signed-in shell, drawn again from scratch when a plugin's redraw key changes (the
+ * business's colours arriving after sign-in): its navigator then starts again at its first
+ * route, so the place the person was at (a link they opened) is kept, and the new layout goes
+ * back to it. Only the layout starts again; the plugins stay signed in.
+ */
+function Shell(props: { user: SessionUser; onSignOut: () => void }) {
+  const key = useRedrawKey(getApp().plugins);
+  const here = useHere();
+  const drawn = useRef(key);
+  if (drawn.current !== key) {
+    // In render: the old screens unmount in this very commit, while `here` is still theirs.
+    keepPlace(here);
+    drawn.current = key;
+  }
+  return <ShellLayout key={key} {...props} />;
+}
+
+function ShellLayout({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }) {
   const app = getApp();
   // The plugins' nav filters (flags, roles) may hide destinations, never add one.
   const nav = useNavFilters(app.nav, app.plugins);
@@ -309,6 +329,8 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
   const canvasOpen = useCanvas((c) => c.state.kind !== 'closed');
   const closeCanvas = useCanvas((c) => c.close);
   const { registerReveal } = useAssistant();
+  // Drawn again (a plugin's redraw key): back where the person was.
+  useReturnToKeptPlace();
   // A screen's "Try: …" prompt opens the phone's sheet so the reply is in sight; wide
   // layouts always show the thread.
   useEffect(() => {
@@ -335,10 +357,13 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
             <Brand fallback={app.title} />
             <Text style={styles.muted}>{app.tagline}</Text>
           </View>
-          {nav.map((n) => (
-            <NavItem key={n.href} item={n} active={n.match(path)} vertical />
-          ))}
-          <View style={{ flex: 1 }} />
+          {/* The destinations scroll when the rail runs out of height (a short window, the
+              WhatsApp form open below), so the person's part stays in sight. */}
+          <ScrollView style={s.railNav} contentContainerStyle={{ gap: space.xs }}>
+            {nav.map((n) => (
+              <NavItem key={n.href} item={n} active={n.match(path)} vertical />
+            ))}
+          </ScrollView>
           <View style={{ gap: space.xs, paddingHorizontal: space.md }}>
             <Text style={styles.label} numberOfLines={1}>
               {user.name}
@@ -577,6 +602,8 @@ const s = StyleSheet.create({
     paddingHorizontal: space.sm,
     gap: space.xs,
   },
+  // Takes the rail's free height and gives it back when the parts below need it.
+  railNav: { flexGrow: 1, flexShrink: 1, minHeight: 0 },
   railItem: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -4,7 +4,7 @@ import { createElement, isValidElement, type ReactElement, type ReactNode } from
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionUser } from '../session';
 import type { AppPlugin, NavItem } from './app-domain';
-import { filterNav, runSignedIn, useNavFilters, wrapProviders } from './plugins';
+import { filterNav, runSignedIn, useNavFilters, useRedrawKey, wrapProviders } from './plugins';
 
 const user = { id: 'u1', name: 'Asha', email: 'asha@example.com' } as SessionUser;
 const Outer = ({ children }: { children: ReactNode }) => children;
@@ -114,5 +114,18 @@ describe('nav filters', () => {
     const reverse: AppPlugin = { name: 'reverse', useNav: (items) => [...items].reverse() };
     const out = useNavFilters(nav, [flags, { name: 'none' }, reverse]);
     expect(out.map((i) => i.href)).toEqual(['/pages', '/orders', '/']);
+  });
+});
+
+describe('useRedrawKey', () => {
+  it("joins the plugins' keys in order, and is empty without any", () => {
+    expect(useRedrawKey([{ name: 'a' }])).toBe('');
+    const theme = { name: 'theme', useRedrawKey: () => 'blue' };
+    const words = { name: 'words', useRedrawKey: () => 'formal' };
+    expect(useRedrawKey([theme, { name: 'x' }, words])).toBe('theme:blue|words:formal');
+    // Another value from one plugin is another key: the screens are drawn again.
+    expect(useRedrawKey([{ ...theme, useRedrawKey: () => 'red' }, words])).not.toBe(
+      useRedrawKey([theme, words]),
+    );
   });
 });
