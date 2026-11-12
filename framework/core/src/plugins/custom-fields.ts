@@ -6,6 +6,7 @@ import {
   type CustomFilter,
   customValueProblems,
   type EntitySpec,
+  isPrototypeKey,
 } from '@hykr/contracts';
 import { customFields } from '@hykr/db';
 import { BadRequestException } from '@nestjs/common';
@@ -50,10 +51,14 @@ export async function customFieldsOf(
   return rows.map((r) => ({ ...r, options: (r.options as string[] | null) ?? [] }));
 }
 
-/** A patch applied to a stored object: each key sent replaces it, null removes it. */
+/**
+ * A patch applied to a stored object: each key sent replaces it, null removes it. A key no field
+ * may have (`__proto__`, `constructor`) is skipped: it would reach the object's prototype.
+ */
 export function mergeCustom(base: unknown, patch: Readonly<Record<string, unknown>>): Values {
   const next: Values = { ...((base as Values | null) ?? {}) };
   for (const [key, value] of Object.entries(patch)) {
+    if (isPrototypeKey(key)) continue;
     if (value === null) delete next[key];
     else if (value !== undefined) next[key] = value;
   }
@@ -70,6 +75,7 @@ export function mergeCustomSql(column: Column, patch: Readonly<Record<string, un
   const set: Values = {};
   const removed: string[] = [];
   for (const [key, value] of Object.entries(patch)) {
+    if (isPrototypeKey(key)) continue;
     if (value === null) removed.push(key);
     else if (value !== undefined) set[key] = value;
   }

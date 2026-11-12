@@ -3,6 +3,7 @@
 // replace them for one business.
 import { catalogs, isLang, type Lang, type MessageKey, t } from '@hykr/i18n';
 import { z } from 'zod';
+import { ownValue } from '../framework/keys.js';
 import { Lang as DeclaredLang, LangCode } from '../languages.js';
 import { defineSettingsSection } from './sections.js';
 
@@ -54,7 +55,8 @@ const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1
 export function phraseProblems(phrases: Readonly<Record<string, SomeLabels>>): string[] {
   const problems: string[] = [];
   for (const [key, labels] of Object.entries(phrases)) {
-    const base = (catalogs.en as Record<string, string>)[key];
+    // Its own key only: `constructor` is no phrase, though every object has one.
+    const base = ownValue(catalogs.en, key) as string | undefined;
     if (base === undefined) {
       problems.push(`"${key}" is not a phrase`);
       continue;

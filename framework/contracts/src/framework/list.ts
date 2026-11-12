@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isPrototypeKey } from './keys.js';
 import { createHookRegistry } from './registry.js';
 
 /**
@@ -309,14 +310,19 @@ export function listInputSchema(spec: Spec, opts: { maxLimit?: number } = {}) {
   );
 }
 
-/** `a[b]=c` keys from a flat query string become `{ a: { b: c } }`. */
+/**
+ * `a[b]=c` keys from a flat query string become `{ a: { b: c } }`. The keys are the sender's, so
+ * the objects built have no prototype, and `__proto__[x]` (or any name a plain object has, such as
+ * `constructor[x]`) stays one flat key: no schema knows it, so that request alone is refused (docs/decisions/V1.md).
+ */
 export function nestBrackets(value: unknown) {
   if (value === null || typeof value !== 'object') return value;
-  const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = Object.create(null);
   for (const [key, v] of Object.entries(value)) {
     const m = /^([A-Za-z0-9_]+)\[([A-Za-z]+)\]$/.exec(key);
-    if (m) {
-      if (typeof out[m[1]] !== 'object' || out[m[1]] === null) out[m[1]] = {};
+    if (m && !isPrototypeKey(m[1])) {
+      const was = Object.hasOwn(out, m[1]) ? out[m[1]] : undefined;
+      if (typeof was !== 'object' || was === null) out[m[1]] = Object.create(null);
       (out[m[1]] as Record<string, unknown>)[m[2]] = v;
     } else {
       out[key] = v;

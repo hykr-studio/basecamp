@@ -4,6 +4,7 @@
 // `list.filterable`. The definitions are records of the framework's `customField` entity.
 import { z } from 'zod';
 import { Lang, LangCode, typedLabels } from '../languages.js';
+import { isPrototypeKey, ownValue } from './keys.js';
 import { defineListFieldType, type FieldValueContext } from './list.js';
 import { PLATFORM_MODULE, stampModule } from './module.js';
 import { createHookRegistry } from './registry.js';
@@ -70,13 +71,17 @@ const OPS = ['eq', 'ne', 'in', 'lt', 'lte', 'gt', 'gte', 'contains'] as const;
 
 /**
  * A field's key: camelCase letters, at most 32 ('priority', 'roomCount'), so it also works in a
- * query string (`custom[priority]=high`). Never an operator's name.
+ * query string (`custom[priority]=high`). Never an operator's name, nor a name every object has
+ * (`constructor`, `toString`): read from a record's values it would find a built-in.
  */
 export const CUSTOM_KEY = /^[a-z][a-zA-Z]{0,31}$/;
 export const CustomFieldKey = z
   .string()
   .regex(CUSTOM_KEY, 'A key is camelCase letters, at most 32')
-  .refine((k) => !(OPS as readonly string[]).includes(k), 'That key is reserved');
+  .refine(
+    (k) => !(OPS as readonly string[]).includes(k) && !isPrototypeKey(k),
+    'That key is reserved',
+  );
 
 /** One stored value. */
 export const CustomFieldValue = z.union([z.string().max(500), z.number(), z.boolean()]);
@@ -224,7 +229,7 @@ export function customValueProblems(
   }
   if (opts.checkRequired)
     for (const field of fields)
-      if (field.required && (values[field.key] === undefined || values[field.key] === ''))
+      if (field.required && [undefined, ''].includes(ownValue(values, field.key) as string))
         problems.push(`${field.key}: required`);
   return problems;
 }
