@@ -47,17 +47,21 @@ const INTERRUPTED = '(The reply was interrupted.)';
 /**
  * What a tool result keeps once saved: what the chat renders (the outcome, what it showed, an
  * approval, a refusal's reason), not the data. A list's rows are fetched again by its view. A
- * lookup (`lookupsIn`) shows nothing, so it keeps no view.
+ * lookup (`lookupsIn`) shows nothing, so it keeps no view. A call whose input the tool refused
+ * (`inputRefused`: it never ran) is saved refused, as `summarize` reads it, with no words: they
+ * are for the model. The resume feature saves a resumed run's calls with it too.
  */
-function compact(result: RawToolResult['result'], lookup = false) {
+export function compact(result: RawToolResult['result'], lookup = false) {
   if (!result) return null;
   const { ok, present, speech, error } = result;
   const r = result.result;
   return {
-    ok,
+    ok: inputRefused(result) ? false : ok,
     ...(present && !lookup ? { present } : {}),
     ...(speech && !lookup ? { speech } : {}),
-    ...(error ? { error: { reason: error.reason, message: error.message } } : {}),
+    ...(error && typeof error === 'object'
+      ? { error: { reason: error.reason, message: error.message } }
+      : {}),
     ...(r?.status ? { result: { status: r.status, approval: r.approval } } : {}),
   };
 }
