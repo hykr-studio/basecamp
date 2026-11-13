@@ -3137,7 +3137,8 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   the code at `/api/auth/oauth2/token`. The API serves the sign-in page (`/oauth/sign-in`) and the
   consent screen (`/oauth/consent`) in the person's language (`?lang`, in the authorization
   request or added to the page's address, when the application speaks it; else
-  `Accept-Language`): the client as it named itself, the business, and one choice per module asked
+  `Accept-Language`; sign-in carries it on to the consent screen, never to the client's own
+  `redirect_uri`): the client as it named itself, the business, and one choice per module asked
   for (not allowed, read, or change when change was asked), so the person may narrow it. A request
   to change a module asks to read it too (a `before` hook on authorize adds `<m>:read`, where the
   client's registration allows it), since the provider takes a consent only to scopes literally
