@@ -3,6 +3,7 @@ import { fieldPolicyPlugin, grantsCleanup, recordGrantKind } from '@hykr/core';
 import { defineFeature } from '../feature.js';
 import { commandFieldPolicy, FieldPolicyCheck } from './field-policy.js';
 import { GrantsController, MembersController } from './members.controller.js';
+import { invitesErasure, invitesExport, membersParts } from './privacy.js';
 
 // /api/members and /api/grants are the framework's: no module may claim them.
 reserveRoutes('members', 'grants');
@@ -21,5 +22,8 @@ export const membersFeature = defineFeature({
     entityPlugins: [fieldPolicyPlugin],
     writeHooks: [grantsCleanup],
     readProjectors: [commandFieldPolicy],
+    erasureContributors: [invitesErasure],
+    exportContributors: [invitesExport],
+    personalDataParts: membersParts,
   },
 });

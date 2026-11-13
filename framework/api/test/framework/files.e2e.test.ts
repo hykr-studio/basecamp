@@ -700,6 +700,10 @@ describe('WhatsApp media', () => {
     }, 20_000);
     expect(erased.after).toMatchObject({ contributors: { files: 1 } });
     expect(await fileRow(fileId)).toMatchObject({ status: 'erased', name: 'erased' });
+    // Its audit rows still say what happened, never the name it came with.
+    const trail = (await audit(fileId)).map((r) => r.after).filter(Boolean);
+    expect(trail.length).toBeGreaterThan(0);
+    for (const after of trail) expect(after).not.toHaveProperty('name');
     expect((await owner.call('GET', `/api/files/${fileId}`)).status).toBe(404);
     await service().sweep();
     expect(await fileRow(fileId)).toBeUndefined();

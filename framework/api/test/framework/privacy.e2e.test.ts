@@ -983,6 +983,18 @@ describe("the later features' personal data", () => {
        values ($1, 'fixture-calendar', 'sealed') returning id`,
       [tenantId],
     );
+    // Its audit row, as connecting writes it: the label names the account.
+    await pool.query(
+      `insert into audit.events (action, resource_type, resource_id, actor_kind, actor_id,
+         tenant_id, after)
+       values ('integration_connection.create', 'integration_connection', $1, 'user', $2, $3, $4)`,
+      [
+        rows.calendarInbound,
+        hal.id,
+        tenantId,
+        { connector: 'fixture-calendar', label: `Google Calendar: ${halEmail}` },
+      ],
+    );
     await pool.query(
       `insert into app.integration_inbound (tenant_id, connection_id, connector, external_id, type, data)
        values ($1, $2, 'fixture-calendar', 'ch1', 'calendar.changed', '{"channelId":"ch1"}')`,
@@ -1219,6 +1231,14 @@ describe("the later features' personal data", () => {
     expect(
       await count('app.integration_inbound where connection_id = $1', [rows.calendarInbound]),
     ).toBe(0);
+    // Its audit row keeps the connector, never the account in its label.
+    expect(
+      await one(
+        `select after from audit.events
+         where action = 'integration_connection.create' and resource_id = $1`,
+        [rows.calendarInbound],
+      ),
+    ).toEqual({ after: { connector: 'fixture-calendar' } });
     expect(await count('app.calendar_feeds where user_id = $1', [hal.id])).toBe(0);
     expect(await count('app.calendar_oauth_states where user_id = $1', [hal.id])).toBe(0);
     expect(
@@ -1420,5 +1440,280 @@ describe("the later features' personal data", () => {
     expect(body.data.row).not.toHaveProperty('name');
     expect(body.data.row).not.toHaveProperty('phone');
     expect(body.data.row).toHaveProperty('id', old.id);
+  });
+});
+
+describe('the copies of what an erasure takes (decisions V3)', () => {
+  const gus = new Person('Gus Privacy'); // a customer: a card, a chat, copies of the card
+  const uma = new Person('Uma Privacy'); // invited, joins as staff, then asks to be forgotten
+  const MK = `V3MK${Date.now()}`; // in the copies of Gus's card
+  const CHAT = `V3CHAT${Date.now()}`; // in Gus's chat turn
+  const KEEP = `V3KEEP${Date.now()}`; // in copies that must stay
+  const seeded: Record<string, string> = {};
+  let runs: string[] = [];
+  let outcome: Json = {};
+
+  const one = async (sql: string, params: unknown[]) => (await pool.query(sql, params)).rows[0];
+  const id = async (sql: string, params: unknown[]) => (await one(sql, params)).id as string;
+  const n = async (sql: string, params: unknown[]) => Number((await one(sql, params)).n);
+  /** The rows of Mastra's score results and spans that hold this text. */
+  const mastraHolding = async (text: string) => ({
+    scorers: await n(
+      `select count(*)::int as n from mastra.mastra_scorers where input::text like $1`,
+      [`%${text}%`],
+    ),
+    spans: await n(
+      `select count(*)::int as n from mastra_obs.mastra_span_events
+       where coalesce(input::text, '') || coalesce(output::text, '') like $1`,
+      [`%${text}%`],
+    ),
+  });
+
+  beforeAll(async () => {
+    await setTenantSettings(tenantId, { privacy: null });
+    for (const p of [gus, uma]) await p.signUp();
+    customer[gus.name] = await makeCustomer(gus);
+    const card = await call(gus, 'POST', '/api/cards', { name: `${MK} card`, phone: '+91 7' });
+    expect(card.status).toBe(201);
+    const X = card.body.value.id as string;
+    seeded.card = X;
+
+    // A turn with the assistant; Mastra stores its scores and the scorers' traces after it.
+    expect(
+      (await gus.call('POST', '/api/chat/once', { message: `${CHAT} hello there` }, here())).status,
+    ).toBeLessThan(300);
+    runs = (
+      await pool.query(
+        `select distinct m.run_id from app.thread_messages m join app.threads t on t.id = m.thread_id
+         where t.owner_id = $1 and m.run_id is not null`,
+        [gus.id],
+      )
+    ).rows.map((r) => r.run_id as string);
+    expect(runs.length).toBeGreaterThan(0);
+    await eventually(async () => {
+      try {
+        const scores = await n(
+          'select count(*)::int as n from mastra.mastra_scorers where "runId" = any($1)',
+          [runs],
+        );
+        const scorerSpans = await n(
+          `select count(*)::int as n from mastra_obs.mastra_span_events
+           where "metadataRaw" ->> 'targetTraceId' = any($1)`,
+          [runs],
+        );
+        const held = await mastraHolding(CHAT);
+        return scores >= 2 && scorerSpans >= 1 && held.scorers && held.spans ? true : undefined;
+      } catch {
+        return undefined; // Mastra has not made its tables yet
+      }
+    }, 20_000);
+
+    // Copies of the card, in the shapes the server writes them. An approval of Ana's on the
+    // card, decided: its audit row and stored event carry the approval whole.
+    const approval = (resourceType: string, resourceId: string, summary: string, input: Json) =>
+      id(
+        `insert into app.approvals (tenant_id, owner_id, action, rule, reason, resource_type,
+           resource_id, summary, payload, requested_by, status, expires_at)
+         values ($1, $2, 'card.update', 'r', 'r', $3, $4, $5, $6, 'user', 'approved',
+           now() + interval '1 day') returning id`,
+        [tenantId, ana.id, resourceType, resourceId, summary, { input }],
+      );
+    seeded.onCard = await approval('card', X, `Rename "${MK} card"`, { name: `${MK} renamed` });
+    const stored = {
+      id: seeded.onCard,
+      resourceType: 'card',
+      resourceId: X,
+      summary: `Rename "${MK} card"`,
+      payload: { input: { name: `${MK} renamed` } },
+      status: 'approved',
+    };
+    const audit = (action: string, type: string, rid: string, extra: Json) =>
+      pool.query(
+        `insert into audit.events (action, resource_type, resource_id, actor_kind, actor_id,
+           tenant_id, outcome, before, after)
+         values ($1, $2, $3, 'user', $4, $5, $6, $7, $8)`,
+        [
+          action,
+          type,
+          rid,
+          ana.id,
+          tenantId,
+          extra.outcome ?? 'committed',
+          extra.before ?? null,
+          extra.after ?? null,
+        ],
+      );
+    await audit('approval.approved', 'approval', seeded.onCard, {
+      before: { ...stored, status: 'pending' },
+      after: stored,
+    });
+    const { payload: _payload, ...eventRow } = stored;
+    await pool.query(
+      `insert into app.domain_events (id, tenant_id, name, resource_type, resource_id, actor_kind,
+         actor_id, "row", occurred_at, available_at, relayed_at)
+       values (gen_random_uuid()::text, $1, 'approval.decided', 'approval', $2, 'user', $3, $4,
+         now(), now(), now())`,
+      [tenantId, seeded.onCard, ana.id, eventRow],
+    );
+    // An approval on another record whose input names the card (a comment's, on its record),
+    // and its park's row.
+    seeded.other = crypto.randomUUID();
+    seeded.naming = await approval('ledgerEntry', seeded.other, `About ${MK}`, {
+      cardId: X,
+      name: `${MK} named`,
+      amountMinor: 5,
+    });
+    await audit('ledgerEntry.adjust', 'ledgerEntry', seeded.other, {
+      outcome: 'needs_approval',
+      after: { approvalId: seeded.naming, summary: `About ${MK}` },
+    });
+    // A reply kept for a retry, with the card inside; a notification listing it; one about
+    // another record that only references it; another business's reply holding the same id.
+    await pool.query(
+      `insert into app.idempotency (key, principal_id, request_hash, response)
+       values ($1, $2, 'h', $3), ($4, $5, 'h', $6)`,
+      [
+        `v3-${MK}`,
+        `user:${ana.id}:${tenantId}:user:${ana.id}`,
+        { status: 'done', value: { card: { id: X, name: `${MK} card` }, token: 'kept' } },
+        `v3-${KEEP}`,
+        `user:${ravi.id}:${raviTenant}:user:${ravi.id}`,
+        { status: 'done', value: { card: { id: X, name: `${KEEP} elsewhere` } } },
+      ],
+    );
+    await pool.query(
+      `insert into app.outbox (tenant_id, key, payload, relayed_at)
+       values ($1, $2, $3, now()), ($1, $4, $5, now())`,
+      [
+        tenantId,
+        `v3-${MK}`,
+        { rows: [{ id: X, name: `${MK} card`, phone: '+91 7' }] },
+        `v3-${KEEP}`,
+        { row: { id: seeded.other, cardId: X, name: `${KEEP} references` } },
+      ],
+    );
+    // A file kept on the card, and its own audit row (the name the person gave it).
+    seeded.file = await id(
+      `insert into app.files (tenant_id, owner_id, key, name, mime, size, status, resource_type,
+         resource_id, field)
+       values ($1, $2, $3, $4, 'image/png', 10, 'attached', 'card', $5, 'photos') returning id`,
+      [tenantId, gus.id, `v3/${MK}`, `${MK}.png`, X],
+    );
+    await audit('file.attach', 'file', seeded.file, {
+      after: { name: `${MK}.png`, on: { entity: 'card', id: X, field: 'photos' } },
+    });
+    expect((await copiesHolding(MK)).length).toBeGreaterThanOrEqual(8);
+
+    const res = await file(gus, 'erase');
+    expect(res.status).toBe(200);
+    const done = await finished(ana, res.body.value.id);
+    expect(done.status).toBe('completed');
+    outcome = done.outcome;
+  });
+
+  it("leave nothing of the person's turn in Mastra: scores and the scorers' traces go too", async () => {
+    expect(outcome.assistant).toMatchObject({ runs: runs.length });
+    expect(await mastraHolding(CHAT)).toEqual({ scorers: 0, spans: 0 });
+    expect(
+      await n('select count(*)::int as n from mastra.mastra_scorers where "runId" = any($1)', [
+        runs,
+      ]),
+    ).toBe(0);
+    expect(
+      await n(
+        `select count(*)::int as n from mastra_obs.mastra_span_events
+         where "metadataRaw" ->> 'targetTraceId' = any($1) or "traceId" = any($1)`,
+        [runs],
+      ),
+    ).toBe(0);
+  });
+
+  it('take the record out of every copy, nested or naming it, with its file and approvals', async () => {
+    expect(outcome.records).toMatchObject({ cards: { deleted: 1 } });
+    expect(await copiesHolding(MK)).toEqual([]);
+    // The rows stay, with their ids.
+    expect(
+      await one('select summary, payload from app.approvals where id = $1', [seeded.naming]),
+    ).toEqual({ summary: null, payload: { input: { cardId: seeded.card, amountMinor: 5 } } });
+    expect(
+      await one(
+        `select after from audit.events where action = 'approval.approved' and resource_id = $1`,
+        [seeded.onCard],
+      ),
+    ).toMatchObject({
+      after: { id: seeded.onCard, resourceId: seeded.card, payload: { input: {} } },
+    });
+    expect(
+      await one(
+        `select after from audit.events where resource_type = 'file' and resource_id = $1`,
+        [seeded.file],
+      ),
+    ).toEqual({ after: { on: { entity: 'card', id: seeded.card, field: 'photos' } } });
+    expect(await one('select status, name from app.files where id = $1', [seeded.file])).toEqual({
+      status: 'erased',
+      name: 'erased',
+    });
+    expect(await one(`select response from app.idempotency where key = $1`, [`v3-${MK}`])).toEqual({
+      response: { status: 'done', value: { card: { id: seeded.card }, token: 'kept' } },
+    });
+  });
+
+  it('keep what only references the record, and what another business holds', async () => {
+    expect(
+      (await one('select payload from app.outbox where key = $1', [`v3-${KEEP}`])).payload.row,
+    ).toEqual({ id: seeded.other, cardId: seeded.card, name: `${KEEP} references` });
+    expect(
+      (await one('select response from app.idempotency where key = $1', [`v3-${KEEP}`])).response
+        .value.card.name,
+    ).toBe(`${KEEP} elsewhere`);
+  });
+
+  it("take a member's invitations, and the email in their audit rows, with them", async () => {
+    const invite = (email: string) =>
+      call(ana, 'POST', '/api/members/invites', { email, roles: ['staff'] });
+    const taken = await invite(uma.email);
+    expect(taken.status).toBe(200);
+    expect(
+      (await call(ana, 'DELETE', `/api/members/invites/${taken.body.value.invite.id}`)).status,
+    ).toBe(200);
+    const sent = await invite(uma.email);
+    expect(sent.status).toBe(200);
+    const joined = await uma.call('POST', '/api/members/invites/accept', {
+      token: sent.body.value.token,
+    });
+    expect(joined.status).toBe(200);
+    expect((await copiesHolding(uma.email)).length).toBeGreaterThanOrEqual(3);
+
+    const res = await file(uma, 'erase');
+    expect(res.status).toBe(200);
+    const done = await finished(ana, res.body.value.id);
+    expect(done.status).toBe('completed');
+    expect(done.outcome.features).toMatchObject({ invites: 2 });
+    expect(
+      await n(
+        'select count(*)::int as n from app.member_invites where tenant_id = $1 and email = $2',
+        [tenantId, uma.email.toLowerCase()],
+      ),
+    ).toBe(0);
+    expect(await copiesHolding(uma.email)).toEqual([]);
+    const listed = await call(ana, 'GET', '/api/members/invites');
+    expect(listed.status).toBe(200);
+    expect(JSON.stringify(listed.body)).not.toContain(uma.email.toLowerCase());
+    // Who invited and who joined stays, by id.
+    expect(
+      await n(
+        `select count(*)::int as n from audit.events
+         where tenant_id = $1 and resource_type = 'invite' and actor_id = $2`,
+        [tenantId, ana.id],
+      ),
+    ).toBeGreaterThanOrEqual(3);
+  });
+
+  it('list invitations on the register', async () => {
+    const reg = (await call(ana, 'GET', '/api/privacy/register')).body;
+    expect(reg.parts.find((x: Json) => x.name === 'members.invites')).toMatchObject({
+      erase: 'delete',
+      fields: ['email'],
+    });
   });
 });

@@ -2,7 +2,18 @@ import type { Subject } from '@hykr/contracts';
 import type { Tx } from '@hykr/core';
 import { files } from '@hykr/db';
 import { and, eq, inArray, ne, type SQL } from 'drizzle-orm';
-import type { ErasureContributor, ExportContributor } from '../../hooks.js';
+import type { ErasedRecords, ErasureContributor, ExportContributor } from '../../hooks.js';
+
+/**
+ * Erased files, as a set whose copies lose the file's name and words: the `file.*` audit rows
+ * (upload, confirm, attach, received) name the file as the person called it.
+ */
+export const fileCopies = (ids: readonly string[]): ErasedRecords => ({
+  type: 'file',
+  ids,
+  fields: ['name', 'transcript'],
+  deleted: true,
+});
 
 /** What a subject sent: a contact's files from their number, a person's uploads. */
 const sentBy = (subject: Subject, tenantId?: string): SQL =>
@@ -34,20 +45,22 @@ export const filesErasure: ErasureContributor = {
       })
       .where(sentBy(subject, tenantId))
       .returning({ id: files.id });
-    return { count: erased.length };
+    const ids = erased.map((f) => f.id);
+    return { count: ids.length, erased: ids.length ? [fileCopies(ids)] : [] };
   },
 };
 
 /**
  * The files kept on these records go with them (a record erased or expired for personal data,
  * B18): erased now, deleted by the sweeper, so a rollback deletes nothing. `fields`: only the
- * files of these fields (an anonymised record keeps the rest).
+ * files of these fields (an anonymised record keeps the rest). Returns the files' ids, whose
+ * copies the caller redacts (`fileCopies`).
  */
 export async function eraseFilesOn(
   tx: Tx,
   a: { tenantId: string; resourceType: string; ids: readonly string[]; fields?: readonly string[] },
-): Promise<number> {
-  if (!a.ids.length || a.fields?.length === 0) return 0;
+): Promise<string[]> {
+  if (!a.ids.length || a.fields?.length === 0) return [];
   const erased = await tx
     .update(files)
     .set({
@@ -67,7 +80,7 @@ export async function eraseFilesOn(
       ) as SQL,
     )
     .returning({ id: files.id });
-  return erased.length;
+  return erased.map((f) => f.id);
 }
 
 /** The subject's files, for their data export: what each is and the record it is on. */

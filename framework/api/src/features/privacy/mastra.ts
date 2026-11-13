@@ -1,6 +1,6 @@
-// The assistant's own records of a person (B18): Mastra keeps run snapshots in the `mastra`
-// schema and traces, logs, scores, metrics and feedback in `mastra_obs`, outside drizzle's
-// schemas. They are reached here with SQL, by the person's runs (from their threads and the audit
+// The assistant's own records of a person (B18): Mastra keeps run snapshots and score results
+// in the `mastra` schema and traces, logs, scores, metrics and feedback in `mastra_obs`, outside
+// drizzle's schemas. They are reached here with SQL, by the person's runs (from their threads and the audit
 // rows of what was done for them) and by the subject key Mastra records as `userId`. A table
 // Mastra has not made yet is skipped. Nothing here loads Nest.
 import type { Conn, Tx } from '@hykr/core';
@@ -66,11 +66,36 @@ export async function runsOf(conn: Conn, ids: Identities): Promise<string[]> {
   return [...runs].sort();
 }
 
-/** Rows naming the person or one of their runs, in this business. */
-function theirs(ids: Identities, runs: readonly string[]): SQL {
+/** Mastra's stored score results (the scorers on every turn), outside `mastra_obs`. */
+const SCORERS = 'mastra.mastra_scorers';
+
+/**
+ * The traces of the scorers that scored these runs: a scorer's spans name the run only as
+ * `metadataRaw.targetTraceId`, and its score event as `scoreTraceId`.
+ */
+async function scorerTraces(conn: Conn, runs: readonly string[]): Promise<string[]> {
+  if (!runs.length) return [];
+  const found = new Set<string>();
+  const read = async (q: SQL) => {
+    const r = (await conn.execute(q)) as unknown as { rows: { t: string | null }[] };
+    for (const row of r.rows) if (row.t) found.add(row.t);
+  };
+  if (await exists(conn, 'mastra_obs.mastra_score_events'))
+    await read(sql`select distinct "scoreTraceId" as t from mastra_obs.mastra_score_events
+      where "runId" in (${list(runs)}) or "traceId" in (${list(runs)})`);
+  if (await exists(conn, 'mastra_obs.mastra_span_events'))
+    await read(sql`select distinct "traceId" as t from mastra_obs.mastra_span_events
+      where "metadataRaw" ->> 'targetTraceId' in (${list(runs)})`);
+  for (const r of runs) found.delete(r);
+  return [...found].sort();
+}
+
+/** Rows naming the person or one of their runs (or a scorer's trace of one), in this business. */
+function theirs(ids: Identities, runs: readonly string[], scored: readonly string[] = []): SQL {
   const subjects = [ids.userId, ...ids.keys].filter((x): x is string => !!x);
+  const traces = [...runs, ...scored];
   const byRun = runs.length
-    ? sql`"runId" in (${list(runs)}) or "traceId" in (${list(runs)})`
+    ? sql`"runId" in (${list(runs)}) or "traceId" in (${list(traces)})`
     : null;
   const byPerson = sql`("userId" in (${list(subjects)}) and "requestContext" ->> 'tenantId' = ${ids.tenantId})`;
   return byRun ? sql`(${byRun} or ${byPerson})` : byPerson;
@@ -88,16 +113,18 @@ export async function eraseMastra(
   everywhere: boolean,
 ): Promise<number> {
   let n = 0;
+  // The scorers' own traces (each scorer run is a trace of its own, naming the run it scored
+  // only in its metadata): read before their score events go.
+  const scored = await scorerTraces(tx, runs);
+  const traces = [...runs, ...scored];
   for (const [table] of OBSERVED) {
     const name = `mastra_obs.${table}`;
     if (!(await exists(tx, name))) continue;
     // Only span events carry the request context; the others go by run or subject alone.
-    const where =
-      table === 'mastra_span_events'
-        ? theirs(ids, runs)
-        : runs.length
-          ? sql`("runId" in (${list(runs)}) or "traceId" in (${list(runs)}))`
-          : null;
+    const byRun = runs.length
+      ? sql`("runId" in (${list(runs)}) or "traceId" in (${list(traces)}))`
+      : null;
+    const where = table === 'mastra_span_events' ? theirs(ids, runs, scored) : byRun;
     if (!where) continue;
     n += rowsOf(await tx.execute(sql`delete from ${sql.raw(name)} where ${where}`));
   }
@@ -105,6 +132,14 @@ export async function eraseMastra(
     n += rowsOf(
       await tx.execute(
         sql`delete from mastra.mastra_workflow_snapshot where run_id in (${list(runs)})`,
+      ),
+    );
+  // The scorers' results: each keeps the turn's input and output, by the run it scored.
+  if (runs.length && (await exists(tx, SCORERS)))
+    n += rowsOf(
+      await tx.execute(
+        sql`delete from ${sql.raw(SCORERS)}
+            where "runId" in (${list(runs)}) or "traceId" in (${list(runs)})`,
       ),
     );
   // Mastra's own memory, keyed by resource: the framework keeps conversations itself, but an
@@ -152,7 +187,10 @@ export async function exportMastra(
   }));
 }
 
-/** Traces older than `before`, for the whole deployment (the `assistant.traces` target). */
+/**
+ * Traces and score results older than `before`, for the whole deployment (the
+ * `assistant.traces` target).
+ */
 export async function expireTraces(tx: Tx, before: Date): Promise<number> {
   let n = 0;
   for (const [table, at] of OBSERVED) {
@@ -164,5 +202,12 @@ export async function expireTraces(tx: Tx, before: Date): Promise<number> {
       ),
     );
   }
+  // `createdAtZ`: the time with its zone (`createdAt` is UTC without one).
+  if (await exists(tx, SCORERS))
+    n += rowsOf(
+      await tx.execute(
+        sql`delete from ${sql.raw(SCORERS)} where "createdAtZ" < ${before.toISOString()}`,
+      ),
+    );
   return n;
 }

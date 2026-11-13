@@ -1,10 +1,12 @@
 // Audit redaction (B18): the server keeps copies of records (audit rows' before and after, stored
 // events, approvals' inputs and cards, notifications' rows, messages' notification rows, the
 // replies kept for idempotent retries, and each feature's own: `recordCopies`). When a record is
-// erased or blanked for personal data, its personal fields leave every copy; the rows stay, with
-// their ids, so the trail of who did what stays whole. Derived data goes too: the record's
-// files, and its memory vectors. A privacy filing about the person loses the email or number it
-// named them by, and its note. Nothing here loads Nest.
+// erased or blanked for personal data, its personal fields leave every copy, at any depth (a
+// reply's nested record, an order's lines, a command's input that names it); the rows stay,
+// with their ids, so the trail of who did what stays whole. Derived data goes too: the record's
+// files (and their names in the files' own audit rows), and its memory vectors. A privacy filing
+// about the person loses the email or number it named them by, and its note. Nothing here loads
+// Nest. docs/decisions/B18.md and V3.md.
 
 import { FilePrivacyRequestSpec, fileFieldsOf } from '@hykr/contracts';
 import type { Tx } from '@hykr/core';
@@ -12,7 +14,7 @@ import { entityDef } from '@hykr/core';
 import { approvals, events as auditEvents, idempotencyKeys } from '@hykr/db';
 import { and, eq, or, type SQL, sql } from 'drizzle-orm';
 import type { ErasedRecords } from '../../hooks.js';
-import { eraseFilesOn } from '../files/privacy.js';
+import { eraseFilesOn, fileCopies } from '../files/privacy.js';
 import { forgetRecords } from '../memory/privacy.js';
 import { recordCopies } from './registry.js';
 
@@ -21,11 +23,9 @@ const list = (xs: readonly string[]) =>
     xs.map((x) => sql`${x}`),
     sql`, `,
   );
-const keys = (xs: readonly string[]) => sql`ARRAY[${list(xs)}]::text[]`;
 
-/** A jsonb object without these keys; anything else as it is. */
-const without = (col: SQL, ks: SQL) =>
-  sql`case when jsonb_typeof(${col}) = 'object' then ${col} - ${ks} else ${col} end`;
+type Obj = Record<string, unknown>;
+const isObj = (x: unknown): x is Obj => !!x && typeof x === 'object' && !Array.isArray(x);
 
 /** How many copies lost something, by where they are (and each feature's own, `recordCopies`). */
 export interface Redacted {
@@ -41,12 +41,190 @@ export interface Redacted {
   [where: string]: number;
 }
 
-const rowsOf = (r: unknown) => (r as { rowCount?: number | null }).rowCount ?? 0;
+/* ── Copies, at any depth ─────────────────────────────────────────────────── */
+
+/** The records whose copies lose fields, as the walker reads them. */
+export interface CopyTarget {
+  /** The resource type audit and events name them by. */
+  type: string;
+  ids: ReadonlySet<string>;
+  fields: readonly string[];
+  /** Keys a command's input names them by: `id`, `<type>Id` and the set's `refs`. */
+  refs: readonly string[];
+  /** Approvals about them: every copy of one loses its summary and the fields in its input. */
+  approvals: ReadonlySet<string>;
+}
+
+export function copyTarget(set: ErasedRecords, approvalIds: Iterable<string> = []): CopyTarget {
+  return {
+    type: set.type,
+    ids: new Set(set.ids),
+    fields: set.fields,
+    refs: [...new Set(['id', `${set.type}Id`, ...(set.refs ?? [])])],
+    approvals: new Set(approvalIds),
+  };
+}
+
+/** An object without these keys; the same object when it has none of them. */
+function strip(o: Obj, ks: readonly string[]): Obj {
+  if (!ks.some((k) => Object.hasOwn(o, k))) return o;
+  const out = { ...o };
+  for (const k of ks) delete out[k];
+  return out;
+}
+
+const idOf = (o: Obj, k: string) => (typeof o[k] === 'string' ? (o[k] as string) : null);
+
+/** Does this object name one of the records by one of the input keys? */
+const names = (o: Obj, t: CopyTarget) =>
+  t.refs.some((k) => {
+    const v = idOf(o, k);
+    return v !== null && t.ids.has(v);
+  });
+
+/** Does this command input name one of the records anywhere? */
+export function namesRecord(v: unknown, t: CopyTarget): boolean {
+  if (Array.isArray(v)) return v.some((x) => namesRecord(x, t));
+  if (!isObj(v)) return false;
+  return names(v, t) || Object.values(v).some((x) => namesRecord(x, t));
+}
+
+/**
+ * A copy of an approval about the records (the stored row, or as clients read it, with `input`
+ * on top): without its summary, and its input without the records' fields. The input is the
+ * record's own when the approval is on the record.
+ */
+function scrubApproval(o: Obj, t: CopyTarget): Obj {
+  const resourceId = idOf(o, 'resourceId');
+  const top = o.resourceType === t.type && resourceId !== null && t.ids.has(resourceId);
+  let out = strip(o, ['summary']);
+  if (Object.hasOwn(out, 'input')) {
+    const input = walk(out.input, t, top, true);
+    if (input !== out.input) out = { ...out, input };
+  }
+  const payload = out.payload;
+  if (isObj(payload) && Object.hasOwn(payload, 'input')) {
+    const input = walk(payload.input, t, top, true);
+    if (input !== payload.input) out = { ...out, payload: { ...payload, input } };
+  }
+  return out;
+}
+
+/**
+ * The walker: every object whose `id` is one of the records loses their fields (and, at the
+ * top, the copy itself when it is the record); in a command's input, every object that names
+ * one by an input key too. An approval about them, or anything pointing at one (a park's
+ * `approvalId`), loses its summary. Unchanged values come back as they were (the same object).
+ */
+function walk(v: unknown, t: CopyTarget, top: boolean, input: boolean): unknown {
+  if (Array.isArray(v)) {
+    let changed = false;
+    const out = v.map((x) => {
+      const y = walk(x, t, false, input);
+      if (y !== x) changed = true;
+      return y;
+    });
+    return changed ? out : v;
+  }
+  if (!isObj(v)) return v;
+  let o = v;
+  const id = idOf(o, 'id');
+  if (id !== null && t.approvals.has(id)) o = scrubApproval(o, t);
+  else if (top || (id !== null && t.ids.has(id)) || (input && names(o, t))) o = strip(o, t.fields);
+  const approvalId = idOf(o, 'approvalId');
+  if (approvalId !== null && t.approvals.has(approvalId)) o = strip(o, ['summary']);
+  let changed = o !== v;
+  const out: Obj = {};
+  for (const [k, x] of Object.entries(o)) {
+    const y = walk(x, t, false, input);
+    if (y !== x) changed = true;
+    out[k] = y;
+  }
+  return changed ? out : v;
+}
+
+/** A copy without the records' personal fields. `top`: the copy is one of the records. */
+export const scrubCopy = (v: unknown, t: CopyTarget, top = false) => walk(v, t, top, false);
+
+/** A command's input without the records' fields, wherever it names one. `top`: it is the record's. */
+export const scrubInput = (v: unknown, t: CopyTarget, top = false) => walk(v, t, top, true);
+
+const rowsOf = (r: unknown) => (r as { rows?: Obj[] }).rows ?? [];
+
+/**
+ * Write changed rows back, in one statement: `key` names the key columns with their types,
+ * `cols` the jsonb columns written.
+ */
+async function writeBack(
+  tx: Tx,
+  table: string,
+  key: readonly [string, string][],
+  cols: readonly string[],
+  rows: readonly Obj[],
+): Promise<number> {
+  if (!rows.length) return 0;
+  const q = (c: string) => `"${c}"`;
+  const spec = [...key.map(([c, type]) => `${q(c)} ${type}`), ...cols.map((c) => `${q(c)} jsonb`)];
+  const set = cols.map((c) => `${q(c)} = v.${q(c)}`);
+  const on = key.map(([c]) => `t.${q(c)} = v.${q(c)}`);
+  await tx.execute(sql`
+    update ${sql.raw(table)} as t set ${sql.raw(set.join(', '))}
+    from jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) as v(${sql.raw(spec.join(', '))})
+    where ${sql.raw(on.join(' and '))}`);
+  return rows.length;
+}
+
+/** Rows whose jsonb column holds an object with one of these ids, at any depth. */
+const holdsId = (col: SQL, ids: readonly string[]) =>
+  sql`exists (select 1 from jsonb_path_query(${col}, 'lax $.**.id') as found(v)
+    where found.v #>> '{}' in (${list(ids)}))`;
+
+/** The approvals of this business about the records: on one of them, or naming one in their input. */
+async function redactApprovals(
+  tx: Tx,
+  tenantId: string,
+  set: ErasedRecords,
+): Promise<{ about: Obj[]; changed: number }> {
+  const t = copyTarget(set);
+  const found = rowsOf(
+    await tx.execute(sql`
+      select id, resource_type, resource_id, summary, payload from app.approvals
+      where tenant_id = ${tenantId}
+        and ((resource_type = ${set.type} and resource_id in (${list(set.ids)}))
+          or exists (select 1 from jsonb_path_query(payload -> 'input', 'lax $.**') as found(v)
+            where jsonb_typeof(found.v) = 'string' and found.v #>> '{}' in (${list(set.ids)})))`),
+  );
+  const about: Obj[] = [];
+  const changed: Obj[] = [];
+  for (const row of found) {
+    const own = row.resource_type === set.type && t.ids.has(String(row.resource_id ?? ''));
+    const payload = isObj(row.payload) ? row.payload : null;
+    if (!own && !namesRecord(payload?.input, t)) continue;
+    about.push(row);
+    const input = payload ? scrubInput(payload.input, t, own) : undefined;
+    if (input === payload?.input && row.summary === null) continue;
+    changed.push({
+      id: row.id,
+      payload: payload && input !== payload.input ? { ...payload, input } : row.payload,
+    });
+  }
+  if (changed.length)
+    await tx.execute(sql`
+      update app.approvals set summary = null where id in (${list(changed.map((r) => String(r.id)))})`);
+  return {
+    about,
+    changed: await writeBack(tx, 'app.approvals', [['id', 'text']], ['payload'], changed),
+  };
+}
 
 /**
  * Take the personal fields of these records out of every copy the server keeps of them, in this
  * business, and erase what is derived from them. `deleted`: the records are gone, so all their
- * files go; otherwise only the files of their personal fields.
+ * files go; otherwise only the files of their personal fields. A copy is found by the record's
+ * id at any depth (a reply's nested record, a notification's rows), and an approval about the
+ * record (on it, or naming it in its input) loses its summary and input fields in every copy:
+ * the approval, its audit rows and stored events, its notification, its parked reply and its
+ * park's row. The files erased with the records are redacted the same way, as a `file` set.
  */
 export async function redactCopies(
   tx: Tx,
@@ -63,68 +241,138 @@ export async function redactCopies(
     memory: 0,
     replies: 0,
   };
-  for (const set of sets) {
+  const queue = [...sets];
+  for (let i = 0; i < queue.length; i++) {
+    const set = queue[i];
     if (!set.ids.length) continue;
     const ids = list(set.ids);
-    const fields = keys(set.fields);
+
+    const approved = await redactApprovals(tx, tenantId, set);
+    out.approvals += approved.changed;
+    const approvalIds = approved.about.map((a) => String(a.id));
+    const t = copyTarget(set, approvalIds);
     // An approval card's or a park's summary names the record ('Delete "Call Ravi"').
-    const withSummary = keys([...set.fields, 'summary']);
-    out.audit += rowsOf(
+    const tAfter: CopyTarget = { ...t, fields: [...t.fields, 'summary'] };
+    const own = (row: Obj) => row.resource_type === set.type && t.ids.has(String(row.resource_id));
+    // The parks of approvals on other records (a comment's, on the record it is on).
+    const parks = approved.about
+      .filter((a) => !(a.resource_type === set.type && t.ids.has(String(a.resource_id))))
+      .map(
+        (a) =>
+          sql`(resource_type = ${String(a.resource_type)} and ${
+            a.resource_id === null
+              ? sql`resource_id is null`
+              : sql`resource_id = ${String(a.resource_id)}`
+          } and after ->> 'approvalId' = ${String(a.id)})`,
+      );
+    const ofApprovals = approvalIds.length
+      ? sql`or (resource_type = 'approval' and resource_id in (${list(approvalIds)}))`
+      : sql``;
+
+    const audit: Obj[] = [];
+    for (const row of rowsOf(
       await tx.execute(sql`
-        update audit.events
-        set before = ${without(sql`before`, fields)}, after = ${without(sql`after`, withSummary)}
-        where tenant_id = ${tenantId} and resource_type = ${set.type} and resource_id in (${ids})
-          and (before is not null or after is not null)`),
-    );
-    out.events += rowsOf(
+        select id, resource_type, resource_id, before, after from audit.events
+        where tenant_id = ${tenantId}
+          and ((resource_type = ${set.type} and resource_id in (${ids})) ${ofApprovals}
+            ${parks.length ? sql`or ${sql.join(parks, sql` or `)}` : sql``})`),
+    )) {
+      const top = own(row);
+      const before = scrubCopy(row.before, t, top);
+      const after = scrubCopy(row.after, top ? tAfter : t, top);
+      if (before !== row.before || after !== row.after) audit.push({ id: row.id, before, after });
+    }
+    out.audit += await writeBack(tx, 'audit.events', [['id', 'text']], ['before', 'after'], audit);
+
+    const events: Obj[] = [];
+    for (const row of rowsOf(
       await tx.execute(sql`
-        update app.domain_events
-        set "row" = ${without(sql`"row"`, fields)}, before = ${without(sql`before`, fields)}
-        where tenant_id = ${tenantId} and resource_type = ${set.type} and resource_id in (${ids})`),
+        select id, resource_type, resource_id, "row", before from app.domain_events
+        where tenant_id = ${tenantId}
+          and ((resource_type = ${set.type} and resource_id in (${ids})) ${ofApprovals})`),
+    )) {
+      const top = own(row);
+      const r = scrubCopy(row.row, t, top);
+      const before = scrubCopy(row.before, t, top);
+      if (r !== row.row || before !== row.before) events.push({ id: row.id, row: r, before });
+    }
+    out.events += await writeBack(
+      tx,
+      'app.domain_events',
+      [['id', 'text']],
+      ['row', 'before'],
+      events,
     );
-    out.approvals += rowsOf(
-      await tx.execute(sql`
-        update app.approvals
-        set summary = null,
-            payload = case when jsonb_typeof(payload -> 'input') = 'object'
-              then jsonb_set(payload, '{input}', (payload -> 'input') - ${fields})
-              else payload end
-        where tenant_id = ${tenantId} and resource_type = ${set.type} and resource_id in (${ids})`),
+
+    // Copies that carry the record (or an approval about it) somewhere inside.
+    const held = [...set.ids, ...approvalIds];
+    const scrubbed = (rows: Obj[], col: string) =>
+      rows.flatMap((row) => {
+        const v = scrubCopy(row[col], t);
+        return v === row[col] ? [] : [{ ...row, [col]: v }];
+      });
+    out.notifications += await writeBack(
+      tx,
+      'app.outbox',
+      [['id', 'bigint']],
+      ['payload'],
+      scrubbed(
+        rowsOf(
+          await tx.execute(sql`
+            select id, payload from app.outbox
+            where tenant_id = ${tenantId} and ${holdsId(sql`payload`, held)}`),
+        ),
+        'payload',
+      ),
     );
-    out.notifications += rowsOf(
-      await tx.execute(sql`
-        update app.outbox
-        set payload = jsonb_set(payload, '{row}', (payload -> 'row') - ${fields})
-        where tenant_id = ${tenantId} and jsonb_typeof(payload -> 'row') = 'object'
-          and payload -> 'row' ->> 'id' in (${ids})`),
+    out.messages += await writeBack(
+      tx,
+      'channel.messages',
+      [['id', 'text']],
+      ['meta'],
+      scrubbed(
+        rowsOf(
+          await tx.execute(sql`
+            select id, meta from channel.messages
+            where tenant_id = ${tenantId} and ${holdsId(sql`meta`, held)}`),
+        ),
+        'meta',
+      ),
     );
-    out.messages += rowsOf(
-      await tx.execute(sql`
-        update channel.messages
-        set meta = jsonb_set(meta, '{row}', (meta -> 'row') - ${fields})
-        where tenant_id = ${tenantId} and jsonb_typeof(meta -> 'row') = 'object'
-          and meta -> 'row' ->> 'id' in (${ids})`),
+    // The reply kept for a retry: the record as it was written, or the park. Its key names the
+    // business (`<actor kind>:<actor id>:<tenant>:<subject>`).
+    out.replies += await writeBack(
+      tx,
+      'app.idempotency',
+      [
+        ['key', 'text'],
+        ['principal_id', 'text'],
+      ],
+      ['response'],
+      scrubbed(
+        rowsOf(
+          await tx.execute(sql`
+            select key, principal_id, response from app.idempotency
+            where split_part(principal_id, ':', 3) = ${tenantId}
+              and ${holdsId(sql`response`, held)}`),
+        ),
+        'response',
+      ),
     );
-    // The reply kept for a retry: the record as it was written. Its key names the business
-    // (`<actor kind>:<actor id>:<tenant>:<subject>`).
-    out.replies += rowsOf(
-      await tx.execute(sql`
-        update app.idempotency
-        set response = jsonb_set(response, '{value}', (response -> 'value') - ${fields})
-        where split_part(principal_id, ':', 3) = ${tenantId}
-          and jsonb_typeof(response -> 'value') = 'object'
-          and response -> 'value' ->> 'id' in (${ids})`),
-    );
+
     const def = entityDef(set.type);
     const fileFields = fileFieldsOf(def?.spec)
       .map(([f]) => f)
       .filter((f) => set.fields.includes(f));
-    out.files += await eraseFilesOn(tx, {
+    const files = await eraseFilesOn(tx, {
       tenantId,
       resourceType: set.type,
       ids: set.ids,
       ...(set.deleted ? {} : { fields: fileFields }),
     });
+    out.files += files.length;
+    // The files' own copies (their names in `file.*` audit rows) go the same way.
+    if (files.length) queue.push(fileCopies(files));
     out.memory += await forgetRecords(tx, { tenantId, resourceType: set.type, ids: set.ids });
     // Each feature's own copies (webhook bodies, payloads).
     for (const copies of recordCopies.all())
@@ -146,9 +394,6 @@ export interface FiledAbout {
   /** Their requests' ids: replies that carry a request lose its note. */
   requestIds: readonly string[];
 }
-
-type Obj = Record<string, unknown>;
-const isObj = (x: unknown): x is Obj => !!x && typeof x === 'object' && !Array.isArray(x);
 
 /**
  * A privacy filing's input (`privacy.request`) without the person's email or number and without
