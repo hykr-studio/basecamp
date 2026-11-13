@@ -338,6 +338,37 @@ describe('a NUL character in what someone sends', () => {
     expect((await a.call('GET', '/api/tasks?title=a%2500b')).status).toBe(200);
   });
 
+  it('half of a surrogate pair is refused alike: a custom value with one was a 500', async () => {
+    // jsonb refuses a lone surrogate (22P05), and text turned one into U+FFFD without a word.
+    const lone = (res: { status: number; body: unknown }, what: string) => {
+      expect(res.status, `${what}: ${JSON.stringify(res.body)}`).toBe(400);
+      expect(res.body, what).toMatchObject({ error: 'invalid', rule: 'lone_surrogate' });
+    };
+    const field = await a.call('POST', '/api/custom-fields', {
+      entity: 'gadget',
+      key: 'shade',
+      type: 'text',
+      label: { en: 'Shade' },
+    });
+    expect(field.status, JSON.stringify(field.body)).toBe(201);
+    lone(
+      await a.call('POST', '/api/gadgets', { title: 'ok', custom: { shade: 'a\ud800b' } }),
+      'custom',
+    );
+    lone(await a.call('POST', '/api/tasks', { title: 'a\udc00b' }), 'title');
+    const filter = encodeURIComponent(JSON.stringify({ shade: 'a\ud800b' }));
+    lone(await a.call('GET', `/api/gadgets?custom=${filter}`), 'filter');
+    const named = new Person('Half Pair');
+    expect((await named.signUp()).status).toBe(200);
+    lone(await named.call('POST', '/api/auth/update-user', { name: 'Half \ud800' }), 'name');
+    expect((await named.call('GET', '/api/auth/get-session')).body.user.name).toBe('Half Pair');
+    // A whole pair is a character like any other.
+    const smile = await a.call('POST', '/api/tasks', { title: 'Smile \u{1F600}' });
+    expect(smile.status).toBe(201);
+    expect(smile.body.value.title).toBe('Smile \u{1F600}');
+    await othersUnharmed('half a pair');
+  });
+
   it('Better Auth’s routes refuse one too: an update of the name was a 500', async () => {
     // Its routes are not Nest's: a hook in front of its endpoints checks them (infra/auth.ts).
     const odd = new Person('Odd Name');
@@ -429,6 +460,30 @@ describe('a time Postgres cannot store, in a query string', () => {
       const res = await who.call('GET', path);
       expect(res.status, `${path}: ${JSON.stringify(res.body)}`).toBe(200);
     }
+  });
+});
+
+describe('a filter value its column cannot hold', () => {
+  // The list schema takes any finite number for a `number` field; an `integer` column holds
+  // whole numbers to 2^31 - 1. Postgres refused the rest (22003, 22P02): a 500 before V10, and
+  // `bad_cursor` with a genuine cursor, which blamed the cursor for the filter.
+  it('is 400 invalid on the list, its summary and with a cursor, never a 500 or bad_cursor', async () => {
+    for (const title of ['Ranked one', 'Ranked two'])
+      expect((await a.call('POST', '/api/gadgets', { title, rank: 1 })).status).toBe(201);
+    const cursor = (await a.call('GET', '/api/gadgets?sort=title&limit=1')).body.nextCursor;
+    expect(cursor).toBeTruthy();
+    for (const q of ['rank=1e12', 'rank[gt]=-1e12', 'rank=1.5', 'rank[in]=1,1e12'])
+      for (const path of [
+        '/api/gadgets?',
+        '/api/gadgets/summary?',
+        `/api/gadgets?sort=title&limit=1&cursor=${cursor}&`,
+      ]) {
+        const res = await a.call('GET', `${path}${q}`);
+        expect(res.status, `${path}${q}: ${JSON.stringify(res.body)}`).toBe(400);
+        expect(res.body, `${path}${q}`).toMatchObject({ error: 'invalid', field: 'rank' });
+      }
+    expect((await a.call('GET', '/api/gadgets?rank=2147483647')).status).toBe(200);
+    expect((await a.call('GET', '/api/gadgets/summary?rank[in]=1,2')).status).toBe(200);
   });
 });
 
@@ -577,5 +632,5 @@ describe('routes that read their own query string', () => {
           expect(polluted()).toEqual([]);
         }
     expect(failures, failures.join('\n').slice(0, 4000)).toEqual([]);
-  });
+  }, 180_000); // Every route with every variant: a few thousand requests.
 });

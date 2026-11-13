@@ -106,6 +106,62 @@ function columnCheck(column: Column): (value: unknown) => boolean {
   }
 }
 
+/** The whole numbers each integer column holds. */
+const INTEGER_RANGE: Readonly<Record<string, readonly [number, number]>> = {
+  PgSmallInt: [-32_768, 32_767],
+  PgSmallSerial: [-32_768, 32_767],
+  PgInteger: [-2_147_483_648, 2_147_483_647],
+  PgSerial: [-2_147_483_648, 2_147_483_647],
+  PgBigInt53: [-Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
+  PgBigSerial53: [-Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
+};
+
+/**
+ * What a column holds, when this filter value is not it; else null. Only what Postgres would
+ * refuse outright: an integer column's whole numbers and range, a numeric column's precision, a
+ * uuid's form, an enum's values. Other values (text, dates the schema bounded) are its to compare.
+ */
+function unfit(column: Column, v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const range = INTEGER_RANGE[column.columnType];
+  if (range)
+    return typeof v === 'number' && Number.isInteger(v) && v >= range[0] && v <= range[1]
+      ? null
+      : `whole numbers from ${range[0]} to ${range[1]}`;
+  if (column.columnType.startsWith('PgNumeric')) {
+    const { precision, scale = 0 } = column as Column & { precision?: number; scale?: number };
+    const n = Number(v);
+    if (precision === undefined || !Number.isFinite(n)) return null;
+    const below = 10 ** (precision - scale);
+    return Math.abs(n) < below ? null : `numbers below ${below} (either way)`;
+  }
+  if (column.columnType === 'PgUUID')
+    return typeof v === 'string' && UUID.test(v) ? null : 'ids (uuids)';
+  if (column.columnType === 'PgEnumColumn' || column.columnType === 'PgEnumObjectColumn') {
+    const values = column.enumValues ?? [];
+    return typeof v === 'string' && values.includes(v) ? null : `one of ${values.join(', ')}`;
+  }
+  return null;
+}
+
+/**
+ * A filter value the field type's schema takes and its column cannot hold (`rank=1e12` on an
+ * integer column, an id that is no uuid) is 400 `invalid`, before any query: Postgres's refusal
+ * was a 500, or `bad_cursor` with a cursor, which blamed the cursor for the filter (V10).
+ */
+function refuseUnfit(column: Column, f: ListQuery['filters'][number]): void {
+  if (f.op === 'contains') return;
+  for (const v of Array.isArray(f.value) ? f.value : [f.value]) {
+    const holds = unfit(column, v);
+    if (holds)
+      throw new BadRequestException({
+        error: 'invalid',
+        field: f.field,
+        message: `"${f.field}" holds ${holds}`,
+      });
+  }
+}
+
 /** Nullable sort columns sort as if nulls were a far-off value: always last. */
 function sortExpr(column: Column, dir: 'asc' | 'desc'): SQL | Column {
   if (column.notNull) return column;
@@ -207,6 +263,8 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
     // Each field type builds its own condition (listFieldSql): built-in or contributed.
     const type = list.filterable[f.field];
     if (!type) throw new Error(`"${f.field}" is not filterable`);
+    const column = columns[f.field];
+    if (column) refuseUnfit(column, f);
     where.push(
       filterSql(type, {
         table,
