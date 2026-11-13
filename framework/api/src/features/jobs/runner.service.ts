@@ -10,8 +10,8 @@ import {
 } from '@hykr/contracts';
 import {
   auditCtx,
-  type Conn,
   CORE_OPTIONS,
+  type Conn,
   type CoreOptions,
   entityDef,
   findRepeat,
@@ -212,11 +212,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
    * May p use every one of these files (startJob's input files)? Asked on the starting write's
    * transaction: it may wait for no second pooled connection while that one is held.
    */
-  private async filesReachable(
-    conn: Conn,
-    p: Principal,
-    ids: readonly string[],
-  ): Promise<boolean> {
+  private async filesReachable(conn: Conn, p: Principal, ids: readonly string[]): Promise<boolean> {
     const found = await this.files().reachableIds(conn, p, ids);
     return ids.every((id) => found.includes(id));
   }

@@ -26,7 +26,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { TenantConfigService } from '../tenants/tenant-config.service.js';
-import { type Conn, CORE_OPTIONS, type CoreOptions } from '../tokens.js';
+import { CORE_OPTIONS, type Conn, type CoreOptions } from '../tokens.js';
 import { standingProviders } from './standing.js';
 
 /**

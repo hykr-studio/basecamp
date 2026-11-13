@@ -9,7 +9,7 @@ import {
 import { type Database, schema } from '@hykr/db';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
-import { type Conn, CORE_OPTIONS, type CoreOptions } from '../tokens.js';
+import { CORE_OPTIONS, type Conn, type CoreOptions } from '../tokens.js';
 
 /** A business as its features need it: its name and its settings, defaults applied. */
 export interface TenantInfo {

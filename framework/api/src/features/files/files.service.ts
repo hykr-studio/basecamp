@@ -14,8 +14,8 @@ import {
 import {
   type AnyEntityDef,
   auditCtx,
-  type Conn,
   CORE_OPTIONS,
+  type Conn,
   type CoreOptions,
   entityDef,
   entityDefs,
@@ -550,7 +550,8 @@ export class FilesService implements OnApplicationBootstrap {
   /** The files of these ids that p reaches; the others are left out, saying nothing of them. */
   async getMany(p: Principal, ids: readonly string[]): Promise<FileInfo[]> {
     const out: FileInfo[] = [];
-    for (const row of await this.reachableRows(this.db, p, ids)) out.push(await this.withUrl(row, p));
+    for (const row of await this.reachableRows(this.db, p, ids))
+      out.push(await this.withUrl(row, p));
     return out;
   }
 
