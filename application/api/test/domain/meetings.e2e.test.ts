@@ -96,6 +96,8 @@ describe('meetings, end to end', () => {
         present: {
           kind: 'text',
           text: expect.stringContaining('• Site review'),
+          // The view's title, to head the rows (V7).
+          heading: 'Meetings',
           choices: [{ id: siteReview.id, title: 'Site review' }],
         },
       },

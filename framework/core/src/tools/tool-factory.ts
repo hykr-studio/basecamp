@@ -158,7 +158,11 @@ function parked(result: unknown): Present | undefined {
     ? {
         kind: 'inline',
         view: 'approval.card',
-        props: { approvalId: r.approval.id, summary: r.approval.summary },
+        props: {
+          approvalId: r.approval.id,
+          summary: r.approval.summary,
+          ...(r.approval.canDecide === false ? { canDecide: false } : {}),
+        },
       }
     : undefined;
 }
