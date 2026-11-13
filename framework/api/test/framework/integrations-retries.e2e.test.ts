@@ -1,7 +1,7 @@
 // Retries and the integration bus (V6): a write repeated with its idempotency-key is the first
 // write again (one endpoint, one connection, one rotation, the same secret), a different body
 // under the same key is a 409, and an endpoint gets only events that happened after it was made.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -193,6 +193,93 @@ describe('a connection asked for twice with one key', () => {
     expect(
       await count('select count(*) n from app.integration_connections where label = $1', [label]),
     ).toBe(1);
+  });
+});
+
+describe('a repeat after someone else changed the record', () => {
+  let bea: Person;
+  const asBea = (method: string, path: string, body: unknown) =>
+    bea.call(method, path, body, { 'x-tenant-id': tenantId, 'idempotency-key': randomUUID() });
+
+  beforeAll(async () => {
+    bea = new Person('Bea Retries');
+    await bea.signUp();
+    await addMember(bea, tenantId, ['admin']);
+  });
+
+  it('a connection given new credentials since: the repeat has none of them', async () => {
+    const key = randomUUID();
+    const body = { connector: 'standard-webhooks', label: `replaced ${key}` };
+    const first = await post('/api/integrations/connections', body, key);
+    expect(first.body.credentials).toBeDefined();
+    const theirs = `whsec_${randomUUID()}`;
+    const patched = await asBea('PATCH', `/api/integrations/connections/${first.body.value.id}`, {
+      credentials: { secret: theirs },
+    });
+    expect(patched.status).toBe(200);
+    const again = await post('/api/integrations/connections', body, key);
+    expect(again.status).toBe(201);
+    expect(again.body.value.id).toBe(first.body.value.id);
+    expect(again.body.credentials).toBeUndefined();
+    expect(JSON.stringify(again.body)).not.toContain(theirs);
+  });
+
+  it('an endpoint rotated since: the repeat of its create or of a rotate has no secret', async () => {
+    const key = randomUUID();
+    const body = { url: `${base}/idem/rotated-since`, events: ['nothing.here'] };
+    const first = await post('/api/integrations/endpoints', body, key);
+    const id = first.body.value.id as string;
+    const rotateKey = randomUUID();
+    const rotated = await post(`/api/integrations/endpoints/${id}/rotate`, undefined, rotateKey);
+    const later = await asBea('POST', `/api/integrations/endpoints/${id}/rotate`, undefined);
+    expect(later.status).toBe(200);
+    const again = await post('/api/integrations/endpoints', body, key);
+    expect(again.status).toBe(201);
+    expect(again.body.value.id).toBe(id);
+    expect(again.body.secret).toBeUndefined();
+    const rotateAgain = await post(
+      `/api/integrations/endpoints/${id}/rotate`,
+      undefined,
+      rotateKey,
+    );
+    expect(rotateAgain.status).toBe(200);
+    expect(rotateAgain.body.secret).toBeUndefined();
+    for (const res of [again, rotateAgain])
+      for (const secret of [rotated.body.secret, later.body.secret])
+        expect(JSON.stringify(res.body)).not.toContain(secret);
+  });
+});
+
+describe('a connection with credentials given, asked for twice with one key', () => {
+  it('is recognised by a keyed tag of them: no plain hash of the secret is stored', async () => {
+    const key = randomUUID();
+    const secret = `whsec_${randomUUID()}`;
+    const body = {
+      connector: 'standard-webhooks',
+      label: `given ${key}`,
+      credentials: { secret },
+    };
+    const first = await post('/api/integrations/connections', body, key);
+    const again = await post('/api/integrations/connections', body, key);
+    expect(first.status).toBe(201);
+    expect(again.status).toBe(201);
+    expect(again.body.value.id).toBe(first.body.value.id);
+    const other = await post(
+      '/api/integrations/connections',
+      { ...body, credentials: { secret: `whsec_${randomUUID()}` } },
+      key,
+    );
+    expect(other.status).toBe(409);
+    const plain = createHash('sha256')
+      .update(JSON.stringify(['integrations.connection.create', null, body]))
+      .digest('hex');
+    const { rows } = await pool.query(
+      'select request_hash, response from app.idempotency where key = $1',
+      [key],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].request_hash).not.toBe(plain);
+    expect(JSON.stringify(rows[0].response)).not.toContain(secret);
   });
 });
 

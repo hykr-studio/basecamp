@@ -58,7 +58,21 @@ import {
   endpointAad,
   PREVIOUS_SECRET_MS,
   requireSecretBox,
+  secretTag,
 } from './settings.js';
+
+/**
+ * Is the record as the write being repeated left it? A secret is answered again only then: a
+ * rotation, new credentials (or any other change) since means the row holds what someone else
+ * wrote, which a repeat must not give away.
+ */
+const unchangedSince = (result: WriteOutcome['result'], row: { updatedAt: Date }) =>
+  result.status === 'done' &&
+  (result.value as { updatedAt?: string } | null)?.updatedAt === row.updatedAt.toISOString();
+
+/** What a body carrying credentials is recognised by on a retry: them, tagged, never in clear. */
+const recognised = <T extends { credentials?: unknown }>(input: T) =>
+  input.credentials === undefined ? input : { ...input, credentials: secretTag(input.credentials) };
 
 /** What a request sends, checked, or 400 with the problems. */
 function parse<T extends z.ZodType>(schema: T, body: unknown): z.infer<T> {
@@ -138,7 +152,8 @@ export class IntegrationsService implements OnModuleInit {
 
   /**
    * A repeated create or rotate answers the endpoint's secret again: read from its sealed row,
-   * so no secret is ever kept with the stored answer.
+   * so no secret is ever kept with the stored answer. Only while the endpoint is as that write
+   * left it: after a later rotation or change, the stored answer alone.
    */
   private async withSecret(result: WriteOutcome['result'], p: Principal) {
     if (result.status !== 'done') return result;
@@ -154,7 +169,7 @@ export class IntegrationsService implements OnModuleInit {
             ),
           )
       : [];
-    if (!row) return result;
+    if (!row || !unchangedSince(result, row)) return result;
     this.mayStillSee(p, row.capabilities);
     const secret = requireSecretBox().open(row.secretSealed, endpointAad(row.tenantId, row.id));
     return { ...result, secret };
@@ -375,7 +390,8 @@ export class IntegrationsService implements OnModuleInit {
     const op = createConnectionOp();
     const made = (out: WriteOutcome) =>
       input.credentials ? out.result : this.withCredentials(out.result, p);
-    const repeat = await findRepeat(this.db, this.ctx(p, meta), op, input);
+    const request = recognised(input);
+    const repeat = await findRepeat(this.db, this.ctx(p, meta), op, request);
     if (repeat) return made(repeat);
     const c = this.connector(input.connector);
     if (!input.credentials && !c.generate)
@@ -399,13 +415,17 @@ export class IntegrationsService implements OnModuleInit {
         sealed,
         public: creds.public,
       },
-      input,
+      request,
     );
     if (out.repeat) return made(out);
     return generated ? { ...out.result, credentials: generated } : out.result;
   }
 
-  /** A repeated create's made credentials, read from the connection's sealed row. */
+  /**
+   * A repeated create's made credentials, read from the connection's sealed row, while they are
+   * still the ones it made: once anyone has changed the connection (new credentials, a label),
+   * the stored answer alone.
+   */
   private async withCredentials(result: WriteOutcome['result'], p: Principal) {
     if (result.status !== 'done') return result;
     const id = (result.value as { id?: string } | null)?.id;
@@ -420,7 +440,7 @@ export class IntegrationsService implements OnModuleInit {
             ),
           )
       : [];
-    if (!row) return result;
+    if (!row || !unchangedSince(result, row)) return result;
     this.mayStillSee(p);
     const plain = requireSecretBox().open(
       row.credentialsSealed,
@@ -447,7 +467,7 @@ export class IntegrationsService implements OnModuleInit {
       meta,
       updateConnectionOp({ id }),
       { ...rest, sealed, public: creds.public },
-      input,
+      recognised(input),
     );
     return out.result;
   }
