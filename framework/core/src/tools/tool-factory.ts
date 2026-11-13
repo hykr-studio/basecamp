@@ -113,6 +113,7 @@ export async function safely<T>(
         kind: 'approval',
         approvalId: approval.id,
         summary: approval.summary,
+        ...(typeof approval.canDecide === 'boolean' ? { canDecide: approval.canDecide } : {}),
         output: out,
         context: runContextOf(ctx.requestContext),
       };
@@ -157,7 +158,11 @@ function parked(result: unknown): Present | undefined {
     ? {
         kind: 'inline',
         view: 'approval.card',
-        props: { approvalId: r.approval.id, summary: r.approval.summary },
+        props: {
+          approvalId: r.approval.id,
+          summary: r.approval.summary,
+          ...(r.approval.canDecide === false ? { canDecide: false } : {}),
+        },
       }
     : undefined;
 }

@@ -78,7 +78,8 @@ export const todosScripts = [
     },
   }),
   defineScript({
-    // Only when the business switched "clear done to-dos" on: off, the tool is not offered.
+    // Only when the business switched "clear done to-dos" on: off, the tool is not offered, and
+    // the scripted model answers for it ("I can't do that here.").
     name: 'clear-done',
     match: (text) =>
       /^clear (?:the |my )?done(?: to-?dos)?\.?$/i.test(first(text)) ? true : undefined,

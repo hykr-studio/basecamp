@@ -6,9 +6,9 @@ import { isParkedCall, type ParkedCall, type ResumeDecision } from '@hykr/core/t
 import type { Agent } from '@mastra/core/agent';
 import type { Mastra } from '@mastra/core/mastra';
 import type { MastraModelOutput } from '@mastra/core/stream';
-import { parkedLine, type TurnVoice, voiceOf } from './parked-line.js';
+import { type ParkedApproval, parkedLine, type TurnVoice, voiceOf } from './parked-line.js';
 
-export { parkedLine, type TurnVoice, voiceOf };
+export { type ParkedApproval, parkedLine, type TurnVoice, voiceOf };
 
 type RequestContextLike = { get(key: string): unknown } | undefined;
 
@@ -45,7 +45,7 @@ const resultChunk = (call: SuspendedCall, base: Pick<Chunk, 'runId' | 'from'>) =
 
 /** One line per waiting request (the same line once), after what the model said. */
 function waitingText(text: string, calls: readonly SuspendedCall[], voice: TurnVoice) {
-  const lines = [...new Set(calls.map((c) => parkedLine(c.parked.summary, voice)))];
+  const lines = [...new Set(calls.map((c) => parkedLine(c.parked, voice)))];
   return [text.trim(), ...lines].filter(Boolean).join('\n\n');
 }
 

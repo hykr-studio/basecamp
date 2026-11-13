@@ -31,7 +31,11 @@ function shown(spec: EntitySpec, id: string) {
       return {
         kind: 'inline',
         view: 'approval.card',
-        props: { approvalId: r.approval.id, summary: r.approval.summary },
+        props: {
+          approvalId: r.approval.id,
+          summary: r.approval.summary,
+          ...(r.approval.canDecide === false ? { canDecide: false } : {}),
+        },
       };
     return spec.views?.item ? { kind: 'inline', view: spec.views.item, props: { id } } : undefined;
   };

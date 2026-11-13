@@ -68,19 +68,29 @@ function ParkedLine({
   approvalId: string;
   withCard: boolean;
 }) {
-  const { status } = useApprovalStatus(approvalId);
+  const { approval, status } = useApprovalStatus(approvalId);
   const asked = toolWords(tool).asked;
   if (withCard) return <Line icon="clock" tone={colors.approvalText} tool={tool} label={asked} />;
+  // Someone else decides it (a capability's holders, a named person): never "by you".
+  const theirs = approval?.canDecide === false;
   const [icon, tone, state]: [IconName, string, string] =
     status === 'approved'
-      ? ['check-circle', colors.success, 'approved by you']
+      ? ['check-circle', colors.success, theirs ? 'approved' : 'approved by you']
       : status === 'rejected'
-        ? ['slash', colors.muted, 'rejected by you; nothing changed']
+        ? [
+            'slash',
+            colors.muted,
+            theirs ? 'rejected; nothing changed' : 'rejected by you; nothing changed',
+          ]
         : status === 'failed'
           ? ['x-circle', colors.danger, "approved, but it couldn't be done"]
           : status === 'expired'
             ? ['clock', colors.muted, 'expired; nothing changed']
-            : ['clock', colors.approvalText, 'waiting for your approval'];
+            : [
+                'clock',
+                colors.approvalText,
+                theirs ? 'waiting for the team' : 'waiting for your approval',
+              ];
   return <Line icon={icon} tone={tone} tool={tool} label={`${asked}: ${state}`} />;
 }
 

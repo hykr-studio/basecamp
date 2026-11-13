@@ -182,6 +182,8 @@ describe('"clear done to-dos": behind a flag the business switches', () => {
     expect(turn.body.toolCalls ?? []).not.toContainEqual(
       expect.objectContaining({ tool: 'clear-done-todos', ok: true }),
     );
+    // The scripted model says it can't, never an API status (V7).
+    expect(turn.body.reply).toBe("I can't do that here.");
     expect(await titles(owner, 'done=true')).toEqual(['Old task']);
   });
 

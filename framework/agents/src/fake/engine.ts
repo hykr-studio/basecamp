@@ -47,6 +47,12 @@ export type Turn = {
   spoken: boolean;
   /** The record the person is looking at, as the instructions state it ("close this one"). */
   record?: { type: string; id: string };
+  /**
+   * Whether this turn offers the tool (a switched-off feature's are not). A script's call to one
+   * it does not offer is answered for it ("I can't do that here."); true when the turn's tools
+   * are not known.
+   */
+  offered: (tool: string) => boolean;
 };
 
 /** One thing the scripted model knows how to do. The first script that matches runs. */
@@ -125,11 +131,11 @@ export function written(
   const r = o.result as {
     status: string;
     value?: Row;
-    approval?: { summary: string | null };
+    approval?: { summary: string | null; canDecide?: boolean };
   };
   const lang = turn?.lang ?? 'en';
   const summary = r.approval?.summary ?? t(lang, 'said.aChange');
-  if (r.status === 'needs_approval') return parkedLine(r.approval?.summary, turn);
+  if (r.status === 'needs_approval') return parkedLine(r.approval, turn);
   if (r.status === 'approved')
     return r.value ? done(r.value) : t(lang, 'run.approved', { summary });
   if (r.status === 'rejected') return t(lang, 'run.rejected', { summary });
@@ -160,6 +166,15 @@ function lastUserText(prompt: LanguageModelV2Prompt): string {
   return '';
 }
 
+/**
+ * A tool's output as an outcome. An error output (a tool the loop could not find, or one that
+ * threw) is not the API's answer: a refusal with no reason, never its text (a developer's).
+ */
+function outcomeOf(output: { type?: string; value: unknown }): Outcome {
+  if (output.type?.startsWith('error')) return { ok: false };
+  return output.value as Outcome;
+}
+
 /** Tool results since the last user message, oldest first. */
 function stepsThisTurn(prompt: LanguageModelV2Prompt): Step[] {
   const steps: Step[] = [];
@@ -167,8 +182,8 @@ function stepsThisTurn(prompt: LanguageModelV2Prompt): Step[] {
     const message = prompt[i];
     if (message.role !== 'tool') continue;
     for (const part of [...message.content].reverse()) {
-      const output = part.output as { value: unknown };
-      steps.unshift({ toolName: part.toolName, outcome: output.value as Outcome });
+      const output = part.output as { type?: string; value: unknown };
+      steps.unshift({ toolName: part.toolName, outcome: outcomeOf(output) });
     }
   }
   return steps;
@@ -185,7 +200,7 @@ function pinnedLang(prompt: LanguageModelV2Prompt): Lang | undefined {
 }
 const literally = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-function turnOf(prompt: LanguageModelV2Prompt): Turn {
+function turnOf(prompt: LanguageModelV2Prompt, offered?: ReadonlySet<string>): Turn {
   const steps = stepsThisTurn(prompt);
   // As the instructions state them (see INSTRUCTIONS in version.ts).
   const zone = fromSystem(prompt, /time zone is ([A-Za-z0-9_+\-/]+)/, (m) => m[1]) ?? 'UTC';
@@ -208,33 +223,47 @@ function turnOf(prompt: LanguageModelV2Prompt): Turn {
       type: m[1],
       id: m[2],
     })),
+    offered: (tool) => !offered || offered.has(tool),
   };
 }
 
-const why = (o: Outcome) => {
-  const body = o.error as { reason?: string; message?: unknown } | null;
-  return (
-    body?.reason ??
-    (typeof body?.message === 'string' ? body.message : `the API answered ${o.status}`)
-  );
+/** Why a call was refused: the API's reason, else its status, else no reason, in the language. */
+const why = (o: Outcome, lang: Lang) => {
+  const body = o.error as { reason?: string; message?: unknown } | null | undefined;
+  if (body?.reason) return body.reason;
+  if (typeof body?.message === 'string') return body.message;
+  return typeof o.status === 'number'
+    ? t(lang, 'said.apiAnswered', { status: o.status })
+    : t(lang, 'said.noReason');
 };
 
-/** Decide the next step from the conversation so far. */
+/**
+ * Decide the next step from the conversation so far. `offered`: the tools the turn offers (the
+ * call's own list); a step that calls one it does not offer says it cannot instead.
+ */
 export function runScripts(
   prompt: LanguageModelV2Prompt,
   scripts: readonly Script[],
   help: string,
+  offered?: ReadonlySet<string>,
 ): LanguageModelV2Content[] {
-  const turn = turnOf(prompt);
+  const turn = turnOf(prompt, offered);
   const last = turn.steps.at(-1);
   if (last && !last.outcome.ok)
-    return [say(t(turn.lang, 'said.couldNot', { reason: why(last.outcome) }))];
+    return [say(t(turn.lang, 'said.couldNot', { reason: why(last.outcome, turn.lang) }))];
   for (const script of scripts) {
     const intent = script.match(turn.text);
-    if (intent !== undefined) return script.step(intent, turn);
+    if (intent === undefined) continue;
+    const content = script.step(intent, turn);
+    const missing = content.some((p) => p.type === 'tool-call' && !turn.offered(p.toolName));
+    return missing ? [say(t(turn.lang, 'said.notAvailable'))] : content;
   }
   return [say(help)];
 }
+
+/** The tools a model call offers, by name; undefined when the call lists none. */
+const offeredBy = (options: LanguageModelV2CallOptions) =>
+  options.tools ? new Set(options.tools.map((tool) => tool.name)) : undefined;
 
 /** Characters per token, as the scripted model counts them: roughly a real tokenizer's. */
 const CHARS_PER_TOKEN = 4;
@@ -264,7 +293,7 @@ export function fakeModel(scripts: readonly Script[], help: string): LanguageMod
     supportedUrls: {},
 
     async doGenerate(options: LanguageModelV2CallOptions) {
-      const content = runScripts(options.prompt, scripts, help);
+      const content = runScripts(options.prompt, scripts, help, offeredBy(options));
       const calledTool = content.some((part) => part.type === 'tool-call');
       return {
         content,
@@ -275,7 +304,7 @@ export function fakeModel(scripts: readonly Script[], help: string): LanguageMod
     },
 
     async doStream(options: LanguageModelV2CallOptions) {
-      const content = runScripts(options.prompt, scripts, help);
+      const content = runScripts(options.prompt, scripts, help, offeredBy(options));
       const calledTool = content.some((part) => part.type === 'tool-call');
       const parts: LanguageModelV2StreamPart[] = [{ type: 'stream-start', warnings: [] }];
       for (const part of content) {

@@ -2845,6 +2845,8 @@ Helpers you will use, all from `@hykr/agents/script`: `call`, `say`, `sayIn(turn
 
 A write that waits for approval suspends the run: the script's next step runs when the request is decided, with the tool's result saying `approved`, `rejected` or `expired` (section 5.8.3). The steps before the park are still in `turn.steps`.
 
+The scripted model knows which tools the turn offers (the call's tool list): `turn.offered('create-todo')` says whether a script may call it. A tool can be missing because its feature flag is off for the business, or the person may not use it. A step that calls a tool the turn does not offer is not sent: the engine answers "I can't do that here." (`said.notAvailable`, in every language) instead, so a script needs no check of its own. Check `turn.offered` only to say something else. A tool that fails reads as a refusal with its reason, and never as "the API answered undefined".
+
 The framework's own scripts (saved pages, handoff, the failing turn) run before the domain's. Each feature keeps them in `framework/agents/src/fake/scripts/<feature>.ts` as `defineScriptSet({ name, order, scripts })`, with one line in `scripts/index.ts`. The first script that matches runs, so `order` places the set: pages 100, handoff 200, testing 900. A set or script name used twice throws. A new framework tool gets its script there.
 
 The fake model reads the language, surfaces and canvas from the system prompt with regular expressions. If you change the wording of `buildInstructions` in `framework/agents/src/version.ts`, scripted tests can break silently.
@@ -2877,6 +2879,8 @@ export const TodoListView = defineView({
 ```
 
 Add it to the module's `<name>Views.views`. `createUiRegistry` refuses a spoken list view without `labels.noun` and `labels.empty`, and a view or screen name another module (or the framework) already has.
+
+On WhatsApp a list's rows (two or more) go as buttons or a list to tap, headed by the view's heading: the `title` it was shown with, else its `labels.title` in the turn's language (the text intent's `heading`). A view with neither is headed by its whole text, so give a list view a `labels.title`; its `text` need not start with one.
 
 Bind it to a component in the app, in its app module's `bind` (`application/mobile/src/modules/todos/index.tsx`):
 
@@ -3599,6 +3603,7 @@ These are not built. Each has a workaround for now.
 | Emailing an invitation | `POST /api/members/invites` returns the code; the inviter shares it. Notifications have no recipient by address yet. |
 | Agent tools for members and grants | `/api/members` and `/api/grants` are people-only routes. |
 | Seed data | Create data through the API or the app. Maestro's demo assumes data exists. |
+| A link for a WhatsApp request someone else decides | The waiting line says the team was asked, with no link: a contact cannot open the business's app. A member finds the request in the app's Approvals. |
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
 | Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
 | Images in documents (a logo, a signature, photos) | The layout has no image block. Put the business's name in the header. |

@@ -5,6 +5,7 @@
 // records of an entity whose business may require custom fields the command cannot know about.
 // Only the settings test's server (`settingsApp`) adds these modules; the other tests never load
 // this file.
+import { call, defineScript, say, written } from '@hykr/agents/script';
 import { defineModule, defineServer } from '@hykr/api';
 import {
   CreatedBy,
@@ -267,6 +268,21 @@ const gadgetsModule = defineModule({
   }),
   server: GadgetsModule,
   tables: { gadgets },
+  // Calls the tool whether or not the turn offers it: the scripted model answers for a
+  // switched-off one (V7).
+  agent: {
+    scripts: [
+      defineScript({
+        name: 'polish-gadget',
+        match: (text) => /^polish gadget ([0-9a-f-]{36})$/.exec(text.trim())?.[1],
+        step: (gadgetId, turn) => {
+          const r = turn.result('polish-gadget');
+          if (!r) return [call('polish-gadget', { gadgetId })];
+          return [say(written(r, () => 'Polished.', turn))];
+        },
+      }),
+    ],
+  },
   contributes: { featureFlags: [ExtrasFlag, PolishFlag], readProjectors: [staffSeeNoRank] },
 });
 

@@ -314,7 +314,11 @@ describe('render', () => {
   it('words first, then 2–3 rows as buttons, 4–10 as a list, more as a list plus a link', () => {
     expect(
       render(
-        { reply: 'Here.', views: [{ text: 'To-dos\n• a\n• b', choices: rows(2) }], approvals: [] },
+        {
+          reply: 'Here.',
+          views: [{ text: 'To-dos\n• a\n• b', heading: 'To-dos', choices: rows(2) }],
+          approvals: [],
+        },
         o,
       ),
     ).toEqual([
@@ -344,6 +348,26 @@ describe('render', () => {
     expect((many[1] as { rows: unknown[] }).rows).toHaveLength(10);
   });
 
+  it("the buttons' or list's body is the view's heading; without one, its words whole (V7)", () => {
+    // No heading line: the first line is the first row, never the body alone.
+    for (const n of [2, 5]) {
+      const [first] = render(
+        { reply: '', views: [{ text: '• a\n• b', choices: rows(n) }], approvals: [] },
+        o,
+      );
+      expect(first).toMatchObject({ kind: n === 2 ? 'buttons' : 'list', text: '• a\n• b' });
+    }
+    const [titled] = render(
+      {
+        reply: '',
+        views: [{ text: '• a\n• b', heading: 'To-dos', choices: rows(5) }],
+        approvals: [],
+      },
+      o,
+    );
+    expect(titled).toMatchObject({ kind: 'list', text: 'To-dos' });
+  });
+
   it('a view with no rows to pick is just words', () => {
     expect(render({ reply: 'Done.', views: [{ text: '• one to-do' }], approvals: [] }, o)).toEqual([
       { kind: 'text', to: '919', text: 'Done.\n\n• one to-do' },
@@ -371,7 +395,7 @@ describe('render', () => {
       ],
     });
     expect(render(turn, o)[0]).toMatchObject({
-      text: expect.stringContaining('Approve it in the app: http://app/approvals'),
+      text: 'It waits.\n\nDelete "Tiles". Approve it in the app: http://app/approvals/ap1',
     });
   });
 
