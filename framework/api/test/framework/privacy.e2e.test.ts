@@ -1683,6 +1683,17 @@ describe('the copies of what an erasure takes (decisions V3)', () => {
     });
     expect(joined.status).toBe(200);
     expect((await copiesHolding(uma.email)).length).toBeGreaterThanOrEqual(3);
+    // A page she saved here: its audit rows carry its name and spec.
+    const page = await call(uma, 'POST', '/api/pages', {
+      name: `${MK} page`,
+      spec: {
+        title: `${MK} page`,
+        layout: 'stack',
+        blocks: [{ id: 'k', view: 'kpi.row', props: { items: [{ label: 'Open', value: 3 }] } }],
+      },
+    });
+    expect(page.status).toBe(201);
+    expect((await copiesHolding(`${MK} page`)).length).toBeGreaterThanOrEqual(1);
 
     const res = await file(uma, 'erase');
     expect(res.status).toBe(200);
@@ -1695,7 +1706,7 @@ describe('the copies of what an erasure takes (decisions V3)', () => {
         [tenantId, uma.email.toLowerCase()],
       ),
     ).toBe(0);
-    expect(await copiesHolding(uma.email)).toEqual([]);
+    expect(await copiesHolding(uma.email, `${MK} page`)).toEqual([]);
     const listed = await call(ana, 'GET', '/api/members/invites');
     expect(listed.status).toBe(200);
     expect(JSON.stringify(listed.body)).not.toContain(uma.email.toLowerCase());
