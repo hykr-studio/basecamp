@@ -13,6 +13,7 @@ import {
   Person,
   pool,
   server,
+  setTenantSettings,
   shutdown,
 } from '@hykr/api/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -553,5 +554,109 @@ describe('who decides, and who sees the cost', () => {
       [saved.body.value.order.id],
     );
     expect(rows).toEqual([{ status: 'pending', move: 'cancel' }]);
+  });
+});
+
+describe('a currency that does not exist (V4)', () => {
+  const seq = (r: { body: { value: { order: { number: string } } } }) =>
+    Number(r.body.value.order.number.split('/').at(-1));
+  const titled = async (title: string) =>
+    (
+      await pool.query('select id from app.orders where tenant_id = $1 and title = $2', [
+        tenantId,
+        title,
+      ])
+    ).rows;
+  const line = [{ ref: 'a', title: 'X', quantity: 1, unitPrice: '1.00', taxRateBp: 0 }];
+
+  it('a save in one is refused before a number is taken, priced or not', async () => {
+    const before = await save(owner, { title: 'Before ABC', items: line });
+    expect(before.status).toBe(200);
+    for (const [title, items] of [
+      ['Priced ABC', line],
+      ['Empty ABC', []],
+    ] as const) {
+      const res = await save(owner, { title, currency: 'ABC', items });
+      expect(res.status, title).toBe(403);
+      expect(res.body.rule, title).toBe('money_invalid');
+      expect(res.body.reason, title).toContain('"ABC" is not a currency');
+      expect(await titled(title)).toEqual([]);
+    }
+    const after = await save(owner, { title: 'After ABC', items: line });
+    expect(seq(after)).toBe(seq(before) + 1);
+  });
+
+  it('a brief, a plain create, is refused the same way', async () => {
+    const res = await owner.call('POST', '/api/briefs', {
+      name: 'Made-up money',
+      summary: 'A budget in no currency',
+      budget: '20000.50',
+      currency: 'QZX',
+    });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ rule: 'money_invalid', reason: '"QZX" is not a currency' });
+  });
+});
+
+describe('money in summaries (lead V4-L17)', () => {
+  const both = new Person('Owner Two Currencies');
+  const helper = new Person('Staff Two Currencies');
+  let tid = '';
+
+  beforeAll(async () => {
+    for (const p of [both, helper]) await p.signUp();
+    tid = (await me(both)).tenantId;
+    await addMember(helper, tid, ['staff']);
+    await setTenantSettings(tid, { money: { currency: 'INR' } });
+    const rupees = await save(both, {
+      title: 'Rupees',
+      items: [
+        { ref: 'a', title: 'Tiles', quantity: 2, unitPrice: '50.00', taxRateBp: 0, cost: '30' },
+      ],
+    });
+    expect(rupees.status, JSON.stringify(rupees.body)).toBe(200);
+    const yen = await save(both, {
+      title: 'Yen',
+      currency: 'JPY',
+      items: [
+        { ref: 'a', title: 'Lamp', quantity: 1, unitPrice: '1500', taxRateBp: 0, cost: '900' },
+      ],
+    });
+    expect(yen.status, JSON.stringify(yen.body)).toBe(200);
+  });
+
+  it('sums per currency, in totals and in groups, each as Money', async () => {
+    const res = await both.call('GET', '/api/orders/summary?groupBy=status&sum=total');
+    expect(res.status).toBe(200);
+    const byCurrency = (a: { key: { currency: string } }, b: { key: { currency: string } }) =>
+      a.key.currency.localeCompare(b.key.currency);
+    expect([...res.body.totals].sort(byCurrency)).toEqual([
+      { key: { currency: 'INR' }, count: 1, sum: { total: { minor: 10000, currency: 'INR' } } },
+      { key: { currency: 'JPY' }, count: 1, sum: { total: { minor: 1500, currency: 'JPY' } } },
+    ]);
+    expect([...res.body.groups].sort(byCurrency)).toEqual([
+      {
+        key: { status: 'draft', currency: 'INR' },
+        count: 1,
+        sum: { total: { minor: 10000, currency: 'INR' } },
+      },
+      {
+        key: { status: 'draft', currency: 'JPY' },
+        count: 1,
+        sum: { total: { minor: 1500, currency: 'JPY' } },
+      },
+    ]);
+  });
+
+  it('a line cost is no measure, for staff without orders.cost.read or anyone', async () => {
+    const here = { 'x-tenant-id': tid };
+    for (const [who, headers] of [
+      [helper, here],
+      [both, {}],
+    ] as const) {
+      const res = await who.call('GET', '/api/orderItems/summary?sum=cost', undefined, headers);
+      expect([400, 403], JSON.stringify(res.body)).toContain(res.status);
+      expect(JSON.stringify(res.body)).not.toMatch(/"minor"/);
+    }
   });
 });
