@@ -132,6 +132,8 @@ export const MeetingCheckInSpec = entitySpec({
     defaultSort: [['createdAt', 'desc']],
     pageSize: { default: 25, max: 100 },
   },
+  // Its meeting is one the person reads in their business (meeting.check-in loads it so).
+  traits: { references: { meetingId: 'meeting' } },
   // People check in where they are, through meeting.check-in; the assistant has no position.
   expose: {
     list: 'human',

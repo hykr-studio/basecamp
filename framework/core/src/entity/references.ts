@@ -2,11 +2,12 @@
 // the writer can read in their business, or the write is refused, the same way whether the id is
 // unknown, another business's, or one the writer cannot read. docs/decisions/V2.md.
 import { type EntitySpec, type Principal, referencesOf } from '@hykr/contracts';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import type { Conn } from '../tokens.js';
 import { entityDef } from './registry.js';
 
 type Values = Record<string, unknown>;
+const log = new Logger('references');
 
 /**
  * Load every reference this write sets to a value, or changes, through the target entity's own
@@ -59,6 +60,11 @@ export function referenceRefusal(
   label = 'record',
 ): unknown {
   if (!isForeignKeyViolation(e)) return e;
+  // The server's log keeps which key it was; the answer does not.
+  const constraint =
+    (e as { constraint?: unknown })?.constraint ??
+    (e as { cause?: { constraint?: unknown } })?.cause?.constraint;
+  log.warn(`a ${action} refused by the foreign key ${String(constraint ?? '(unnamed)')}`);
   if (action === 'delete')
     return new ConflictException({
       error: 'in_use',
