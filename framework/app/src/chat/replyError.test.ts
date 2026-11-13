@@ -6,8 +6,8 @@ const refusedBy = (rule: string, reason: string) =>
   new Error(JSON.stringify({ error: 'turn_refused', rule, reason }));
 const PAUSED = 'असिस्टेंट रुका हुआ है';
 const SUSPENDED = 'असिस्टेंट रुका हुआ है: ऑपरेटर';
-/** The app's sentence for a credits rule: the operator's pause has its own. */
-const said = (rule: string) => (rule === 'credits_suspended' ? SUSPENDED : PAUSED);
+/** The app's `t` for the paused sentences: the operator's pause has its own. */
+const said = (key: string) => (key === 'credits.suspended' ? SUSPENDED : PAUSED);
 
 describe('a refused turn', () => {
   it("by the business's credits reads the app's own words, never the API's English reason", () => {

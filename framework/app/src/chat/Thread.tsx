@@ -5,7 +5,6 @@ import {
   ThreadPrimitive,
   useAuiState,
 } from '@assistant-ui/react-native';
-import { pausedSentenceKey } from '@hykr/contracts';
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, TextInput, View } from 'react-native';
 import { Button } from '../components/ui/button';
@@ -111,9 +110,7 @@ function ReplyError() {
   return (
     <View className="flex-row items-start gap-2">
       <Icon name="alert-circle" color={colors.danger} size={16} />
-      <Text className="shrink text-danger">
-        {replyError(error, (rule) => t(pausedSentenceKey(rule)))}
-      </Text>
+      <Text className="shrink text-danger">{replyError(error, t)}</Text>
     </View>
   );
 }
