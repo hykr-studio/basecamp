@@ -13,7 +13,7 @@ const MILLIS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const FORMAT = sql.raw(`'YYYY-MM-DD"T"HH24:MI:SS.US'`);
 
 /** A column with a time zone (every framework table's), else a plain timestamp. */
-const zoned = (column: Column) =>
+export const zoned = (column: Column) =>
   (column as Column & { withTimezone?: boolean }).withTimezone !== false;
 
 /**

@@ -11,7 +11,7 @@ import {
   sql,
   type Table,
 } from 'drizzle-orm';
-import { exactTime, readTimeKey, type TimeKey, timeAfter, timeSame } from './exact-time.js';
+import { exactTime, readTimeKey, type TimeKey, timeAfter, timeSame, zoned } from './exact-time.js';
 import { escapeLike, filterSql, listFieldSql, toColumnValue } from './field-sql.js';
 
 /**
@@ -126,7 +126,13 @@ function sortExpr(column: Column, dir: 'asc' | 'desc'): SQL | Column {
       return sql`coalesce(${column}, ${far === 'max' ? '9999-12-31' : '0001-01-01'}::date)`;
     case 'PgTimestamp':
     case 'PgTimestampString':
-      return sql`coalesce(${column}, ${far === 'max' ? '9999-12-31T00:00:00Z' : '0001-01-01T00:00:00Z'}::timestamptz)`;
+      // The far-off time in the column's own type. A `timestamptz` one made a column without a
+      // zone `timestamptz` too: read in the session's zone, so its order moved with that zone,
+      // and west of UTC the year 1 printed as 1 BC with no era (`exactTime`), a walk that never
+      // ended (V12, decision 13).
+      return zoned(column)
+        ? sql`coalesce(${column}, ${far === 'max' ? '9999-12-31T00:00:00Z' : '0001-01-01T00:00:00Z'}::timestamptz)`
+        : sql`coalesce(${column}, ${far === 'max' ? '9999-12-31T00:00:00' : '0001-01-01T00:00:00'}::timestamp)`;
     case 'PgInteger':
     case 'PgNumeric':
     case 'PgDoublePrecision':

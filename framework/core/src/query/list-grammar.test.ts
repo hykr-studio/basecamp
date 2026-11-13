@@ -264,6 +264,34 @@ describe('a time a cursor keeps (V12)', () => {
     const clause = render(built.after({ s: 'at', v: ['2026-11-12T16:55:48.123456'], id: 'x' }));
     expect(clause.sql).toContain('"app"."plain_times"."at" > $1::timestamp');
   });
+
+  it('a nullable time with no zone stays one: its far-off time is a timestamp too', () => {
+    // A `timestamptz` far value made the whole expression one, read in the session's zone: west
+    // of UTC its year 1 printed as 1 BC, and a walk into the rows with none never ended (13).
+    const plain = pgSchema('app').table('plain_times', {
+      id: text('id').primaryKey(),
+      at: timestamp('at'),
+      text: timestamp('text', { mode: 'string' }),
+    });
+    const sortedBy = (field: string, dir: 'asc' | 'desc') =>
+      buildListSql(
+        plain,
+        { ...config, sortable: ['at', 'text'] } as never,
+        listOf([{ field, dir }]),
+      );
+    const desc = sortedBy('at', 'desc');
+    expect(render((desc.fields as Record<string, never>).key0)).toMatchObject({
+      sql: `to_char(coalesce("app"."plain_times"."at", $1::timestamp), 'YYYY-MM-DD"T"HH24:MI:SS.US')`,
+      params: ['0001-01-01T00:00:00'],
+    });
+    expect(render(desc.orderBy[0]).sql).toBe(
+      'coalesce("app"."plain_times"."at", $1::timestamp) desc',
+    );
+    expect(render(sortedBy('at', 'asc').orderBy[0]).params).toEqual(['9999-12-31T00:00:00']);
+    expect(render(sortedBy('text', 'desc').orderBy[0]).sql).toBe(
+      'coalesce("app"."plain_times"."text", $1::timestamp) desc',
+    );
+  });
 });
 
 describe('cursor values', () => {
