@@ -48,6 +48,12 @@ export function parseCreditsConfig(raw: string | undefined): CreditsConfig {
     throw new CreditsConfigError(
       parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`),
     );
+  const { defaults } = parsed.data;
+  const order = thresholdProblem(
+    defaults.alertAt ?? NEUTRAL_PLAN.alertAt,
+    defaults.pauseAt ?? NEUTRAL_PLAN.pauseAt,
+  );
+  if (order) throw new CreditsConfigError([`defaults: ${order}`]);
   return parsed.data;
 }
 
@@ -92,6 +98,10 @@ export const NEUTRAL_PLAN = {
   prices: {} as Record<string, number>,
   pauseMessages: [] as string[],
 };
+
+/** An alert is an early warning: it must come before the pause, never at it. */
+export const thresholdProblem = (alertAt: number, pauseAt: number): string | undefined =>
+  alertAt >= pauseAt ? `alertAt (${alertAt}) must be below pauseAt (${pauseAt})` : undefined;
 
 /** The override, if it still holds at `now`. */
 export function activeOverride(

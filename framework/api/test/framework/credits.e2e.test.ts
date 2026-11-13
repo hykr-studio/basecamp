@@ -9,6 +9,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { agentRunToken, pausedText, reportModelUsage } from '@hykr/agents';
 import { TenantConfigService } from '@hykr/core';
+import { contentHash } from '@hykr/notifications';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CreditsService } from '../../dist/index.js';
 import {
@@ -20,7 +21,9 @@ import {
   me,
   Person,
   pool,
+  seedContact,
   server,
+  setTenantSettings,
   shutdown,
 } from '../../dist/testing.js';
 import {
@@ -30,6 +33,7 @@ import {
   GATEWAY,
   started,
 } from '../fixture/dist/features/credits/index.js';
+import { fixture } from '../fixture/dist/index.js';
 
 // Connections keep their credentials sealed with it; set before the app reads its configuration.
 process.env.SECRETS_KEY ||= 'test-secrets-key-0123456789abcdef0123456789';
@@ -340,6 +344,9 @@ describe('the operator', () => {
       'prices.nope.x: no meter is called nope',
     ]);
     expect((await setPlan(ravi, { alertAt: 90, pauseAt: 80 })).status).toBe(400);
+    expect((await setPlan(ravi, { alertAt: 90, pauseAt: 90 })).status).toBe(400);
+    // No alertAt: the deployment's 80 is not below a pause at 80.
+    expect((await setPlan(ravi, { pauseAt: 80 })).status).toBe(400);
     expect((await setPlan(ravi, { enforce: true, extra: 1 })).status).toBe(400);
     expect((await ravi.call('GET', '/api/credits')).body.enforced).toBe(false);
   });
@@ -587,11 +594,22 @@ describe('who may see and do what', () => {
     });
     expect(res.status).toBe(403);
     expect(res.body.rule).toBe('credits_manage');
+    // Who may buy is decided before what the deployment can sell through (V5): no provider
+    // named (two are set up) or one that does not exist is still a 403, not a 400.
+    for (const body of [{ amount: 100 }, { amount: 100, provider: 'nosuch' }]) {
+      const other = await inLee(sam)('POST', '/api/credits/purchases', body);
+      expect(other.status).toBe(403);
+      expect(other.body.rule).toBe('credits_manage');
+    }
     const { rows } = await pool.query(
       `select outcome from audit.events where action = 'credits.purchase' and actor_id = $1`,
       [sam.id],
     );
-    expect(rows).toEqual([{ outcome: 'denied' }]);
+    expect(rows).toEqual([{ outcome: 'denied' }, { outcome: 'denied' }, { outcome: 'denied' }]);
+    // Whoever manages the credits still hears what is wrong with the purchase.
+    const unnamed = await lee.call('POST', '/api/credits/purchases', { amount: 100 });
+    expect(unnamed.status).toBe(400);
+    expect(unnamed.body.error).toBe('provider_required');
   });
 
   it('the assistant and a customer get 403', async () => {
@@ -618,12 +636,25 @@ describe('who may see and do what', () => {
     ).toBe(403);
   });
 
-  it('the business sets its own alert threshold, never above its pause', async () => {
+  it('the business sets its own alert threshold, below its pause', async () => {
     expect((await lee.call('PUT', '/api/credits/alerts', { alertAt: 120 })).status).toBe(400);
+    // An alert at the pause is never early (V5).
+    const equal = await lee.call('PUT', '/api/credits/alerts', { alertAt: 100 });
+    expect(equal.status).toBe(400);
+    expect(equal.body.problems).toEqual(['alertAt (100) must be below pauseAt (100)']);
     const res = await lee.call('PUT', '/api/credits/alerts', { alertAt: 70 });
     expect(res.status).toBe(200);
     expect((await lee.call('GET', '/api/credits')).body.alertAt).toBe(70);
     expect((await inLee(sam)('PUT', '/api/credits/alerts', { alertAt: 60 })).status).toBe(403);
+    // Staff are refused for who they are, audited, whatever the threshold (V5).
+    const staff = await inLee(sam)('PUT', '/api/credits/alerts', { alertAt: 150 });
+    expect(staff.status).toBe(403);
+    expect(staff.body.rule).toBe('credits_manage');
+    const { rows } = await pool.query(
+      `select outcome from audit.events where action = 'credits.alerts.set' and actor_id = $1`,
+      [sam.id],
+    );
+    expect(rows).toEqual([{ outcome: 'denied' }, { outcome: 'denied' }]);
     // The operator's next plan keeps it.
     await setPlan(lee, { enforce: true, allowance: 500, prices: { tokens: 0 } });
     expect((await lee.call('GET', '/api/credits')).body.alertAt).toBe(70);
@@ -642,15 +673,41 @@ describe('limits', () => {
     const refused = await addTask(mia);
     expect(refused.status).toBe(402);
     expect(refused.body.rule).toBe('usage_limit_reached');
+    // Turns are refused, so the business reads paused, with the limit's rule and reason (V5).
     const status = (await mia.call('GET', '/api/credits')).body;
-    expect(status.paused).toBeNull();
+    const why = { rule: 'usage_limit_reached', cap: 'tool_calls', reason: refused.body.reason };
+    expect(status.paused).toEqual(why);
     expect(status.meters.find((m: { meter: string }) => m.meter === 'tool_calls')).toMatchObject({
       quantity: 2,
       limit: 2,
       usedPercent: 100,
       paused: true,
+      refusal: why,
     });
+    // Its voice limit is not reached: that meter is not paused.
+    expect(
+      status.meters.find((m: { meter: string }) => m.meter === 'voice_seconds'),
+    ).not.toHaveProperty('refusal');
+    // The operator sees the same.
+    expect((await operator('GET', `/${tenant[mia.name]}`)).body.paused).toEqual(why);
     expect(await alertsOf(mia)).toEqual(['tool_calls/alert', 'tool_calls/pause']);
+  });
+
+  it('a tokens limit pauses turns too, and says so (V5)', async () => {
+    const tia = new Person('Tia Credits');
+    await tia.signUp();
+    tenant[tia.name] = (await me(tia)).tenantId;
+    expect((await tia.chat('hello')).status).toBe(200);
+    await setPlan(tia, { enforce: true, allowance: 1_000_000, limits: { tokens: 1 } });
+    const refused = await tia.chat('hello');
+    expect(refused.status).toBe(402);
+    expect(refused.body.rule).toBe('usage_limit_reached');
+    const status = (await tia.call('GET', '/api/credits')).body;
+    expect(status.paused).toMatchObject({ rule: 'usage_limit_reached', cap: 'tokens' });
+    expect(status.meters.find((m: { meter: string }) => m.meter === 'tokens')).toMatchObject({
+      paused: true,
+      refusal: { rule: 'usage_limit_reached', cap: 'tokens' },
+    });
   });
 
   it.skipIf(!process.env.VOICE_AGENT_KEY)(
@@ -729,7 +786,12 @@ describe('the operator’s override', () => {
     expect((await addTask(mia)).status).toBe(200);
     const status = (await mia.call('GET', '/api/credits')).body;
     expect(status.override).toMatchObject({ mode: 'run', reason: 'support case' });
-    expect(status.meters.find((m: { meter: string }) => m.meter === 'tool_calls').quantity).toBe(3);
+    // Nothing is refused while it runs: neither the business nor its reached limit reads paused.
+    expect(status.paused).toBeNull();
+    expect(status.meters.find((m: { meter: string }) => m.meter === 'tool_calls')).toMatchObject({
+      quantity: 3,
+      paused: false,
+    });
     expect(
       (await operator('PUT', `/${tenant[mia.name]}/override`, { override: null })).status,
     ).toBe(200);
@@ -897,10 +959,21 @@ describe('embeddings', () => {
     expect((await eve.chat('hello')).status).toBe(200);
     expect(await embeddingsOf(eve)).toHaveLength(before);
     const status = (await eve.call('GET', '/api/credits')).body;
+    // Turns run, so the business is not paused; the meter says why recall is refused.
     expect(status.paused).toBeNull();
     expect(
       status.meters.find((m: { meter: string }) => m.meter === 'embedding_tokens'),
-    ).toMatchObject({ unit: 'token', quantity: used, limit: used, paused: true });
+    ).toMatchObject({
+      unit: 'token',
+      quantity: used,
+      limit: used,
+      paused: true,
+      refusal: {
+        rule: 'usage_limit_reached',
+        cap: 'embedding_tokens',
+        reason: limited.body.reason,
+      },
+    });
   });
 });
 
@@ -1003,6 +1076,77 @@ describe('WhatsApp', () => {
       (await uses(mia)).some((u) => u.variant === 'utility') ? true : undefined,
     );
     expect((await uses(mia)).some((u) => u.variant === 'marketing')).toBe(false);
+  });
+
+  it('a marketing send refused while paused uses none of the weekly cap; after a top-up it goes (V5)', async () => {
+    const t = tenant[mia.name];
+    const template = fixture.notifications.templates.find((x) => x.name === 'monthly_update_v1');
+    if (!template) throw new Error('The fixture has no monthly_update_v1');
+    await pool.query(
+      `insert into channel.templates (name, language, category, content_hash, status)
+       values ($1, 'en', $2, $3, 'APPROVED')
+       on conflict (name, language) do update set status = 'APPROVED'`,
+      [template.name, template.category, contentHash(template, 'en')],
+    );
+    // Never quiet, so the test does not depend on the hour; one marketing message a week.
+    await setTenantSettings(t, { quietHours: { from: '00:00', to: '00:00' }, marketingPerWeek: 1 });
+    const params = Object.fromEntries(Object.keys(template.params.shape).map((k) => [k, 'x']));
+    /** What notify.send writes to the outbox once the send is approved. */
+    const sendByHand = (customerId: string) =>
+      pool.query('insert into app.outbox (tenant_id, key, payload) values ($1, $2, $3)', [
+        t,
+        `template:${template.name}`,
+        JSON.stringify({
+          row: { id: customerId, tenantId: t, params },
+          dedupe: `send:${randomUUID()}`,
+          queues: process.env.BULL_PREFIX ?? 'bull',
+        }),
+      ]);
+    const marketingTo = async (contactId: string) =>
+      (
+        await pool.query(
+          `select status, meta->'refused'->>'rule' as rule from channel.messages
+           where contact_id = $1 and category = 'marketing' order by at, id`,
+          [contactId],
+        )
+      ).rows;
+    const reach = async (name: string) => {
+      const address = `1557${String(Date.now()).slice(-6)}${seq++ % 10}`;
+      const c = await seedContact(t, name, address);
+      await pool.query(
+        `insert into channel.consents (contact_id, topic, granted, source)
+         values ($1, 'marketing', true, 'test')`,
+        [c.contactId],
+      );
+      return { ...c, address };
+    };
+    const delivered = (address: string) =>
+      sent.filter((s) => s.to === address && s.template?.name === template.name);
+
+    // Paused for marketing: the send is recorded as failed, with why, and not sent.
+    await setPlan(mia, { enforce: true, allowance: 0, pauseMessages: ['marketing'] });
+    const kofi = await reach('Kofi Credits');
+    await sendByHand(kofi.customerId);
+    const refused = await eventually(async () => {
+      const rows = await marketingTo(kofi.contactId);
+      return rows.length ? rows : undefined;
+    });
+    expect(refused).toEqual([{ status: 'failed', rule: 'credits_exhausted' }]);
+    expect(delivered(kofi.address)).toEqual([]);
+
+    // A top-up: the refused one used none of the week's cap, so the contact gets this one.
+    await setPlan(mia, { enforce: true, allowance: 1_000_000, pauseMessages: ['marketing'] });
+    await sendByHand(kofi.customerId);
+    await eventually(() => (delivered(kofi.address).length ? true : undefined));
+    await eventually(async () =>
+      (await uses(mia)).some((u) => u.variant === 'marketing') ? true : undefined,
+    );
+
+    // The cap still holds: a second marketing message this week is dropped.
+    await sendByHand(kofi.customerId);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(delivered(kofi.address)).toHaveLength(1);
+    expect(await marketingTo(kofi.contactId)).toHaveLength(2);
   });
 });
 

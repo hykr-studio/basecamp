@@ -23,7 +23,7 @@ import {
 } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { creditsConfig, NEUTRAL_PLAN } from './config.js';
+import { creditsConfig, NEUTRAL_PLAN, thresholdProblem } from './config.js';
 import { creditPurchaseProviders, meters } from './meters.js';
 
 const { tenants, creditWallets, creditLedger, creditPurchases } = schema;
@@ -120,6 +120,13 @@ function manager(p: Principal, what: string) {
   return allow('credits_manage', 'Manages the credits');
 }
 
+/**
+ * Whether this principal may manage the business's credits. What a write checks before its
+ * authorize (a precheck, the deployment's set-up) is checked only for them: anyone else is
+ * refused for who they are, and audited, by the write itself.
+ */
+export const mayManageCredits = (p: Principal) => manager(p, '').decision === 'allow';
+
 /** The business's settings row, locked, and its stored `credits` section as it is. */
 async function loadSettings(tx: Tx, tenantId: string | undefined) {
   const [row] = await tx
@@ -147,7 +154,7 @@ const meterOf = (key: string) => key.split('.')[0];
 
 /**
  * What is wrong with a plan: limits and prices for meters nobody registered, and an alert
- * threshold above the pause.
+ * threshold that is not below the pause.
  */
 export function planProblems(credits: Stored): string[] {
   const parsed = CreditsPlan.safeParse(
@@ -165,8 +172,8 @@ export function planProblems(credits: Stored): string[] {
   const defaults = creditsConfig().defaults;
   const alertAt = plan.alertAt ?? defaults.alertAt ?? NEUTRAL_PLAN.alertAt;
   const pauseAt = plan.pauseAt ?? defaults.pauseAt ?? NEUTRAL_PLAN.pauseAt;
-  if (alertAt > pauseAt)
-    problems.push(`alertAt (${alertAt}) must not be above pauseAt (${pauseAt})`);
+  const order = thresholdProblem(alertAt, pauseAt);
+  if (order) problems.push(order);
   return problems;
 }
 
@@ -369,7 +376,7 @@ export const grantCredits = (): WriteOp<
 
 type AlertsInput = z.infer<typeof CreditAlertsInput>;
 
-/** `PUT /api/credits/alerts`: the business's own alert threshold, at most its pause. */
+/** `PUT /api/credits/alerts`: the business's own alert threshold, below its pause. */
 export const setCreditAlerts = (): WriteOp<AlertsInput, SettingsLoaded, Stored> => ({
   name: SET_CREDIT_ALERTS,
   kind: 'command',
@@ -437,11 +444,16 @@ export const buyCredits = (): WriteOp<CreditPurchaseInput, PurchaseLoaded, Purch
   resourceType: 'credit_purchase',
   resourceId: () => null,
   input: CreditPurchaseInput,
-  load: async (_tx, p, input) => ({
-    tenantId: p.tenantId as string,
-    currency: currencyOrFail(),
-    provider: providerFor(input.provider),
-  }),
+  // What this deployment can sell through is checked only for someone who may buy: anyone else
+  // is refused by authorize (403, audited), never told the purchase is unavailable (503).
+  load: async (_tx, p, input) =>
+    mayManageCredits(p)
+      ? {
+          tenantId: p.tenantId as string,
+          currency: currencyOrFail(),
+          provider: providerFor(input.provider),
+        }
+      : { tenantId: p.tenantId as string, currency: '', provider: '' },
   authorize: (p) => manager(p, 'buy credits'),
   summarize: (input, loaded) =>
     `Buy ${input.amount} credits (${loaded.currency}) through ${loaded.provider}`,

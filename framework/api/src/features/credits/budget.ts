@@ -2,7 +2,7 @@
 // service reads the counters and the wallet, this does the arithmetic.
 import type { UsageRefusal } from '@hykr/contracts';
 import type { CreditsPlanResolved } from './config.js';
-import type { MeterDef } from './meters.js';
+import { FrameworkMeters, type MeterDef } from './meters.js';
 
 /** One meter's use this period. */
 export interface Counter {
@@ -133,15 +133,36 @@ export function refusalFor(
       reason: `This business has used ${a.budget.usedPercent}% of its credits this period`,
       cap: 'credits',
     };
-  const limit = a.limits.get(meter.name);
-  if (limit?.pause)
-    return {
-      rule: 'usage_limit_reached',
-      reason: `This business has used ${limit.quantity} of its ${limit.limit} ${meter.unit}s of ${meter.name} this period`,
-      cap: meter.name,
-    };
-  return null;
+  return limitRefusal(a, meter);
 }
+
+/**
+ * Whether this meter's own limit refuses its use now, whatever the budget: what the credits
+ * screen shows beside the meter. The operator's `run` lets everything through.
+ */
+export function limitRefusal(a: Assessment, meter: MeterDef): UsageRefusal | null {
+  if (a.plan.override?.mode === 'run') return null;
+  const limit = a.limits.get(meter.name);
+  if (!limit?.pause) return null;
+  return {
+    rule: 'usage_limit_reached',
+    reason: `This business has used ${limit.quantity} of its ${limit.limit} ${meter.unit}s of ${meter.name} this period`,
+    cap: meter.name,
+  };
+}
+
+/**
+ * What an assistant's turn spends, in the order a refusal is reported: its model tokens, then
+ * its tool calls. A turn, and an agent's call outside MCP, is refused when either is.
+ */
+export const TURN_METERS: readonly MeterDef[] = [FrameworkMeters.tokens, FrameworkMeters.toolCalls];
+
+/**
+ * Why turns are refused now, or null when they run: the operator's pause, the budget, or a
+ * limit on what a turn spends. The turn hook, the agent guard and the credits status share it.
+ */
+export const turnRefusal = (a: Assessment): UsageRefusal | null =>
+  TURN_METERS.reduce<UsageRefusal | null>((r, meter) => r ?? refusalFor(a, meter), null);
 
 /**
  * How many base units of this meter may still be used before the business is paused, by its

@@ -35,7 +35,7 @@ import { EventBus } from '@nestjs/cqrs';
 import { OptionalAuth } from '@thallesp/nestjs-better-auth';
 import type { z } from 'zod';
 import { CreditsService } from './credits.service.js';
-import { buyCredits, planProblems, setCreditAlerts } from './writes.js';
+import { buyCredits, mayManageCredits, planProblems, setCreditAlerts } from './writes.js';
 
 /** A body that does not parse: 400 with every problem. */
 export function parseOr400<T>(schema: z.ZodType<T>, body: unknown, error: string): T {
@@ -132,7 +132,7 @@ export class CreditsController {
     return result;
   }
 
-  /** The business's own alert threshold (per cent), at most its pause threshold. */
+  /** The business's own alert threshold (per cent), below its pause threshold. */
   @Put('alerts')
   async alerts(
     @CurrentPrincipal() p: Principal,
@@ -140,10 +140,14 @@ export class CreditsController {
     @Body() body: unknown,
   ) {
     const input = parseOr400(CreditAlertsInput, body, 'invalid_alerts');
-    const stored = (await this.credits.tenantInfo(p.tenantId as string).catch(() => undefined))
-      ?.settings.credits;
-    const problems = planProblems({ ...(stored ?? {}), alertAt: input.alertAt });
-    if (problems.length) throw new BadRequestException({ error: 'invalid_alerts', problems });
+    // The threshold is checked against the plan only for someone who may set it: anyone else
+    // is refused by the write (403, audited), whatever they sent.
+    if (mayManageCredits(p)) {
+      const stored = (await this.credits.tenantInfo(p.tenantId as string).catch(() => undefined))
+        ?.settings.credits;
+      const problems = planProblems({ ...(stored ?? {}), alertAt: input.alertAt });
+      if (problems.length) throw new BadRequestException({ error: 'invalid_alerts', problems });
+    }
     const { result, events } = await runWrite(
       this.core.db,
       { principal: p, requestId: meta.requestId, idempotencyKey: meta.idempotencyKey },
