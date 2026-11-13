@@ -2144,11 +2144,30 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
   links, pending approvals, the outside clients (MCP) the person allowed here, the membership,
   customer records and contacts; the `mastra` and `mastra_obs` rows of their runs (the scorers'
   results in `mastra.mastra_scorers` and the scorers' own traces included); their earlier
-  archives. A contributor returns `{ count, erased?, kept?, afterCommit? }` (`ErasureResult`):
-  records whose copies are redacted like declared ones, data it keeps on purpose
-  (`outcome.kept`, with a `keepReason` code), and work outside the database once the erasure has
-  committed (a calendar's grant revoked at Google; best effort). The later features
-  (`docs/decisions/H4.md`) do the following:
+  archives. A contributor returns `{ count, erased?, kept?, runs?, afterCommit? }`
+  (`ErasureResult`): records whose copies are redacted like declared ones (named by the resource
+  type their audit rows and events use), data it keeps on purpose (`outcome.kept`, with a
+  `keepReason` code), assistant runs whose turns it erased (their Mastra rows go too), and work
+  outside the database once the erasure has committed (a calendar's grant revoked at Google;
+  best effort). Every framework feature's contributor returns its sets (`docs/decisions/V8.md`):
+  - Comments: the person's comments are deleted, and their copies lose the words and the author;
+    a comment that named them is rewritten (`@—`), and its copies lose its words and mentions
+    (a token and a mention carry the name they were written with).
+  - Parties: their memberships and the invitations to join sent to their email go, and a person
+    party left empty with its participations; the copies lose the name, number and email.
+  - Share links: links made for a contact or sent to a person's email are revoked and lose the
+    recipient and their label, in the copies too.
+  - Memory: their business memories go, with the text of their copies.
+  - Jobs: a job about no record started for them loses its input and output, and its files are
+    erased with their names in the `file.*` audit rows. A job's files (a business export's
+    archive, an import's file and its error report) copy other people's records: they are on the
+    register as kept (`jobs.files`, `business_copy`) until the `jobs.files` retention period.
+  - Agents: their agents go, with their runs and threads, and the copies lose the instructions
+    and what the runs said; a contact's message that started someone else's agent leaves the
+    run without the message and the reply, and its turns and Mastra rows go.
+  - Inbox and push: other people's inbox items about an erased record are deleted, and push
+    tickets lose its fields from `meta` (`recordCopies`).
+  The later features (`docs/decisions/H4.md`) do the following:
   - Calendars: the person's connections and their tokens, event links and push channel (its
     inbound connection's label too), their feeds, their sign-ins and the invites sent to them are
     deleted, then cleaned up at Google.
@@ -2180,6 +2199,15 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
   waits for an approval names them by id from the start. A person in no business and no party any
   more loses their login too (name, email, sessions). The request's `outcome` holds the counts,
   never the data.
+  **Redis.** BullMQ keeps each queue's finished jobs whole (an event's envelope with its row, a
+  notification's row). Once the erasure commits, `forgetJobs` removes every completed or failed
+  job, in every registered queue, whose data or failure names the person (their account,
+  contacts and customer records, by id; their emails and numbers) or a record erased with them,
+  and the entries of the queues' event streams that do. Jobs still waiting or running finish
+  first. Finished jobs are kept at most 24 hours (completed) and 7 days (failed) and 1,000 and
+  5,000 per queue (`JOBS_KEEP_COMPLETED_HOURS`, `JOBS_KEEP_FAILED_DAYS`, `JOBS_KEEP_COMPLETED`,
+  `JOBS_KEEP_FAILED`); BullMQ applies the age when the queue next finishes a job. What a
+  registry queue's job returns is not kept.
 - **Deadlines.** A sweeper (every 5 minutes) marks open requests past due once (`overdueAt`,
   audited, event `privacy.request.overdue`). The application's notifications say what that means
   to whom (the sample's account module tells holders of `privacy.manage` in the inbox).
@@ -3574,7 +3602,7 @@ These are not built. Each has a workaround for now.
 | Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |
 | Telling someone a job finished | Jobs store `job.succeeded` and `job.failed` events; nothing notifies a person yet. Subscribe to them (section 5.10) or show `<JobProgress>`. |
 | Job progress without polling | `useJob` and `useJobs` still ask every 2 s until a job finishes, even when `livePlugin()` already refreshes them on each job event. |
-| Retention of finished jobs | Jobs and their result files are kept until "delete my data" (jobs about no record only). |
+| Retention of finished jobs | A job's files go after the `jobs.files` period (the sample: 30 days); the job rows themselves are kept until "delete my data" (jobs about no record only). |
 | A result file on a record | Result files stay on their job; `complete` puts a copy on a record (`ctx.copyFile`). |
 | Every job of a business | `GET /api/jobs` lists a record's jobs or the caller's own; there is no operations view. |
 | Importing children, owners and dates | An import writes top-level records only (a record with a parent comes in with its parent's command), owned by the importer, with today's `createdAt`. Set owners afterwards with the entity's own writes. |
@@ -3696,7 +3724,7 @@ These are not built. Each has a workaround for now.
 | Large data exports | An export is built in the worker's memory, one entity at a time, and fails `too_large` past `FILES_MAX_BYTES` (compressed): raise the limit, or export a few entities at a time (`only`). |
 | Telling someone an export is ready, export retention | Nothing notifies the person; the export screen polls. Archives stay until "delete my data" (B11). A person's copy of their own data (section 5.27) expires with `privacy.archives`. |
 | Correction, nomination, grievances, a breach log | Privacy requests are `export` and `erase` only. Record the rest outside the product. |
-| Copies erasure does not reach | BullMQ's kept jobs (`removeOnComplete`, `removeOnFail`) still hold their data until they are trimmed; other people's conversation messages that quoted the person stay; backups are the deployment's. An approval of a parked create names no record (it did not exist yet), so erasing the record it made leaves the approval's input; a park's summary on another record stays unless the approval names the erased record by id (`docs/decisions/V3.md`). Mastra writes a turn's spans and scores after the turn: an erasure in the seconds after the person's last turn can miss them, until `assistant.traces` retention removes them. |
+| Copies erasure does not reach | A job still waiting or running when the person is erased keeps their data in Redis until it finishes and its keep bound passes (24 hours completed, 7 days failed by default); a finished job that names them only by their display name is not matched. Text already delivered to other people stays: other people's conversation messages that quoted the person, WhatsApp and email text, pushes sent, an inbox item about a record that stays. A business's export archives and imported files made before the erasure keep them until the `jobs.files` period (`docs/decisions/V8.md`). Backups are the deployment's. An approval of a parked create names no record (it did not exist yet), so erasing the record it made leaves the approval's input; a park's summary on another record stays unless the approval names the erased record by id (`docs/decisions/V3.md`). Mastra writes a turn's spans and scores after the turn: an erasure in the seconds after the person's last turn can miss them, until `assistant.traces` retention removes them. |
 | Checking who asks before a copy is released | A signed-in person's own request runs as they are; there is no OTP step, and the copy is not sent on WhatsApp or by email. The team downloads it for a contact. |
 | A privacy tool for the assistant | Requests are filed by people (the app, the back office, WhatsApp's keyword). |
 | Retention of the later features' logs | Webhook deliveries, attempts and inbound events, the call log and calendar invites have no retention target: they stay until erasure, or until their endpoint or connection is deleted (`docs/decisions/H4.md`). |
