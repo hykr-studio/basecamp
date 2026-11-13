@@ -14,6 +14,7 @@ import { LeaveChat, useApprovalStatus } from '../framework/ApprovalCard';
 import { AssistantMark } from '../framework/AssistantMark';
 import { clock } from '../framework/dates';
 import { Icon } from '../framework/Icon';
+import { useT } from '../framework/lang';
 import { inApp, webHref } from '../framework/web-link';
 import { getApp } from '../runtime';
 import { colors } from '../theme';
@@ -21,6 +22,7 @@ import { MicButton, VoiceBar } from '../voice/VoiceBar';
 import { useVoice } from '../voice/VoiceProvider';
 import { useAssistantRuntime, useClearConversation } from './ChatRuntime';
 import { useDraft } from './draft';
+import { replyError } from './replyError';
 import { ToolPart } from './ToolPart';
 
 const INPUT_ID = 'assistant-input';
@@ -99,40 +101,8 @@ function useSuperseded(): Superseded {
   }, [parked, status, approval?.decidedAt, approval?.canDecide]);
 }
 
-/**
- * Why a reply failed, in words: the model provider's message (it arrives as the serialised
- * error, stack and all), never its stack trace. The trace link below keeps the detail.
- */
-function replyError(error: unknown): string {
-  let detail: { message?: unknown; statusCode?: unknown } = {};
-  if (typeof error === 'string') {
-    try {
-      detail = JSON.parse(error);
-    } catch {
-      detail = { message: error };
-    }
-  } else if (error instanceof Error) detail = { message: error.message };
-  else if (error && typeof error === 'object') detail = error;
-  const message = typeof detail.message === 'string' ? detail.message.split('\n')[0] : '';
-  // A turn the server refused before the model ran (the business's credits are used up, a model
-  // it does not allow): the API's own reason.
-  const refused = (() => {
-    try {
-      const body = JSON.parse(message) as { error?: unknown; reason?: unknown };
-      return body.error === 'turn_refused' && typeof body.reason === 'string' ? body.reason : '';
-    } catch {
-      return '';
-    }
-  })();
-  if (refused) return refused;
-  if (detail.statusCode === 429 || /rate.?limit/i.test(message))
-    return 'The model is busy right now (rate-limited). Wait a moment, then send it again.';
-  return message
-    ? `The assistant couldn't answer: ${message.slice(0, 200)}`
-    : "The assistant couldn't answer. Send it again.";
-}
-
 function ReplyError() {
+  const { t } = useT();
   const error = useAuiState((s) => {
     const status = s.message.status;
     return status?.type === 'incomplete' && status.reason === 'error' ? status.error : undefined;
@@ -140,7 +110,7 @@ function ReplyError() {
   return (
     <View className="flex-row items-start gap-2">
       <Icon name="alert-circle" color={colors.danger} size={16} />
-      <Text className="shrink text-danger">{replyError(error)}</Text>
+      <Text className="shrink text-danger">{replyError(error, t('credits.paused'))}</Text>
     </View>
   );
 }

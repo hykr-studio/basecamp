@@ -8,7 +8,7 @@ import { defineTemplate } from '@hykr/notifications';
 import { defineView } from '@hykr/ui-registry';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { defineModule, defineServer, type ModuleDef } from '../../dist/index.js';
+import { defineMeter, defineModule, defineServer, type ModuleDef } from '../../dist/index.js';
 
 const Row = z.object({ id: z.string(), title: z.string() });
 const german = defineLanguages({ de: { name: 'Deutsch', english: 'German' } });
@@ -113,6 +113,26 @@ describe('the languages a server speaks', () => {
     );
     // German is declared: the field label in German is not a problem.
     expect(found.some((p) => p.includes('lang_bad.title'))).toBe(false);
+  });
+
+  it("refuses a meter's label in a language it does not declare, from a module or the server", () => {
+    const meter = (name: string) =>
+      defineMeter({ name, unit: 'page', label: { en: 'Pages', hn: 'पेज' } as never });
+    const found = problems(() =>
+      defineServer({
+        name: 'T',
+        persona: 'p',
+        languages: german,
+        modules: [mod('lang_meter', { contributes: { meters: [meter('lang_pages')] } })],
+        contributes: { meters: [meter('lang_server_pages')] },
+      }),
+    );
+    expect(found).toEqual(
+      expect.arrayContaining([
+        `lang_meter: the meter lang_pages's label is in "hn", not one of the application's languages`,
+        `the server: the meter lang_server_pages's label is in "hn", not one of the application's languages`,
+      ]),
+    );
   });
 
   it('refuses a field label in a language it does not declare', () => {

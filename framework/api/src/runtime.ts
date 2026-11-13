@@ -140,7 +140,14 @@ export function defineServer(definition: ServerDefinition): Basecamp {
   );
   problems.push(...tableProblems(modules, definition.tablePrefix));
   const languages = definition.languages ?? defineLanguages({});
-  problems.push(...languageCheckProblems({ modules, languages, does: definition.channel?.does }));
+  problems.push(
+    ...languageCheckProblems({
+      modules,
+      languages,
+      does: definition.channel?.does,
+      contributes: definition.contributes,
+    }),
+  );
   if (catalog && registry) problems.push(...crossProblems({ modules, catalog, registry }));
   if (problems.length || !catalog || !registry || !notifications) throw new ModulesError(problems);
 
