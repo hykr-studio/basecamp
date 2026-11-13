@@ -36,3 +36,49 @@ export const isReadOnlyChannel = (channel: Channel | undefined) =>
 export const drivenByAgent = (p: Pick<Principal, 'actor' | 'channel'>) =>
   p.actor.kind === 'agent' ||
   (p.channel !== undefined && AGENT_DRIVEN_CHANNELS.includes(p.channel));
+
+/** The methods a read-only channel may use: they change nothing. */
+export const CHANNEL_READS: readonly string[] = ['GET', 'HEAD'];
+
+/** A channel rule's refusal: the status and the body, as the API answers it everywhere. */
+export interface ChannelRefusal {
+  status: 400 | 403;
+  body: { error: 'bad_channel' | 'forbidden'; rule?: 'read_only_channel'; reason: string };
+}
+
+/**
+ * Why a signed-in caller may not name this channel in `x-channel` (400 `bad_channel`), or
+ * nothing: a session names only its own channels (`SESSION_CHANNELS`).
+ */
+export function sessionChannelRefusal(named: string | undefined): ChannelRefusal | undefined {
+  if (named === undefined || isSessionChannel(named)) return undefined;
+  return {
+    status: 400,
+    body: {
+      error: 'bad_channel',
+      reason: `A signed-in caller cannot name the channel "${named.slice(0, 40)}"`,
+    },
+  };
+}
+
+/**
+ * Why a call on this channel may not do this (403 `read_only_channel`), or nothing. A read-only
+ * channel uses only `CHANNEL_READS`; `readsToo` refuses those as well (a route where even a GET
+ * signs in or grants, as Better Auth's do).
+ */
+export function readOnlyChannelRefusal(
+  channel: Channel | undefined,
+  method: string,
+  opts: { readsToo?: boolean } = {},
+): ChannelRefusal | undefined {
+  if (!isReadOnlyChannel(channel)) return undefined;
+  if (!opts.readsToo && CHANNEL_READS.includes(method.toUpperCase())) return undefined;
+  return {
+    status: 403,
+    body: {
+      error: 'forbidden',
+      rule: 'read_only_channel',
+      reason: `Calls on the ${channel} channel can only read`,
+    },
+  };
+}
