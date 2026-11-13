@@ -3343,7 +3343,7 @@ eval case in one, and keywords for no keyword. To keep a language complete, test
 | What the assistant does, in the WhatsApp welcome and HELP | `channel.does` in `defineServer` |
 | Labels a business types (its roles, custom fields, wording) | Any of the application's languages; a write in another is refused |
 
-Some app copy is still English only: toasts in `useAct`, tool-line labels in `ToolPart`, and the `text` of `approval.card` and `kpi.row`.
+Some app copy is still English only: what a tool line says was asked (`toolWords`), the approval card's own toasts and details ("What will happen", "Approving deletes it permanently"), and the `text` of `approval.card` and `kpi.row`. What became of a request, in the thread's line, the note on the assistant's words and the card in the chat, is framework phrases (`approval.line.*`, `approval.since.*`, `approval.decided.*`, `approval.pointer.*`), in every language. A rule's `reason` is the server's words: write it so it is true for the decider and the requester alike ("Orders the assistant saves need approval", never "your approval"); the card shows it only to whoever decides.
 
 ---
 

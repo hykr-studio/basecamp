@@ -219,7 +219,7 @@ export const RenameChore = defineCommand(RenameChoreSpec, {
   load: (tx, p, input) => ChoreDef.repo.get(tx, p, input.choreId),
   authorize: (p) =>
     p.actor.kind === 'agent'
-      ? needsApproval('agent_renames', 'Renames by the assistant need your approval')
+      ? needsApproval('agent_renames', 'Renames by the assistant need approval')
       : allow('person_renames'),
   summarize: (input, chore) => `Rename "${chore.title}" to "${input.title}"`,
   run: async ({ tx, principal, input, loaded, via }) => {

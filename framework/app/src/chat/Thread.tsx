@@ -5,6 +5,7 @@ import {
   ThreadPrimitive,
   useAuiState,
 } from '@assistant-ui/react-native';
+import type { MessageKey } from '@hykr/i18n';
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, TextInput, View } from 'react-native';
 import { Button } from '../components/ui/button';
@@ -14,6 +15,7 @@ import { LeaveChat, useApprovalStatus } from '../framework/ApprovalCard';
 import { AssistantMark } from '../framework/AssistantMark';
 import { clock } from '../framework/dates';
 import { Icon } from '../framework/Icon';
+import { useT } from '../framework/lang';
 import { inApp, webHref } from '../framework/web-link';
 import { getApp } from '../runtime';
 import { colors } from '../theme';
@@ -75,28 +77,29 @@ function useParkedInMessage(): { approvalId: string; texts: string[] } | null {
   return useMemo(() => (key ? JSON.parse(key) : null), [key]);
 }
 
-const SINCE: Record<string, string> = {
-  approved: 'Since approved by you',
-  rejected: 'Since rejected by you; nothing changed',
-  expired: 'Since expired; nothing changed',
-  failed: "Since approved, but it couldn't be done",
+const SINCE: Record<string, MessageKey> = {
+  approved: 'approval.since.approvedByYou',
+  rejected: 'approval.since.rejectedByYou',
+  expired: 'approval.since.expired',
+  failed: 'approval.since.failed',
 };
 /** The same notes for a request someone else decided (its `canDecide` is false): not "by you". */
-const SINCE_TEAM: Record<string, string> = {
+const SINCE_TEAM: Record<string, MessageKey> = {
   ...SINCE,
-  approved: 'Since approved',
-  rejected: 'Since rejected; nothing changed',
+  approved: 'approval.since.approved',
+  rejected: 'approval.since.rejected',
 };
 
 function useSuperseded(): Superseded {
   const parked = useParkedInMessage();
   const { approval, status } = useApprovalStatus(parked?.approvalId);
+  const { t } = useT();
   return useMemo(() => {
     if (!parked || !status || status === 'pending' || !SINCE[status]) return null;
     const at = approval?.decidedAt ? ` · ${clock(approval.decidedAt)}` : '';
     const notes = approval?.canDecide === false ? SINCE_TEAM : SINCE;
-    return { texts: new Set(parked.texts), note: `${notes[status]}${at}` };
-  }, [parked, status, approval?.decidedAt, approval?.canDecide]);
+    return { texts: new Set(parked.texts), note: `${t(notes[status])}${at}` };
+  }, [parked, status, approval?.decidedAt, approval?.canDecide, t]);
 }
 
 /**
@@ -303,7 +306,7 @@ function Help({ onPick }: { onPick: (text: string) => void }) {
   return (
     <View className="gap-1">
       <Text variant="muted">
-        It acts for you through the same API as this app. Anything risky waits for your approval.
+        It acts for you through the same API as this app. Anything risky waits for approval.
       </Text>
       {getApp().suggestions.map((c) => (
         <Pressable

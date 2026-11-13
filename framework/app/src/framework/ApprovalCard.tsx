@@ -337,7 +337,11 @@ export function ApprovalItem({
           </Text>
         </View>
         {stakes && <Text style={[styles.label, { color: colors.approvalText }]}>{stakes}</Text>}
-        <Text style={styles.muted}>Why it waits: {approval.reason}.</Text>
+        {/* Why it waits, for whoever decides: an application's reason may say "your approval",
+            which is not the requester's when someone else decides it. */}
+        {mine && (
+          <Text style={styles.muted}>{t('approval.whyItWaits', { reason: approval.reason })}</Text>
+        )}
         {destructive && !open && (
           <Text style={[styles.muted, { color: colors.danger, fontWeight: '600' }]}>
             Approving deletes it permanently.

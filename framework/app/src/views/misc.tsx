@@ -1,4 +1,5 @@
 import type { EntitySpec } from '@hykr/contracts';
+import type { MessageKey } from '@hykr/i18n';
 import {
   type ApprovalCardView,
   type KpiRowView,
@@ -20,23 +21,23 @@ import {
 } from '../framework/ApprovalCard';
 import { errorMessage, useEntitySummary } from '../framework/hooks';
 import { Icon } from '../framework/Icon';
-import { useLang } from '../framework/lang';
+import { useLang, useT } from '../framework/lang';
 import { getCatalog } from '../runtime';
 import { colors } from '../theme';
 import { ByAssistant, OpenRow, Rows, ViewCard } from './parts';
 
 const DECIDED = {
-  approved: ['check-circle', colors.success, 'Approved by you, and done'],
-  rejected: ['slash', colors.muted, 'Rejected by you; nothing changed'],
-  expired: ['clock', colors.muted, 'Expired; nothing changed'],
-  failed: ['x-circle', colors.danger, "Approved, but it couldn't be done"],
-} as const;
+  approved: ['check-circle', colors.success, 'approval.decided.approvedByYou'],
+  rejected: ['slash', colors.muted, 'approval.decided.rejectedByYou'],
+  expired: ['clock', colors.muted, 'approval.decided.expired'],
+  failed: ['x-circle', colors.danger, 'approval.decided.failed'],
+} as const satisfies Record<string, readonly [string, string, MessageKey]>;
 /** The same, for a request someone else decided (its `canDecide` is false): not "by you". */
 const DECIDED_TEAM = {
   ...DECIDED,
-  approved: ['check-circle', colors.success, 'Approved, and done'],
-  rejected: ['slash', colors.muted, 'Rejected; nothing changed'],
-} as const;
+  approved: ['check-circle', colors.success, 'approval.decided.approved'],
+  rejected: ['slash', colors.muted, 'approval.decided.rejected'],
+} as const satisfies Record<string, readonly [string, string, MessageKey]>;
 
 /**
  * A parked request in the chat. It is decided in exactly one place: here, when nothing else
@@ -49,6 +50,7 @@ export function ApprovalCardComponent({
   canDecide,
 }: ViewProps<typeof ApprovalCardView>) {
   const { approval, status } = useApprovalStatus(approvalId);
+  const { t } = useT();
   // Someone else decides it: the words never say "you".
   const theirs = canDecide === false || approval?.canDecide === false;
   const pending = status === 'pending' ? approval : undefined;
@@ -62,14 +64,18 @@ export function ApprovalCardComponent({
     );
   }
   if (pending && !place.here) {
-    const who = theirs ? 'the team' : 'you';
     const where = place.onScreen
-      ? `Waiting for ${who} on ${place.where ?? 'the page'}`
-      : `Waiting for ${who} above`;
+      ? t(theirs ? 'approval.pointer.teamOn' : 'approval.pointer.youOn', {
+          where: place.where ?? t('approval.pointer.thePage'),
+        })
+      : t(theirs ? 'approval.pointer.teamAbove' : 'approval.pointer.youAbove');
     return (
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${summary ?? pending.summary ?? 'A request'}: ${where}. Show it`}
+        accessibilityLabel={t('approval.pointer.show', {
+          summary: summary ?? pending.summary ?? 'A request',
+          where,
+        })}
         onPress={() => {
           leaveChat?.();
           // After the sheet steps aside, so the target is laid out where it will stay.
@@ -91,7 +97,7 @@ export function ApprovalCardComponent({
       <View className="flex-1 gap-0.5">
         <Text className="font-semibold">{summary ?? approval?.summary}</Text>
         <Text variant="muted" style={{ color: tone }}>
-          {label}
+          {t(label)}
           {status === 'failed' && approval?.failureReason ? `: ${approval.failureReason}` : ''}
         </Text>
       </View>

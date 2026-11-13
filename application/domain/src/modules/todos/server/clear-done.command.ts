@@ -11,7 +11,7 @@ export const ClearDoneTodos = defineCommand(ClearDoneTodosSpec, {
   load: async (tx, p) => (await Todo.repo.list(tx, p, { done: true, limit: 1000 })).items,
   authorize: (p) =>
     p.actor.kind === 'agent'
-      ? needsApproval('agent_clear_done', 'Clearing done to-dos needs your approval')
+      ? needsApproval('agent_clear_done', 'Clearing done to-dos needs approval')
       : allow('owner_clears'),
   summarize: (_input, done) => `Clear ${done.length} done to-do${done.length === 1 ? '' : 's'}`,
   run: async ({ tx, principal, loaded: done, via }) => {

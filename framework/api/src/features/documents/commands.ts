@@ -317,10 +317,7 @@ export const SendDocument = defineCommand(SendDocumentSpec, {
     if (!can(p, FrameworkCapabilities.messageCustomers))
       return deny('cannot_send_to_others', 'Only the business sends documents to others');
     if (p.actor.kind === 'agent')
-      return needsApproval(
-        'agent_sends_document',
-        'Sending a document for you needs your approval',
-      );
+      return needsApproval('agent_sends_document', 'Documents the assistant sends need approval');
     return allow('person_sends_document', 'The business sends its documents');
   },
   summarize: (input, { doc, recipient }) =>

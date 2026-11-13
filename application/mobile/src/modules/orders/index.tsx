@@ -27,12 +27,12 @@ export const orders = defineAppModule({
   suggestions: [
     {
       text: 'order <title>: 2 <item> at 1500, 1 <item> at 800 +18%',
-      what: 'saves a whole order; waits for your approval',
+      what: 'saves a whole order; waits for approval',
     },
     { text: 'list orders', what: 'your orders, with their totals' },
     {
       text: 'submit order <number>',
-      what: 'sends a draft for a decision; waits for your approval',
+      what: 'sends a draft for a decision; waits for approval',
     },
     { text: 'revise order <number>', what: 'makes v2 of a submitted order, as a draft' },
   ],

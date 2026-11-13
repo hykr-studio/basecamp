@@ -612,11 +612,12 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
         decision = strongerDecision(decision, {
           decision: 'needs_approval',
           rule: `${spec.name}_${action}_needs_approval`,
-          // Says why it waits, in the person's words: "Deletes by the assistant need your approval".
+          // Says why it waits, in words true for the decider and the requester alike
+          // ("Deletes by the assistant need approval"): never whose approval it is.
           reason:
             approval === 'always'
-              ? `Every ${label} ${action} needs your approval`
-              : `${action[0].toUpperCase()}${action.slice(1)}s by the ${p.actor.kind === 'agent' ? 'assistant' : 'requester'} need your approval`,
+              ? `Every ${label} ${action} needs approval`
+              : `${action[0].toUpperCase()}${action.slice(1)}s by the ${p.actor.kind === 'agent' ? 'assistant' : 'requester'} need approval`,
         });
       }
       if (decision?.decision === 'needs_approval') return decision;

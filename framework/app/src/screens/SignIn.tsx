@@ -82,7 +82,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void
         <DomainBrand />
         <Text style={styles.muted}>
           The agentic development stack: an assistant acts for you through the same API, and
-          anything risky waits for your approval.
+          anything risky waits for approval.
         </Text>
       </View>
       <View style={styles.card}>
