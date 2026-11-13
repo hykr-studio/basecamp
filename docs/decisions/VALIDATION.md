@@ -50,8 +50,13 @@ root cause with file and line, fix sketch) is in the evidence folder below, `val
 ## Fixes
 
 Thirteen units fixed the defects, on 2026-11-13, each on its own branch (`gap/V<n>`) with its
-decisions doc (`V1.md` to `V13.md`), reviewed with fix rounds until no blocking finding was left
-(V8, V10 and V11 took three reviews), and CI on a fresh database before its merge. Each merged
+decisions doc (`V1.md` to `V13.md`). Each was reviewed independently, with fix rounds until a
+review found no blocking finding (V8, V10 and V11 took four reviews, V13 three, V6, V7 and V12
+two). One exception: V10's fourth review found one more blocking gap (a list's date filter with
+an offset reached Postgres as text it refuses), which the integrator fixed red first after the
+merge (`31a3c908`) and which no reviewer has read since. V1 to V9 ran CI on a fresh database
+(`scripts/wt.sh ci --since`) before their merges; V10 to V13 merged on build, typecheck, lint,
+the boundary check and their own tests, and the full CI at the end covers them. Each merged
 into `feat/platform-gaps` as a merge commit, in the order the reviews finished: V2, V3, V1, V5,
 V4, V6, V7, V9, V8, V11, V10, V12, V13. The integrator generated the two migrations (`2db3cd2e`
 for V2, `37c1370a` for V6) and made two integration commits (`31a3c908` after V10, `f63bb019`
@@ -249,6 +254,40 @@ detail; items a later unit closed are left out):
   is read as a strict time and may skip unseen rows of that millisecond once.
 - **MCP (A1, unchanged).** The framework features' tools and the platform commands are still
   not offered over MCP.
+
+Each unit's last review, the one that approved it, also left non-blocking findings that no unit
+took (`fix/round3-result.json` to `round5-result.json` in the session folder). The ones that
+change behaviour:
+
+- **Erasure (V8).** A job *about* a personal record the erasure deleted or anonymised keeps that
+  record's words (input, output, message, its `job_updates`, its `job.*` audit rows and events,
+  its result files until `jobs.files`): `jobsErasure` reaches only jobs started *for* the
+  person, and the jobs feature contributes no `recordCopies`. A signed callback that arrives
+  after the erasure for the person's own, now cancelled, job is stored again with its output. A
+  pending update of an anonymised record whose fields were all personal is scrubbed to an empty
+  patch; V11's `nothing_to_change` closes such a replay as failed, except on a
+  `traits.versioned` entity (below).
+- **Entity writes (V11).** On a `traits.versioned` entity, `PATCH {}` still answers 200, bumps
+  the version and writes an audit row that changed nothing, because the versioned plugin adds
+  `version` before the empty-patch check. A delivery's router that catches a routed write's
+  `Parked` and goes on commits a pending approval with the delivery, though the guide says a
+  delivery write cannot wait.
+- **Times (V10, V12).** A `timestamptz` in the years 1 to 99 is stored right and read back 1900
+  years later (`0001-01-01` reads as `2001-01-01`), in drizzle's read mapping; seen on the
+  fixture's visits, outside V10's class. A credits ledger `next` cut short is neither a token nor
+  a time and is read as no bound (200, the newest page) instead of `bad_cursor`. A contributed
+  list field type with its own `order` on a timestamp column keeps the old millisecond cursor
+  (only geo uses `order` today).
+- **Credits words (V13).** `credits_unavailable` (the business's credits settings cannot be
+  read) is told the business "used its credits". A module meter with no `label` reaches people
+  by its code name, the defect V13 fixed for the framework's meters. Under an overdraft plan
+  (`alertAt` above 100) the alert reads "100% used" at its threshold. Voice in the ledger reads
+  "3 min", with English digits, in every language.
+- **Claims to recheck (V10, V11).** V11.md says the whole suite passes with every pool at one
+  connection; the reviewer could not reproduce it as a multi-file run (`jobs.e2e` 4 failed on
+  timeouts waiting for the worker, `erasure-copies.e2e` 1 failed with a hook timeout), so the
+  claim holds per file only until shown otherwise. V10.md says the meeting POST case failed
+  first with 500; it sends equal start and end times, which are 400 with or without the fix.
 
 The owner questions above ("Judged by design") stand as they were. The units' own questions are
 in the register ([README](README.md#assumptions-register), rows V1 to V13).
