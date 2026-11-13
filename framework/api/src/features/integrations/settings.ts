@@ -5,6 +5,7 @@
 //   INTEGRATIONS_ALLOWED_HOSTS   host names an endpoint may reach on any address, over http too
 //   INTEGRATIONS_TIMEOUT_MS      one delivery's whole request (default 10000)
 //   INTEGRATIONS_RETRY_SCHEDULE  waits between tries (default 5s,5m,30m,2h,5h,10h,10h)
+import { createHmac, hkdfSync } from 'node:crypto';
 import {
   createSecretBox,
   type EgressPolicy,
@@ -41,6 +42,24 @@ export function requireSecretBox(): SecretBox {
       reason: 'This server has no SECRETS_KEY, so it cannot keep credentials',
     });
   return box;
+}
+
+let tagKey: { key: string; bytes: Buffer } | undefined;
+
+/**
+ * A fingerprint of a secret value under a key derived from SECRETS_KEY, never a plain hash: what
+ * a retry of a write carrying credentials is recognised by, so `app.idempotency` keeps nothing a
+ * low-entropy secret could be guessed from. 503 without a key, as sealing is.
+ */
+export function secretTag(value: unknown): string {
+  requireSecretBox();
+  const key = process.env.SECRETS_KEY ?? '';
+  if (tagKey?.key !== key)
+    tagKey = {
+      key,
+      bytes: Buffer.from(hkdfSync('sha256', key, Buffer.alloc(0), 'basecamp request tag v1', 32)),
+    };
+  return createHmac('sha256', tagKey.bytes).update(JSON.stringify(value)).digest('base64url');
 }
 
 /**

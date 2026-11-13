@@ -44,7 +44,7 @@ export class JobsController {
     @Param('id') id: string,
     @RequestMeta() meta: RequestMetaValue,
   ) {
-    return this.runner.cancel(p, id, meta.requestId);
+    return this.runner.cancel(p, id, meta);
   }
 }
 

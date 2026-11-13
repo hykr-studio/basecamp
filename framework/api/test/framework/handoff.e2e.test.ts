@@ -237,6 +237,17 @@ describe('handoff', () => {
     expect(reply.body).toEqual({ sent: 'text' });
     await heard(address, /tiles arrive on Friday/);
 
+    // A reply repeated with its idempotency-key is sent once, and answered the same.
+    const key = { 'idempotency-key': `reply-${handoff.id}` };
+    const once = { text: 'Your fitter calls ahead.' };
+    for (let i = 0; i < 2; i++) {
+      const res = await ana.call('POST', `/api/backoffice/handoffs/${handoff.id}/reply`, once, key);
+      expect(res.body).toEqual({ sent: 'text' });
+    }
+    await heard(address, /fitter calls ahead/);
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(textsTo(address).filter((t) => t.includes('fitter calls ahead'))).toHaveLength(1);
+
     // Outside the 24 hours, the same reply goes as the approved template.
     await pool.query(
       `update channel.messages set at = now() - interval '25 hours' where contact_id = $1 and direction = 'in'`,
@@ -261,6 +272,8 @@ describe('handoff', () => {
     expect(rows.map((r) => r.action)).toEqual([
       'handoff.opened',
       'handoff.taken',
+      'handoff.replied',
+      // The repeated reply is audited once.
       'handoff.replied',
       'handoff.replied',
       'handoff.returned',

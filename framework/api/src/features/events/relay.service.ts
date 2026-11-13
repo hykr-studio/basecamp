@@ -9,12 +9,29 @@ import {
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { config } from '../../config.js';
-import { eventFeeds, type ServerContext, subscribers } from '../../hooks.js';
+import { eventFeeds, type ServerContext, type Subscriber, subscribers } from '../../hooks.js';
 import { JobsService, serverContext } from '../../queues/jobs.service.js';
 import { checkSubscribers, EVENTS_QUEUE, subscriberJobId, wants } from './subscriber.js';
 
 const log = new Logger('Events');
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** Why an event cannot be relayed, in a line: a schema's problems by path, or the error. */
+export function failureOf(e: unknown): string {
+  const issues = (e as { issues?: { path: PropertyKey[]; message: string }[] })?.issues;
+  const text = Array.isArray(issues)
+    ? `not an event: ${issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')}`
+    : message(e);
+  return text.slice(0, 1000);
+}
+
+/** What one pass of a batch did: relayed, failed for good, or stopped by a queue. */
+export interface RelayOutcome {
+  relayed: string[];
+  failed: { id: string; error: string }[];
+  /** A queue refused a job: the rest of the batch waits for the next tick. */
+  stopped?: string;
+}
 
 /**
  * Puts each committed event on the queue of every subscriber that wants it: the shared `events`
@@ -32,20 +49,61 @@ export class EventRelay implements OnApplicationBootstrap {
   }
 
   async publish(events: readonly DomainEventEnvelope[]) {
+    for (const raw of events) await this.add(...this.route(raw));
+  }
+
+  /**
+   * A batch, each event on its own: one that is not an event, or that a subscriber's `when`
+   * throws on, fails alone and the rest go on. A queue that refuses a job stops the batch there:
+   * that is the queue's trouble, not the event's, so it waits for the next tick.
+   */
+  async relay(events: readonly DomainEventEnvelope[]): Promise<RelayOutcome> {
+    const out: RelayOutcome = { relayed: [], failed: [] };
     for (const raw of events) {
-      const event = DomainEventEnvelope.parse(raw);
-      const delay = event.availableAt ? Math.max(0, Date.parse(event.availableAt) - Date.now()) : 0;
-      for (const s of subscribers.all()) {
-        if (!wants(s, event)) continue;
-        await this.jobs.add(s.queue ?? EVENTS_QUEUE, event, {
-          name: s.name,
-          jobId: subscriberJobId(s.name, event.id),
-          delay,
-          attempts: s.attempts ?? 3,
-          backoff: { type: 'exponential', delay: s.backoffMs ?? 2000 },
-        });
+      let routed: [DomainEventEnvelope, Subscriber[]];
+      try {
+        routed = this.route(raw);
+      } catch (e) {
+        out.failed.push({ id: String((raw as { id?: unknown })?.id), error: failureOf(e) });
+        continue;
       }
+      try {
+        await this.add(...routed);
+      } catch (e) {
+        out.stopped = message(e);
+        break;
+      }
+      out.relayed.push(routed[0].id);
     }
+    return out;
+  }
+
+  /** The event, checked, and every subscriber that wants it. Throws when either cannot be told. */
+  private route(raw: DomainEventEnvelope): [DomainEventEnvelope, Subscriber[]] {
+    const event = DomainEventEnvelope.parse(raw);
+    const targets: Subscriber[] = [];
+    for (const s of subscribers.all()) {
+      let wanted: boolean;
+      try {
+        wanted = wants(s, event);
+      } catch (e) {
+        throw new Error(`subscriber ${s.name}: ${message(e)}`);
+      }
+      if (wanted) targets.push(s);
+    }
+    return [event, targets];
+  }
+
+  private async add(event: DomainEventEnvelope, targets: readonly Subscriber[]) {
+    const delay = event.availableAt ? Math.max(0, Date.parse(event.availableAt) - Date.now()) : 0;
+    for (const s of targets)
+      await this.jobs.add(s.queue ?? EVENTS_QUEUE, event, {
+        name: s.name,
+        jobId: subscriberJobId(s.name, event.id),
+        delay,
+        attempts: s.attempts ?? 3,
+        backoff: { type: 'exponential', delay: s.backoffMs ?? 2000 },
+      });
   }
 }
 
@@ -54,7 +112,9 @@ const BATCH = 100;
 
 /**
  * The worker's poller: each second, each feed's pending events for this queue prefix go to the
- * relay, then are marked relayed. One tick at a time. Feeds get the services (`ctx.db`).
+ * relay, then are marked relayed. One tick at a time. Feeds get the services (`ctx.db`). An
+ * event that cannot be relayed is marked failed (the feed's `failed`) and logged; it never holds
+ * up the others, of this business or another.
  */
 @Injectable()
 export class EventFeedPoller implements OnModuleInit, OnApplicationShutdown {
@@ -86,12 +146,13 @@ export class EventFeedPoller implements OnModuleInit, OnApplicationShutdown {
         try {
           const events = await feed.pending({ limit: BATCH, prefix }, this.ctx);
           if (!events.length) continue;
-          await this.relay.publish(events);
-          await feed.relayed(
-            events.map((e) => e.id),
-            { prefix },
-            this.ctx,
-          );
+          const out = await this.relay.relay(events);
+          if (out.relayed.length) await feed.relayed(out.relayed, { prefix }, this.ctx);
+          if (out.failed.length) {
+            for (const f of out.failed) log.error(`feed ${feed.name}: event ${f.id}: ${f.error}`);
+            await feed.failed?.(out.failed, { prefix }, this.ctx);
+          }
+          if (out.stopped) log.error(`feed ${feed.name}: ${out.stopped}`);
         } catch (e) {
           log.error(`feed ${feed.name}: ${message(e)}`);
         }

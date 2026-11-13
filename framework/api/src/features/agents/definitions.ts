@@ -162,6 +162,8 @@ async function syncTriggers(tx: Tx, row: Row, zone: string, now: Date) {
       spec: t,
       nextAt: firstDue(t, zone, now),
       queues: config.queuePrefix,
+      // The app's clock, as an event's occurredAt: a trigger sees what happens from now on.
+      createdAt: now,
     });
   }
 }

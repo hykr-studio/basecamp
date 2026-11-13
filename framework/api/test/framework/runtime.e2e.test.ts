@@ -127,6 +127,67 @@ describe('events and subscribers', () => {
     ).not.toContain(id);
   });
 
+  it('a stored row that is not an event, or that a filter throws on, fails alone', async () => {
+    const now = Date.now();
+    const bad = { notEvent: `evt-bad-${now}`, filterThrows: `evt-throws-${now}` };
+    const insert = (id: string, channel: string | null, row: string | null) =>
+      pool.query(
+        `insert into app.domain_events (id, tenant_id, name, resource_type, resource_id, row,
+           actor_kind, actor_id, channel, occurred_at, available_at, queues)
+         values ($1, $2, 'task.created', 'task', null, $3::jsonb, 'user', $4, $5, now(), now(), $6)`,
+        [id, anaTenant, row, ana.id, channel, process.env.BULL_PREFIX],
+      );
+    // Not a channel the envelope knows: the row can never be read as an event.
+    await insert(bad.notEvent, 'bogus', '{}');
+    // No record: the fixture's `when` (a title that starts with "Forward") throws on it.
+    await insert(bad.filterThrows, null, null);
+    // Another business's write, after them: it still reaches its subscriber.
+    const created = await ravi.call('POST', '/api/tasks', { title: 'After the bad rows' });
+    expect(created.status).toBe(201);
+    await eventually(() => seen.events.find((e) => e.resourceId === created.body.value.id));
+    const rows = await eventually(async () => {
+      const r = await pool.query(
+        'select id, relayed_at, failed_at, error from app.domain_events where id = any($1)',
+        [Object.values(bad)],
+      );
+      return r.rows.every((x) => x.failed_at) ? r.rows : undefined;
+    });
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId[bad.notEvent].relayed_at).toBeNull();
+    expect(byId[bad.notEvent].error).toContain('channel');
+    expect(byId[bad.filterThrows].relayed_at).toBeNull();
+    expect(byId[bad.filterThrows].error).toContain('fixture.runtime.forward');
+    expect(seen.events.filter((e) => Object.values(bad).includes(e.id))).toEqual([]);
+    // Never returned again.
+    const ctx = { db: server.app?.get(DB, { strict: false }) } as never;
+    const prefix = String(process.env.BULL_PREFIX);
+    const pending = await outboxFeed.pending({ limit: 10_000, prefix }, ctx);
+    for (const id of Object.values(bad)) expect(pending.map((e) => e.id)).not.toContain(id);
+  });
+
+  it('a batch with a bad event relays the others', async () => {
+    const relay = server.app?.get(EventRelay, { strict: false }) as EventRelay & {
+      relay(events: unknown[]): Promise<{ relayed: string[]; failed: { id: string }[] }>;
+    };
+    const good = {
+      id: `evt-good-${Date.now()}`,
+      name: 'task.created',
+      tenantId: raviTenant,
+      resourceType: 'task',
+      resourceId: null,
+      row: { title: 'Good' },
+      actor: { kind: 'user', id: ravi.id },
+      occurredAt: new Date().toISOString(),
+    };
+    const out = await relay.relay([
+      { ...good, id: `${good.id}-bad`, occurredAt: 'yesterday' },
+      good,
+    ]);
+    expect(out.relayed).toEqual([good.id]);
+    expect(out.failed.map((f) => f.id)).toEqual([`${good.id}-bad`]);
+    await eventually(() => seen.events.find((e) => e.id === good.id));
+  });
+
   it('relaying the same event twice runs it once', async () => {
     const relay = server.app?.get(EventRelay, { strict: false }) as EventRelay;
     const event: DomainEventEnvelope = {
