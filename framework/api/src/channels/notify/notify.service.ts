@@ -22,26 +22,40 @@ const notifications = () => runtime().notifications.notifications;
 
 /**
  * What one stored event asks of one notification, from the notification's own functions only:
- * send now (its dedupe key), and schedule or cancel one (its dedupe key and when). Throws when
- * one of them does, before anything is queued.
+ * send now (its dedupe key), and schedule or cancel one (its dedupe key and when). Each part is
+ * asked on its own: one whose function throws goes to `skip` and is left out, and the other
+ * still goes. `when` decides both, so when it throws, neither goes.
  */
 function planOf(
   def: NotificationDef<Row>,
   event: string,
   row: Row,
+  skip: (part: 'when' | 'send' | 'schedule', e: unknown) => void,
 ): { now?: string; later?: { dedupe: string; at: Date | null | 'cancel' } } {
+  const tried = <T>(part: 'when' | 'send' | 'schedule', ask: () => T): T | undefined => {
+    try {
+      return ask();
+    } catch (e) {
+      skip(part, e);
+      return undefined;
+    }
+  };
   const plan: ReturnType<typeof planOf> = {};
   if (def.send?.on.includes(event)) {
     // Sent on this event, but not for this row: nothing else of it either.
-    if (def.when && !def.when(row)) return plan;
-    plan.now = def.dedupe(row);
+    const when = def.when;
+    if (when && !tried('when', () => when(row))) return plan;
+    plan.now = tried('send', () => def.dedupe(row));
   }
   const schedule = def.schedule;
   if (!schedule) return plan;
-  const cancels = schedule.cancelOn?.includes(event);
-  if (cancels) plan.later = { dedupe: def.dedupe(row), at: 'cancel' };
-  else if (schedule.on.includes(event))
-    plan.later = { dedupe: def.dedupe(row), at: schedule.at(row) };
+  plan.later = tried('schedule', () =>
+    schedule.cancelOn?.includes(event)
+      ? { dedupe: def.dedupe(row), at: 'cancel' as const }
+      : schedule.on.includes(event)
+        ? { dedupe: def.dedupe(row), at: schedule.at(row) }
+        : undefined,
+  );
   return plan;
 }
 
@@ -176,8 +190,9 @@ export class NotifyService implements OnApplicationBootstrap {
    * One stored event (the `notify.events` subscriber): every notification that names it is sent
    * now, scheduled or cancelled. A schedule moves only forward in time: an event older than the
    * last one applied to the same notification (relayed late, or by another worker) is skipped.
-   * A notification whose own functions (`when`, `dedupe`, `schedule.at`) throw on this row misses
-   * it alone, logged; the others still go. A queue or Redis that fails fails the whole event, so
+   * A notification whose own function throws on this row misses that part alone, logged (a
+   * throwing `schedule.at` its schedule, not its send now; a throwing `when` both); the other
+   * notifications still go. A queue or Redis that fails fails the whole event, so
    * the subscriber's retry tries again.
    */
   async onStored(event: DomainEventEnvelope) {
@@ -187,15 +202,11 @@ export class NotifyService implements OnApplicationBootstrap {
     if (typeof row.id !== 'string') return;
     const resourceType = event.resourceType;
     for (const def of notifications()) {
-      let plan: ReturnType<typeof planOf>;
-      try {
-        plan = planOf(def, event.name, row);
-      } catch (e) {
+      const plan = planOf(def, event.name, row, (part, e) =>
         log.error(
-          `notification ${def.key} skipped ${event.name} ${row.id}: ${e instanceof Error ? e.message : e}`,
-        );
-        continue;
-      }
+          `notification ${def.key} skipped its ${part} of ${event.name} ${row.id}: ${e instanceof Error ? e.message : e}`,
+        ),
+      );
       if (plan.now)
         await this.dispatch.add(
           'now',
