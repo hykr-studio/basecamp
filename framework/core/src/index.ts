@@ -133,7 +133,7 @@ export {
   listFieldSql,
 } from './query/field-sql.js';
 export { metersBetween, withinMeters } from './query/geo.js';
-export { buildListSql, decodeCursor, encodeCursor } from './query/list-grammar.js';
+export { buildListSql, decodeCursor, encodeCursor, listQuery } from './query/list-grammar.js';
 export * from './states/index.js';
 export { type SystemPrincipalOptions, systemPrincipal } from './system.js';
 export { TenantConfigService, type TenantInfo } from './tenants/tenant-config.service.js';

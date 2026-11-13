@@ -23,7 +23,7 @@ import { deny } from '../authorize.js';
 import { defineEntity, type EntityConfig, type EntityDef } from '../entity/define-entity.js';
 import { entityDef } from '../entity/registry.js';
 import type { EntityPlugin, WriteHook } from '../hooks.js';
-import { buildListSql, decodeCursor, encodeCursor } from '../query/list-grammar.js';
+import { buildListSql, decodeCursor, encodeCursor, listQuery } from '../query/list-grammar.js';
 import type { Conn } from '../tokens.js';
 
 type Values = Record<string, unknown>;
@@ -120,12 +120,14 @@ export function defineSharedEntity<S extends EntitySpec, T extends Table>(
     const built = buildListSql(table, spec.list, q);
     const where = [theirs, ...built.where];
     const after = q.cursor ? [built.after(decodeCursor(q.cursor, q.sort))] : [];
-    const platform = (await conn
-      .select()
-      .from(table as Table)
-      .where(and(...where, ...after))
-      .orderBy(...built.orderBy)
-      .limit(built.limit + 1)) as Row[];
+    const platform = (await listQuery(q.cursor, () =>
+      conn
+        .select()
+        .from(table as Table)
+        .where(and(...where, ...after))
+        .orderBy(...built.orderBy)
+        .limit(built.limit + 1),
+    )) as Row[];
     // The first `limit` rows of both, in one order: Postgres orders the candidates, so text
     // sorts by the database's collation exactly as each half did.
     const candidates = [...page.items, ...platform.slice(0, built.limit)] as Values[];

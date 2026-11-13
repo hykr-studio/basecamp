@@ -163,3 +163,48 @@ describe('a route parameter naming a prototype', () => {
     }
   });
 });
+
+describe('a tampered list cursor', () => {
+  const decode = (c: string) => JSON.parse(Buffer.from(c, 'base64url').toString('utf8'));
+  const encode = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+
+  // (Ids are text columns here: any string id is a valid place to start from.)
+  it('is 400 bad_cursor, never a 500, and the genuine one still pages', async () => {
+    for (const dueOn of ['2026-12-01', '2026-12-02', '2026-12-03'])
+      expect((await a.call('POST', '/api/tasks', { title: `Due ${dueOn}`, dueOn })).status).toBe(
+        201,
+      );
+    for (const title of ['Cursor one', 'Cursor two'])
+      expect((await a.call('POST', '/api/gadgets', { title, rank: 1 })).status).toBe(201);
+    for (const [path, sort, values] of [
+      ['/api/tasks', '-dueOn', ['not-a-date', { a: 1 }, '2026-02-31', true, 123]],
+      ['/api/tasks', 'title', [{ a: 1 }, 123, null]],
+      ['/api/tasks', '-createdAt', ['not-a-date', { a: 1 }, '2026-02-31T00:00:00.000Z', 123]],
+      // A shared list pages its own rows and the platform's with the same cursor.
+      ['/api/gadgets', 'rank', ['x', { a: 1 }, true, 1.5]],
+    ] as const) {
+      const at = `${path}?sort=${sort}&limit=1`;
+      const first = await a.call('GET', at);
+      expect(first.status, JSON.stringify(first.body)).toBe(200);
+      const cursor = first.body.nextCursor as string;
+      expect(cursor, at).toBeTruthy();
+      expect((await a.call('GET', `${at}&cursor=${cursor}`)).status, at).toBe(200);
+      const genuine = decode(cursor);
+      for (const tampered of [
+        ...values.map((v) => ({ ...genuine, v: [v] })),
+        { s: genuine.s, id: genuine.id },
+        { ...genuine, v: 'x' },
+        { ...genuine, v: [] },
+        { ...genuine, id: { a: 1 } },
+        null,
+        5,
+      ]) {
+        const res = await a.call('GET', `${at}&cursor=${encode(tampered)}`);
+        expect(res.status, `${at} ${JSON.stringify(tampered)}: ${JSON.stringify(res.body)}`).toBe(
+          400,
+        );
+        expect(res.body.error).toBe('bad_cursor');
+      }
+    }
+  });
+});
