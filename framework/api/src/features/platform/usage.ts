@@ -1,7 +1,13 @@
 // What every business used, for the platform's operators (B19): per business and meter, the
 // quantities and credits as A3 recorded them (`usage_events`), and each wallet's balance and what
 // came in and went out (`credit_ledger`), over a range. Nothing here reads a plan or a price.
-import type { UsageLine, UsageReport, UsageWallet } from '@hykr/contracts';
+import {
+  storableDate,
+  storableInstant,
+  type UsageLine,
+  type UsageReport,
+  type UsageWallet,
+} from '@hykr/contracts';
 import { creditLedger, creditWallets, type DbOrTx, tenants, usageEvents } from '@hykr/db';
 import { BadRequestException } from '@nestjs/common';
 import { and, asc, eq, gt, gte, inArray, lt, sql } from 'drizzle-orm';
@@ -12,8 +18,9 @@ const MAX_DAYS = 366;
 
 export const UsageQuery = z
   .object({
-    from: z.iso.date().optional(),
-    to: z.iso.date().optional(),
+    // A day Postgres can store: `z.iso.date()` takes the year 0000 (V10).
+    from: storableDate().optional(),
+    to: storableDate().optional(),
     tenantId: z.uuid().optional(),
     after: z.uuid().optional(),
     limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -21,15 +28,26 @@ export const UsageQuery = z
   .strict();
 export type UsageQuery = z.infer<typeof UsageQuery>;
 
+/** The first day of the month after this one. (`Date.UTC` would read the years 0 to 99 as 1900s.) */
+function nextMonth(d: Date): Date {
+  const next = new Date(d);
+  next.setUTCMonth(d.getUTCMonth() + 1, 1);
+  return next;
+}
+
 /** The range: `from` (inclusive) to `to` (exclusive), whole UTC days; the current month by default. */
 export function rangeOf(q: Pick<UsageQuery, 'from' | 'to'>): { from: Date; to: Date } {
   const now = new Date();
   const from = q.from
     ? new Date(`${q.from}T00:00:00Z`)
     : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const to = q.to
-    ? new Date(`${q.to}T00:00:00Z`)
-    : new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth() + 1, 1));
+  const to = q.to ? new Date(`${q.to}T00:00:00Z`) : nextMonth(from);
+  // A `from` late in the year 9999 ends in the year 10000, which Postgres has no room for.
+  if (!storableInstant(to.toISOString()))
+    throw new BadRequestException({
+      error: 'invalid_range',
+      reason: 'The range ends after the year 9999: send `to`',
+    });
   if (!(to > from))
     throw new BadRequestException({ error: 'invalid_range', reason: '`to` must be after `from`' });
   if (to.getTime() - from.getTime() > MAX_DAYS * DAY)

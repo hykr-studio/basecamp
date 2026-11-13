@@ -545,6 +545,9 @@ describe('routes that read their own query string', () => {
           (v) => `${name}=${encodeURIComponent(v)}`,
         ),
       ),
+      // A range both of whose ends Postgres refuses, and one whose computed end it does (V10).
+      'from=0000-01-01&to=0000-06-01',
+      'from=9999-12-15',
       // More keys than the query parser keeps, with a NUL past them (V10).
       `${Array.from({ length: 1000 }, (_, i) => `f${i}=0`).join('&')}&q=a%00b&client_id=a%00b`,
     ];

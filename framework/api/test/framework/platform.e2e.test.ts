@@ -1038,6 +1038,35 @@ describe('usage across businesses', () => {
     ).toBe(400);
     expect((await helper.call('GET', '/api/platform/usage')).body.rule).toBe('operator_capability');
   });
+
+  it('refuses a time Postgres cannot store, the default end it computes included', async () => {
+    // Each was a 500: the year 0000 passes `z.iso.date()`, and a `from` late in 9999 gets a
+    // default `to` in the year 10000 (docs/decisions/V10.md).
+    for (const q of ['from=0000-01-01&to=0000-06-01', 'from=0000-12-01&to=0001-01-02']) {
+      const res = await usher.call('GET', `/api/platform/usage?${q}`);
+      expect([q, res.status]).toEqual([q, 400]); // The query schema refuses the day.
+    }
+    for (const q of ['from=9999-12-15', 'from=9999-12-01']) {
+      const res = await usher.call('GET', `/api/platform/usage?${q}`);
+      expect([q, res.status, res.body.error]).toEqual([q, 400, 'invalid_range']);
+    }
+    // What Postgres stores is answered: the first year, the last storable month, and a `from` in
+    // the years 1 to 99, whose default end is one month on (`Date.UTC` reads a two-digit year
+    // as the 1900s, which made the range "over 366 days").
+    for (const q of [
+      'from=0001-01-01&to=0001-02-01',
+      'from=9999-11-01',
+      'from=9999-12-01&to=9999-12-31',
+      'from=0099-12-01',
+    ]) {
+      const res = await usher.call('GET', `/api/platform/usage?${q}`);
+      expect([q, res.status]).toEqual([q, 200]);
+    }
+    expect((await usher.call('GET', '/api/platform/usage?from=0099-12-01')).body).toMatchObject({
+      from: '0099-12-01',
+      to: '0100-01-01',
+    });
+  });
 });
 
 describe('the job queues', () => {
