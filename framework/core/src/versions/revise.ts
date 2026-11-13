@@ -14,6 +14,7 @@ import {
 import { and, type Column, eq, getTableColumns, max, type SQL, sql, type Table } from 'drizzle-orm';
 import { type ChildLink, childLinksOf } from '../entity/children.js';
 import type { AnyEntityDef, RuleContext } from '../entity/define-entity.js';
+import { checkReferences } from '../entity/references.js';
 import { assertWritable } from '../states/transition.js';
 import type { Tx } from '../tokens.js';
 import type { Touched } from '../write/pipeline.js';
@@ -181,7 +182,16 @@ export async function reviseWithChildren(
     versionField(trait),
   ]);
   const own = typeof opts.values === 'function' ? opts.values(revision) : (opts.values ?? {});
-  for (const [k, v] of Object.entries(own)) if (columns[k] && !fixed.has(k)) values[k] = v;
+  const changed: Values = {};
+  for (const [k, v] of Object.entries(own)) {
+    if (!columns[k] || fixed.has(k)) continue;
+    values[k] = v;
+    changed[k] = v;
+  }
+  // A reference the application sets names a record the writer can read in their business, as
+  // on every insert and update (V2): checked against the row it copies, so a kept link passes
+  // and a changed one is loaded through its target's scoped repository (V10).
+  await checkReferences(tx, p, def.spec, row, changed);
   const [made] = (await tx
     .insert(def.table as Table)
     .values(values as never)

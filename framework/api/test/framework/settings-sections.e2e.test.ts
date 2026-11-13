@@ -401,6 +401,18 @@ describe('a change through the write path', () => {
       { within: { 'fixture.claims.answer': 'soon' } },
       /^sla\.within\.fixture\.claims\.answer: /,
     );
+    // A duration whose due time Postgres could not store (285,000 years of milliseconds, or of
+    // hours) is refused here, not a 500 at the next transition (docs/decisions/V10.md).
+    await bad(
+      'sla',
+      { within: { 'fixture.claims.answer': Number.MAX_SAFE_INTEGER } },
+      /^sla\.within\.fixture\.claims\.answer: /,
+    );
+    await bad(
+      'sla',
+      { within: { 'fixture.claims.answer': '99999999999h' } },
+      /^sla\.within\.fixture\.claims\.answer: /,
+    );
     await bad('sla', { off: ['fixture.nothing'] }, /^sla\.off: no SLA is called "fixture.nothing"/);
     await bad(
       'general',

@@ -4,6 +4,7 @@
 import type { Labels } from '@hykr/i18n';
 import { z } from 'zod';
 import { ThreadMessage, ToolCallSummary } from '../chat.js';
+import { storableDateTime } from '../framework/instant.js';
 import { CreatedBy, commandSpec, entitySpec } from '../framework/spec.js';
 import { defineCapability } from '../roles.js';
 
@@ -35,7 +36,7 @@ const Where = z.record(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/), z.unknown())
  * record, a WhatsApp message to the business, an @-mention in a comment, or a signed webhook.
  */
 export const AgentTrigger = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('once'), at: z.iso.datetime({ offset: true }) }).strict(),
+  z.object({ kind: z.literal('once'), at: storableDateTime({ offset: true }) }).strict(),
   z
     .object({
       kind: z.literal('recurring'),

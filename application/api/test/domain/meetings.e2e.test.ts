@@ -68,6 +68,21 @@ describe('meetings, end to end', () => {
     expect((await bob.call('GET', `/api/meetings/${siteReview.id}`)).status).toBe(404);
   });
 
+  it('a meeting time Postgres cannot store is refused, not a 500', async () => {
+    // `z.iso.datetime({ offset: true })` takes a time past the year 9999 in UTC (V10).
+    const past9999 = '9999-12-31T23:59:59-01:00';
+    const made = await ana.call('POST', '/api/meetings', {
+      title: 'Never',
+      startsAt: past9999,
+      endsAt: past9999,
+      attendees: [],
+    });
+    expect(made.status).toBe(400);
+    const kept = await newMeeting(ana, 'Some day');
+    const moved = await ana.call('PATCH', `/api/meetings/${kept.id}`, { endsAt: past9999 });
+    expect(moved.status).toBe(400);
+  });
+
   it('a plain PATCH cannot close a meeting: that is what close-meeting is for', async () => {
     const res = await ana.call('PATCH', `/api/meetings/${siteReview.id}`, { status: 'closed' });
     expect(res.status).toBe(403);

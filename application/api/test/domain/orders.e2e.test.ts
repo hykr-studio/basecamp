@@ -603,6 +603,36 @@ describe('a currency that does not exist (V4)', () => {
     expect(rows[0].n).toBe(0);
   });
 
+  it('an order stored in one before V4 takes no save, refused before it could park (V10)', async () => {
+    const made = await save(owner, { title: 'Stored ABC order', items: [] });
+    expect(made.status).toBe(200);
+    const id = made.body.value.order.id as string;
+    await pool.query(`update app.orders set currency = 'ABC' where id = $1`, [id]);
+    const renamed = await save(owner, { orderId: id, title: 'Stored ABC, renamed', items: [] });
+    expect(renamed.status, JSON.stringify(renamed.body)).toBe(403);
+    expect(renamed.body).toMatchObject({
+      rule: 'money_invalid',
+      reason: '"ABC" is not a currency',
+    });
+    const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
+    const asked = await asks('POST', '/api/orders/save', {
+      orderId: id,
+      title: 'Asked stored ABC',
+      items: [],
+    });
+    expect(asked.status, JSON.stringify(asked.body)).toBe(403);
+    expect(asked.body.rule).toBe('money_invalid');
+    const { rows } = await pool.query(
+      'select count(*)::int as n from app.approvals where tenant_id = $1 and resource_id = $2',
+      [tenantId, id],
+    );
+    expect(rows[0].n).toBe(0);
+    // It still moves through its states: it can be cancelled.
+    const cancelled = await move(owner, id, 'cancel', { cancelReason: 'Made-up money' });
+    expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200);
+    expect(cancelled.body.value.status).toBe('cancelled');
+  });
+
   it('a brief, a plain create, is refused the same way', async () => {
     const res = await owner.call('POST', '/api/briefs', {
       name: 'Made-up money',

@@ -1,6 +1,13 @@
 // Reading an import's file: CSV (RFC 4180, with a header row), JSON (an array of objects) or
 // NDJSON (one object per line). Nothing here touches the database or Nest.
-import type { ImportFormat } from '@hykr/contracts';
+import {
+  type ImportFormat,
+  storableData,
+  storableText,
+  TEXT_FAULTS,
+  textFault,
+  unstorableTextAt,
+} from '@hykr/contracts';
 import { formulaSafeRead } from '../export/csv.js';
 
 /** One data row as the file gave it. */
@@ -138,6 +145,11 @@ function parseCsv(text: string, maxRows: number): ParsedFile {
   const columns = header.cells.map((c) => formulaSafeRead(c.trim()));
   const empty = columns.findIndex((c) => !c);
   if (empty >= 0) throw new Unreadable(`Column ${empty + 1} of the header has no name`);
+  // A name Postgres cannot keep names no field, and a report could not show it (V10).
+  for (const [i, c] of columns.entries()) {
+    const rule = textFault(c);
+    if (rule) throw new Unreadable(`Column ${i + 1} of the header: ${TEXT_FAULTS[rule]}`);
+  }
   const twice = columns.find((c, i) => columns.indexOf(c) !== i);
   if (twice) throw new Unreadable(`The header names "${twice}" twice`);
   const rows: RawRow[] = [];
@@ -146,14 +158,20 @@ function parseCsv(text: string, maxRows: number): ParsedFile {
     if (record.cells.every((c) => c === '')) continue;
     if (rows.length >= maxRows) throw new TooManyRows(`The file has more than ${maxRows} rows`);
     const values: Record<string, unknown> = {};
+    // A cell Postgres cannot keep is its row's problem; the report shows it with U+FFFD (V10).
+    let fault: string | null = null;
     columns.forEach((c, i) => {
       // A cell an export or an error report kept from running as a formula reads as it was.
-      values[c] = formulaSafeRead(record.cells[i] ?? '');
+      const cell = formulaSafeRead(record.cells[i] ?? '');
+      const rule = textFault(cell);
+      if (rule) fault ??= TEXT_FAULTS[rule];
+      values[c] = rule ? storableText(cell) : cell;
     });
     const extra = record.cells.length - columns.length;
     const row: RawRow = { n: rows.length + 1, values };
     if (extra > 0 && record.cells.slice(columns.length).some((c) => c !== ''))
       row.problem = `Line ${record.line} has ${record.cells.length} values; the header has ${columns.length}`;
+    else if (fault) row.problem = `Line ${record.line}: ${fault}`;
     rows.push(row);
   }
   return { format: 'csv', columns, rows, text: true };
@@ -171,6 +189,15 @@ function jsonRows(items: unknown[], maxRows: number, where: (i: number) => strin
   const rows = items.map((item, i): RawRow => {
     if (!isRecord(item))
       return { n: i + 1, values: {}, problem: `${where(i)} is not an object of fields` };
+    // Text Postgres cannot keep (a NUL, half a surrogate pair), in a value or a key at any depth:
+    // the row's problem, never the file's columns; the report shows it with U+FFFD (V10).
+    const bad = unstorableTextAt(item, '');
+    if (bad)
+      return {
+        n: i + 1,
+        values: storableData(item) as Record<string, unknown>,
+        problem: `${where(i)}: ${TEXT_FAULTS[bad.rule]}`,
+      };
     for (const k of Object.keys(item))
       if (!seen.has(k)) {
         seen.add(k);

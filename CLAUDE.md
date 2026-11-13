@@ -242,7 +242,9 @@ audited `on_behalf_of`), never through a role.
   and per-band approvers are tenant settings (`approvals`). A write whose level gives an undo window answers
   with `undo: { id, until }`, and `POST /api/undo/:id` reverses it (developer guide 5.8).
 - Money is `Money = { minor, currency }` everywhere (`minorUnits()` columns, the spec's `money` trait), never
-  a float or `numeric`. Take a document number with `nextNumber` in a command's `run` (a parked write
+  a float or `numeric`. A command that takes or writes a currency checks it in `authorize` (`knownCurrency`,
+  or `resolveMoneyInput` on its amounts), a stored record's own currency included: the money plugin
+  refuses only in `run`, after a parked request was made. Take a document number with `nextNumber` in a command's `run` (a parked write
   then takes none), and cancel numbered records instead of deleting them. Line items are a child entity
   (`defineChildEntity`, `traits.parent`), written whole with `children.replace` (developer guide 5.13).
 - Return `deny(...)` with a stable `rule` code and a plain `reason` instead of throwing. The caller gets

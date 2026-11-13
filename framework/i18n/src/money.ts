@@ -14,23 +14,34 @@ const FORMAT = /^[A-Z]{3}$/;
 /** The currencies Intl lists, plus XXX; null where the runtime cannot list them. */
 let known: ReadonlySet<string> | null | undefined;
 
+/** The currencies this runtime's Intl lists, or null when it lists none (no ICU data, Hermes). */
+function listCurrencies(): ReadonlySet<string> | null {
+  const list = (Intl as { supportedValuesOf?: (key: 'currency') => string[] }).supportedValuesOf;
+  try {
+    const codes = typeof list === 'function' ? list('currency') : [];
+    return codes.length ? new Set([...codes, 'XXX']) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Can this runtime list its currencies? Where it cannot, `knownCurrency` takes any three capital
+ * letters, so the server refuses to start without it (`assertConfig`): its check must fail
+ * closed. Asked afresh each time, not remembered.
+ */
+export const canListCurrencies = (): boolean => listCurrencies() !== null;
+
 /**
  * Is this a currency: one the runtime's Intl lists (ISO 4217), or XXX, ISO's code for "no
  * currency" (what a business that set none counts in)? Writes and configuration refuse any other
  * code; reads and formatting take one, so a row stored with it still shows. Where the runtime
  * cannot list its currencies (Hermes on a device), any three capital letters pass: the server,
- * which can, refuses the rest.
+ * which can (it does not start otherwise), refuses the rest.
  */
 export function knownCurrency(code: string): boolean {
   if (!FORMAT.test(code)) return false;
-  if (known === undefined) {
-    const list = (Intl as { supportedValuesOf?: (key: 'currency') => string[] }).supportedValuesOf;
-    try {
-      known = typeof list === 'function' ? new Set([...list('currency'), 'XXX']) : null;
-    } catch {
-      known = null;
-    }
-  }
+  if (known === undefined) known = listCurrencies();
   return known === null || known.has(code);
 }
 

@@ -123,15 +123,13 @@ const refused = (x: Priced | AuthorizeResult): x is AuthorizeResult => 'decision
 /**
  * The order's currency: an existing order's own; a new one's from the input or the business,
  * and one that exists. Refused here, in authorize: a save that would park (the assistant's, one
- * over the limit) is refused before it asks anyone, and none takes a number.
+ * over the limit) is refused before it asks anyone, and none takes a number. An order stored in
+ * a code that is no currency (before V4) is refused too: its totals could never be written.
  */
 function currencyOf(input: SaveOrderInput, loaded: Loaded): string | AuthorizeResult {
-  if (loaded.order) {
-    if (input.currency && input.currency !== loaded.order.currency)
-      return deny('currency_fixed', `This order is in ${loaded.order.currency}`);
-    return loaded.order.currency;
-  }
-  const currency = input.currency ?? loaded.money.currency;
+  if (loaded.order && input.currency && input.currency !== loaded.order.currency)
+    return deny('currency_fixed', `This order is in ${loaded.order.currency}`);
+  const currency = loaded.order?.currency ?? input.currency ?? loaded.money.currency;
   if (!knownCurrency(currency)) return deny('money_invalid', `"${currency}" is not a currency`);
   return currency;
 }

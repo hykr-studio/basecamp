@@ -1,5 +1,5 @@
 import { isTimeZone } from '@hykr/contracts';
-import { knownCurrency } from '@hykr/i18n';
+import { canListCurrencies, knownCurrency } from '@hykr/i18n';
 
 const env = process.env;
 
@@ -114,6 +114,12 @@ export function assertConfig() {
   if (config.voiceAgentKey && config.voiceAgentKey === config.agentApiKey) {
     throw new Error('VOICE_AGENT_KEY must differ from AGENT_API_KEY: audit tells them apart');
   }
+  // Every money write checks its currency against the runtime's list (knownCurrency), which
+  // lets any code through where there is none: on the server that check must fail closed.
+  if (!canListCurrencies())
+    throw new Error(
+      'This Node cannot list its currencies (Intl.supportedValuesOf): run one built with full ICU data',
+    );
   if (config.defaultCurrency !== undefined && !knownCurrency(config.defaultCurrency))
     throw new Error(
       `DEFAULT_CURRENCY must be an ISO 4217 currency such as EUR, not "${config.defaultCurrency}"`,

@@ -11,6 +11,8 @@ import {
   PgDialect,
   pgEnum,
   pgSchema,
+  real,
+  smallint,
   text,
   timestamp,
   uuid,
@@ -255,5 +257,107 @@ describe('cursor values', () => {
       'Failed query',
     );
     await expect(listQuery('c', () => Promise.resolve(1))).resolves.toBe(1);
+  });
+});
+
+describe('a filter value its column cannot hold (V10)', () => {
+  // The list schema takes any number for a `number` field and any text for an `id`: Postgres
+  // refused what its column cannot hold (22003, 22P02), a 500, or `bad_cursor` with a cursor.
+  const kind = pgEnum('unit_kind', ['a', 'b']);
+  const things = pgSchema('app').table('unit_things', {
+    id: text('id').primaryKey(),
+    rank: integer('rank').notNull(),
+    small: smallint('small').notNull(),
+    big: bigint('big', { mode: 'number' }).notNull(),
+    price: numeric('price', { precision: 6, scale: 2 }).notNull(),
+    ratio: real('ratio').notNull(),
+    roomId: uuid('room_id').notNull(),
+    kind: kind('kind').notNull(),
+  });
+  const Thing = z.object({
+    id: z.string(),
+    rank: z.number(),
+    small: z.number(),
+    big: z.number(),
+    price: z.number(),
+    ratio: z.number(),
+    roomId: z.string(),
+    kind: z.string(),
+  });
+  const ThingSpec = entitySpec({
+    name: 'unitThing',
+    label: 'thing',
+    description: 'Things.',
+    schemas: { read: Thing, create: Thing.omit({ id: true }), update: Thing.partial() },
+    list: {
+      filterable: {
+        rank: 'number',
+        small: 'number',
+        big: 'number',
+        price: 'number',
+        ratio: 'number',
+        roomId: 'id',
+        kind: 'enum',
+      },
+      sortable: ['rank'],
+      defaultSort: [['rank', 'asc']],
+      pageSize: { default: 20, max: 100 },
+    },
+  });
+  const build = (input: object) =>
+    buildListSql(things, ThingSpec.list, listInputSchema(ThingSpec).parse(input));
+  const refused = (input: object) => {
+    try {
+      build(input);
+    } catch (e) {
+      return e instanceof BadRequestException ? e.getResponse() : e;
+    }
+    return undefined;
+  };
+
+  it('is 400 invalid, naming the field, before any query', () => {
+    for (const input of [
+      { rank: 2 ** 31 },
+      { rank: { gt: -(2 ** 31) - 1 } },
+      { rank: 1.5 },
+      { rank: { in: [1, 1e12] } },
+      { small: 40_000 },
+      { big: 2 ** 63 },
+      { big: { gt: -(2 ** 63) } },
+      { big: 1.5 },
+      { ratio: { lt: 1e300 } },
+      { ratio: 1e-50 },
+      { roomId: 'not-a-uuid' },
+      { roomId: '{00000000-0000-4000-8000-000000000000' },
+      { roomId: '0000000-00000-4000-8000-000000000000' },
+      { roomId: { in: ['00000000-0000-4000-8000-000000000000', 'x'] } },
+      { kind: 'c' },
+    ]) {
+      const field = Object.keys(input)[0];
+      expect(refused(input), JSON.stringify(input)).toMatchObject({ error: 'invalid', field });
+    }
+  });
+
+  it('what the column holds builds as before', () => {
+    for (const input of [
+      { rank: 2 ** 31 - 1 },
+      { rank: { in: [-(2 ** 31), 0] } },
+      { small: -32_768 },
+      { big: Number.MAX_SAFE_INTEGER },
+      // Postgres compares a parameter as the column's type without its precision or a safe
+      // integer's bound: these were 400 (the V10 review), and Postgres answers each.
+      { big: 2 ** 53 },
+      { big: { lt: 1e16 } },
+      { big: 2 ** 63 - 1024 },
+      { price: 10_000 },
+      { price: { in: [12.5, 1e12] } },
+      { ratio: { lt: 3.4e38 } },
+      { ratio: 0 },
+      { roomId: '00000000-0000-4000-8000-000000000000' },
+      { roomId: 'A0EEBC999C0B4EF8BB6D6BB9BD380A11' },
+      { roomId: '{a0eebc99-9c0b4ef8-bb6d6bb9-bd380a11}' },
+      { kind: { in: ['a', 'b'] } },
+    ])
+      expect(refused(input), JSON.stringify(input)).toBeUndefined();
   });
 });

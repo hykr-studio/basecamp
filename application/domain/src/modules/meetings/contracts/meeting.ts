@@ -1,10 +1,18 @@
-import { Address, CreatedBy, entitySpec, GeoPoint } from '@hykr/contracts';
+import {
+  Address,
+  CreatedBy,
+  entitySpec,
+  GeoPoint,
+  storableDate,
+  storableDateTime,
+} from '@hykr/contracts';
 import { z } from 'zod';
 import { NoteView } from '../../notes/contracts/index.js';
 import { Todo } from '../../todos/contracts/index.js';
 
 const title = z.string().min(1).max(200);
-const at = z.iso.datetime({ offset: true });
+/** A time Postgres can store: `z.iso.datetime()` takes one past 9999 in UTC (guide, section 14). */
+const at = storableDateTime({ offset: true });
 const attendees = z.array(z.string().min(1).max(100)).max(50);
 
 export const MeetingStatus = z.enum(['scheduled', 'held', 'closed']);
@@ -148,7 +156,7 @@ export const MeetingCheckInSpec = entitySpec({
 
 export const ActionItem = z.object({
   title: z.string().min(1).max(200),
-  dueOn: z.iso.date().optional(),
+  dueOn: storableDate().optional(),
 });
 
 export const CloseMeetingInput = z.object({

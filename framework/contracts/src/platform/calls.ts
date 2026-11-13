@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { storableDateTime } from '../framework/instant.js';
 import { commandSpec } from '../framework/spec.js';
 import { defineCapability } from '../roles.js';
 
@@ -76,7 +77,8 @@ const about = {
   entity: z.string().min(1).max(100).optional().describe("The record's kind it is about"),
   id: z.string().min(1).max(100).optional().describe("The record's id"),
 };
-const at = z.iso.datetime({ offset: true });
+// A time Postgres can store: `z.iso.datetime()` takes one past 9999 in UTC (V10).
+const at = storableDateTime({ offset: true });
 const notes = z.string().trim().max(4000);
 
 export const LogCallInput = z.object({

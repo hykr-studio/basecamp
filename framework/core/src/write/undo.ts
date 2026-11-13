@@ -37,6 +37,7 @@ import { z } from 'zod';
 import { allow, RuleDenied } from '../authorize.js';
 import { EntityEvent } from '../entity/cqrs-classes.js';
 import { type AnyEntityDef, toJson } from '../entity/define-entity.js';
+import { checkReferences } from '../entity/references.js';
 import { entityDef } from '../entity/registry.js';
 import { CORE_OPTIONS, type CoreOptions, type Tx } from '../tokens.js';
 import { runWrite, type Touched, type WriteOp } from './pipeline.js';
@@ -218,6 +219,9 @@ async function reverse(
   const asInput = Object.fromEntries(Object.keys(createShape).map((k) => [k, before[k]]));
   const decision = def.decide(p, 'create', null, asInput);
   if (decision.decision === 'deny') throw new RuleDenied(decision);
+  // Every record it names is one this person can still read in this business (V2), as undoing
+  // an update checks through repo.update: else the reference's 404, and nothing comes back (V10).
+  await checkReferences(tx, p, def.spec, null, before);
   const [back] = await tx
     .insert(def.table as Table)
     .values(columnsOf(def, before) as never)

@@ -3,10 +3,12 @@ import {
   isSessionChannel,
   readOnlyChannelRefusal,
   sessionChannelRefusal,
+  unstorableTextAt,
 } from '@hykr/contracts';
 import { ensureDefaultTenant, schema } from '@hykr/db';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
 import type { NextFunction, Request, Response } from 'express';
 import { config } from '../config.js';
 import { authPlugins } from '../hooks.js';
@@ -15,6 +17,7 @@ import { sharedDb } from './db.js';
 import { CLIENT_ADDRESS_HEADER, stampClientAddress } from './http.js';
 import { nativeAppOrigin } from './native-origin.js';
 import { authRateLimit } from './throttle.js';
+import { textRefusal } from './untrusted-text.js';
 
 /** The native app's scheme (and the Expo dev client's, outside production). */
 const appSchemes = () => [
@@ -83,6 +86,16 @@ function createAuth() {
     // default (one x-forwarded-for entry, else one bucket for everyone) only for its own calls.
     rateLimit: authRateLimit(),
     advanced: { ipAddress: { ipAddressHeaders: [CLIENT_ADDRESS_HEADER, 'x-forwarded-for'] } },
+    // The request edge on Better Auth's own routes, which no Nest guard sees: a NUL (or half a
+    // surrogate pair) anywhere in the body or the query is 400, as on every other route
+    // (UntrustedTextGuard). Its text reaches Postgres too (a name, an email), and an update with
+    // one was a 500. Its query is every key of the URL (better-call reads `searchParams`).
+    hooks: {
+      before: createAuthMiddleware(async (ctx) => {
+        const bad = unstorableTextAt(ctx.body, 'body') ?? unstorableTextAt(ctx.query, 'query');
+        if (bad) throw new APIError('BAD_REQUEST', textRefusal(bad.rule, bad.where));
+      }),
+    },
     // A new person gets their own business, as its creator: the template works for one person
     // as before, and their records are theirs alone. (The guard does the same if this ever
     // fails.) Unless the application gives none on sign-up (`signUp.createBusiness: false`): then

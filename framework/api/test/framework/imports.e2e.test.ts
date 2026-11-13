@@ -413,6 +413,117 @@ describe('JSON and NDJSON', () => {
     expect(j.output).toMatchObject({ created: 2, failed: 0 });
     expect(await itemByTitle('From NDJSON')).toMatchObject({ done: true });
   });
+
+  it('a key column named like a built-in is read from the row alone', async () => {
+    // A row without the column read Object's own `constructor` as its key before V10.
+    const j = await importText(
+      owner,
+      'item',
+      JSON.stringify([{ constructor: 'K1', title: 'Keyed oddly' }, { title: 'Keyless oddly' }]),
+      { source: 'odd-key', key: 'constructor' },
+      { name: 'items.json', mime: 'application/json' },
+    );
+    expect(j.output).toMatchObject({ created: 1, failed: 1, errors: { missing_key: 1 } });
+    expect(await itemByTitle('Keyed oddly')).toBeTruthy();
+    expect(await itemByTitle('Keyless oddly')).toBeUndefined();
+  });
+});
+
+describe('text Postgres cannot keep, in a file', () => {
+  // A NUL (U+0000), or half of a surrogate pair from a JSON escape. Before V10 the row was
+  // `invalid`, but its values could not be stored in the batch's problems (jsonb): the whole job
+  // failed with the driver's text (the SQL, its parameters), no row was kept and no report made.
+  it('is its row’s problem: the other rows import, and the report shows it as U+FFFD', async () => {
+    const json = JSON.stringify([
+      { id: 'Z1', title: 'Zero one' },
+      { id: 'Z2', title: 'a\u0000b' },
+      { id: 'Z3', title: 'Zero three', 'a\u0000b': 1 },
+      { id: 'Z4', title: 'Half \ud800 a pair' },
+      { id: 'Z5', title: 'Zero five', tags: ['deep', 'a\u0000b'] },
+      { id: 'Z6', title: 'Zero six' },
+    ]);
+    const csv = 'id,title\nC1,Csv one\nC2,a\u0000b\nC3,Csv three\n';
+    for (const [name, mime, text, created, failed] of [
+      ['nul.json', 'application/json', json, 2, 4],
+      [
+        'nul.ndjson',
+        'application/x-ndjson',
+        (JSON.parse(json) as unknown[]).map((r) => JSON.stringify(r)).join('\n'),
+        2,
+        4,
+      ],
+      ['nul.csv', 'text/csv', csv, 2, 1],
+    ] as const) {
+      const j = await importText(owner, 'item', text, { source: name }, { name, mime });
+      expect(j.status, `${name}: ${JSON.stringify(j.error)}`).toBe('succeeded');
+      expect(j.output, name).toMatchObject({ created, failed, errors: { invalid: failed } });
+      const report = await reportOf(owner, j);
+      expect(report, name).toContain('\uFFFD');
+      expect(report, name).not.toContain('\u0000');
+    }
+    expect(await itemByTitle('Zero six')).toBeTruthy();
+    expect(await itemByTitle('Csv three')).toBeTruthy();
+    // A dry run says the same and writes nothing.
+    const dry = await importText(owner, 'item', csv, { source: 'nul-dry', dryRun: true });
+    expect(dry.output).toMatchObject({ dryRun: true, created: 2, failed: 1 });
+    // A header naming no column Postgres can keep: the file, not a row.
+    const header = await importText(owner, 'item', 'id,ti\u0000tle\nH1,x\n', { source: 'nul-h' });
+    expect(header.status).toBe('failed');
+    expect(header.error.message).toMatch(/Column 2 of the header: Text may not hold the NUL/);
+  });
+
+  it('a CSV cell that spells it as a JSON escape is its row’s problem too', async () => {
+    // The file's check reads each cell's text; a cell spelling JSON is decoded after it
+    // (`cellValue`). Before V10's second review `["a\ud800b"]` was imported with U+FFFD in
+    // place of the half pair, and `["a\u0000b"]` failed only at the database.
+    const csv = [
+      'id,title,tags',
+      'J1,Json one,"[""red""]"',
+      'J2,Json surrogate,"[""a\\ud800b""]"',
+      'J3,Json nul,"[""a\\u0000b""]"',
+      'J4,Json four,"[""blue""]"',
+      '',
+    ].join('\n');
+    for (const dryRun of [true, false]) {
+      const j = await importText(owner, 'item', csv, { source: `json-cell-${dryRun}`, dryRun });
+      expect(j.status, JSON.stringify(j.error)).toBe('succeeded');
+      expect(j.output).toMatchObject({ dryRun, created: 2, failed: 2, errors: { invalid: 2 } });
+      const report = await reportOf(owner, j);
+      expect(report).toContain('Text may not hold half of a UTF-16 surrogate pair');
+      expect(report).toContain('Text may not hold the NUL character');
+    }
+    expect(await itemByTitle('Json four')).toMatchObject({ tags: ['blue'] });
+    expect(await itemByTitle('Json surrogate')).toBeUndefined();
+    expect(await itemByTitle('Json nul')).toBeUndefined();
+  });
+
+  it('in a failed import’s own message is kept as U+FFFD, and the job still says why', async () => {
+    // V8 repeats a file's first character when it cannot read it, and a message cut at 500
+    // characters may halve a surrogate pair: either failed the job's own row before V10.
+    // Uploaded as text: the local driver's upload route would read a JSON body itself.
+    const notJson = await importText(owner, 'item', '\u0000[]', {
+      source: 'nul-msg',
+      format: 'json',
+    });
+    expect(notJson.status).toBe('failed');
+    expect(notJson.error.code).toBe('unreadable');
+    expect(notJson.error.message).toMatch(/^The file is not JSON: .*\uFFFD/);
+    for (const pad of ['', 'a']) {
+      const key = `${pad}${'\u{1F600}'.repeat(300)}`;
+      const odd = await importText(
+        owner,
+        'item',
+        JSON.stringify([{ id: 'E1', title: 'Emoji', [key]: 1 }]),
+        { source: 'emoji-cols' },
+        { name: 'emoji.json', mime: 'application/json' },
+      );
+      expect(odd.status, JSON.stringify(odd.error)).toBe('failed');
+      expect(odd.error.code).toBe('unknown_columns');
+      // Well formed: UTF-8 has no half of a pair, so a round trip changes nothing.
+      const message = odd.error.message as string;
+      expect(Buffer.from(message).toString()).toBe(message);
+    }
+  });
 });
 
 describe('hidden fields', () => {

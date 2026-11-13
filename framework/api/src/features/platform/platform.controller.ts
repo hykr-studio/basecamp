@@ -12,6 +12,7 @@ import {
   RenameTenantInput,
   SetPlatformFeatureInput,
   SupportRequestInput,
+  storableDateTime,
   UpdateOperatorInput,
 } from '@hykr/contracts';
 import {
@@ -102,7 +103,8 @@ const RoutingQuery = z
   .object({
     status: z.enum(['routed', 'unrouted', 'failed']).optional(),
     tenantId: z.uuid().optional(),
-    before: z.iso.datetime().optional(),
+    // A time Postgres can store: `z.iso.datetime()` takes the year 0000 (V10).
+    before: storableDateTime().optional(),
     limit: z.coerce.number().int().min(1).max(200).default(50),
   })
   .strict();

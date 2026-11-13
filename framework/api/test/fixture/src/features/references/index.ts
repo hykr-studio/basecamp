@@ -3,23 +3,38 @@
 // writer; `spareRoomId` is not, so only the database's key checks it. Staff read and write their
 // own rooms and bookings; owners and admins all of the business's. The assistant's new bookings
 // wait for the person; offline phones choose a new booking's id; `booking.move` changes the room
-// through the repository. Only the references test boots this server (`referencesServer`).
+// through the repository. A booking's update and delete can be undone for a minute. Plans have
+// revisions, and `plan.revise` may name another room for the next one; a public form makes a
+// plan, its room typed as text, and a guest's plan would wait for the team (so it is refused,
+// `guest_cannot_wait`) (V10). Only the references test boots this server (`referencesServer`).
 import { defineModule, defineServer } from '@hykr/api';
-import { CreatedBy, commandSpec, entitySpec, moduleSpec } from '@hykr/contracts';
+import {
+  CreatedBy,
+  commandSpec,
+  defineApprovalLevel,
+  definePublicForm,
+  entitySpec,
+  moduleSpec,
+} from '@hykr/contracts';
 import {
   allow,
+  atLevel,
   commandController,
   commandHandler,
   defineCommand,
   defineEntity,
+  defineLevelRule,
   entityController,
   entityHandlers,
+  reviseWithChildren,
 } from '@hykr/core';
 import type { Access } from '@hykr/policy';
 import { Module } from '@nestjs/common';
 import { z } from 'zod';
 import { fixture } from '../../index.js';
-import { bookings, rooms } from './schema.js';
+import { bookings, plans, rooms } from './schema.js';
+
+const same = (en: string) => ({ en, hi: en, te: en });
 
 const title = z.string().min(1).max(200);
 const list = {
@@ -92,10 +107,47 @@ export const MoveBookingSpec = commandSpec({
   touches: ['booking'],
 });
 
+export const Plan = z.object({
+  id: z.string(),
+  title,
+  roomId: z.string().nullable(),
+  version: z.number().int(),
+  seriesId: z.string().nullable(),
+  revision: z.number().int(),
+  createdBy: CreatedBy,
+  createdAt: z.iso.datetime(),
+});
+
+export const PlanSpec = entitySpec({
+  name: 'plan',
+  label: 'plan',
+  description: 'Plans: a title and the room, in revisions.',
+  schemas: {
+    read: Plan,
+    // Text, so a public form may ask for it.
+    create: z.object({ title, roomId: z.string().min(1).max(64).optional() }),
+    update: z.object({ title: title.optional(), roomId: z.uuid().nullable().optional() }),
+  },
+  list,
+  // A guest's plan (the public form's) would wait for the team.
+  approval: { create: (p) => p.actor.kind === 'guest' },
+  traits: { references: { roomId: 'room' }, versioned: { revisions: {} } },
+});
+
+export const RevisePlanSpec = commandSpec({
+  name: 'plan.revise',
+  description: 'Make the next revision of a plan, in the same room or another.',
+  input: z.object({ planId: z.uuid(), roomId: z.uuid().nullable().optional() }),
+  output: Plan,
+  http: { method: 'POST', path: '/api/plans/:planId/revise' },
+  expose: 'all',
+  touches: ['plan'],
+});
+
 export const roomsSpec = moduleSpec({
   name: 'rooms',
-  entities: { rooms: RoomSpec, bookings: BookingSpec },
-  commands: [MoveBookingSpec],
+  entities: { rooms: RoomSpec, bookings: BookingSpec, plans: PlanSpec },
+  commands: [MoveBookingSpec, RevisePlanSpec],
 });
 
 const ACCESS: Access = {
@@ -115,6 +167,31 @@ export const BookingDef = defineEntity(BookingSpec, {
   owner: (t) => t.ownerId,
   customer: (t) => t.customerId,
   access: ACCESS,
+});
+
+export const PlanDef = defineEntity(PlanSpec, {
+  table: plans,
+  owner: (t) => t.ownerId,
+  customer: (t) => t.customerId,
+  access: ACCESS,
+});
+
+/** The next revision: the caller's room goes straight into the copy (`values`). */
+export const RevisePlan = defineCommand(RevisePlanSpec, {
+  resource: { type: 'plan', id: (input) => input.planId },
+  load: (tx, p, input) => PlanDef.repo.get(tx, p, input.planId),
+  authorize: () => allow('revise'),
+  summarize: (_input, plan) => `Revise "${plan.title}" (v${plan.revision})`,
+  run: async ({ tx, principal, input, loaded, via }) => {
+    const next = await reviseWithChildren(tx, principal, PlanDef, loaded, {
+      via,
+      values: input.roomId === undefined ? {} : { roomId: input.roomId },
+    });
+    return {
+      value: PlanDef.toRead(next.row as typeof loaded, principal),
+      touched: next.touched,
+    };
+  },
 });
 
 export const MoveBooking = defineCommand(MoveBookingSpec, {
@@ -141,12 +218,16 @@ export const MoveBooking = defineCommand(MoveBookingSpec, {
   controllers: [
     entityController(RoomDef),
     entityController(BookingDef),
+    entityController(PlanDef),
     commandController(MoveBooking),
+    commandController(RevisePlan),
   ],
   providers: [
     ...entityHandlers(RoomDef),
     ...entityHandlers(BookingDef),
+    ...entityHandlers(PlanDef),
     commandHandler(MoveBooking),
+    commandHandler(RevisePlan),
   ],
 })
 class RoomsModule {}
@@ -154,11 +235,38 @@ class RoomsModule {}
 export const roomsModule = defineModule({
   ...roomsSpec,
   server: RoomsModule,
-  tables: { rooms, bookings },
+  tables: { rooms, bookings, plans },
+});
+
+/** A public form that makes a plan, naming its room. */
+export const PlanForm = definePublicForm({
+  name: 'rooms.plan',
+  entity: 'plan',
+  label: same('Plan a room'),
+  fields: ['title', 'roomId'],
+});
+
+/** A booking's change or removal runs, and can be undone for a minute. */
+export const UndoableLevel = defineApprovalLevel({
+  name: 'fixture_rooms_undoable',
+  rank: 1,
+  label: same('Undoable'),
+  policy: { parks: false, undoMs: 60_000 },
+});
+
+export const BookingLevels = defineLevelRule({
+  name: 'fixture.bookings',
+  on: ['booking.update', 'booking.delete'],
+  decide: () => atLevel(UndoableLevel.name, 'booking_undoable', 'It can be undone'),
 });
 
 /** The fixture with the rooms module. */
 export const referencesServer = defineServer({
   ...fixture.definition,
   modules: [...fixture.definition.modules, roomsModule],
+  contributes: {
+    publicForms: [PlanForm],
+    approvalLevels: [UndoableLevel],
+    levelRules: [BookingLevels],
+  },
 });

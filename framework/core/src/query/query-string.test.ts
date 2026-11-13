@@ -125,3 +125,50 @@ describe('objects with no prototype', () => {
     expect(s.success, JSON.stringify(s.error?.issues)).toBe(true);
   });
 });
+
+describe('text and times a query value decodes after the edge (V10)', () => {
+  const enc = (o: unknown) => encodeURIComponent(JSON.stringify(o));
+  /** Refused with the edge's rule, which the API's pipe answers as the edge does. */
+  const refusedAs = (r: { success: boolean; error?: { issues: unknown[] } }, rule: string) =>
+    !r.success &&
+    (r.error?.issues ?? []).some(
+      (i) => (i as { params?: { rule?: string } }).params?.rule === rule,
+    );
+
+  it('a custom filter’s JSON holding a NUL or half a surrogate pair is refused', () => {
+    for (const [filter, rule] of [
+      [{ colour: 'a\u0000b' }, 'nul_character'],
+      [{ colour: { contains: 'a\u0000b' } }, 'nul_character'],
+      [{ colour: { in: ['red', 'a\u0000b'] } }, 'nul_character'],
+      [{ colour: { ne: 'a\ud800b' } }, 'lone_surrogate'],
+    ] as const) {
+      expect(refusedAs(list(`custom=${enc(filter)}`), rule), JSON.stringify(filter)).toBe(true);
+      expect(refusedAs(summary(`custom=${enc(filter)}`), rule), JSON.stringify(filter)).toBe(true);
+    }
+    // A key holding one is no custom field's key; a backslash and "u0000" are plain text.
+    expect(list(`custom=${enc({ 'a\u0000b': 'x' })}`).success).toBe(false);
+    expect(list(`custom=${enc({ colour: 'a\\u0000b' })}`).success).toBe(true);
+    expect(list(`custom=${enc({ colour: 'red' })}`).success).toBe(true);
+  });
+
+  it('a geo filter’s JSON yields numbers only: a NUL in it never reaches a query', () => {
+    expect(list(`location[near]=${enc({ lat: 'a\u0000b', lng: 1, radiusM: 5 })}`).success).toBe(
+      false,
+    );
+    // Its object is strict: a key holding one is refused, not dropped.
+    expect(
+      list(`location[near]=${enc({ lat: 1, lng: 2, radiusM: 5, 'a\u0000b': 'x' })}`).success,
+    ).toBe(false);
+    expect(list(`location[near]=${enc({ lat: 1, lng: 2, radiusM: 5 })}`).success).toBe(true);
+  });
+
+  it('a date filter Postgres cannot store is refused: the year 0000, or past 9999 in UTC', () => {
+    for (const v of ['0000-01-01', '0000-01-01T00:00:00Z', '9999-12-31T23:59:59-01:00']) {
+      expect(list(`dueOn[gte]=${encodeURIComponent(v)}`).success, v).toBe(false);
+      expect(list(`dueOn=${encodeURIComponent(v)}`).success, v).toBe(false);
+      expect(summary(`dueOn[lt]=${encodeURIComponent(v)}`).success, v).toBe(false);
+    }
+    for (const v of ['0001-01-01', '9999-12-31', '2026-11-13T10:00:00+05:30'])
+      expect(list(`dueOn[gte]=${encodeURIComponent(v)}`).success, v).toBe(true);
+  });
+});

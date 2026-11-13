@@ -903,6 +903,25 @@ describe('calls', () => {
     expect((await inBusiness(admin)('GET', `/api/calls/${callId}`)).status).toBe(200);
   });
 
+  it('a call time Postgres cannot store is 400, logged or changed (V10)', async () => {
+    // `z.iso.datetime({ offset: true })` took a time past 9999 in UTC: a bare 500.
+    const far = '9999-12-31T23:59:59-01:00';
+    for (const field of ['startedAt', 'endedAt']) {
+      const res = await inBusiness(owner)('POST', '/api/calls', {
+        direction: 'inbound',
+        notes: `Too far ${field}`,
+        [field]: far,
+      });
+      expect(res.status, `${field}: ${JSON.stringify(res.body)}`).toBe(400);
+    }
+    const changed = await inBusiness(owner)('PATCH', `/api/calls/${callId}`, { endedAt: far });
+    expect(changed.status, JSON.stringify(changed.body)).toBe(400);
+    const edge = await inBusiness(owner)('PATCH', `/api/calls/${callId}`, {
+      endedAt: '9999-12-31T23:59:59Z',
+    });
+    expect(edge.status, JSON.stringify(edge.body)).toBe(200);
+  });
+
   it('only whoever logged a call changes it', async () => {
     const mine = await inBusiness(owner)('PATCH', `/api/calls/${callId}`, {
       notes: 'Tuesday 10:00',

@@ -198,6 +198,9 @@ describe('a tampered list cursor', () => {
         { ...genuine, v: 'x' },
         { ...genuine, v: [] },
         { ...genuine, id: { a: 1 } },
+        // Text Postgres cannot hold: the class-22 backstop answers for it (V10).
+        { ...genuine, v: ['a\u0000b'] },
+        { ...genuine, id: 'a\u0000b' },
         null,
         5,
       ]) {
@@ -208,6 +211,279 @@ describe('a tampered list cursor', () => {
         expect(res.body.error).toBe('bad_cursor');
       }
     }
+  });
+});
+
+describe('a NUL character in what someone sends', () => {
+  // Postgres's text and jsonb hold no U+0000: before V10, any that reached it was a 500.
+  const nul = (res: { status: number; body: unknown }, what: string) => {
+    expect(res.status, `${what}: ${JSON.stringify(res.body)}`).toBe(400);
+    expect(res.body, what).toMatchObject({ error: 'invalid', rule: 'nul_character' });
+  };
+
+  it('is 400 in a query string, a body or a path, on every route, and nothing is stored', async () => {
+    const task = await a.call('POST', '/api/tasks', { title: 'NUL target' });
+    expect(task.status).toBe(201);
+    const id = task.body.value.id as string;
+    const on = `entity=task&id=${id}`;
+    for (const path of [
+      '/api/tasks?title=a%00b',
+      '/api/tasks?q=a%00b',
+      '/api/tasks/summary?title=a%00b',
+      '/api/gadgets?title=a%00b',
+      '/api/jobs?kind=a%00b',
+      '/api/calls?entity=task&id=a%00b',
+      `/api/comments/mentionable?${on}&q=a%00b`,
+      '/api/comments?entity=task&id=a%00b',
+      '/api/tasks/a%00b',
+      '/api/tasks?a%00b=1',
+    ])
+      nul(await a.call('GET', path), path);
+    for (const [method, path, body] of [
+      ['POST', '/api/tasks', { title: 'a\u0000b' }],
+      ['POST', '/api/tasks', { title: 'ok', extra: ['deep', { in: 'a\u0000b' }] }],
+      ['POST', '/api/tasks', raw('{"title":"ok","a\\u0000b":1}')],
+      ['PATCH', `/api/tasks/${id}`, { title: 'a\u0000b' }],
+      ['POST', '/api/gadgets', { title: 'ok', custom: { colour: 'a\u0000b' } }],
+      ['POST', '/api/comments', { entity: 'task', recordId: id, body: 'a\u0000b' }],
+      ['PATCH', '/api/settings/wording', { phrases: { greeting: { en: 'a\u0000b' } } }],
+    ] as const) {
+      nul(await a.call(method, path, body), `${method} ${path} ${JSON.stringify(body)}`);
+      await othersUnharmed(`${method} ${path}`);
+    }
+    // Not stored with the character dropped either: the patch changed nothing.
+    expect((await a.call('GET', `/api/tasks/${id}`)).body.title).toBe('NUL target');
+  });
+
+  it('with a genuine cursor, a NUL filter is the filter’s fault, not the cursor’s', async () => {
+    for (const title of ['Paged one', 'Paged two'])
+      expect((await a.call('POST', '/api/tasks', { title })).status).toBe(201);
+    const first = await a.call('GET', '/api/tasks?sort=title&limit=1');
+    const cursor = first.body.nextCursor as string;
+    expect(cursor).toBeTruthy();
+    const at = `/api/tasks?sort=title&limit=1&cursor=${cursor}`;
+    expect((await a.call('GET', at)).status).toBe(200);
+    nul(await a.call('GET', `${at}&title=a%00b`), 'paged');
+  });
+
+  it('in a custom filter’s JSON, decoded after the edge, is refused alike, with or without a cursor', async () => {
+    // `custom={"colour":"a\u0000b"}`: the query text holds a backslash, JSON.parse makes the NUL.
+    const field = await a.call('POST', '/api/custom-fields', {
+      entity: 'gadget',
+      key: 'colour',
+      type: 'text',
+      label: { en: 'Colour' },
+    });
+    expect(field.status, JSON.stringify(field.body)).toBe(201);
+    for (const title of ['Colour one', 'Colour two'])
+      expect(
+        (await a.call('POST', '/api/gadgets', { title, custom: { colour: 'red' } })).status,
+      ).toBe(201);
+    const json = (o: unknown) => encodeURIComponent(JSON.stringify(o));
+    const first = await a.call('GET', '/api/gadgets?sort=title&limit=1');
+    const cursor = first.body.nextCursor as string;
+    expect(cursor).toBeTruthy();
+    for (const filter of [
+      { colour: 'a\u0000b' },
+      { colour: { contains: 'a\u0000b' } },
+      { colour: { in: ['red', 'a\u0000b'] } },
+      { colour: { ne: 'a\u0000b' } },
+    ])
+      for (const path of [
+        '/api/gadgets?',
+        '/api/gadgets/summary?',
+        `/api/gadgets?sort=title&limit=1&cursor=${cursor}&`,
+      ]) {
+        const res = await a.call('GET', `${path}custom=${json(filter)}`);
+        nul(res, `${path} ${JSON.stringify(filter)}`);
+        expect(res.body.where).toBe('query.custom');
+      }
+    // A backslash and "u0000" are text like any other, and the plain filter still reads.
+    for (const colour of ['red', 'a\\u0000b']) {
+      const res = await a.call('GET', `/api/gadgets?custom=${json({ colour })}`);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect((await a.call('GET', `/api/gadgets/summary?custom=${json({ colour })}`)).status).toBe(
+        200,
+      );
+    }
+    expect(
+      (await a.call('GET', `/api/gadgets?sort=title&limit=1&cursor=${cursor}`)).body.items,
+    ).toHaveLength(1);
+  });
+
+  it('past the query parser’s 1000 keys too: a page that reads the raw query sees no NUL', async () => {
+    // Express keeps the first 1000 keys in req.query; the OAuth pages read the raw query again.
+    const filler = Array.from({ length: 1000 }, (_, i) => `f${i}=0`).join('&');
+    const anon = async (path: string) => {
+      const res = await fetch(`${server.base}${path}`, { redirect: 'manual' });
+      const text = await res.text();
+      let body: unknown = text;
+      try {
+        body = JSON.parse(text);
+      } catch {}
+      return { status: res.status, body };
+    };
+    for (const path of [
+      `/oauth/consent?${filler}&client_id=a%00b`,
+      `/oauth/sign-in?${filler}&client_id=a%00b`,
+      `/api/branding/public?${filler}&x=a%00b`,
+    ])
+      nul(await anon(path), path.slice(-30));
+    for (const path of [
+      `/api/tasks?${filler}&title=a%00b`,
+      `/api/auth/get-session?${filler}&x=a%00b`,
+    ])
+      nul(await a.call('GET', path), path.slice(-30));
+    // `%2500` is the text "%00", not a NUL.
+    expect((await a.call('GET', '/api/tasks?title=a%2500b')).status).toBe(200);
+  });
+
+  it('half of a surrogate pair is refused alike: a custom value with one was a 500', async () => {
+    // jsonb refuses a lone surrogate (22P05), and text turned one into U+FFFD without a word.
+    const lone = (res: { status: number; body: unknown }, what: string) => {
+      expect(res.status, `${what}: ${JSON.stringify(res.body)}`).toBe(400);
+      expect(res.body, what).toMatchObject({ error: 'invalid', rule: 'lone_surrogate' });
+    };
+    const field = await a.call('POST', '/api/custom-fields', {
+      entity: 'gadget',
+      key: 'shade',
+      type: 'text',
+      label: { en: 'Shade' },
+    });
+    expect(field.status, JSON.stringify(field.body)).toBe(201);
+    lone(
+      await a.call('POST', '/api/gadgets', { title: 'ok', custom: { shade: 'a\ud800b' } }),
+      'custom',
+    );
+    lone(await a.call('POST', '/api/tasks', { title: 'a\udc00b' }), 'title');
+    const filter = encodeURIComponent(JSON.stringify({ shade: 'a\ud800b' }));
+    lone(await a.call('GET', `/api/gadgets?custom=${filter}`), 'filter');
+    const named = new Person('Half Pair');
+    expect((await named.signUp()).status).toBe(200);
+    lone(await named.call('POST', '/api/auth/update-user', { name: 'Half \ud800' }), 'name');
+    expect((await named.call('GET', '/api/auth/get-session')).body.user.name).toBe('Half Pair');
+    // A whole pair is a character like any other.
+    const smile = await a.call('POST', '/api/tasks', { title: 'Smile \u{1F600}' });
+    expect(smile.status).toBe(201);
+    expect(smile.body.value.title).toBe('Smile \u{1F600}');
+    await othersUnharmed('half a pair');
+  });
+
+  it('Better Auth’s routes refuse one too: an update of the name was a 500', async () => {
+    // Its routes are not Nest's: a hook in front of its endpoints checks them (infra/auth.ts).
+    const odd = new Person('Odd Name');
+    const signUp = await odd.call('POST', '/api/auth/sign-up/email', {
+      name: 'Odd\u0000Name',
+      email: odd.email,
+      password: 'password123',
+    });
+    nul(signUp, 'sign-up');
+    expect((await odd.signUp()).status).toBe(200);
+    nul(await odd.call('POST', '/api/auth/update-user', { name: 'Odd\u0000Again' }), 'update');
+    nul(await odd.call('GET', '/api/auth/get-session?x=a%00b'), 'session');
+    expect((await odd.call('GET', '/api/auth/get-session')).body.user.name).toBe('Odd Name');
+  });
+});
+
+describe('a tampered keyset cursor (inbox, comments, agent runs)', () => {
+  const b64 = (s: string) => Buffer.from(s).toString('base64url');
+  const now = new Date().toISOString();
+  /** A time Postgres cannot store, a NUL in the id, and an id longer than any id. */
+  const bad = [
+    ['99999', 'x'],
+    ['-100000-01-01T00:00:00Z', 'x'],
+    [now, 'a\u0000b'],
+    [now, 'x'.repeat(129)],
+  ];
+
+  it('is 400 bad_cursor for a far-off time, a NUL id or an over-long id, never a 500', async () => {
+    const task = await a.call('POST', '/api/tasks', { title: 'Cursor target' });
+    const on = `entity=task&id=${task.body.value.id}`;
+    for (const [path, encode] of [
+      ['/api/inbox', ([at, id]: string[]) => b64(`${at}|${id}`)],
+      [`/api/comments?${on}`, ([at, id]: string[]) => b64(`${at}|${id}`)],
+      ['/api/agent-runs', (x: string[]) => b64(JSON.stringify(x))],
+    ] as const)
+      for (const parts of bad) {
+        const res = await a.call(
+          'GET',
+          `${path}${path.includes('?') ? '&' : '?'}cursor=${encode(parts)}`,
+        );
+        const what = `${path} ${JSON.stringify(parts).slice(0, 60)}`;
+        expect(res.status, `${what}: ${JSON.stringify(res.body)}`).toBe(400);
+        // The query's schema refuses a cursor that long before it is read; the rest are its own.
+        if (parts[1].length <= 128) expect(res.body.error, what).toBe('bad_cursor');
+      }
+  });
+});
+
+describe('a time Postgres cannot store, in a query string', () => {
+  // JavaScript reads year 0 and years past 9999; Postgres refuses them (22008): a 500 before V10.
+  const year0 = encodeURIComponent('0000-01-01T00:00:00Z');
+  const past9999 = encodeURIComponent('9999-12-31T23:59:59-01:00');
+  const fine = encodeURIComponent('2026-01-01T00:00:00Z');
+
+  it('is 400 in a list’s date filter, history, credits usage and the platform’s routing', async () => {
+    expect(
+      (await a.call('POST', '/api/tasks', { title: 'Dated', dueOn: '2026-12-01' })).status,
+    ).toBe(201);
+    const operator = new Person('Operator Times');
+    await operator.signUp();
+    await makeOperator(operator);
+    const bad: [Person, string][] = [
+      [a, '/api/tasks?dueOn=0000-01-01'],
+      [a, '/api/tasks?dueOn[gte]=0000-01-01'],
+      [a, `/api/tasks?dueOn[lt]=${year0}`],
+      [a, `/api/tasks?dueOn[lt]=${past9999}`],
+      [a, '/api/tasks/summary?dueOn[gte]=0000-01-01'],
+      [a, `/api/history?since=${year0}`],
+      [a, `/api/history?since=${past9999}`],
+      [a, '/api/credits/usage?from=99999'],
+      [a, '/api/credits/usage?to=99999'],
+      [a, `/api/credits/usage?from=${year0}`],
+      [a, '/api/credits/usage?from=not-a-time'],
+      [operator, `/api/platform/routing?before=${year0}`],
+      [operator, `/api/platform/routing?before=${past9999}`],
+    ];
+    for (const [who, path] of bad) {
+      const res = await who.call('GET', path);
+      expect(res.status, `${path}: ${JSON.stringify(res.body)}`).toBe(400);
+    }
+    for (const [who, path] of [
+      [a, '/api/tasks?dueOn[gte]=2026-01-01'],
+      [a, `/api/tasks?dueOn[lt]=${fine}`],
+      [a, '/api/tasks/summary?dueOn[gte]=2026-01-01'],
+      [a, `/api/history?since=${fine}`],
+      [a, `/api/credits/usage?from=${fine}`],
+      [operator, `/api/platform/routing?before=${fine}`],
+    ] as const) {
+      const res = await who.call('GET', path);
+      expect(res.status, `${path}: ${JSON.stringify(res.body)}`).toBe(200);
+    }
+  });
+});
+
+describe('a filter value its column cannot hold', () => {
+  // The list schema takes any finite number for a `number` field; an `integer` column holds
+  // whole numbers to 2^31 - 1. Postgres refused the rest (22003, 22P02): a 500 before V10, and
+  // `bad_cursor` with a genuine cursor, which blamed the cursor for the filter.
+  it('is 400 invalid on the list, its summary and with a cursor, never a 500 or bad_cursor', async () => {
+    for (const title of ['Ranked one', 'Ranked two'])
+      expect((await a.call('POST', '/api/gadgets', { title, rank: 1 })).status).toBe(201);
+    const cursor = (await a.call('GET', '/api/gadgets?sort=title&limit=1')).body.nextCursor;
+    expect(cursor).toBeTruthy();
+    for (const q of ['rank=1e12', 'rank[gt]=-1e12', 'rank=1.5', 'rank[in]=1,1e12'])
+      for (const path of [
+        '/api/gadgets?',
+        '/api/gadgets/summary?',
+        `/api/gadgets?sort=title&limit=1&cursor=${cursor}&`,
+      ]) {
+        const res = await a.call('GET', `${path}${q}`);
+        expect(res.status, `${path}${q}: ${JSON.stringify(res.body)}`).toBe(400);
+        expect(res.body, `${path}${q}`).toMatchObject({ error: 'invalid', field: 'rank' });
+      }
+    expect((await a.call('GET', '/api/gadgets?rank=2147483647')).status).toBe(200);
+    expect((await a.call('GET', '/api/gadgets/summary?rank[in]=1,2')).status).toBe(200);
   });
 });
 
@@ -251,6 +527,29 @@ describe('routes that read their own query string', () => {
       'form=a&form=b',
       'kind=a&kind=b',
       'origin=a&origin=b',
+      // A NUL character, which no Postgres text holds (V10).
+      'q=a%00b',
+      'kind=a%00b',
+      'status=a%00b',
+      'id=a%00b',
+      'entity=a%00b',
+      `cursor=${Buffer.from('99999|x').toString('base64url')}`,
+      `cursor=${Buffer.from(`${new Date().toISOString()}|a\u0000b`).toString('base64url')}`,
+      `cursor=${Buffer.from(JSON.stringify(['99999', 'x'])).toString('base64url')}`,
+      `cursor=${Buffer.from(JSON.stringify([new Date().toISOString(), 'a\u0000b'])).toString('base64url')}`,
+      `cursor=${Buffer.from(JSON.stringify({ d: '2026-01-01T00:00:00.000000', i: 'a\u0000b' })).toString('base64url')}`,
+      `cursor=${Buffer.from(JSON.stringify({ d: '0000-01-01T00:00:00.000000', i: 'x' })).toString('base64url')}`,
+      // Times JavaScript reads and Postgres refuses, on every name a route reads one by (V10).
+      ...['since', 'before', 'after', 'from', 'to', 'until'].flatMap((name) =>
+        ['99999', '0000-01-01T00:00:00Z', '0000-01-01', '9999-12-31T23:59:59-01:00'].map(
+          (v) => `${name}=${encodeURIComponent(v)}`,
+        ),
+      ),
+      // A range both of whose ends Postgres refuses, and one whose computed end it does (V10).
+      'from=0000-01-01&to=0000-06-01',
+      'from=9999-12-15',
+      // More keys than the query parser keeps, with a NUL past them (V10).
+      `${Array.from({ length: 1000 }, (_, i) => `f${i}=0`).join('&')}&q=a%00b&client_id=a%00b`,
     ];
     const task = await a.call('POST', '/api/tasks', { title: 'Fuzzed' });
     const on = `entity=task&id=${task.body.value.id}`;
@@ -284,6 +583,9 @@ describe('routes that read their own query string', () => {
       `/api/history/versions?${resource}`,
       '/api/credits/ledger',
       `/api/credits/usage?${day}`,
+      '/api/credits/usage',
+      '/api/tasks',
+      '/api/tasks/summary',
       '/api/files',
       `/api/acceptances?${on}`,
       '/api/acceptances/kinds?entity=task',
@@ -314,6 +616,8 @@ describe('routes that read their own query string', () => {
       '/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=x&hub.challenge=1',
       '/api/share/not-a-token',
       '/api/share/not-a-token/acceptances/documents/x',
+      '/oauth/consent?client_id=x',
+      '/oauth/sign-in',
     ];
     const failures: string[] = [];
     for (const [who, paths] of [
@@ -330,6 +634,6 @@ describe('routes that read their own query string', () => {
             failures.push(`${path}?${q}: shows the other business`);
           expect(polluted()).toEqual([]);
         }
-    expect(failures).toEqual([]);
-  });
+    expect(failures, failures.join('\n').slice(0, 4000)).toEqual([]);
+  }, 180_000); // Every route with every variant: a few thousand requests.
 });

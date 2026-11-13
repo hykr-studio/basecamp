@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  canListCurrencies,
   currencyExponent,
   defineLanguages,
   knownCurrency,
@@ -65,5 +66,26 @@ describe('known currencies', () => {
     } finally {
       intl.supportedValuesOf = saved;
     }
+  });
+
+  it('says whether the runtime can list them, so the server can refuse to start without', () => {
+    const intl = Intl as { supportedValuesOf?: unknown };
+    const saved = intl.supportedValuesOf;
+    expect(canListCurrencies()).toBe(true);
+    try {
+      for (const missing of [
+        undefined,
+        () => [],
+        () => {
+          throw new RangeError('no data');
+        },
+      ]) {
+        intl.supportedValuesOf = missing;
+        expect(canListCurrencies(), String(missing)).toBe(false);
+      }
+    } finally {
+      intl.supportedValuesOf = saved;
+    }
+    expect(canListCurrencies()).toBe(true);
   });
 });

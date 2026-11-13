@@ -2,6 +2,7 @@ import { baseMime } from '@hykr/contracts';
 import { Controller, Get, Inject, Param, Put, Req, Res } from '@nestjs/common';
 import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 import type { Request, Response } from 'express';
+import { TakesBytes } from '../../infra/untrusted-text.js';
 import { filesConfig } from './config.js';
 import {
   BLOB_PATH,
@@ -39,6 +40,7 @@ const refuse = (res: Response, status: number, error: string) => res.status(stat
  */
 @Controller(BLOB_PATH.slice(1))
 @AllowAnonymous()
+@TakesBytes()
 export class BlobController {
   private readonly secret = filesConfig().secret;
 

@@ -263,3 +263,144 @@ describe('a key no spec declares', () => {
     expect(res.body).toEqual({ error: 'in_use', message: 'Other records still name this room' });
   });
 });
+
+describe('the writes that went around the check (V10)', () => {
+  const plansIn = async (series: string) =>
+    Number(
+      (
+        await pool.query(
+          'select count(*)::int n from app.fixture_rooms_plans where coalesce(series_id, id) = $1',
+          [series],
+        )
+      ).rows[0].n,
+    );
+
+  it('a revision naming another room is refused alike; one keeping its room is not', async () => {
+    const made = await as(staff)('POST', '/api/plans', { title: 'Plan', roomId: staffRoom });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    const id = made.body.value.id;
+    for (const roomId of forStaff()) {
+      const res = await as(staff)('POST', `/api/plans/${id}/revise`, { roomId });
+      expect(res.status, JSON.stringify(res.body)).toBe(404);
+      expect(res.body).toEqual(refused);
+    }
+    expect(await plansIn(id)).toBe(1);
+    // Linked when it was readable (here: by the database), the owner's room is out of reach now:
+    // a revision that keeps it, or names it again, copies it as the update would keep it.
+    await pool.query('update app.fixture_rooms_plans set room_id = $1 where id = $2', [
+      ownerRoom,
+      id,
+    ]);
+    const kept = await as(staff)('POST', `/api/plans/${id}/revise`, {});
+    expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+    expect(kept.body.value).toMatchObject({ roomId: ownerRoom, revision: 2 });
+    const again = await as(staff)('POST', `/api/plans/${id}/revise`, { roomId: ownerRoom });
+    expect(again.body.value).toMatchObject({ roomId: ownerRoom, revision: 3 });
+    const moved = await as(staff)('POST', `/api/plans/${id}/revise`, { roomId: staffRoom });
+    expect(moved.body.value).toMatchObject({ roomId: staffRoom, revision: 4 });
+    expect(await plansIn(id)).toBe(4);
+  });
+
+  it('a public form’s answer is refused alike, before it could wait, and spends nothing', async () => {
+    const link = await as(owner)('POST', '/api/shares', {
+      target: { form: 'rooms.plan' },
+      maxUses: 5,
+    });
+    expect(link.status, JSON.stringify(link.body)).toBe(201);
+    const token = link.body.value.token as string;
+    const guest = async (method: string, path: string, body?: unknown) => {
+      const res = await fetch(`${server.base}${path}`, {
+        method,
+        headers: body === undefined ? {} : { 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const text = await res.text();
+      return { status: res.status, body: text ? JSON.parse(text) : null };
+    };
+    const customers = async () =>
+      Number(
+        (
+          await pool.query('select count(*)::int n from app.customers where tenant_id = $1', [
+            tenantId,
+          ])
+        ).rows[0].n,
+      );
+    const before = await customers();
+    // A guest reads no room of the business: each is one they may not name.
+    for (const roomId of [...forStaff(), staffRoom]) {
+      const res = await guest('POST', `/api/share/${token}/submit`, {
+        values: { title: 'Guest plan', roomId },
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(404);
+      expect(res.body).toEqual(refused);
+    }
+    // Naming none, the answer would wait for the team, and a guest's never does.
+    const waits = await guest('POST', `/api/share/${token}/submit`, {
+      values: { title: 'Guest plan' },
+    });
+    expect(waits.status).toBe(403);
+    expect(waits.body).toMatchObject({ rule: 'guest_cannot_wait' });
+    expect((await guest('GET', `/api/share/${token}`)).body.form).toMatchObject({ remaining: 5 });
+    expect(await customers()).toBe(before);
+    const made = await pool.query(
+      `select count(*)::int n from app.fixture_rooms_plans where title = 'Guest plan'`,
+    );
+    expect(made.rows[0].n).toBe(0);
+  });
+
+  /** A room of staff's that the owner takes over: staff no longer read it. */
+  const handedOver = async (title: string) => {
+    const id = await room(staff, title);
+    return {
+      id,
+      handOver: () =>
+        pool.query('update app.fixture_rooms set owner_id = $1 where id = $2', [owner.id, id]),
+    };
+  };
+  const undo = (id: string) => as(staff)('POST', `/api/undo/${id}`);
+
+  it('undoing a delete puts the booking back only while its room is still theirs', async () => {
+    const lent = await handedOver('Lent room');
+    const made = await as(staff)('POST', '/api/bookings', { title: 'Undo me', roomId: lent.id });
+    const id = made.body.value.id;
+    const removed = await as(staff)('DELETE', `/api/bookings/${id}`);
+    expect(removed.body).toMatchObject({ status: 'done', undo: { id: expect.any(String) } });
+    await lent.handOver();
+    const undone = await undo(removed.body.undo.id);
+    expect(undone.status, JSON.stringify(undone.body)).toBe(404);
+    expect(undone.body).toEqual(refused);
+    expect(await bookingsNaming(lent.id)).toBe(0);
+
+    // A room gone meanwhile: the same refusal, never the database's.
+    const gone = await room(staff, 'Gone room');
+    const doomed = await as(staff)('POST', '/api/bookings', { title: 'Undo me', roomId: gone });
+    const out = await as(staff)('DELETE', `/api/bookings/${doomed.body.value.id}`);
+    expect((await as(staff)('DELETE', `/api/rooms/${gone}`)).status).toBe(200);
+    const late = await undo(out.body.undo.id);
+    expect(late.status, JSON.stringify(late.body)).toBe(404);
+    expect(late.body).toEqual(refused);
+
+    // Its room still theirs, it comes back as it was.
+    const kept = await as(staff)('POST', '/api/bookings', { title: 'Back', roomId: staffRoom });
+    const gone2 = await as(staff)('DELETE', `/api/bookings/${kept.body.value.id}`);
+    expect((await undo(gone2.body.undo.id)).status).toBe(200);
+    expect((await as(staff)('GET', `/api/bookings/${kept.body.value.id}`)).body).toMatchObject({
+      roomId: staffRoom,
+    });
+  });
+
+  it('undoing a change of room goes back only to a room still theirs, as an update does', async () => {
+    const lent = await handedOver('Lent again');
+    const made = await as(staff)('POST', '/api/bookings', { title: 'Revert me', roomId: lent.id });
+    const id = made.body.value.id;
+    const moved = await as(staff)('PATCH', `/api/bookings/${id}`, { roomId: staffRoom });
+    expect(moved.body.undo).toMatchObject({ id: expect.any(String) });
+    await lent.handOver();
+    const undone = await undo(moved.body.undo.id);
+    expect(undone.status, JSON.stringify(undone.body)).toBe(404);
+    expect(undone.body).toEqual(refused);
+    expect((await as(staff)('GET', `/api/bookings/${id}`)).body).toMatchObject({
+      roomId: staffRoom,
+    });
+  });
+});

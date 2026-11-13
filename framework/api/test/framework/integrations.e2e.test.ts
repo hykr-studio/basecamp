@@ -351,6 +351,31 @@ describe('outbound webhooks', () => {
     expect(asAdmin.body).not.toHaveProperty('body');
   });
 
+  it('the delivery log pages back by `before`, and refuses a time Postgres cannot store', async () => {
+    // V1 read `before` through storableInstant; a random endpoint answered 404 before reading it.
+    const path = `/api/integrations/endpoints/${dated.id}/deliveries`;
+    await eventually(async () => {
+      const all = await ana.call('GET', path);
+      return all.body.items.length >= 2 ? all : undefined;
+    });
+    for (const before of ['99999', '-100000-01-01T00:00:00Z', 'not-a-date']) {
+      const res = await ana.call('GET', `${path}?before=${encodeURIComponent(before)}`);
+      expect(res.status, `${before}: ${JSON.stringify(res.body)}`).toBe(400);
+      expect(res.body).toMatchObject({ error: 'invalid', message: 'before is not a time' });
+    }
+    const first = await ana.call('GET', `${path}?limit=1`);
+    expect(first.status).toBe(200);
+    expect(first.body.items).toHaveLength(1);
+    expect(first.body.nextBefore).toBeTruthy();
+    const older = await ana.call(
+      'GET',
+      `${path}?limit=1&before=${encodeURIComponent(first.body.nextBefore)}`,
+    );
+    expect(older.status, JSON.stringify(older.body)).toBe(200);
+    expect(older.body.items).toHaveLength(1);
+    expect(older.body.items[0].id).not.toBe(first.body.items[0].id);
+  });
+
   it('an update carries the record before; patterns choose the events', async () => {
     const made = await task(ana, { title: 'Before and after' });
     await ana.call('PATCH', `/api/tasks/${made.id}`, { title: 'After' });

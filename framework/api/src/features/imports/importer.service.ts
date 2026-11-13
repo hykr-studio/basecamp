@@ -7,7 +7,10 @@ import {
   type ImportErrorCode,
   type ImportOptions,
   type ImportResult,
+  ownValue,
   type Principal,
+  TEXT_FAULTS,
+  unstorableTextAt,
   type WriteResult,
 } from '@hykr/contracts';
 import {
@@ -286,7 +289,7 @@ export class Importer {
     const seen = new Set<string>();
     return parsed.rows.map((raw) => {
       if (raw.problem) return { raw, problem: new RowProblem('invalid', raw.problem) };
-      const k = raw.values[o.key];
+      const k = ownValue(raw.values, o.key);
       const key = k === undefined || k === null ? '' : String(k).trim();
       if (!key) return { raw, problem: new RowProblem('missing_key', `No ${o.key}`, o.key) };
       if (key.length > 200)
@@ -304,6 +307,10 @@ export class Importer {
         values[field] = parsed.text
           ? cellValue(fields.create[field] ?? fields.update[field], String(v ?? ''), o.empty)
           : v;
+        // A cell spelling JSON is decoded after the file's check (`["a\ud800b"]`): text
+        // Postgres cannot keep is the row's problem here too, never repaired (V10).
+        const bad = unstorableTextAt(values[field], field);
+        if (bad) return { raw, problem: new RowProblem('invalid', TEXT_FAULTS[bad.rule], field) };
       }
       return { raw, key, values };
     });

@@ -5,11 +5,13 @@ import {
   commandSpec,
   defineFeatureFlag,
   entitySpec,
+  storableDate,
 } from '@hykr/contracts';
 import { z } from 'zod';
 
 const title = z.string().min(1).max(200);
-const dueOn = z.iso.date();
+/** A day Postgres can store: `z.iso.date()` takes the year 0000 (developer guide, section 14). */
+const dueOn = storableDate();
 /** What it costs, in minor units of the business's currency. */
 const cost = z.number().int().min(0);
 
