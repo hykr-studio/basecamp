@@ -1831,7 +1831,9 @@ pnpm exec basecamp import todo domain/src/modules/todos/import/todos.csv \
   import again updates those records (`existing: 'update'`), or leaves them (`'skip'`), and a row
   that would change nothing counts as `unchanged`. A key whose record was deleted is `not_found`: a
   re-run never brings it back. `refs: { shelfId: 'shelf' }` says a column holds another entity's
-  keys in the same source; each becomes that record's id.
+  keys in the same source; each becomes that record's id. A row naming a record the importer
+  cannot reach, by key or by a raw id in a declared reference (unknown, another business's, or
+  one it cannot read), is `unknown_reference`, the same code each way (section 5.2).
 - **Values.** Columns are fields by name, or by `columns: { 'Old name': 'field' }` (`null` leaves a
   column out); columns starting with `_` are ignored; any other unknown column fails the import
   before it writes anything. A CSV cell is given to the field's schema as text, or as the number,

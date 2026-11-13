@@ -130,7 +130,7 @@ export const ItemSpec = entitySpec({
     defaultSort: [['createdAt', 'asc']],
     pageSize: { default: 50, max: 200 },
   },
-  traits: { fieldPolicy: { cost: ItemCost.name } },
+  traits: { fieldPolicy: { cost: ItemCost.name }, references: { shelfId: 'shelf' } },
 });
 
 /** Bins: their spec opts out of imports. */
