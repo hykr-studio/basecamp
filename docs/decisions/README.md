@@ -69,12 +69,29 @@ change the sample application or a business's settings, not the framework.
 | [HLANG](HLANG.md) | Boundary | The application declares its languages (`defineLanguages`); English is the only fixed one and every word's fallback. | `befe10fc` |
 | [HDOCS](HDOCS.md) | Docs | The guides read as one set against the merged code; a new `docs/modules.md` on working on modules in parallel. | `090fd9f3` |
 | [HCONS](HCONS.md) | CI, evals | The consumer job as one script with evals in CI, spoken cases per module, `better-auth` pinned, the full CI run. | `10b54eae` |
-| [REPORT](REPORT.md) | Report | This register and the run report. | this change |
+| [REPORT](REPORT.md) | Report | This register and the run report. | `9aa751b5` |
+| [V1](V1.md) | Validation (C10) | Prototype-named query keys are refused and reach no prototype; a tampered list cursor is 400 `bad_cursor`; an import's error report neutralises formulas and imports back. | `781b71fb` |
+| [V2](V2.md) | Validation (C1, C8) | `traits.references`: a reference names a record its writer may read in its own business, checked in the write path; the sample's meeting links keyed with their business. | `1ac04453` (migration `2db3cd2e`) |
+| [V3](V3.md) | Validation (C8) | Erasure reaches file names, invitations, the calendar's label and Mastra's scores; `redactCopies` finds a copy at any depth. | `5a2456ce` |
+| [V4](V4.md) | Validation (C3) | `knownCurrency`: a write refuses a currency Intl does not list, and the deployment's configuration is checked at start. | `aae893d7` |
+| [V5](V5.md) | Validation (C5) | A refused marketing send uses none of the cap; credits say when turns are refused; `alertAt` below `pauseAt`; 403 before 503; limit notices worded apart from the credits. | `22132282` |
+| [V6](V6.md) | Validation (C9, C6) | A retry with its idempotency key is one record; an event reaches only triggers and endpoints that existed; one bad stored event stops nothing; a job's result URL is fetched only from the addresses checked. | `ef225d80` (migration `37c1370a`) |
+| [V7](V7.md) | Validation (C2, C7, C9) | The waiting line names who decides; WhatsApp links the request; a list is headed by its title; "I can't do that here."; push masks tell devices apart. | `43bee58c` |
+| [V8](V8.md) | Validation (C8) | Erasure reaches every feature's copies, Redis's finished jobs, and the copies of deleted and moved records; briefs are personal data; job files expire. | `38fe9cf3` |
+| [V9](V9.md) | Validation (C6) | Better Auth's routes hold the channel rules and rate limits; the consent screen narrows a module to read; the OAuth pages take `?lang`; a revoked token is told so. | `217e12cc` |
+| [V10](V10.md) | Validation (reviews of V1, V2, V4) | A NUL anywhere is 400; keyset cursors checked; three more writes through `checkReferences`; times and values Postgres cannot store refused before any query; the start needs ICU's currencies. | `d790b5fb` (with `31a3c908`) |
+| [V11](V11.md) | Validation (reviews of V5, V6, V7, V9) | `TRUST_PROXY`; a throwing filter loses one event alone; routes with their own reply run one at a time; an approver who left gives way; nothing in a write's transaction reaches the pool; an empty patch is refused. | `99f87fc7` |
+| [V12](V12.md) | Validation (acceptance) | Every keyset keeps its time to the microsecond and compares it in SQL; the ledger, delivery and routing logs page by (time, id). | `d2844401` |
+| [V13](V13.md) | Validation (acceptance) | A lookup before a write is not shown as the answer; a limit's refusal names the meter by its label; one alert per crossing. | `a0865ebd` |
+| [VALIDATION](VALIDATION.md) | Validation | The live validation at `23805b76`: 349 claims, 18 defects by root cause, the fixes V1 to V13 and their acceptance. | this change (after `f63bb019`) |
 
 Units are grouped as the run went: the foundation, the gaps (combined units such as `B3B5` built
 two gaps together, and `A11X` is A11's data export), then the fix units from the reviews: H for
 completeness, S for security, X for the framework/application boundary, and `HLANG`, `HDOCS` and
-`HCONS` for languages, documentation and the consumer job.
+`HCONS` for languages, documentation and the consumer job. After REPORT, the live validation
+([VALIDATION](VALIDATION.md)) found 18 defects, and V1 to V13 fixed them: V1 to V9 one root cause
+each (the defect clusters `C<n>` in their Gaps column), V10 and V11 what the reviews of those
+units left, V12 and V13 what the acceptance runs found.
 
 ## Assumptions register
 
@@ -83,7 +100,8 @@ How to read it:
 - **Unit** is the decisions doc to open for the detail. A row naming several units is one
   question several units raised, merged; it states the latest answer.
 - **Gap** is the gap the assumption belongs to (`Foundation` for F0 to F6; `Boundary` for the
-  framework/application rule; `Settings`, `Docs`, `CI` and `Evals` for cross-cutting units).
+  framework/application rule; `Settings`, `Docs`, `CI` and `Evals` for cross-cutting units;
+  `Validation` for the fix units V1 to V13, with the gap or defect cluster in brackets).
 - **Source** is where the choice came from: the PRD (tab and section), the gap list (the gap
   statement, or the gap map's risks and owner questions), the plan (including its boundary rule
   and hot-file table), a review finding, or a default: a conservative choice by the unit, failing
@@ -92,10 +110,12 @@ How to read it:
   the choice itself. "Settled by H1" (or another unit) means a later unit answered it; the row stays so the
   change is visible. "None" means the unit reported the choice without a question.
 
-The table has 484 rows: the 458 items of the units' "Assumptions to review" sections and
+The table has 563 rows: the 458 items of the units' "Assumptions to review" sections and
 70 assumptions the units reported to the run that their docs do not state, less duplicates merged
 and process notes left out (merging the integration branch into a unit, which test approach a fix
-took, where a demo lived before its module existed). Those stay in each unit's doc.
+took, where a demo lived before its module existed), plus 79 rows from the fix units V1 to V13
+(their "Assumptions to review" sections, an assumption a later V unit settled merged into one
+row, and the two B18 rows V8 handed to the integrator). Those stay in each unit's doc.
 
 | Unit | Gap | Topic | What we chose | Source | Question for the owner |
 |---|---|---|---|---|---|
@@ -486,7 +506,8 @@ took, where a demo lived before its module existed). Those stay in each unit's d
 | B18 | B18 | Shortening a period | A shorter period applies at the next daily run, to data already kept | Default | Must shortening a period wait (a notice period) or ask for a confirmation in the back office? |
 | B18 | B18 | Filings after erasure | A filing about an erased person keeps its kind, intake and their id, without the email, number or note | B18 decision 14; review fix | Is the id enough evidence of whom a request was about, or must the filing keep nothing that links to the person? |
 | B18 | B18 | A privacy tool for the assistant | None: requests are filed by people (the app, the back office, WhatsApp's keyword). | Default (erasure cannot be undone) | Should the assistant be able to file a privacy request? |
-| B18 | B18 | Mastra's stores | Spans, logs, scores, metrics, feedback and workflow snapshots of the person's runs are deleted by SQL, each table skipped if Mastra has not created it. Mastra memory keyed by subject goes only with a contact or a person's last business. | Gap map risk | Does any other Mastra store need erasing? |
+| B18, V3, V8 | B18 | Mastra's stores | Spans, logs, scores, metrics, feedback and workflow snapshots of the person's runs, the scorers' results (`mastra.mastra_scorers`) and the scorers' own traces are deleted by SQL, each step skipped (with a process warning, V8 decision 41) if Mastra has not created its table or a column it names. Mastra memory keyed by subject goes only with a contact or a person's last business. | Gap map risk; V3 (scores); V8 decision 35 | Does any other Mastra store need erasing? |
+| V8 | B18 | Undo windows | Undo windows hold the rows their write touched; an erasure or a retention rule deletes the windows that hold an erased or blanked record (V8 decision 36), so that write can no longer be undone. | V8 decision 36 | Confirm. |
 | B18 | B18 | Periods a business may set | Only per-business retention rules and targets; deployment targets (assistant traces, raw inbound payloads) and unknown names are refused with 400. | B18 decision 18; default (fail closed) | None |
 | B18 | B18 | Stored idempotency replies | Treated as copies of records: erasure and retention redact erased records' fields in them. Nothing trims them by age. | Default (the client sends a key with every write) | None |
 | B19 | B19 | Consent, not free access | Operators never read a business's data without its consent (decision 9). | Gap map owner question; gap statement (consented, time-boxed, audited) | Is there a case for break-glass access without consent (a legal request, an outage), audited and announced afterwards? |
@@ -581,8 +602,86 @@ took, where a demo lived before its module existed). Those stay in each unit's d
 | HCONS | B3 | A currency for the assistant's creates | A plain create of a record with money must name its currency. The assistant cannot see the business's currency, so the person must say it (the sample's briefs evals do). | B3B5 money plugin (CRUD creates do not take the business's currency); default | Should a create that names no currency take the business's currency (its `money` settings, then `DEFAULT_CURRENCY`), and refuse only when there is neither? Or should the assistant be told the business's currency in its instructions? |
 | HCONS | Packaging | Dependency ranges | `better-auth` and its Expo plugin are exact pins, at the OAuth plugin's version. Everything else keeps its range. | Default | Should the `@hykr/*` packages pin more of their runtime (Mastra, the AI SDK, OpenTelemetry), or should the scaffolder write an `overrides` block, so a new application installs exactly what CI tested? |
 | HCONS | Evals | Spoken cases per module | Every module with tools has English, Hindi and Telugu spoken cases. | Default | Should a module nobody uses by voice be allowed to have none, with `eval voice --module` skipping it? |
-| REPORT | Report | The register is a snapshot | It reflects the decisions docs as merged at `10b54eae` (HCONS). A later change to a unit's doc does not update it. | Default | Should the register be regenerated by a script in CI instead of kept by hand? |
+| REPORT, VALIDATION | Report | The register is a snapshot | It reflects the decisions docs as merged at `10b54eae` (HCONS), plus the V1 to V13 rows as merged at `f63bb019`. A later change to a unit's doc does not update it. | Default | Should the register be regenerated by a script in CI instead of kept by hand? |
 | REPORT | Report | Process notes are left out | Process notes are left out (decision 2). | Default (REPORT decision 2) | Should the owner also see them, for example the two hot-file deviations the integrator merged (A1 in `auth.ts`, A4 in `define-entity.ts`)? |
+| V1 | Validation (C10) | Prototype names as field names | `constructor[x]`, `toString[x]` and the like are refused as unknown keys, so no list field may carry an `Object.prototype` name (or `prototype`) and be filtered with an operator. No spec does. | Default | Confirm. |
+| V1 | Validation (C10) | The `'` escape on import | A CSV cell `'=x`, `'-5` or `'@x` reads `=x`, `-5`, `@x`, as a spreadsheet means it, so an export or an error report imports as given. A file that meant the `'` literally loses it. | V1 decision 8 | Should the importer take an option to keep a leading `'`? |
+| V1, V10 | Validation (C10) | The cursor backstop | Every class-22 error from a list query with a cursor is `bad_cursor`. What reaches it is the cursor's, now that V10 refuses a NUL, a custom filter's NUL, a date Postgres cannot store and a value its column cannot hold before any query; one kind stays Postgres's: a string on a number column (`id=x` on an integer key), `bad_cursor` with a cursor and a 500 without. | Default; V10 decision 22 | Settled by V10. Should the builder refuse a non-number on a number column too? |
+| V2 | Validation (C1, C8) | The repair of crossed links | Meeting links that crossed businesses or dangled are nulled by plain SQL once (`meeting-references.sql`), before the composite key is added: no audit row, no version bump, and a business that relied on one loses it silently. The user had chosen "through the write path"; on `app_val` the hook repaired 4 to-dos and 1 note. | User's choice, amended (VALIDATION "Deviations") | Accepted by the user on 2026-11-13. |
+| V2 | Validation (C1, C8) | The check reads as the writer | A command that links a record its principal cannot read fails. The sample's `meeting.close` loads its meeting through the scoped repository, and background writers run as `systemPrincipal`, which reaches every row of its business. | Default | None |
+| V2 | Validation (C1, C8) | An offline create of a deleted meeting | Refused (404) and kept on the phone as `failed` with "No such meeting", where it used to be retried; not dropped. | Default | Confirm. |
+| V2 | Validation (C1, C8) | A key the database refuses | Logged at warn with the constraint's name; the answer carries none. | Default | None |
+| V2 | Validation (C1, C8) | Read access is enough to link | Linking means naming, which needs only seeing. An application that wants "may write the target" writes an entity rule. | V2 decision 3 | Should linking ever need write access to the target? |
+| V2 | Validation (C1, C8) | Undeclared references | A reference no spec declares is still checked by the database alone: without a composite key another business's id is accepted and an unknown one is 404, so the existence oracle stays for undeclared keys. The guide's checklist says to declare every reference. | Default | Should boot warn on a foreign key to a tenant table that `traits.references` does not declare (V10 Deferred, section 14)? |
+| V2 | Validation (C1, C8) | A repaired note's memory | The repair nulls the note's link but not its memory row `about` that meeting (rebuilt on the note's next change); recall drops a memory whose record the reader cannot read. | Default | None |
+| V2, V10 | Validation (C1, C8) | Undo and links | Undoing a delete puts the row back with its links, checked again as the person: a target they can no longer read is the reference's 404, and the record stays deleted rather than coming back unlinked. Undoing an update that changed a link checks the old link again. | V2 assumption; V10 ("undo refuses rather than unlinks") | Settled by V10. Confirm. |
+| V3 | Validation (C8) | Over-redaction in approval inputs | An input naming an erased record by `<type>Id` loses the set's field names from that object, even when a field of the same name belongs to the record the approval is on. | Default (taking out is the safer side) | Acceptable? |
+| V3 | Validation (C8) | Approvals about an erased customer or contact | Lose their summary in every copy, pending ones included; the action, the requester and the ids stay. | Default | Confirm. |
+| V3 | Validation (C8) | Scorer rows found by run only | Not by `requestContext.userId` (JSON encoded twice inside jsonb, a scan of the whole deployment's scores); every turn of the person has a run in their thread messages or in audit. | Default | None |
+| V3 | Validation (C8) | Invitations matched by `accepted_by` too | An invitation the person accepted is matched by `accepted_by` as well as by email. | Default | None |
+| V4 | Validation (C3) | A made-up currency stops the start | `DEFAULT_CURRENCY=ABC`, a `CREDITS_CONFIG` or a `MODEL_PROVIDERS` price in one refuses to boot, where it used to start and guess two decimals; ISO 4217's testing code `XTS` too. | Default (fail closed) | Confirm. |
+| V4, V10 | Validation (C3) | Intl's list is the list | A code the runtime's ICU omits is refused until Node is updated: today `VED` (circulating since 2021) and the fund codes (`CLF`, `BOV`, `USN`, `CHE`, `MXV`, `UYW`). Since V10 the server does not start on a Node that cannot list currencies at all. | Default | Should a deployment be able to add codes (guide section 14)? |
+| V4 | Validation (C3) | Rows already stored with a bad code | Read, listed, summed and formatted as before; changed except for their amounts; a command that rewrites amounts (the order save) refuses them. Nothing repairs them. | V4 decision 5; V10 | Should a repair be provided, or is cancel and re-create enough? |
+| V4 | Validation (C3) | On a device | The app checks the format only (Hermes has no `Intl.supportedValuesOf`); the server refuses the rest. | Default | None |
+| V5 | Validation (C5) | Provider failures leave the cap | The weekly marketing cap counts only messages queued, sent, delivered or read, so a send the provider failed does not count either. | V5 decision 2 | Should a failed send (a number not on WhatsApp) count against the cap? |
+| V5 | Validation (C5) | The operator is held to `alertAt < pauseAt` | The operator's plan and `CREDITS_CONFIG.defaults` get the business's check; defaults with `pauseAt: 80` and no `alertAt` now fail at start. | A3 decision 6 extended; default | Confirm. |
+| V5 | Validation (C5) | "It starts again next period." | The sample's limit notices say the limit resets next period. The operator can raise it, but the sample does not name the operator to a business. | Default | Should the notice say how to ask for more? |
+| V6 | Validation (C9, C6) | Any change hides the secret from a repeat | A repeat answers a secret only while the record's `updatedAt` is the one the repeated write left; a label change or a pause since answers without it (the creator can rotate). | Default (fail closed) | Should a fingerprint of the sealed value tell credentials apart from other changes? |
+| V6 | Validation (C9, C6) | A paused agent's cut-off | Events while an agent is paused still start runs once it is active again before they are relayed; the cut-off is the trigger's creation, not its last resume. | Default | Should a resume start a new cut-off? |
+| V6 | Validation (C9, C6) | An endpoint's changed events | An endpoint that adds a pattern, or is made active again, gets the events relayed after that change, even ones that happened a few seconds before it. | Default | Confirm. |
+| V6, V11 | Validation (C9, B1, B11, B17) | Routes with their own reply, repeated at once | A file's presign and discard, a job's cancel, a calendar `complete` and a back-office reply run one at a time per caller and key (`oneAtATime`), under a claim row that holds no pooled connection: a request waits up to 30 s for another with its key, then 409 `idempotency_in_progress`; a claim older than 2 min is taken over. Neither is a setting, and a storage call has no timeout of its own. | V6 open question; V11 decisions 6 and 7 | Settled by V11. Should the two limits be settings? |
+| V6 | Validation (C9, C6) | A parked create repeated has no secret | The first answer of a parked endpoint create carried its secret; a repeat finds no endpoint yet and answers without it. Rotate after the approval if the first answer was lost. | Default | None |
+| V6, V11 | Validation (C9, C6) | A filter that throws | V6 failed such an event for every subscriber; now the subscriber (or notification) whose `when` throws misses that event alone, never retried, and the others get it. Only the log and the subscriber's `error` column say so. | V6 open question; V11 | Settled by V11. Should a fixed filter be able to replay what it missed? |
+| V6, V11 | Validation (C9, C6) | Write hooks see the caller's body | `ctx.requestBody` reaches every write hook's `decide` and `afterRun`. A connection's credentials there are their keyed tag; only a calendar sign-in's Google code and state are in clear. Nothing stores the context. | V6 decision 15; V11 | None |
+| V6 | Validation (C9, C6) | A failed stored event is not retried | A row the envelope refuses stays failed until someone clears `failed_at`. The worker's log says so; nothing tells the business. | Default | Should the back office show failed stored events? |
+| V7 | Validation (C2, C7) | No request link for a team-decided request on WhatsApp | A contact (the usual case) cannot open the business's app, so a link would point them nowhere; a staff member finds the request in the app's waiting list. | Default | Should a staff member get the `/approvals/<id>` link on WhatsApp? |
+| V7 | Validation (C2, C7) | A Hindi or Telugu written app turn | Says the long waiting line instead of "That needs your OK. I've put it on screen."; the card still shows below it. | Default | Confirm. |
+| V7 | Validation (C2, C7) | A contact with the decider's capability | Still decides other contacts' requests; only its own are refused. Whether a contact should decide anything is the business's grant. | V7 decision 16 | Should the framework refuse a contact's decisions altogether? |
+| V7 | Validation (C9) | "I can't do that here." says not why | A switched-off feature is the business's setup, and the framework does not name it. | Default | Should the refusal say the feature is switched off? |
+| V8 | Validation (C8) | Copies of comments naming the person | Lose their whole body and mentions, not only the token; the live comment keeps its rewritten text. | V8 decision 2 | Confirm. |
+| V8 | Validation (C8) | Inbox items matched by their notification's key | An application whose `dedupe(row)` does not name the row leaves such an item until its owner clears it; it links to a record whose other copies are gone. | V8 decision 6 | None |
+| V8 | Validation (C8) | The Redis sweep | Removes any finished job naming one of the ids, emails or numbers, including jobs about records that stay and only name the person. Finished jobs are history, not work. | V8 decision 8 | Confirm. |
+| V8 | Validation (C8) | Carried runs | A run of another member's agent on an event the person caused (its `actorId`) loses its input, reply and turns though the record stays; a run of any agent whose input holds an erased or blanked record is forgotten whole, one about a record retention anonymised included. | V8 decisions 5 and 16 | Confirm. |
+| V8 | Validation (C8) | Inbox items about every erased set | Deleted, including sets whose records stay (comments that named the person, blanked records): broader than needed, on the safe side. | V8 decision 6 | Confirm. |
+| V8 | Validation (C8) | Person parties found by audit rows | A party the person was ever on that has no member left is deleted only when every member its audit rows show was theirs; a party only they were ever on is deleted even when named after someone else; members written by SQL with no audit row are not counted. | V8 decisions 17 and 28 | Acceptable? |
+| V8 | Validation (C8) | A record moved to someone else before the erasure | Keeps its row, files and memory, but every copy of it loses the trait's fields, copies written after the move about the new subject included. Only records whose audit rows name the person by a subject column are found. | V8 decision 20 | Confirm. |
+| V8 | Validation (C8) | A decider's inbox item about a pending approval | Deleted while the approval is pending; the approval stays in their Approvals list, without its summary. | V8 decision 24 | Confirm. |
+| V8 | Validation (C8) | Decided requests naming the person | Stay in the business's Approvals list without their summary and the trait's fields; a waiting one is deleted; one made by another member's assistant is deleted under its run, which stays suspended, its Mastra snapshot and thread turn keeping the parked call's words. The match is at the input's top: `{ brief: { customerId } }` is not found. | V8 decision 45 | Should a nested subject be found too? |
+| V8 | Validation (C8) | A request about a moved record, still waiting | Keeps what was asked, even when asked while the record was still theirs; notifications about it not yet sent (`app.outbox`) lose the fields. | V8 decision 37 | None |
+| V8 | Validation (C8) | 24 hours and 7 days | Deployment defaults bounding Redis's finished jobs, an operational cache, not a business's retention. | Default | Confirm. |
+| V8 | Validation (C8) | Briefs | 365 days from the last change is the sample's. A brief for nobody in particular has no subject, so neither erasure nor the rule reaches it. A form answer on a link naming nobody, or sent to an email, files a customer linked to no account, which only the retention rule reaches; linking it to the account with that email is the share feature's identity decision (section 14). | Default; share feature (`customerFor`) | Should a form's customer be linked to the account with that email, once verified? |
+| V9 | Validation (C6) | A verified domain on the API's own domain | Would be same-site, and the Lax cookie would reach it. Verification needs the domain's DNS, so this needs the platform to hand out its own subdomains. No tenant binding is built. | Default | None |
+| V9, V11 | Validation (C6) | Throttles key on `req.ip` | Behind a balancer the deployment sets `TRUST_PROXY` (V11), or every caller shares one bucket. `TRUST_PROXY=true` takes the leftmost forwarded address, right only behind a balancer that overwrites `X-Forwarded-For`; the guide says to prefer a hop count or the balancer's addresses, and nothing checks the setting against the deployment. | V9 assumption; V11 | Settled by V11. Should the API refuse to start, or warn, when it sees a forwarded header and no `TRUST_PROXY`? |
+| V10 | Validation (C10) | A NUL is refused, never stripped | A client that sends one gets a 400 and must fix its text; a key with a NUL has no safe stripped form. A NUL in a field the schema would have dropped is still a 400. | Default | Confirm. |
+| V10 | Validation (C10) | Signed webhooks too | An inbound webhook (WhatsApp, an integration's, a job callback) whose JSON holds a NUL is refused 400 whole, before its signature is read; before, the events ahead of it were stored and the request was a 500. A connector cannot strip it, since the guard runs before its `parse` (section 14). | Default (one mechanism, no 500) | Should a connector be able to clean a payload before the guard? |
+| V10 | Validation (C10) | Half a surrogate pair | Refused like a NUL (`lone_surrogate`), not repaired; only an import's report shows it, as U+FFFD, because it is made to be fixed and imported again. A row with such text adds no column to the file. | Default | None |
+| V10 | Validation (B6) | Ten years is the longest SLA | An SLA `within` setting past ten years is refused: a longer one is a setting mistake, and a due time past the year 9999 could not be stored. | V10 decision 28 | Confirm. |
+| V10 | Validation (B19) | A usage report's `from` in the years 1 to 99 | Means that year, as the ISO date says, not the 1900s `Date.UTC` would read. | V10 decision 27 | None |
+| V10 | Validation (B9) | A guest names no record | A form's `fixed` values are merged into the answer and checked as the guest too, so a `fixed` reference works only for a target the answer's customer principal can read; for any other target the application sets the id in a command of its own. | Default | None |
+| V10 | Validation (C10) | Over-long cursor ids | `keysetOf`'s 128-character bound is defence in depth: over HTTP the cursor schemas (`max(200)`) refuse such a cursor first. | Default | None |
+| V10 | Validation | No release notes | The repository has none; the V2 repair (crossed meeting links nulled once) is recorded in V2's assumptions for whoever cuts the next release. | Default | Where should release notes live? |
+| V11 | Validation (A5) | The approver-left fallback is not announced | The holders of `approvals.decide` can decide a request whose named approver left, and see it in their list, but nobody sends them the `approval.request` notice. The fallback is always `approvals.decide`, never the band's next approver. | Default | Should leaving the team (or a demotion) re-send pending requests that named that person, and should an application choose another fallback? |
+| V11 | Validation (A5) | A requester off the team never decides their own request | Even where a rule says `by: 'requester'`. | V11 decision 1 | Should an application be able to let a contact approve its own assistant's request? |
+| V11 | Validation (A5) | A 400, 410 or 422 on replay closes the request | A command that answers 400 for a reason that could pass later (none known today) would end its request instead of leaving it for another try. | Default | Confirm. |
+| V11 | Validation (C9) | A waiter polls | Each try is one short statement on a pooled connection, every 10 ms to 200 ms; many retries of one slow request cost a little database work, never a held connection. | Default | None |
+| V11 | Validation (A3) | A limit that stops nothing is silent | A `messages` limit with no kind in `pauseMessages` raises no alert at all, and an empty `pauseMessages` is the default, so a business that sets a `messages` limit and nothing else hears nothing as it nears the number. | V11 decision 11; A3 decision 9 amended | Should such a limit still alert as it nears? |
+| V11 | Validation (F3) | An empty patch is refused | `PATCH {}`, or a patch of only unknown keys, is 400 `nothing_to_change` where it was a bare 500; the assistant's `update-*` tool sees a refusal. Returning the row unchanged was rejected because an approved replay that changed nothing would read as approved. | V11 decision 23 | Confirm. |
+| V11 | Validation (A3) | Metering in a write announces before commit | With `record(uses, { tx })`, the in-process `credits.threshold` events are published when `record` returns, inside the write; the rows and the outbox twin commit with it, and a rolled-back write loses both. The wallet row's lock then lasts to the end of the write, so the guide says to meter last in `run`. | Default | None |
+| V11 | Validation (F4) | A standing provider reads on what it is given | `StandingProvider.forUser`'s `db` is a `Conn`, which may be a write's transaction; a provider written against `Database`-only members no longer compiles. | Default | None |
+| V11 | Validation (Settings) | The settings cache may hold a row read on a caller's transaction | `get` and `section` with a `conn` cache the row they read (10 s); a transaction that wrote `app.tenants` and rolled back would leave its settings served that long. No caller does both today; one that does should skip the cache. | Default | None |
+| V12 | Validation (Foundation) | An old cursor, once | For one page, a cursor made before the fix may show rows of its last millisecond again, ascending or descending; it skips none. | Default | None |
+| V12 | Validation (A3, B10, B19) | `next` is now a token | The ledger's `next` and the delivery log's `nextBefore` used to be ISO times. Passed back as `before` (the documented use) they keep working; one handed out before the fix is read as a strict time, so a client mid-walk at deploy may skip, once, unseen rows of that millisecond. | Default | Confirm. |
+| V12 | Validation (A3, B10, B19) | A time stays a time-only bound | `before=<ISO time>` still means strictly before that moment; rows at that very moment are excluded on purpose. | Default | Confirm. |
+| V12 | Validation (Foundation) | The session time zone is not pinned | The framework does not set Postgres's `TimeZone`; lists, every keyset and a summary's periods no longer depend on it. Pinning it in `createDb` would be a second guard but would change `now()::date` and similar SQL elsewhere. | Default | Should `createDb` pin the session zone to UTC? |
+| V12 | Validation (B19) | Each routed row carries `cursor` | One more selected expression per row; `before=<id>` was rejected because retention may have deleted that row. | Default | None |
+| V13 | Validation (A7) | Lookups are found by their place | A read before a write in the same turn is how the assistant found what to write, and is not shown: "Show order 12 and submit it" shows only the submit. A list before a refused write is hidden too (the reply says why); a list before a refused read stays. | V13 decisions 9 and 19 | Should a read the person asked for by name survive a later write? |
+| V13 | Validation (A7) | A list is a lookup when a later call shows one of its rows | "List my meetings and open the first" shows only the meeting. | V13 decision 19 | Is that right? |
+| V13 | Validation (A7) | A contributed write tool is known only by its result | A module's own write tool (`toolContributions`) is not in `writeToolIds`, so a list before its refused call still shows (section 14). | Default | None |
+| V13 | Validation (A3) | The app's refused turn reads the generic paused sentence | Not the reason naming the meter, in every language; `GET /api/credits` and the credits screen name it. An agent's 402 is in English, since an agent's call carries no language. | V13 decision 21; default | Confirm. |
+| V13 | Validation (A3) | No numbers in a limit's reason | The status and the screen carry the quantities. | V13 decision 11 | Should the reason say "(2 of 1)" in the meter's display unit? |
+| V13 | Validation (A3) | One alert per crossing | A use that crosses both levels sends only the pause; no "low" after the pause, and none after the pause is lifted by a higher limit. | V13 decision 16 | Confirm. |
+| V13 | Validation (A3) | Past what was left reads 100% | Not "more than all of it"; the balance below zero, shown beside it to those who manage the credits, says by how much. | V13 decision 17 | Confirm. |
+| V13 | Validation (A3) | A debit's stored note is kept in the table | Only left out when read; an operator reading SQL still sees "tool_calls × 1". | V13 decision 23 | None |
 
 ## Run report
 
@@ -629,6 +728,26 @@ Not run by any unit or by the integrator's CI, so still to do (the plan's final 
   and `npm create` from the registry.
 - The new consumer steps on GitHub Actions (checked locally with `CI=true` and actionlint), and
   pushing the branch and opening the draft pull request (no unit may push).
+
+### The validation and its fixes
+
+After REPORT, the live validation ([VALIDATION](VALIDATION.md)) drove the gaps in a running
+deployment at `23805b76`: 349 claims, 282 working, 18 defects in ten root causes (one of them
+critical and older than the branch: prototype pollution through a list's query string), 8
+documented gaps. Thirteen fix units (V1 to V13, in the index) took them, each reviewed and
+merged like the others; the integrator generated their two migrations (`2db3cd2e`, `37c1370a`).
+Of the list above, the five `pnpm dev` smoke flows and `pnpm templates:sync` are done: the
+flows all work end to end, and acceptance ran them again on the fixed branch. Still to do: native
+apps and Maestro, push to a real device, live models and live voice, `npm create` from the
+registry, the consumer steps on GitHub Actions, and the push and pull request.
+
+How the fixes were checked: at `a0865ebd` (the V13 merge), the consumer job with `--run`
+(evals 33 of 33, 39 of 39, 30 of 30) and the second of two acceptance runs of six suites
+against `app_val`, passing every check (g0 103, g1 78, g2 38, g3 30, g4 30, g5 18) with no
+regression; at the head `f63bb019`, full CI on a fresh database (208 test files, 2,263 tests,
+36 of 36 turbo tasks; its first attempt, at `a0865ebd`, failed one test that assumed an order
+between one write's two audit rows, which `f63bb019` fixes). The register's V rows and the deferred items are in VALIDATION's "Fixes"
+section; its "Judged by design" questions stand.
 
 ### Known gaps still open
 
@@ -753,7 +872,7 @@ re-run": HCONS's full CI covers them). An item a later unit fixed says so. Devel
   - A team filing that waits for approval names a provisional request id on the approval.
   - Until a business sets `grievanceContact`, the register and HELP show the deployment's `DEFAULT_GRIEVANCE_CONTACT` or say none is named (X2); nothing asks a new business for it.
   - Nothing trims `app.idempotency` replies by age; erasure and retention only redact them.
-  - Not caused by B18: `models.e2e.test.ts` "an owner sets it through the write path" fails now and then (it orders audit rows by a timestamp the two rows share).
+  - Not caused by B18: `models.e2e.test.ts` "an owner sets it through the write path" fails now and then (it orders audit rows by a timestamp the two rows share). Fixed by `f63bb019` (it orders by `at, action` and finds the row by its action); other e2e tests that order audit rows by `at` alone were not audited.
   - Seen once, not captured: two failures in a 4-suite run right after a rebuild; six later runs passed.
 - **B19**
   - The platform e2e test's tenant search expects exactly one "Provisioned Platform" business; a run that fails between creating and renaming it breaks every later run on that database.
