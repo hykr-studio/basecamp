@@ -17,11 +17,12 @@ import {
   levelOf,
   Money,
   type Principal,
+  rolesOfBusiness,
   standingIn,
   type TenantConfig,
   teamRoles,
 } from '@hykr/contracts';
-import { approvals, type Database, membershipOf, writeAudit } from '@hykr/db';
+import { approvals, type Database, membershipOf, memberships, writeAudit } from '@hykr/db';
 import { subjectOf, userIdOf } from '@hykr/policy';
 import {
   ConflictException,
@@ -32,7 +33,22 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventBus } from '@nestjs/cqrs';
-import { and, asc, eq, inArray, isNull, lte, ne, or, type SQL } from 'drizzle-orm';
+import {
+  and,
+  arrayOverlaps,
+  asc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  ne,
+  not,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm';
+import { z } from 'zod';
 import type { NamedEvent } from '../entity/cqrs-classes.js';
 import { entityDef } from '../entity/registry.js';
 import { projectRead } from '../hooks.js';
@@ -111,8 +127,13 @@ function levelInfo(name: string | null): ApprovalLevelInfo | null {
   return def ? { name, rank: def.rank, label: def.label } : { name };
 }
 
-/** Who decides it: the requester, one named person, or the holders of a capability. */
-function deciderOf(row: ApprovalRow): Decider {
+/**
+ * Who decides it: the requester, one named person, or the holders of a capability. A named
+ * person who is no longer on the business's team (`approverGone`) has given way to the holders
+ * of `approvals.decide`.
+ */
+function deciderOf(row: ApprovalRow, approverGone = false): Decider {
+  if (row.approverUserId && approverGone) return { by: 'capability', capability: DECIDE };
   if (row.approverUserId)
     return row.approverUserId === row.ownerId
       ? { by: 'requester', userId: row.approverUserId }
@@ -123,7 +144,7 @@ function deciderOf(row: ApprovalRow): Decider {
 }
 
 /** An approval row as stored: every field, for the server's own use. */
-export function toApproval(row: ApprovalRow): Approval {
+export function toApproval(row: ApprovalRow, approverGone = false): Approval {
   const stored = row.payload as Stored | null;
   const amount = Money.safeParse(stored?.decision?.amount);
   return {
@@ -142,21 +163,28 @@ export function toApproval(row: ApprovalRow): Approval {
     decidedAt: row.decidedAt?.toISOString() ?? null,
     level: levelInfo(row.level),
     amount: amount.success ? amount.data : null,
-    decider: deciderOf(row),
+    decider: deciderOf(row, approverGone),
   };
 }
 
 /**
  * May this person decide this request? Its named decider (the requester, when the policy sends
- * it back to them), or a holder of its capability who is not the requester: nobody approves
- * their own request unless the policy says it is theirs to decide.
+ * it back to them) while they are on the business's team, or a holder of its capability who is
+ * not the requester: nobody approves their own request unless the policy says it is theirs to
+ * decide. A named decider who left the team (`approverGone`, which `ApprovalService` looks up)
+ * gives way to the holders of `approvals.decide`, as one who was never on it does when the
+ * request parks.
  */
-export function mayDecide(row: ApprovalRow, p: Principal): boolean {
+export function mayDecide(
+  row: ApprovalRow,
+  p: Principal,
+  opts: { approverGone?: boolean } = {},
+): boolean {
   if (row.tenantId !== p.tenantId) return false;
   const self = userIdOf(p);
-  if (row.approverUserId) return !!self && row.approverUserId === self;
-  if (!row.approverCapability || !(p.capabilities ?? []).includes(row.approverCapability))
-    return false;
+  if (row.approverUserId && !opts.approverGone) return !!self && row.approverUserId === self;
+  const capability = row.approverUserId ? DECIDE : row.approverCapability;
+  if (!capability || !(p.capabilities ?? []).includes(capability)) return false;
   return !askedBy(row, p);
 }
 
@@ -179,8 +207,8 @@ function contactIdOf(p: Principal): string | null {
  * that entity's record (a hidden field stays hidden on the card), then the whole approval goes
  * through the read projectors as 'approval'. `canDecide` says whether they may decide it.
  */
-export function approvalFor(row: ApprovalRow, p: Principal): Approval {
-  const approval = toApproval(row);
+export function approvalFor(row: ApprovalRow, p: Principal, approverGone = false): Approval {
+  const approval = toApproval(row, approverGone);
   const def = entityDef(row.resourceType);
   const input = approval.input;
   const entityWrite = def && row.action.startsWith(`${def.name}.`);
@@ -190,7 +218,7 @@ export function approvalFor(row: ApprovalRow, p: Principal): Approval {
       : input;
   return projectRead(
     'approval',
-    { ...approval, input: seen, canDecide: mayDecide(row, p) },
+    { ...approval, input: seen, canDecide: mayDecide(row, p, { approverGone }) },
     p,
   ) as Approval;
 }
@@ -346,33 +374,83 @@ export async function parkForApproval<I, L>(
   return { approval: approvalFor(row, p), event: new ApprovalEvent('approval.requested', row) };
 }
 
+/** The role names that put someone on this business's team: its roles no outsider is given. */
+async function teamOf(conn: Database | Tx, tenantId: string | undefined): Promise<string[]> {
+  return teamRoles(rolesOfBusiness(await settingsIn(conn, tenantId)).map((r) => r.name));
+}
+
+/** Is the request's named approver on its business's team now (a membership with a team role)? */
+const approverOnTeam = (team: readonly string[]): SQL =>
+  sql`exists (select 1 from ${memberships} where ${and(
+    eq(memberships.tenantId, approvals.tenantId),
+    eq(memberships.userId, approvals.approverUserId),
+    arrayOverlaps(memberships.roles, [...team]),
+  )})`;
+
 /**
- * The approvals this principal may decide, in its business: the ones that name them, and the
- * ones whose capability they hold that they did not ask for. Everything else is a 404, never a
- * hint it exists. (`mayDecide` is the same rule for one row.)
+ * Of these requests, the ones whose named approver is no longer on the business's team (left
+ * it, or holds only an outsider's roles now): by id. `team` is `teamOf` the business.
  */
-function decidable(p: Principal): SQL {
+async function goneApprovers(
+  conn: Database | Tx,
+  rows: readonly ApprovalRow[],
+  team: readonly string[],
+): Promise<Set<string>> {
+  const named = rows.filter((r) => r.approverUserId);
+  if (!named.length) return new Set();
+  const found = await conn
+    .select({
+      tenantId: memberships.tenantId,
+      userId: memberships.userId,
+      roles: memberships.roles,
+    })
+    .from(memberships)
+    .where(
+      and(
+        inArray(memberships.tenantId, [...new Set(named.map((r) => r.tenantId))]),
+        inArray(memberships.userId, [...new Set(named.map((r) => r.approverUserId as string))]),
+      ),
+    );
+  const onTeam = new Set(
+    found
+      .filter((m) => m.roles.some((r) => team.includes(r)))
+      .map((m) => `${m.tenantId}:${m.userId}`),
+  );
+  return new Set(
+    named.filter((r) => !onTeam.has(`${r.tenantId}:${r.approverUserId}`)).map((r) => r.id),
+  );
+}
+
+/**
+ * The approvals this principal may decide, in its business: the ones that name them (while they
+ * are on its team), the ones whose capability they hold that they did not ask for, and, for a
+ * holder of `approvals.decide`, the ones whose named approver is off the team now. Everything
+ * else is a 404, never a hint it exists. (`mayDecide` is the same rule for one row.)
+ */
+function decidable(p: Principal, team: readonly string[]): SQL {
   const self = userIdOf(p);
   const contact = contactIdOf(p);
   const held = p.capabilities ?? [];
+  const notTheirs = [
+    ...(self ? [or(isNull(approvals.ownerId), ne(approvals.ownerId, self))] : []),
+    ...(contact
+      ? [or(isNull(approvals.requesterContactId), ne(approvals.requesterContactId, contact))]
+      : []),
+  ];
+  const named = approverOnTeam(team);
   const mine = [
-    ...(self ? [eq(approvals.approverUserId, self)] : []),
+    ...(self ? [and(eq(approvals.approverUserId, self), named)] : []),
     ...(held.length
       ? [
           and(
             isNull(approvals.approverUserId),
             inArray(approvals.approverCapability, held),
-            ...(self ? [or(isNull(approvals.ownerId), ne(approvals.ownerId, self))] : []),
-            ...(contact
-              ? [
-                  or(
-                    isNull(approvals.requesterContactId),
-                    ne(approvals.requesterContactId, contact),
-                  ),
-                ]
-              : []),
+            ...notTheirs,
           ),
         ]
+      : []),
+    ...(held.includes(DECIDE)
+      ? [and(isNotNull(approvals.approverUserId), not(named), ...notTheirs)]
       : []),
   ];
   return and(
@@ -382,16 +460,22 @@ function decidable(p: Principal): SQL {
 }
 
 /** What this principal may open: what they decide, and their own requests (read only). */
-function visible(p: Principal): SQL {
+function visible(p: Principal, team: readonly string[]): SQL {
   const self = userIdOf(p);
-  if (!self) return decidable(p);
+  if (!self) return decidable(p, team);
   return or(
-    decidable(p),
+    decidable(p, team),
     and(eq(approvals.tenantId, p.tenantId ?? ''), eq(approvals.ownerId, self)),
   ) as SQL;
 }
 
 const notFound = () => new NotFoundException({ error: 'not_found', message: 'No such approval' });
+
+/**
+ * A replay refused with one of these ends the request as failed: it would be refused again.
+ * Anything else (a 5xx, a 429) leaves it pending, to be decided again.
+ */
+const REPLAY_REFUSED = [400, 401, 403, 404, 409, 410, 422];
 
 /** Lists and decides approvals. Approving replays the parked operation through runWrite. */
 @Injectable()
@@ -410,33 +494,39 @@ export class ApprovalService {
 
   /** One request: one they may decide, or their own (with `canDecide` false when not theirs). */
   async get(p: Principal, id: string): Promise<Approval> {
+    const team = await teamOf(this.db, p.tenantId);
     const [row] = await this.db
       .select()
       .from(approvals)
-      .where(and(eq(approvals.id, id), visible(p)));
+      .where(and(eq(approvals.id, id), visible(p, team)));
     if (!row) throw notFound();
-    return approvalFor(row, p);
+    const gone = await goneApprovers(this.db, [row], team);
+    return approvalFor(row, p, gone.has(row.id));
   }
 
   /** What waits for this person's decision, oldest first. */
   async pending(p: Principal): Promise<Approval[]> {
+    const team = await teamOf(this.db, p.tenantId);
     const rows = await this.db
       .select()
       .from(approvals)
-      .where(and(decidable(p), eq(approvals.status, 'pending')))
+      .where(and(decidable(p, team), eq(approvals.status, 'pending')))
       .orderBy(asc(approvals.createdAt));
-    return rows.map((row) => approvalFor(row, p));
+    const gone = await goneApprovers(this.db, rows, team);
+    return rows.map((row) => approvalFor(row, p, gone.has(row.id)));
   }
 
   async decide(p: Principal, id: string, approve: boolean, requestId: string): Promise<Approval> {
     // Only what this principal may see: someone else's approval id is a 404, not a 403.
+    const team = await teamOf(this.db, p.tenantId);
     const [found] = await this.db
       .select()
       .from(approvals)
-      .where(and(eq(approvals.id, id), visible(p)));
+      .where(and(eq(approvals.id, id), visible(p, team)));
     if (!found) throw notFound();
+    const approverGone = (await goneApprovers(this.db, [found], team)).has(found.id);
     // Their own request, which someone else decides: they may look, never decide.
-    if (!mayDecide(found, p))
+    if (!mayDecide(found, p, { approverGone }))
       throw new ForbiddenException({
         error: 'forbidden',
         rule: 'own_request',
@@ -504,9 +594,14 @@ export class ApprovalService {
       return row;
     };
 
-    if (!approve) return this.decided(await this.db.transaction((tx) => close(tx, 'rejected')), p);
+    if (!approve)
+      return this.decided(
+        await this.db.transaction((tx) => close(tx, 'rejected')),
+        p,
+        approverGone,
+      );
     if (found.expiresAt <= new Date())
-      return this.decided(await this.db.transaction((tx) => close(tx, 'expired')), p);
+      return this.decided(await this.db.transaction((tx) => close(tx, 'expired')), p, approverGone);
 
     const stored = found.payload as Stored | null;
     const factory = stored?.op ? registry.get(stored.op)?.factory : undefined;
@@ -516,6 +611,7 @@ export class ApprovalService {
           close(tx, 'failed', 'This request can no longer be replayed'),
         ),
         p,
+        approverGone,
       );
     }
 
@@ -569,10 +665,23 @@ export class ApprovalService {
         return { approval: row, events: out.events };
       });
       for (const event of events) this.events.publish(event);
-      return this.decided(approval, p);
+      return this.decided(approval, p, approverGone);
     } catch (e) {
-      // Refused or missing on replay (the meeting was closed meanwhile): record why.
-      if (e instanceof HttpException && [401, 403, 404, 409].includes(e.getStatus())) {
+      // What was asked no longer validates (a field taken out of the stored input since, by an
+      // erasure's scrubbing): no approval will ever replay it, so it ends as failed.
+      if (e instanceof z.ZodError) {
+        const where = e.issues.map((i) => i.path.join('.') || '(input)').join(', ');
+        return this.decided(
+          await this.db.transaction((tx) =>
+            close(tx, 'failed', `What was asked is no longer complete (${where})`.slice(0, 500)),
+          ),
+          p,
+          approverGone,
+        );
+      }
+      // Refused, missing or invalid on replay (the meeting was closed meanwhile, a command's own
+      // 400): record why. A request repeated later would be refused the same way.
+      if (e instanceof HttpException && REPLAY_REFUSED.includes(e.getStatus())) {
         const body = e.getResponse() as { reason?: string; message?: string };
         if (e.getStatus() === 409 && (body as { error?: string }).error === 'already_decided')
           throw e;
@@ -581,6 +690,7 @@ export class ApprovalService {
             close(tx, 'failed', body?.reason ?? body?.message ?? e.message),
           ),
           p,
+          approverGone,
         );
       }
       throw e;
@@ -639,8 +749,8 @@ export class ApprovalService {
    * Tell whoever listens in this process (a customer waiting on WhatsApp) how it ended. The
    * event was stored with the decision; this is its in-process publication after commit.
    */
-  private decided(row: ApprovalRow, p: Principal): Approval {
+  private decided(row: ApprovalRow, p: Principal, approverGone = false): Approval {
     this.events.publish(new ApprovalEvent('approval.decided', row));
-    return approvalFor(row, p);
+    return approvalFor(row, p, approverGone);
   }
 }

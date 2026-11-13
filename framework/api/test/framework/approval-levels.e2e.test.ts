@@ -283,6 +283,49 @@ describe('levels on the payload', () => {
     expect((await look(outsider, away.body.approval.id)).status).toBe(404);
   });
 
+  it('a named approver who leaves after a request parked gives way to the business', async () => {
+    const leaver = new Person('Leaver Levels');
+    await leaver.signUp();
+    await addMember(leaver, tenantId, ['staff']);
+    await approvalsSettings({
+      thresholds: LIMIT,
+      bands: { payments: [{ approver: { userId: leaver.id } }] },
+    });
+    const res = await pay(owner, 500_00);
+    const id = res.body.approval.id;
+    expect(res.body.approval.decider).toEqual({ by: 'person', userId: leaver.id });
+    expect((await look(ops, id)).status).toBe(404);
+
+    // They leave the business: the holders of approvals.decide decide it now, never the requester.
+    await pool.query('delete from app.memberships where tenant_id = $1 and user_id = $2', [
+      tenantId,
+      leaver.id,
+    ]);
+    const business = { by: 'capability', capability: 'approvals.decide' };
+    expect((await look(ops, id)).body).toMatchObject({ canDecide: true, decider: business });
+    const waiting = await ops.call('GET', '/api/approvals', undefined, as(ops));
+    expect(waiting.body.map((a: { id: string }) => a.id)).toContain(id);
+    expect((await look(owner, id)).body).toMatchObject({ canDecide: false, decider: business });
+    expect((await approve(owner, id)).status).toBe(403);
+    expect((await approve(ops, id)).body).toMatchObject({ status: 'approved' });
+
+    // Still a member, but holding only an outsider's roles now: off the team too. Back on it,
+    // the request is theirs alone again.
+    await addMember(leaver, tenantId, ['staff']);
+    const again = (await pay(owner, 500_00)).body.approval.id;
+    await addMember(leaver, tenantId, ['customer']);
+    expect((await look(ops, again)).body).toMatchObject({ canDecide: true, decider: business });
+    await addMember(leaver, tenantId, ['staff']);
+    expect((await look(ops, again)).status).toBe(404);
+    const theirs = await leaver.call(
+      'POST',
+      `/api/approvals/${again}/approve`,
+      undefined,
+      inTenant(),
+    );
+    expect(theirs.body).toMatchObject({ status: 'approved' });
+  });
+
   it('a business tightens any level, and loosens only one that allows it', async () => {
     await approvalsSettings({ thresholds: LIMIT });
     const made = await pay(owner, 20_00);
@@ -449,6 +492,22 @@ describe('an approved replay is bounded by what was approved', () => {
       [tenantId],
     );
     expect(rows[0].n).toBe(0);
+  });
+
+  it('fails, and is decided, when what was asked no longer validates', async () => {
+    await approvalsSettings({ thresholds: LIMIT, levels: { fixture_internal: { parks: true } } });
+    const res = await pay(owner, 50_00, { title: 'Scrubbed since' });
+    const id = res.body.approval.id;
+    // An erasure's scrubbing took a required field out of the stored input.
+    await pool.query(
+      `update app.approvals set payload = payload #- '{input,title}' where id = $1`,
+      [id],
+    );
+    expect((await approve(owner, id)).body).toMatchObject({
+      status: 'failed',
+      failureReason: expect.stringContaining('title'),
+    });
+    expect((await approve(owner, id)).status).toBe(409);
   });
 
   it('fails when its amount grew', async () => {
