@@ -706,11 +706,18 @@ describe('a polled job about no record', () => {
     // take no second pooled connection, or enough starts at once hold the whole pool for 30 s.
     const { sharedDb } = await import('../../dist/infra/db.js');
     const n = 2 * ((sharedDb.pool.options.max as number | undefined) ?? 10) + 2;
-    // A file nobody has: every start is refused in its transaction, and no job runs meanwhile.
+    // The owner's convert result, kept on their job: staff names it, so the check reads the
+    // job through its file holder, on the write's connection, and refuses. No job runs.
+    const theirs = (await job(owner, id)).body.files[0] as string;
     const burst = () =>
       Promise.all(
         Array.from({ length: n }, (_, i) =>
-          owner.call('POST', '/api/drawings/convert', { text: `burst ${i}`, source: randomUUID() }),
+          staff.call(
+            'POST',
+            '/api/drawings/convert',
+            { text: `burst ${i}`, source: theirs },
+            inTenant(),
+          ),
         ),
       );
     // Warm first: with the pool at its size, every start reaches its transaction at the same moment.
@@ -727,6 +734,35 @@ describe('a polled job about no record', () => {
     // Well under the pool's 30 s connection timeout, which a stall would take.
     expect(Date.now() - started).toBeLessThan(20_000);
   }, 120_000);
+
+  it('a file on a record the starter reads is one the job may take', async () => {
+    // The check reads the record on the write's connection, as the starter sees it.
+    const d = await drawing('Plan Source');
+    const bytes = png(10, 10);
+    const pre = await owner.call('POST', '/api/files', {
+      name: 'source.png',
+      mime: 'image/png',
+      size: bytes.length,
+      for: { entity: 'drawing', field: 'preview', id: d.id },
+    });
+    await fetch(`${server.base}${pre.body.upload.url}`, {
+      method: 'PUT',
+      headers: pre.body.upload.headers,
+      body: new Uint8Array(bytes),
+    });
+    await owner.call('POST', `/api/files/${pre.body.file.id}/confirm`);
+    expect(
+      (await owner.call('PATCH', `/api/drawings/${d.id}`, { preview: pre.body.file.id })).status,
+    ).toBe(200);
+    const started = await owner.call('POST', '/api/drawings/convert', {
+      text: 'from a record',
+      source: pre.body.file.id,
+    });
+    expect(started.status).toBe(200);
+    expect(started.body.value.input).toEqual({ text: 'from a record', source: pre.body.file.id });
+    const s = await submitted(started.body.value.id);
+    expect(Buffer.from(s.source ?? '', 'base64')).toEqual(bytes);
+  });
 
   it('a result URL to a private address fails it (the default download)', async () => {
     const started = await owner.call('POST', '/api/drawings/convert', { text: 'private' });
