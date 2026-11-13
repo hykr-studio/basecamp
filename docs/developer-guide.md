@@ -427,7 +427,7 @@ export const meetingsSpec = moduleSpec({
 
 ### 5.2 The table
 
-Add tables to the module's `db/schema.ts`, in the `app` schema, named after the module (`todos`, or `todos_<x>`; `defineServer` refuses another name). Use the helpers `@hykr/db` exports (`app`, `id`, `tenantColumn`, `customerColumn`, `user`, and `tableRef` for a foreign key to a module that depends on this one):
+Add tables to the module's `db/schema.ts`, in the `app` schema, named after the module (`todos`, or `todos_<x>`; `defineServer` refuses another name). Use the helpers `@hykr/db` exports (`app`, `id`, `tenantColumn`, `customerColumn`, `user`, and `tableRef` for a key to a module that depends on this one):
 
 ```ts
 export const todos = app.table('todos', {
@@ -438,7 +438,7 @@ export const todos = app.table('todos', {
   title: text('title').notNull(),
   done: boolean('done').default(false).notNull(),
   dueOn: date('due_on'),
-  meetingId: text('meeting_id').references(() => meetings.id, { onDelete: 'set null' }),
+  meetingId: text('meeting_id'), // a reference: declared on the spec, keyed with its business (below)
   createdBy: text('created_by', { enum: ['person', 'assistant'] }).notNull().default('person'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().$onUpdate(() => new Date()).notNull(),
@@ -447,6 +447,28 @@ export const todos = app.table('todos', {
   index('todos_tenant_customer_idx').on(table.tenantId, table.customerId),
 ]);
 ```
+
+**A field that holds another record's id is a reference.** Declare it on the spec, naming the
+target entity: `traits: { references: { meetingId: 'meeting' } }`. The name is resolved at run
+time, so a reference to a module that depends on yours imports nothing. Every insert and update
+that sets or changes it (CRUD, commands, the assistant's tools, MCP, imports, offline creates,
+approved replays) loads the record through the target's own scoped repository, as the writer.
+An unknown id, another business's record and one the writer cannot read all get the same 404
+`{ error: 'not_found', message: 'No such meeting', field: 'meetingId' }`; null always passes, and
+so does an update that keeps the stored id. A CRUD write checks before it can park.
+`defineServer` refuses a reference to an entity that does not exist, from a field no write sets,
+or on a record with a parent (check a line's references in the parent's command).
+
+Back it in the database with a key that keeps the business: `(tenant_id, meeting_id)` →
+`meetings (tenant_id, id)`, with a unique `(tenant_id, id)` on the target. A plain
+`.references(() => meetings.id)` only checks that the id exists in some business, and its
+`ON DELETE SET NULL` would let another business's delete change your rows. `tableRef('meetings')`
+has `id` and `tenantId` for a `foreignKey({ columns, foreignColumns })` down the graph. Unlinking
+one column on delete (`ON DELETE SET NULL (meeting_id)`; drizzle would null `tenant_id` too) is a
+SQL hook: the sample's `application/domain/sql/post/meeting-references.sql`. A key no spec
+declares is checked by the database alone: a write naming a missing record is 404 `It names a
+record that does not exist`, and a delete such a key blocks is 409 `in_use`, without the
+database's detail. `docs/decisions/V2.md`.
 
 What the framework requires:
 
@@ -1048,7 +1070,9 @@ export const server = defineServer({ name: 'Meetings', persona, help, channel, m
 - **Depend on another** by naming it in `dependsOn`, listing it earlier in `modules/index.ts`, and
   importing only its `contracts/` (specs, types) or its `server/public.ts` (what it lets others
   call on the server, such as its entity defs, whose repos run the framework's checks inside your
-  transaction). A foreign key from a module that the other depends on uses `tableRef('<table>')`.
+  transaction). A reference to a module that depends on yours names its entity on the spec
+  (`traits.references: { meetingId: 'meeting' }`) and its table with `tableRef('<table>')` or a
+  SQL hook (section 5.2).
 - **Collisions fail at boot.** `defineServer` throws one `ModulesError` listing every problem: the
   same entity name or plural, command, tool id or approval op in two modules; a route another
   module or the framework serves (`reserveRoutes` holds the framework's first segments: `approvals`,
@@ -3415,6 +3439,7 @@ Declare it in `application/domain/src/languages.ts`, add its words to each `Labe
 | Add words in each of the application's languages, and read them with `pick` | Hard-code English in views, or index `labels[lang]` | The channels speak every declared language; a missing one reads in English, and `missingLabels` in a test catches it |
 | Use the outbox to send from a write (events plus `schedule`/`send.on`, or `queueNotification(tx, …)` inside a command) | Call WhatsApp or SMTP directly | A rollback must send nothing, a crash after commit must still send, and an undo must withdraw it |
 | Let 404 mean "not yours" | Return 403 for someone else's id | No hint that a record exists |
+| Declare every field holding another record's id in `traits.references`, keyed with its business `(tenant_id, x_id)` | A plain `.references(() => x.id)` alone | The database takes any business's id, 201 against 404 tells that an id exists, and the other business's delete changes your rows |
 | Check capabilities with `can(p, …)`, and reach rows through `access` | Compare role names in code | Roles are data: a business makes its own and edits the application's |
 | Keep what changes with the business (role sets, approval levels and thresholds, currencies, states and SLAs, periods, templates, prices) in the application or the business's settings | Put it in `framework/` | The framework is mechanisms only; `pnpm lint:boundary` refuses product words there |
 | Keep money as `{ minor, currency }` in `minorUnits()` columns | Floats, `numeric`, or a currency constant | Sums stay exact, and the currency is the business's |
@@ -3489,7 +3514,7 @@ A feature is done when every box is ticked:
 
 - [ ] The module is registered: its line in `modules/index.ts`, the contracts and views aggregates and the app's `modules/index.ts`, and `dependsOn` names every module it imports.
 - [ ] Spec in the module's `contracts/`, registered in its `moduleSpec`. `description`, `label`, `fieldLabels` and list `examples` are written for the model.
-- [ ] Table in the module's `db/schema.ts`, named after the module, with `id`, `tenantColumn()`, an owner column, `createdBy`, `createdAt`, `updatedAt`, and `customerColumn()` if customers have rows. Indexes match your filters and sorts.
+- [ ] Table in the module's `db/schema.ts`, named after the module, with `id`, `tenantColumn()`, an owner column, `createdBy`, `createdAt`, `updatedAt`, and `customerColumn()` if customers have rows. Indexes match your filters and sorts. Every field holding another record's id is in the spec's `traits.references`, and its key includes `tenant_id` (section 5.2).
 - [ ] A migration generated with `pnpm db:generate` after the latest base (`basecamp db rebase` after a rebase), committed under `application/domain/drizzle/`, and applied to a database migrated from scratch.
 - [ ] `defineEntity` / `defineCommand` with the right `access`, `rules` and `authorize`. Every command passes `via` and lists everything it changes in `touched`.
 - [ ] Nest module with controllers *and* handlers, passed to the module's `defineModule({ server })`.
@@ -3498,7 +3523,7 @@ A feature is done when every box is ticked:
 - [ ] Views for list and item, with `text`, `speak` and `labels` in each of the application's languages (the sample: `en`, `hi` and `te`). They are bound in the app (the app module's `bind`, in `application/mobile/src/modules/<name>/index.tsx`).
 - [ ] Scripts for the fake model, and eval cases for new phrases.
 - [ ] Templates and notifications, if the feature sends anything. `pnpm templates:check` passes.
-- [ ] An e2e test in `application/api/test/domain/` covering: another business's record is a 404, a denied rule gets 403 with its `rule`, a hidden field stays hidden (in reads, tool results and approvals), and a parked agent write is audited and shows up in approvals.
+- [ ] An e2e test in `application/api/test/domain/` covering: another business's record is a 404 (also when a reference field names it, with the same body as an unknown id), a denied rule gets 403 with its `rule`, a hidden field stays hidden (in reads, tool results and approvals), and a parked agent write is audited and shows up in approvals.
 - [ ] `pnpm lint`, `pnpm typecheck`, `pnpm lint:deps` and `pnpm test` pass. `basecamp eval --module <name>` and `pnpm eval` pass.
 - [ ] A framework change has e2e tests on the fixture application (`framework/api/test/framework`), passes `pnpm lint:boundary`, and records its choices in `docs/decisions/<unit>.md`.
 - [ ] `DOMAIN.md` and this guide say what the feature adds, and section 14 says what it leaves out.
@@ -3527,6 +3552,8 @@ These are not built. Each has a workaround for now.
 | A document send left `sending` for good | A send's job claims it before delivering, so it leaves at most once. If every try of that job stopped part way (the worker died each time), the row stays `sending`; nothing sweeps it. Send the document again. |
 | A file on two records, versioned files | One file belongs to one record field. Upload the file again for a second record. |
 | Storage quotas, malware scanning | Not built. Keep `FILES_MAX_BYTES` and each field's `maxBytes` small. |
+| References on records with a parent (a line naming a product) | `defineServer` refuses `traits.references` on a child: `children.replace` inserts in bulk. Load each id in the parent's command (`Target.repo.get(tx, p, id)`) before saving the lines, and key the column with `tenant_id`. |
+| An audited unlink when a referenced record is deleted | The sample's `ON DELETE SET NULL (meeting_id)` clears the links in the transaction of the meeting's audited delete; the to-dos and notes it changes get no audit row and no new version, and a phone learns of it on its next read. To audit each one, unlink them through their repository in a command before the delete. |
 | Files of a deleted business or of rows deleted outside the write path | Their rows go with the business (cascade) or stay attached; their objects stay in the bucket. |
 | Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |
 | Telling someone a job finished | Jobs store `job.succeeded` and `job.failed` events; nothing notifies a person yet. Subscribe to them (section 5.10) or show `<JobProgress>`. |

@@ -100,9 +100,11 @@ its evals alone (section 6).
   transaction, through that entity's access, rules, plugins and audit, and listed in `touched`.
   To react to another module without depending on it, subscribe to its stored events
   (`defineSubscriber({ on: ['note.created'] })`, guide 5.10).
-- **Point down the graph by name.** A table that refers to a module that depends on yours (a
-  note's `meeting_id`, while `meetings` depends on `notes`) uses `tableRef('meetings').id` from
-  `@hykr/db`, never an import of that module.
+- **Point down the graph by name.** A record that refers to a module that depends on yours (a
+  note's `meeting_id`, while `meetings` depends on `notes`) names the entity on its spec
+  (`traits.references: { meetingId: 'meeting' }`) and the table with `tableRef('meetings')`
+  from `@hykr/db` (its `id` and `tenantId`, for a key that keeps the business) or a SQL hook,
+  never an import of that module (developer guide 5.2).
 - **Keep the isomorphic folders isomorphic.** `contracts/`, `views/` and `notifications/` are read
   by the server and the apps: no Nest, Drizzle, Mastra or BullMQ, and no `server`, `db` or `agent`
   folder of any module.
