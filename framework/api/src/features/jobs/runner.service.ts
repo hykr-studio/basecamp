@@ -7,6 +7,8 @@ import {
   JobUpdate,
   ListJobsQuery,
   type Principal,
+  storableData,
+  storableText,
 } from '@hykr/contracts';
 import {
   auditCtx,
@@ -285,9 +287,12 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
   private finish(
     id: string,
     status: 'failed' | 'cancelled',
-    error: JobError,
+    given: JobError,
     by: { action: string; principal?: Principal; requestId?: string },
   ): Promise<JobRow | undefined> {
+    // Whoever wrote it (a job's own `failed`, a service's poll), its text is kept as Postgres can
+    // keep it: a NUL or half a surrogate pair would fail the job's own row (V10).
+    const error = { ...given, message: storableText(given.message) };
     return this.db.transaction(async (tx) => {
       const [current] = await tx.select().from(jobs).where(eq(jobs.id, id)).for('update');
       if (!current || isJobFinished(current.status)) return undefined;
@@ -567,7 +572,9 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
         source,
         dedupe,
         status: update.status,
-        body: made.length ? { ...update, [MADE]: made } : update,
+        // Its text as Postgres keeps it: a job's own update (an import's "not JSON" message
+        // repeats the file's NUL) or a service's poll is checked by no request edge (V10).
+        body: storableData(made.length ? { ...update, [MADE]: made } : update) as object,
       })
       .onConflictDoNothing()
       .returning({ id: jobUpdates.id });
@@ -631,7 +638,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
           source: 'callback',
           dedupe,
           status: update.data.status,
-          body: withoutData(update.data) as object,
+          body: storableData(withoutData(update.data)) as object,
           appliedAt: new Date(),
           outcome: 'ignored: finished',
         })
@@ -735,7 +742,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
           ? Math.max(0, Math.min(100, Math.floor(progress)))
           : null;
       const up = pct !== null && (current.progress === null || pct > current.progress);
-      const text = message === undefined ? undefined : String(message).slice(0, 500);
+      const text = message === undefined ? undefined : storableText(String(message).slice(0, 500));
       const said = text !== undefined && text !== current.message;
       const started = current.status === 'queued';
       if (!up && !said && !started)
@@ -843,7 +850,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
         .set({
           status: 'succeeded',
           progress: 100,
-          message: update.message ?? current.message,
+          message: update.message === undefined ? current.message : storableText(update.message),
           output: (toJson(output) ?? null) as unknown,
           resultFiles: stored,
           finishedAt: new Date(),

@@ -471,6 +471,34 @@ describe('text Postgres cannot keep, in a file', () => {
     expect(header.status).toBe('failed');
     expect(header.error.message).toMatch(/Column 2 of the header: Text may not hold the NUL/);
   });
+
+  it('in a failed import’s own message is kept as U+FFFD, and the job still says why', async () => {
+    // V8 repeats a file's first character when it cannot read it, and a message cut at 500
+    // characters may halve a surrogate pair: either failed the job's own row before V10.
+    // Uploaded as text: the local driver's upload route would read a JSON body itself.
+    const notJson = await importText(owner, 'item', '\u0000[]', {
+      source: 'nul-msg',
+      format: 'json',
+    });
+    expect(notJson.status).toBe('failed');
+    expect(notJson.error.code).toBe('unreadable');
+    expect(notJson.error.message).toMatch(/^The file is not JSON: .*\uFFFD/);
+    for (const pad of ['', 'a']) {
+      const key = `${pad}${'\u{1F600}'.repeat(300)}`;
+      const odd = await importText(
+        owner,
+        'item',
+        JSON.stringify([{ id: 'E1', title: 'Emoji', [key]: 1 }]),
+        { source: 'emoji-cols' },
+        { name: 'emoji.json', mime: 'application/json' },
+      );
+      expect(odd.status, JSON.stringify(odd.error)).toBe('failed');
+      expect(odd.error.code).toBe('unknown_columns');
+      // Well formed: UTF-8 has no half of a pair, so a round trip changes nothing.
+      const message = odd.error.message as string;
+      expect(Buffer.from(message).toString()).toBe(message);
+    }
+  });
 });
 
 describe('hidden fields', () => {
