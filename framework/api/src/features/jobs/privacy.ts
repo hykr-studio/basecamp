@@ -1,5 +1,5 @@
 import { type Subject, subjectKey } from '@hykr/contracts';
-import { files, jobs } from '@hykr/db';
+import { files, jobs, jobUpdates } from '@hykr/db';
 import { and, eq, inArray, isNull, lt, ne, type SQL } from 'drizzle-orm';
 import type { ErasureContributor, ExportContributor } from '../../hooks.js';
 import { fileCopies } from '../files/privacy.js';
@@ -19,10 +19,10 @@ const startedFor = (subject: Subject, tenantId?: string): SQL =>
 
 /**
  * "Delete my data": the jobs about no record that were started for the subject lose their
- * input, output, message and error, their result files are erased (the files sweeper deletes the
- * objects), and unfinished ones are cancelled. Jobs about a record are the business's: they stay.
- * Their copies lose the same (`job.*` audit rows, events, replies), and the files' copies their
- * names (`file.*` audit rows).
+ * input, output, message and error, and so do the updates outside workers sent about them; their
+ * result files are erased (the files sweeper deletes the objects), and unfinished ones are
+ * cancelled. Jobs about a record are the business's: they stay. Their copies lose the same
+ * (`job.*` audit rows, events, replies), and the files' copies their names (`file.*` audit rows).
  */
 export const jobsErasure: ErasureContributor = {
   name: 'jobs',
@@ -36,6 +36,14 @@ export const jobsErasure: ErasureContributor = {
       .update(jobs)
       .set({ input: {}, output: null, message: null, error: null, principal: null })
       .where(inArray(jobs.id, ids));
+    // An outside worker's updates copy the output and message (`body`): they go empty, and one
+    // not applied yet is marked ignored (the job is finished or cancelled). The rows stay, so a
+    // repeated delivery is still a duplicate.
+    await tx.update(jobUpdates).set({ body: {} }).where(inArray(jobUpdates.jobId, ids));
+    await tx
+      .update(jobUpdates)
+      .set({ appliedAt: now, outcome: 'ignored: erased' })
+      .where(and(inArray(jobUpdates.jobId, ids), isNull(jobUpdates.appliedAt)));
     await tx
       .update(jobs)
       .set({

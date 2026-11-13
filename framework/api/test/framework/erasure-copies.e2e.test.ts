@@ -51,6 +51,7 @@ const PD = `v8pdel${stamp}`; // a person party of the contact's, deleted before
 const RV = `v8ravi${stamp}`; // Ravi's person party, Sam on it by mistake: it stays
 const AC = `v8cask${stamp}`; // what the contact asked, decided already
 const FR = `v8recv${stamp}`; // a photo the contact sent, swept since
+const UD = `v8undo${stamp}`; // a caller of the contact's Ana deleted and can still undo
 const NUMBER = `9198${String(Date.now()).slice(-8)}`;
 
 const ana = new Person(`Ana ${KEEP}`); // owner
@@ -64,7 +65,7 @@ const call = (p: Person, method: string, path: string, body?: unknown) =>
 
 const MARKERS = [MK, M1, M2, M3, M4, WK, M5, M6, EV, RM, PP, CM, CE, NUMBER];
 /** What was about them and was gone or changed before they asked (decisions V8, round 3). */
-const BEFORE = [DC, MC, PG, FD, AP, AQ, PD, AC, FR];
+const BEFORE = [DC, MC, PG, FD, AP, AQ, PD, AC, FR, UD];
 
 /** Every row of every table, in every schema, that holds one of these texts. */
 async function rowsHolding(texts: readonly string[]) {
@@ -194,6 +195,9 @@ describe('erasing a member and a contact (decisions V8)', () => {
   let samOutcome: Json = {};
   let wenOutcome: Json = {};
   let raviParty = '';
+  let undoId = '';
+  let movedId = '';
+  let movedAsk = '';
 
   beforeAll(async () => {
     // 1. Sam comments on a task; Ana names him in a comment on hers.
@@ -489,6 +493,24 @@ describe('erasing a member and a contact (decisions V8)', () => {
     ])
       expect(res.status, JSON.stringify(res.body)).toBeLessThan(300);
 
+    // Round 4: a caller of the contact's Ana deleted and can undo for an hour (the window holds
+    // the row whole); and Carol's rename of the moved caller, waiting for Ana. The moved caller
+    // is someone else's now: her request is live work, not a copy.
+    const undoable = await call(ana, 'POST', '/api/callers', {
+      caller: `Wen ${UD} (undoable)`,
+      contactId,
+    });
+    expect(undoable.status, JSON.stringify(undoable.body)).toBeLessThan(300);
+    const undoDel = await call(ana, 'DELETE', `/api/callers/${undoable.body.value.id}`);
+    expect(undoDel.body.undo?.id, JSON.stringify(undoDel.body)).toBeTruthy();
+    undoId = undoDel.body.undo.id;
+    movedId = moved.body.value.id;
+    const ask = await call(carol, 'PATCH', `/api/callers/${movedId}`, {
+      caller: `${KEEP} caller (waits)`,
+    });
+    expect(ask.body.status, JSON.stringify(ask.body)).toBe('needs_approval');
+    movedAsk = ask.body.approval.id;
+
     // Ravi's person party: Ravi was invited and taken off, and so was Sam, by mistake.
     const ravi = await call(ana, 'POST', '/api/parties', { kind: 'person', name: `Ravi ${RV}` });
     raviParty = ravi.body.value.id;
@@ -630,6 +652,18 @@ describe('erasing a member and a contact (decisions V8)', () => {
       [tenantId, `user:${sam.id}`, sam.id, { note: M4 }, `${M4} done`],
     );
     const jobId = job.rows[0].id as string;
+    // An outside worker's update to it, as `receive` keeps it (its body is the JobUpdate).
+    await pool.query(
+      `insert into app.job_updates (job_id, tenant_id, source, dedupe, status, body, applied_at,
+         outcome)
+       values ($1, $2, 'callback', $3, 'succeeded', $4, now(), 'applied')`,
+      [
+        jobId,
+        tenantId,
+        `v8-${stamp}`,
+        { status: 'succeeded', message: `${M4} done`, output: { note: M4 } },
+      ],
+    );
     const resultFile = await pool.query(
       `insert into app.files (tenant_id, owner_id, key, name, mime, size, status, resource_type,
          resource_id, field)
@@ -680,6 +714,14 @@ describe('erasing a member and a contact (decisions V8)', () => {
     expect((await rowsHolding([M6])).length).toBeGreaterThanOrEqual(3);
     for (const marker of BEFORE)
       expect((await rowsHolding([marker])).length, marker).toBeGreaterThan(0);
+    expect(
+      (
+        await pool.query(
+          'select count(*)::int as n from channel.inbox_items where user_id = $1 and dedupe = $2',
+          [ana.id, `approval.request:${movedAsk}`],
+        )
+      ).rows[0].n,
+    ).toBe(1);
     expect((await keysHolding([MK, M1])).length).toBeGreaterThan(0);
 
     // Sam asks to be forgotten; Carol files the contact's erasure, and Ana approves it.
@@ -725,6 +767,45 @@ describe('erasing a member and a contact (decisions V8)', () => {
         )
       ).rows[0].n,
     ).toBe(1);
+  });
+
+  it('leaves no undo window that would put an erased record back', async () => {
+    const undone = await call(ana, 'POST', `/api/undo/${undoId}`);
+    expect(undone.status, JSON.stringify(undone.body)).toBe(404);
+    expect(
+      (
+        await pool.query(
+          'select count(*)::int as n from app.fixture_ledgers_callers where caller like $1',
+          [`%${UD}%`],
+        )
+      ).rows[0].n,
+    ).toBe(0);
+  });
+
+  it("leaves a pending request about a record someone else's now as it was asked", async () => {
+    const asked = (
+      await pool.query('select status, summary, payload from app.approvals where id = $1', [
+        movedAsk,
+      ])
+    ).rows[0];
+    expect(asked.status).toBe('pending');
+    expect(asked.summary).toBeTruthy();
+    expect(asked.payload.input).toEqual({ caller: `${KEEP} caller (waits)` });
+    expect(
+      (
+        await pool.query(
+          'select count(*)::int as n from channel.inbox_items where user_id = $1 and dedupe = $2',
+          [ana.id, `approval.request:${movedAsk}`],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    const decided = await call(ana, 'POST', `/api/approvals/${movedAsk}/approve`);
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+    expect(decided.body).toMatchObject({ status: 'approved' });
+    expect(
+      (await pool.query('select caller from app.fixture_ledgers_callers where id = $1', [movedId]))
+        .rows,
+    ).toEqual([{ caller: `${KEEP} caller (waits)` }]);
   });
 
   it('leaves no job in Redis holding them', async () => {

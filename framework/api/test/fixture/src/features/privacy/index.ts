@@ -3,8 +3,8 @@
 // entries are kept for a legal hold, and whose callers (a customer's or a WhatsApp contact's)
 // are anonymised; a processor, a policy (answer within 30 days), a period for relayed
 // notifications, and a level rule that makes processing an erasure, or filing one from a letter,
-// wait for an approval. Only the privacy e2e test boots `privacyApp`; its tables are a migration
-// set of their own.
+// wait for an approval (and one for the callers a test marks: undoable, or waiting). The privacy
+// and erasure-copies e2e tests boot `privacyApp`; its tables are a migration set of their own.
 import {
   type DataSubject,
   defineModule,
@@ -217,6 +217,30 @@ export const ForgetWaits = defineLevelRule({
   },
 });
 
+/** Runs, and can be undone for an hour. */
+export const UndoLevel = defineApprovalLevel({
+  name: 'fixture_undo',
+  rank: 1,
+  label: label('Undo'),
+  policy: { parks: false, undoMs: 60 * 60 * 1000 },
+});
+
+/**
+ * Only for the callers a test marks: deleting a caller whose name says "(undoable)" can be
+ * undone, and renaming one to a name that says "(waits)" waits for a decider (decisions V8).
+ */
+export const CallerLevels = defineLevelRule({
+  name: 'fixture.callers',
+  on: ['caller.delete', 'caller.update'],
+  decide: ({ op, input, row }) => {
+    if (op.name === 'caller.delete' && String(row?.caller ?? '').includes('(undoable)'))
+      return atLevel(UndoLevel.name, 'caller_undoable', 'A caller marked so can be undone');
+    if (op.name === 'caller.update' && String(input?.caller ?? '').includes('(waits)'))
+      return atLevel(ForgetLevel.name, 'caller_waits', 'A rename marked so waits');
+    return null;
+  },
+});
+
 /** What `AfterErasure` saw after each erasure: whose, and the request's status by then. */
 export const erasedAfterCommit: { subject: DataSubject['subject']; status?: string }[] = [];
 
@@ -261,8 +285,8 @@ export const privacyContributions: Partial<Contributions> = {
   ],
   erasureContributors: [AfterErasure],
   retentionPeriods: [{ target: 'outbox.relayed', days: 1 }],
-  approvalLevels: [ForgetLevel],
-  levelRules: [ForgetWaits],
+  approvalLevels: [ForgetLevel, UndoLevel],
+  levelRules: [ForgetWaits, CallerLevels],
 };
 
 /** The fixture, with everything above. */
