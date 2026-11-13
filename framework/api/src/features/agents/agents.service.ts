@@ -597,7 +597,8 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
         const conditions: { agent: AgentRow; trigger: TriggerRow; zone: string }[] = [];
         for (const { trigger, agent } of rows) {
           const spec = AgentTrigger.safeParse(trigger.spec);
-          const zone = await this.zone(trigger.tenantId);
+          // On the sweep's transaction: nothing in it waits for a second pooled connection.
+          const zone = await tenantZoneOf(tx, trigger.tenantId);
           const dueAt = trigger.nextAt as Date;
           await tx
             .update(agentTriggers)
