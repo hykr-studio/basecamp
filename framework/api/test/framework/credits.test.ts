@@ -222,6 +222,17 @@ describe('what a pause refuses', () => {
     expect(refusalFor(some, FrameworkMeters.messages, 'authentication')).toBeNull();
   });
 
+  it('a messages limit that stops nothing raises no level: no notice says it pauses', () => {
+    const levels = (pauseMessages: string[]) =>
+      assess(
+        plan({ enforce: true, allowance: 1000, limits: { messages: 2 }, pauseMessages }),
+        [{ meter: 'messages', quantity: 2, cost: 8 }],
+        null,
+      ).levels.map((l) => `${l.cap}/${l.level}`);
+    expect(levels([])).toEqual([]);
+    expect(levels(['marketing'])).toEqual(['messages/alert', 'messages/pause']);
+  });
+
   it('the override wins: run lets everything through, pause stops it', () => {
     const run = assess(
       plan({ enforce: true, override: { mode: 'run', reason: 'support' } }),
