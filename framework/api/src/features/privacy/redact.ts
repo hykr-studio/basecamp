@@ -4,7 +4,8 @@
 // erased or blanked for personal data, its personal fields leave every copy, at any depth (a
 // reply's nested record, an order's lines, a command's input that names it); the rows stay,
 // with their ids, so the trail of who did what stays whole. Derived data goes too: the record's
-// files (and their names in the files' own audit rows), and its memory vectors. A privacy filing
+// files (and their names in the files' own audit rows), its memory vectors, and the undo windows
+// that hold it (they would put it back). A privacy filing
 // about the person loses the email or number it named them by, and its note. Nothing here loads
 // Nest. docs/decisions/B18.md and V3.md.
 
@@ -38,6 +39,8 @@ export interface Redacted {
   memory: number;
   /** Replies kept for idempotent retries. */
   replies: number;
+  /** Undo windows that held one of the records (`app.undo_windows`): deleted. */
+  undo: number;
   [where: string]: number;
 }
 
@@ -150,6 +153,7 @@ export const scrubCopy = (v: unknown, t: CopyTarget, top = false) => walk(v, t, 
 export const scrubInput = (v: unknown, t: CopyTarget, top = false) => walk(v, t, top, true);
 
 const rowsOf = (r: unknown) => (r as { rows?: Obj[] }).rows ?? [];
+const countOf = (r: unknown) => (r as { rowCount?: number | null }).rowCount ?? 0;
 
 /**
  * Write changed rows back, in one statement: `key` names the key columns with their types,
@@ -179,7 +183,11 @@ const holdsId = (col: SQL, ids: readonly string[]) =>
   sql`exists (select 1 from jsonb_path_query(${col}, 'lax $.**.id') as found(v)
     where found.v #>> '{}' in (${list(ids)}))`;
 
-/** The approvals of this business about the records: on one of them, or naming one in their input. */
+/**
+ * The approvals of this business about the records: on one of them, or naming one in their input.
+ * For records that stay someone else's (`copiesOnly`), only the decided ones: a request still
+ * waiting is live work about the record as it is now, not a copy (decisions V8).
+ */
 async function redactApprovals(
   tx: Tx,
   tenantId: string,
@@ -190,6 +198,7 @@ async function redactApprovals(
     await tx.execute(sql`
       select id, resource_type, resource_id, summary, payload from app.approvals
       where tenant_id = ${tenantId}
+        ${set.copiesOnly ? sql`and status <> 'pending'` : sql``}
         and ((resource_type = ${set.type} and resource_id in (${list(set.ids)}))
           or exists (select 1 from jsonb_path_query(payload -> 'input', 'lax $.**') as found(v)
             where jsonb_typeof(found.v) = 'string' and found.v #>> '{}' in (${list(set.ids)})))`),
@@ -219,6 +228,9 @@ async function redactApprovals(
 
 const SLICE = 1000;
 
+/** The resource type approvals are audited and stored under. */
+const APPROVAL = 'approval';
+
 /** A set in slices of at most `SLICE` ids. */
 function slices(set: ErasedRecords): ErasedRecords[] {
   if (set.ids.length <= SLICE) return [set];
@@ -235,7 +247,12 @@ function slices(set: ErasedRecords): ErasedRecords[] {
  * id at any depth (a reply's nested record, a notification's rows), and an approval about the
  * record (on it, or naming it in its input) loses its summary and input fields in every copy:
  * the approval, its audit rows and stored events, its notification, its parked reply and its
- * park's row. The files erased with the records are redacted the same way, as a `file` set.
+ * park's row, and each feature's copies of it (a decider's inbox item). The files erased with
+ * the records are redacted the same way, as a `file` set. A set of approvals themselves (the
+ * person's, deleted with them: `approvalCopies`) reaches the park's row on the record each was
+ * about too. An undo window that holds one of the records is deleted, so it cannot put the record
+ * back. A `copiesOnly` set (records that stay, someone else's now) keeps its files and memory
+ * vectors, and the requests about it still waiting for a decision (decisions V8).
  */
 export async function redactCopies(
   tx: Tx,
@@ -251,6 +268,7 @@ export async function redactCopies(
     files: 0,
     memory: 0,
     replies: 0,
+    undo: 0,
   };
   // In slices: each statement names the ids, and a retention rule may hand over thousands.
   const queue = sets.flatMap(slices);
@@ -280,6 +298,11 @@ export async function redactCopies(
     const ofApprovals = approvalIds.length
       ? sql`or (resource_type = 'approval' and resource_id in (${list(approvalIds)}))`
       : sql``;
+    // Approvals themselves (a person's, deleted with them): the park's row on the record each
+    // was about names it by `approvalId`, and copies its summary.
+    const asked = set.type === APPROVAL;
+    const parkOf = (row: Obj) =>
+      asked && isObj(row.after) && t.ids.has(String(row.after.approvalId ?? ''));
 
     const audit: Obj[] = [];
     for (const row of rowsOf(
@@ -287,9 +310,10 @@ export async function redactCopies(
         select id, resource_type, resource_id, before, after from audit.events
         where tenant_id = ${tenantId}
           and ((resource_type = ${set.type} and resource_id in (${ids})) ${ofApprovals}
-            ${parks.length ? sql`or ${sql.join(parks, sql` or `)}` : sql``})`),
+            ${parks.length ? sql`or ${sql.join(parks, sql` or `)}` : sql``}
+            ${asked ? sql`or after ->> 'approvalId' in (${ids})` : sql``})`),
     )) {
-      const top = own(row);
+      const top = own(row) || parkOf(row);
       const before = scrubCopy(row.before, t, top);
       const after = scrubCopy(row.after, top ? tAfter : t, top);
       if (before !== row.before || after !== row.after) audit.push({ id: row.id, before, after });
@@ -372,24 +396,43 @@ export async function redactCopies(
       ),
     );
 
-    const def = entityDef(set.type);
-    const fileFields = fileFieldsOf(def?.spec)
-      .map(([f]) => f)
-      .filter((f) => set.fields.includes(f));
-    const files = await eraseFilesOn(tx, {
-      tenantId,
-      resourceType: set.type,
-      ids: set.ids,
-      ...(set.deleted ? {} : { fields: fileFields }),
-    });
-    out.files += files.length;
-    // The files' own copies (their names in `file.*` audit rows) go the same way.
-    if (files.length) queue.push(...slices(fileCopies(files)));
-    out.memory += await forgetRecords(tx, { tenantId, resourceType: set.type, ids: set.ids });
-    // Each feature's own copies (webhook bodies, payloads).
+    // An undo window holds the rows it changed whole (`touched`: before and after), and undoing
+    // it would put them back: a window that holds one of the records goes, so the undo answers
+    // 404. Its held events and notifications stay held until its time, as copies above.
+    out.undo += countOf(
+      await tx.execute(sql`
+        delete from app.undo_windows
+        where tenant_id = ${tenantId} and ${holdsId(sql`touched`, set.ids)}`),
+    );
+
+    // A record that stays someone else's keeps its files and memory: only its copies change.
+    if (!set.copiesOnly) {
+      const def = entityDef(set.type);
+      const fileFields = fileFieldsOf(def?.spec)
+        .map(([f]) => f)
+        .filter((f) => set.fields.includes(f));
+      const files = await eraseFilesOn(tx, {
+        tenantId,
+        resourceType: set.type,
+        ids: set.ids,
+        ...(set.deleted ? {} : { fields: fileFields }),
+      });
+      out.files += files.length;
+      // The files' own copies (their names in `file.*` audit rows) go the same way.
+      if (files.length) queue.push(...slices(fileCopies(files)));
+      out.memory += await forgetRecords(tx, { tenantId, resourceType: set.type, ids: set.ids });
+    }
+    // Each feature's own copies (webhook bodies, payloads, inbox items), of the records and of
+    // the approvals about them: an approval's request in a decider's inbox repeats its summary
+    // ('Rename "<name>"'), and its key names the approval (decisions V8).
+    const about: ErasedRecords | null =
+      approvalIds.length && !asked
+        ? { type: APPROVAL, ids: approvalIds, fields: ['summary'] }
+        : null;
     for (const copies of recordCopies.all())
-      for (const [where, n] of Object.entries(await copies.redact({ tx, tenantId, set })))
-        out[where] = (out[where] ?? 0) + n;
+      for (const one of about ? [set, about] : [set])
+        for (const [where, n] of Object.entries(await copies.redact({ tx, tenantId, set: one })))
+          out[where] = (out[where] ?? 0) + n;
   }
   return out;
 }

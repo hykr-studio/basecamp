@@ -2,7 +2,8 @@
 // Nothing here loads Nest or reads the configuration: the privacy feature imports it at load time.
 import { schema } from '@hykr/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
-import type { ErasureContributor } from '../../hooks.js';
+import type { ErasedRecords, ErasureContributor } from '../../hooks.js';
+import { approvalCopies } from '../../privacy/contributors.js';
 
 const {
   approvals,
@@ -24,7 +25,8 @@ const ERASED_CUSTOMER = 'Erased customer';
  * payloads from its number on every one of the business's numbers, the requests it left waiting
  * for approval, link and one-time codes and sends made to the number before it was a contact,
  * and, for a number linked to an account, the WhatsApp side of that person's thread. A customer
- * record no account holds is anonymised (the business's bookings stay its own). The contact row
+ * record no account holds is anonymised (the business's bookings stay its own). The approvals'
+ * and the customer record's copies lose what they held (decisions V8). The contact row
  * itself (with its consents, messages, handoffs and own thread) goes last, after every other
  * contributor, in the privacy feature's erasure. Audit rows stay and never held the number.
  * Acceptance evidence stays too: it is append-only, kept as a legal record (decisions B8).
@@ -62,12 +64,13 @@ export const channelErasure: ErasureContributor = {
           )
           .returning({ id: inboundEvents.id })
       ).length;
-    n += (
-      await tx
-        .delete(approvals)
-        .where(eq(approvals.requesterContactId, contact.id))
-        .returning({ id: approvals.id })
-    ).length;
+    // Their copies lose what was asked (approvalCopies), as a person's pending approvals do.
+    const asked = await tx
+      .delete(approvals)
+      .where(eq(approvals.requesterContactId, contact.id))
+      .returning({ id: approvals.id });
+    n += asked.length;
+    const erased: ErasedRecords[] = [approvalCopies(asked.map((a) => a.id))];
     n += (
       await tx
         .delete(linkCodes)
@@ -117,15 +120,16 @@ export const channelErasure: ErasureContributor = {
           .returning({ id: threadMessages.id })
       ).length;
     } else if (contact.customerId) {
-      n += (
-        await tx
-          .update(customers)
-          .set({ displayName: ERASED_CUSTOMER })
-          .where(eq(customers.id, contact.customerId))
-          .returning({ id: customers.id })
-      ).length;
+      const blanked = await tx
+        .update(customers)
+        .set({ displayName: ERASED_CUSTOMER })
+        .where(eq(customers.id, contact.customerId))
+        .returning({ id: customers.id });
+      n += blanked.length;
+      // As the account's customer records do (eraseFramework).
+      erased.push({ type: 'customer', ids: blanked.map((c) => c.id), fields: ['displayName'] });
     }
-    return { count: n };
+    return { count: n, erased };
   },
 };
 

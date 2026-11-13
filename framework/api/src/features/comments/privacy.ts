@@ -4,6 +4,7 @@ import { type Mention, rewriteMentions } from '@hykr/contracts';
 import { comments } from '@hykr/db';
 import { and, eq, type SQL, sql } from 'drizzle-orm';
 import type { DataSubject, ErasureContributor, ExportContributor } from '../../hooks.js';
+import { auditedWith, both, createdBy } from '../../privacy/contributors.js';
 
 const inBusiness = (a: DataSubject) => (a.tenantId ? eq(comments.tenantId, a.tenantId) : undefined);
 
@@ -11,8 +12,18 @@ const inBusiness = (a: DataSubject) => (a.tenantId ? eq(comments.tenantId, a.ten
 export const ERASED_MENTION = '@—';
 
 /**
+ * What a comment's copies hold of its words and its author (audit rows, `comment.*` events,
+ * replies, notifications): `excerpt` and `author { id, name }` are `comment.mentioned`'s.
+ */
+const WORDS = ['body', 'mentions', 'anchor', 'excerpt', 'author', 'target'];
+
+/**
  * Forgetting a person: their comments are deleted, and in other comments each token naming them
- * becomes `@—` and they leave the mentions. Contacts write no comments.
+ * becomes `@—` and they leave the mentions. Contacts write no comments. Their comments' copies
+ * lose the words and the author; the copies of a comment that named them lose its words and its
+ * mentions (a token and a mention carry the name they were written with: `label`), and the
+ * comment keeps its rewritten text. So do the copies of a comment that named them and was
+ * deleted, or edited not to, before: its audit rows still do.
  */
 export const CommentsErasure: ErasureContributor = {
   name: 'comments',
@@ -41,7 +52,34 @@ export const CommentsErasure: ErasureContributor = {
       );
       await a.tx.update(comments).set({ body, mentions }).where(eq(comments.id, row.id));
     }
-    return { count: own.length + naming.length };
+    return {
+      count: own.length + naming.length,
+      erased: [
+        {
+          type: 'comment',
+          // With those they removed before: their copies stay otherwise.
+          ids: both(
+            own.map((c) => c.id),
+            await createdBy(a.tx, { type: 'comment', userId, tenantId: a.tenantId }),
+          ),
+          fields: WORDS,
+          deleted: true,
+        },
+        {
+          type: 'comment',
+          // With those that named them and were deleted or edited since (decisions V8).
+          ids: both(
+            naming.map((c) => c.id),
+            await auditedWith(a.tx, {
+              type: 'comment',
+              contains: [{ mentions: [{ kind: 'user', id: userId }] }],
+              tenantId: a.tenantId,
+            }),
+          ),
+          fields: ['body', 'excerpt', 'mentions', 'target'],
+        },
+      ],
+    };
   },
 };
 

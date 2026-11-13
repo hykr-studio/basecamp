@@ -3,6 +3,7 @@ import type { Tx } from '@hykr/core';
 import { files } from '@hykr/db';
 import { and, eq, inArray, ne, type SQL } from 'drizzle-orm';
 import type { ErasedRecords, ErasureContributor, ExportContributor } from '../../hooks.js';
+import { both, createdBy } from '../../privacy/contributors.js';
 
 /**
  * Erased files, as a set whose copies lose the file's name and words: the `file.*` audit rows
@@ -25,11 +26,16 @@ const sentBy = (subject: Subject, tenantId?: string): SQL =>
     ne(files.status, 'erased'),
   ) as SQL;
 
+/** The audit actions of a file someone sent: an upload, a file stored for them, one received. */
+const SENT = ['file.upload', 'file.stored', 'file.received'] as const;
+
 /**
  * "Delete my data": every file the subject sent is erased in the erasure's transaction (its
  * name and words go now; nobody reaches it any more), and the sweeper deletes the objects
  * afterwards, so an erasure that rolls back deletes nothing. A record that held such a file
- * keeps its id; the file answers 404.
+ * keeps its id; the file answers 404. The files they sent that are gone already (an upload
+ * thrown away, a file swept once taken off its record) lose their names in their audit rows
+ * too: their own audit rows find them (decisions V8).
  */
 export const filesErasure: ErasureContributor = {
   name: 'files',
@@ -45,8 +51,19 @@ export const filesErasure: ErasureContributor = {
       })
       .where(sentBy(subject, tenantId))
       .returning({ id: files.id });
-    const ids = erased.map((f) => f.id);
-    return { count: ids.length, erased: ids.length ? [fileCopies(ids)] : [] };
+    const sent = await createdBy(tx, {
+      type: 'file',
+      ...(subject.kind === 'contact'
+        ? { contactId: subject.contactId }
+        : { userId: subject.userId }),
+      tenantId,
+      actions: SENT,
+    });
+    const ids = both(
+      erased.map((f) => f.id),
+      sent,
+    );
+    return { count: erased.length, erased: ids.length ? [fileCopies(ids)] : [] };
   },
 };
 
