@@ -385,18 +385,29 @@ describe('who sees the clocks', () => {
   });
 
   it('a cursor that does not parse is a 400', async () => {
-    for (const cursor of [
-      'nope',
-      Buffer.from('{"d":"x","i":"y"}').toString('base64url'),
-      // An id Postgres's text cannot hold (V10): a 500 before.
-      Buffer.from(JSON.stringify({ d: '2026-01-01T00:00:00.000000', i: 'a\u0000b' })).toString(
-        'base64url',
-      ),
-    ]) {
-      const res = await owner.call('GET', `/api/sla?status=breached&cursor=${cursor}`);
-      expect(res.status).toBe(400);
-      expect(res.body).toMatchObject({ error: 'bad_cursor' });
-    }
+    // A clock runs, so the keyset query reads what the cursor holds.
+    await create(owner, 'A clock for the cursor');
+    const at = (d: string, i: string) =>
+      Buffer.from(JSON.stringify({ d, i })).toString('base64url');
+    for (const status of ['running', 'breached'])
+      for (const cursor of [
+        'nope',
+        Buffer.from('{"d":"x","i":"y"}').toString('base64url'),
+        // An id Postgres's text cannot hold (V10): a 500 before.
+        at('2026-01-01T00:00:00.000000', 'a\u0000b'),
+        // A time JavaScript reads and Postgres refuses (year 0): a 500 before (V10).
+        at('0000-01-01T00:00:00.000000', 'x'),
+      ]) {
+        const res = await owner.call('GET', `/api/sla?status=${status}&cursor=${cursor}`);
+        expect(res.status, `${status} ${cursor}: ${JSON.stringify(res.body)}`).toBe(400);
+        expect(res.body).toMatchObject({ error: 'bad_cursor' });
+      }
+    // A cursor in range still reads.
+    const fine = await owner.call(
+      'GET',
+      `/api/sla?status=running&cursor=${at('2026-01-01T00:00:00.000000', 'x')}`,
+    );
+    expect(fine.status).toBe(200);
   });
 });
 

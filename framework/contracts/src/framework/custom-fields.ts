@@ -4,7 +4,7 @@
 // `list.filterable`. The definitions are records of the framework's `customField` entity.
 import { z } from 'zod';
 import { Lang, LangCode, typedLabels } from '../languages.js';
-import { isPrototypeKey, ownValue } from './keys.js';
+import { isPrototypeKey, ownValue, TEXT_FAULTS, unstorableTextAt } from './keys.js';
 import { defineListFieldType, type FieldValueContext } from './list.js';
 import { PLATFORM_MODULE, stampModule } from './module.js';
 import { createHookRegistry } from './registry.js';
@@ -256,7 +256,14 @@ export const CustomFilter = z
   .refine(
     (v) => Object.keys(v).length > 0 && Object.keys(v).length <= 10,
     'Filter on 1 to 10 custom fields',
-  );
+  )
+  // Its JSON form is decoded after the request's edge checked the text: `"a\u0000b"` in the
+  // query string becomes a NUL only here. The refusal names the same rule (docs/decisions/V10.md).
+  .superRefine((v, ctx) => {
+    const bad = unstorableTextAt(v, '');
+    if (bad)
+      ctx.addIssue({ code: 'custom', message: TEXT_FAULTS[bad.rule], params: { rule: bad.rule } });
+  });
 export type CustomFilter = z.infer<typeof CustomFilter>;
 
 /**

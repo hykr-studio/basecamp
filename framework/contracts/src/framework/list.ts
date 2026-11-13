@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { storableDate, storableDateTime } from './instant.js';
 import { isPrototypeKey } from './keys.js';
 import { createHookRegistry } from './registry.js';
 
@@ -182,7 +183,8 @@ for (const type of [
   {
     name: 'date',
     ops: ORDERED,
-    value: () => z.union([z.iso.datetime({ offset: true }), z.iso.date()]),
+    // A time Postgres can store: `z.iso` takes the year 0000, which Postgres refuses (V10).
+    value: () => z.union([storableDateTime({ offset: true }), storableDate()]),
     summary: { group: 'bucket' },
   },
   {

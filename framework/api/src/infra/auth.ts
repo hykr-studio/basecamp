@@ -3,6 +3,7 @@ import {
   isSessionChannel,
   readOnlyChannelRefusal,
   sessionChannelRefusal,
+  unstorableTextAt,
 } from '@hykr/contracts';
 import { ensureDefaultTenant, schema } from '@hykr/db';
 import { betterAuth } from 'better-auth';
@@ -15,7 +16,7 @@ import { createsBusinessOnSignUp, runtime } from '../runtime.js';
 import { sharedDb } from './db.js';
 import { nativeAppOrigin } from './native-origin.js';
 import { authRateLimit } from './throttle.js';
-import { NUL_REFUSAL, nulAt } from './untrusted-text.js';
+import { textRefusal } from './untrusted-text.js';
 
 /**
  * The caller's address as Express sees it (`req.ip`, which honours `trust proxy`), handed to
@@ -91,13 +92,14 @@ function createAuth() {
     // default (one x-forwarded-for entry, else one bucket for everyone) only for its own calls.
     rateLimit: authRateLimit(),
     advanced: { ipAddress: { ipAddressHeaders: [CLIENT_ADDRESS_HEADER, 'x-forwarded-for'] } },
-    // The request edge on Better Auth's own routes, which no Nest guard sees: a NUL anywhere in
-    // the body or the query is 400, as on every other route (UntrustedTextGuard). Its text
-    // reaches Postgres too (a name, an email), and an update with one was a 500.
+    // The request edge on Better Auth's own routes, which no Nest guard sees: a NUL (or half a
+    // surrogate pair) anywhere in the body or the query is 400, as on every other route
+    // (UntrustedTextGuard). Its text reaches Postgres too (a name, an email), and an update with
+    // one was a 500. Its query is every key of the URL (better-call reads `searchParams`).
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
-        const where = nulAt(ctx.body, 'body') ?? nulAt(ctx.query, 'query');
-        if (where) throw new APIError('BAD_REQUEST', { ...NUL_REFUSAL, where });
+        const bad = unstorableTextAt(ctx.body, 'body') ?? unstorableTextAt(ctx.query, 'query');
+        if (bad) throw new APIError('BAD_REQUEST', textRefusal(bad.rule, bad.where));
       }),
     },
     // A new person gets their own business, as its creator: the template works for one person

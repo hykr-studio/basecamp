@@ -266,6 +266,78 @@ describe('a NUL character in what someone sends', () => {
     nul(await a.call('GET', `${at}&title=a%00b`), 'paged');
   });
 
+  it('in a custom filter’s JSON, decoded after the edge, is refused alike, with or without a cursor', async () => {
+    // `custom={"colour":"a\u0000b"}`: the query text holds a backslash, JSON.parse makes the NUL.
+    const field = await a.call('POST', '/api/custom-fields', {
+      entity: 'gadget',
+      key: 'colour',
+      type: 'text',
+      label: { en: 'Colour' },
+    });
+    expect(field.status, JSON.stringify(field.body)).toBe(201);
+    for (const title of ['Colour one', 'Colour two'])
+      expect(
+        (await a.call('POST', '/api/gadgets', { title, custom: { colour: 'red' } })).status,
+      ).toBe(201);
+    const json = (o: unknown) => encodeURIComponent(JSON.stringify(o));
+    const first = await a.call('GET', '/api/gadgets?sort=title&limit=1');
+    const cursor = first.body.nextCursor as string;
+    expect(cursor).toBeTruthy();
+    for (const filter of [
+      { colour: 'a\u0000b' },
+      { colour: { contains: 'a\u0000b' } },
+      { colour: { in: ['red', 'a\u0000b'] } },
+      { colour: { ne: 'a\u0000b' } },
+    ])
+      for (const path of [
+        '/api/gadgets?',
+        '/api/gadgets/summary?',
+        `/api/gadgets?sort=title&limit=1&cursor=${cursor}&`,
+      ]) {
+        const res = await a.call('GET', `${path}custom=${json(filter)}`);
+        nul(res, `${path} ${JSON.stringify(filter)}`);
+        expect(res.body.where).toBe('query.custom');
+      }
+    // A backslash and "u0000" are text like any other, and the plain filter still reads.
+    for (const colour of ['red', 'a\\u0000b']) {
+      const res = await a.call('GET', `/api/gadgets?custom=${json({ colour })}`);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect((await a.call('GET', `/api/gadgets/summary?custom=${json({ colour })}`)).status).toBe(
+        200,
+      );
+    }
+    expect(
+      (await a.call('GET', `/api/gadgets?sort=title&limit=1&cursor=${cursor}`)).body.items,
+    ).toHaveLength(1);
+  });
+
+  it('past the query parser’s 1000 keys too: a page that reads the raw query sees no NUL', async () => {
+    // Express keeps the first 1000 keys in req.query; the OAuth pages read the raw query again.
+    const filler = Array.from({ length: 1000 }, (_, i) => `f${i}=0`).join('&');
+    const anon = async (path: string) => {
+      const res = await fetch(`${server.base}${path}`, { redirect: 'manual' });
+      const text = await res.text();
+      let body: unknown = text;
+      try {
+        body = JSON.parse(text);
+      } catch {}
+      return { status: res.status, body };
+    };
+    for (const path of [
+      `/oauth/consent?${filler}&client_id=a%00b`,
+      `/oauth/sign-in?${filler}&client_id=a%00b`,
+      `/api/branding/public?${filler}&x=a%00b`,
+    ])
+      nul(await anon(path), path.slice(-30));
+    for (const path of [
+      `/api/tasks?${filler}&title=a%00b`,
+      `/api/auth/get-session?${filler}&x=a%00b`,
+    ])
+      nul(await a.call('GET', path), path.slice(-30));
+    // `%2500` is the text "%00", not a NUL.
+    expect((await a.call('GET', '/api/tasks?title=a%2500b')).status).toBe(200);
+  });
+
   it('Better Auth’s routes refuse one too: an update of the name was a 500', async () => {
     // Its routes are not Nest's: a hook in front of its endpoints checks them (infra/auth.ts).
     const odd = new Person('Odd Name');
@@ -311,6 +383,52 @@ describe('a tampered keyset cursor (inbox, comments, agent runs)', () => {
         // The query's schema refuses a cursor that long before it is read; the rest are its own.
         if (parts[1].length <= 128) expect(res.body.error, what).toBe('bad_cursor');
       }
+  });
+});
+
+describe('a time Postgres cannot store, in a query string', () => {
+  // JavaScript reads year 0 and years past 9999; Postgres refuses them (22008): a 500 before V10.
+  const year0 = encodeURIComponent('0000-01-01T00:00:00Z');
+  const past9999 = encodeURIComponent('9999-12-31T23:59:59-01:00');
+  const fine = encodeURIComponent('2026-01-01T00:00:00Z');
+
+  it('is 400 in a list’s date filter, history, credits usage and the platform’s routing', async () => {
+    expect(
+      (await a.call('POST', '/api/tasks', { title: 'Dated', dueOn: '2026-12-01' })).status,
+    ).toBe(201);
+    const operator = new Person('Operator Times');
+    await operator.signUp();
+    await makeOperator(operator);
+    const bad: [Person, string][] = [
+      [a, '/api/tasks?dueOn=0000-01-01'],
+      [a, '/api/tasks?dueOn[gte]=0000-01-01'],
+      [a, `/api/tasks?dueOn[lt]=${year0}`],
+      [a, `/api/tasks?dueOn[lt]=${past9999}`],
+      [a, '/api/tasks/summary?dueOn[gte]=0000-01-01'],
+      [a, `/api/history?since=${year0}`],
+      [a, `/api/history?since=${past9999}`],
+      [a, '/api/credits/usage?from=99999'],
+      [a, '/api/credits/usage?to=99999'],
+      [a, `/api/credits/usage?from=${year0}`],
+      [a, '/api/credits/usage?from=not-a-time'],
+      [operator, `/api/platform/routing?before=${year0}`],
+      [operator, `/api/platform/routing?before=${past9999}`],
+    ];
+    for (const [who, path] of bad) {
+      const res = await who.call('GET', path);
+      expect(res.status, `${path}: ${JSON.stringify(res.body)}`).toBe(400);
+    }
+    for (const [who, path] of [
+      [a, '/api/tasks?dueOn[gte]=2026-01-01'],
+      [a, `/api/tasks?dueOn[lt]=${fine}`],
+      [a, '/api/tasks/summary?dueOn[gte]=2026-01-01'],
+      [a, `/api/history?since=${fine}`],
+      [a, `/api/credits/usage?from=${fine}`],
+      [operator, `/api/platform/routing?before=${fine}`],
+    ] as const) {
+      const res = await who.call('GET', path);
+      expect(res.status, `${path}: ${JSON.stringify(res.body)}`).toBe(200);
+    }
   });
 });
 
@@ -365,6 +483,15 @@ describe('routes that read their own query string', () => {
       `cursor=${Buffer.from(JSON.stringify(['99999', 'x'])).toString('base64url')}`,
       `cursor=${Buffer.from(JSON.stringify([new Date().toISOString(), 'a\u0000b'])).toString('base64url')}`,
       `cursor=${Buffer.from(JSON.stringify({ d: '2026-01-01T00:00:00.000000', i: 'a\u0000b' })).toString('base64url')}`,
+      `cursor=${Buffer.from(JSON.stringify({ d: '0000-01-01T00:00:00.000000', i: 'x' })).toString('base64url')}`,
+      // Times JavaScript reads and Postgres refuses, on every name a route reads one by (V10).
+      ...['since', 'before', 'after', 'from', 'to', 'until'].flatMap((name) =>
+        ['99999', '0000-01-01T00:00:00Z', '0000-01-01', '9999-12-31T23:59:59-01:00'].map(
+          (v) => `${name}=${encodeURIComponent(v)}`,
+        ),
+      ),
+      // More keys than the query parser keeps, with a NUL past them (V10).
+      `${Array.from({ length: 1000 }, (_, i) => `f${i}=0`).join('&')}&q=a%00b&client_id=a%00b`,
     ];
     const task = await a.call('POST', '/api/tasks', { title: 'Fuzzed' });
     const on = `entity=task&id=${task.body.value.id}`;
@@ -398,6 +525,9 @@ describe('routes that read their own query string', () => {
       `/api/history/versions?${resource}`,
       '/api/credits/ledger',
       `/api/credits/usage?${day}`,
+      '/api/credits/usage',
+      '/api/tasks',
+      '/api/tasks/summary',
       '/api/files',
       `/api/acceptances?${on}`,
       '/api/acceptances/kinds?entity=task',
@@ -428,6 +558,8 @@ describe('routes that read their own query string', () => {
       '/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=x&hub.challenge=1',
       '/api/share/not-a-token',
       '/api/share/not-a-token/acceptances/documents/x',
+      '/oauth/consent?client_id=x',
+      '/oauth/sign-in',
     ];
     const failures: string[] = [];
     for (const [who, paths] of [
@@ -444,6 +576,6 @@ describe('routes that read their own query string', () => {
             failures.push(`${path}?${q}: shows the other business`);
           expect(polluted()).toEqual([]);
         }
-    expect(failures).toEqual([]);
+    expect(failures, failures.join('\n').slice(0, 4000)).toEqual([]);
   });
 });

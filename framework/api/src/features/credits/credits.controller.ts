@@ -6,6 +6,7 @@ import {
   type CreditsStatus,
   CreditsViewCapability,
   type Principal,
+  storableInstant,
 } from '@hykr/contracts';
 import {
   CORE_OPTIONS,
@@ -90,9 +91,12 @@ export class CreditsController {
   @Get('usage')
   usage(@CurrentPrincipal() p: Principal, @Query('from') from?: string, @Query('to') to?: string) {
     need(p, CreditsManageCapability, 'credits_manage', 'people who manage the credits see this');
-    const end = to ? new Date(to) : new Date();
-    const start = from ? new Date(from) : new Date(end.getTime() - 31 * 24 * 60 * 60 * 1000);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()))
+    // A time Postgres can store, or none: `new Date('99999')` reads, and Postgres refuses it (V10).
+    const end = to ? storableInstant(to) : new Date();
+    const start = from
+      ? storableInstant(from)
+      : end && new Date(end.getTime() - 31 * 24 * 60 * 60 * 1000);
+    if (!start || !end || !storableInstant(start.toISOString()))
       throw new BadRequestException({
         error: 'invalid_range',
         reason: 'from and to are ISO times',

@@ -6,6 +6,7 @@ import {
   RecordVersion,
   revisionFields,
   statesOf,
+  storableDateTime,
   versionedOf,
   versionField,
 } from '@hykr/contracts';
@@ -36,7 +37,8 @@ class HistoryQuery extends createZodDto(
       resourceType: z.enum(entityNames).optional(),
       resourceId: z.uuid().optional(),
       // Without a record: the latest across every record, since a moment, by one actor.
-      since: z.iso.datetime().optional(),
+      // A time Postgres can store: `z.iso.datetime()` takes the year 0000 (V10).
+      since: storableDateTime().optional(),
       actor: z.enum(['assistant', 'you']).optional(),
     })
     .refine((q) => Boolean(q.resourceType) === Boolean(q.resourceId), {

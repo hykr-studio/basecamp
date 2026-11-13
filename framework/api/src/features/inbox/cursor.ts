@@ -1,7 +1,7 @@
 // Keyset cursors over (created_at, id), newest first: what comes after the last row shown.
+import { storableInstant, textFault } from '@hykr/contracts';
 import { BadRequestException } from '@nestjs/common';
 import { and, type Column, eq, lt, or, type SQL } from 'drizzle-orm';
-import { storableInstant } from '../../infra/instant.js';
 
 export type Keyset = { at: Date; id: string };
 
@@ -17,12 +17,13 @@ export const badKeyset = () =>
 
 /**
  * A keyset from a cursor's two parts, when Postgres can take both: a time it can store (years 1
- * to 9999, not merely one JavaScript reads) and an id it can hold (text, no NUL, at most MAX_ID
- * long). Else undefined. Every keyset cursor reads its parts through this (V10).
+ * to 9999, not merely one JavaScript reads) and an id it can hold (text, no NUL or half of a
+ * surrogate pair, at most MAX_ID long). Else undefined. Every keyset cursor reads its parts
+ * through this (V10).
  */
 export function keysetOf(at: unknown, id: unknown): Keyset | undefined {
   const date = storableInstant(at);
-  if (!date || typeof id !== 'string' || !id || id.length > MAX_ID || id.includes('\u0000'))
+  if (!date || typeof id !== 'string' || !id || id.length > MAX_ID || textFault(id))
     return undefined;
   return { at: date, id };
 }

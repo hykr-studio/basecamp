@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD, APP_PIPE } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from '@thallesp/nestjs-better-auth';
-import { ZodValidationPipe } from 'nestjs-zod';
 import { ChannelsModule } from './channels/channels.module.js';
 import { config } from './config.js';
 import { FeaturesModule } from './features/features.module.js';
@@ -11,7 +10,7 @@ import { HealthController } from './health/health.controller.js';
 import { authMiddleware, getAuth } from './infra/auth.js';
 import { coreImports } from './infra/core-imports.js';
 import { CallerThrottlerGuard, throttleStorage } from './infra/throttle.js';
-import { UntrustedTextGuard } from './infra/untrusted-text.js';
+import { UntrustedTextGuard, UntrustedTextPipe } from './infra/untrusted-text.js';
 import { ChatModule } from './modules/chat/chat.module.js';
 import { HistoryController } from './modules/history/history.controller.js';
 import { MeModule } from './modules/me/me.controller.js';
@@ -66,7 +65,8 @@ function authWithFeatures() {
     { provide: APP_GUARD, useClass: CallerThrottlerGuard },
     // A NUL character anywhere in what a request sends is 400, before any handler reads it.
     { provide: APP_GUARD, useClass: UntrustedTextGuard },
-    { provide: APP_PIPE, useClass: ZodValidationPipe },
+    // nestjs-zod's, answering a schema's text refusal (a decoded custom filter) as the guard does.
+    { provide: APP_PIPE, useClass: UntrustedTextPipe },
   ],
 })
 export class AppModule {}

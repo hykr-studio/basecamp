@@ -12,7 +12,15 @@ describe('storableInstant', () => {
   });
 
   it('refuses what JavaScript reads but Postgres has no room for, and what is no time', () => {
-    for (const text of ['99999', '-100000-01-01T00:00:00Z', '+010000-01-01T00:00:00Z'])
+    // The year 0000 too, which `z.iso.datetime()` takes (V10).
+    for (const text of [
+      '99999',
+      '-100000-01-01T00:00:00Z',
+      '+010000-01-01T00:00:00Z',
+      '0000-01-01T00:00:00Z',
+      '0000-01-01',
+      '9999-12-31T23:59:59-01:00',
+    ])
       expect(storableInstant(text), text).toBeUndefined();
     for (const text of ['not-a-date', '', undefined, ['2026-01-01', '2026-01-02'], 5])
       expect(storableInstant(text), JSON.stringify(text)).toBeUndefined();

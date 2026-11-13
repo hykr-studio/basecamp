@@ -11,6 +11,8 @@ import {
   type SlaQuery,
   type SlaTimer,
   statesOf,
+  storableInstant,
+  textFault,
 } from '@hykr/contracts';
 import { slaTimers } from '@hykr/db';
 import { BadRequestException, HttpException, Logger, NotFoundException } from '@nestjs/common';
@@ -88,13 +90,12 @@ export function decodeSlaCursor(cursor: string): SlaCursor {
   }
   const c = (parsed ?? {}) as { d?: unknown; i?: unknown };
   if (typeof c.d !== 'string' || !CURSOR_TIME.test(c.d)) throw badCursor();
-  // An id Postgres can hold: no NUL (V10).
-  if (typeof c.i !== 'string' || !c.i || c.i.length > 100 || c.i.includes('\u0000'))
-    throw badCursor();
-  // A real instant: no 31 February rolling into March.
-  const at = Date.parse(`${c.d}Z`);
-  if (Number.isNaN(at) || new Date(at).toISOString().slice(0, 19) !== c.d.slice(0, 19))
-    throw badCursor();
+  // An id Postgres can hold: no NUL, no half of a surrogate pair (V10).
+  if (typeof c.i !== 'string' || !c.i || c.i.length > 100 || textFault(c.i)) throw badCursor();
+  // A real instant Postgres can store: no 31 February rolling into March, and no year 0000,
+  // which JavaScript reads and `::timestamptz` refuses (V10).
+  const at = storableInstant(`${c.d}Z`);
+  if (!at || at.toISOString().slice(0, 19) !== c.d.slice(0, 19)) throw badCursor();
   return { d: c.d, i: c.i };
 }
 
