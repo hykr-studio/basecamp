@@ -229,6 +229,16 @@ describe('approvals on WhatsApp', () => {
   it('in the conversation: her own request gets buttons; a customer is told the team was asked', async () => {
     await ana.call('POST', '/api/tasks', { title: 'Order tiles' });
     await ana.call('POST', '/api/tasks', { title: 'Order grout' });
+    const isPick = (m: Sent) => JSON.stringify(m.interactive?.action ?? '').includes('pick:');
+    // A list that is the answer (nothing changed after it), to tap: headed by the view's title,
+    // not its first row (V7).
+    const listedFrom = toNumber(anaPhone).length;
+    await say(anaPhone, 'delete Order nothing');
+    const listed = await eventually(() => {
+      const picks = toNumber(anaPhone).slice(listedFrom).filter(isPick);
+      return picks.length ? picks : undefined;
+    });
+    for (const m of listed) expect(m.interactive?.body?.text).toBe('Tasks');
     const before = textsTo(anaPhone).length;
     const sentBefore = toNumber(anaPhone).length;
     await say(anaPhone, 'delete Order tiles');
@@ -240,12 +250,8 @@ describe('approvals on WhatsApp', () => {
     const approve = buttons.interactive?.action.buttons?.[0].reply.id ?? '';
     // Hers to decide: her approval, asked once (V7).
     await heard(anaPhone, /I've asked for your approval: Delete "Order tiles"/);
-    // The tasks it looked through, to tap: headed by the view's title, not its first row (V7).
-    const picks = toNumber(anaPhone)
-      .slice(sentBefore)
-      .filter((m) => JSON.stringify(m.interactive?.action ?? '').includes('pick:'));
-    expect(picks.length).toBeGreaterThan(0);
-    for (const m of picks) expect(m.interactive?.body?.text).toBe('Tasks');
+    // The tasks it looked through to find this one are no answer: not shown beside it (V13).
+    expect(toNumber(anaPhone).slice(sentBefore).filter(isPick)).toEqual([]);
     await tap(anaPhone, approve);
     await heard(anaPhone, /Done: Delete "Order tiles"/);
     // The buttons are the approval: no "approve it in the app" beside them.

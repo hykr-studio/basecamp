@@ -555,6 +555,30 @@ describe('who decides, and who sees the cost', () => {
     );
     expect(rows).toEqual([{ status: 'pending', move: 'cancel' }]);
   });
+
+  it("staff's order over the limit, in words (WhatsApp): the waiting line, never the lookup (V13)", async () => {
+    const words = (message: string) =>
+      staff.call('POST', '/api/chat/once', { message, surfaces: ['text'] }, inTenant());
+    const turn = await words('order Lookup check: 1 Marble at 50000');
+    expect(turn.status).toBe(200);
+    const calls = turn.body.toolCalls as { tool: string; outcome: string; present?: unknown }[];
+    expect(calls.map((c) => `${c.tool}:${c.outcome}`)).toEqual([
+      'list-orders:done',
+      'save-order:parked',
+    ]);
+    // The list it read to decide is no answer: nothing of it is shown, so no "No orders." after
+    // the waiting line.
+    expect(calls[0]).not.toHaveProperty('present');
+    expect(turn.body.reply).toMatch(
+      /^I've asked the team for approval: .+Nothing changes until they decide\.$/s,
+    );
+    // Asked for, the list is the answer, and shows.
+    const listed = await words('list orders');
+    expect(listed.body.toolCalls[0]).toMatchObject({
+      tool: 'list-orders',
+      present: { kind: 'text' },
+    });
+  });
 });
 
 describe('a currency that does not exist (V4)', () => {

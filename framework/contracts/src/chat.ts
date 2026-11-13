@@ -75,6 +75,50 @@ export const ToolCallSummary = z.object({
 });
 export type ToolCallSummary = z.infer<typeof ToolCallSummary>;
 
+/** How a resumed call's request was decided (a durable run's write, @hykr/core tools). */
+const DECIDED = new Set(['approved', 'rejected', 'expired', 'failed']);
+
+/**
+ * Whether a tool's output (`{ ok, result, present }`, as the agent got it) is a write's: done,
+ * with its value; waiting for an approval; or, in a run that waited, how its request was decided.
+ * A read's record can carry a `status` of its own ('approved', 'done'), so the shape decides.
+ */
+export function wroteIn(output: unknown): boolean {
+  const r = (output as { result?: unknown } | null | undefined)?.result;
+  if (!r || typeof r !== 'object') return false;
+  const { status } = r as { status?: unknown };
+  if (status === 'done') return 'value' in r && !('id' in r);
+  if (status === 'needs_approval' || (typeof status === 'string' && DECIDED.has(status))) {
+    const { approval } = r as { approval?: unknown };
+    return !!approval && typeof approval === 'object' && !('id' in r);
+  }
+  return false;
+}
+
+/** A view a channel shows: a component on a screen, or words where there is none. */
+const showsView = (output: unknown) => {
+  const kind = (output as { present?: { kind?: unknown } } | null | undefined)?.present?.kind;
+  return kind === 'inline' || kind === 'text';
+};
+
+/**
+ * Which calls of one turn (their outputs, in order) only looked something up: a read whose view
+ * (a list, a record, totals) came before a later write in the same turn. The write is what the
+ * turn did; the read was how the assistant found what to write, so no channel shows it as the
+ * answer: not WhatsApp's words, not the app's view, not the saved thread. A read with no write
+ * after it is the answer, and shows. A refusal is no write here (it may be a read's), and a
+ * canvas a call opened is not a view.
+ */
+export function lookupsIn(outputs: readonly unknown[]): Set<number> {
+  const lookups = new Set<number>();
+  let wroteAfter = false;
+  for (let i = outputs.length - 1; i >= 0; i--) {
+    if (wroteIn(outputs[i])) wroteAfter = true;
+    else if (wroteAfter && showsView(outputs[i])) lookups.add(i);
+  }
+  return lookups;
+}
+
 /** One agent turn: its reply, the run id that ties its audit rows together, and what it called. */
 export const ChatResponse = z.object({
   reply: z.string(),

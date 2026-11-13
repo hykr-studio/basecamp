@@ -1,7 +1,7 @@
 // A resumed run's tool calls as thread parts, the way the chat service saves a turn's: what the
 // chat renders (the outcome, what it showed, an approval, a refusal's reason), never the data.
 import { randomUUID } from 'node:crypto';
-import type { Present } from '@hykr/contracts';
+import { lookupsIn, type Present } from '@hykr/contracts';
 import type { SavedPart } from '../../modules/threads/threads.service.js';
 
 type RawToolResult = {
@@ -17,29 +17,31 @@ type RawToolResult = {
   };
 };
 
-function compact(result: RawToolResult['result']) {
+/** A lookup (`lookupsIn`) shows nothing, so it keeps no view. */
+function compact(result: RawToolResult['result'], lookup: boolean) {
   if (!result) return null;
   const { ok, present, speech, error } = result;
   const r = result.result;
   return {
     ok,
-    ...(present ? { present } : {}),
-    ...(speech ? { speech } : {}),
+    ...(present && !lookup ? { present } : {}),
+    ...(speech && !lookup ? { speech } : {}),
     ...(error ? { error: { reason: error.reason, message: error.message } } : {}),
     ...(r?.status ? { result: { status: r.status, approval: r.approval } } : {}),
   };
 }
 
-/** Each tool result (Mastra's chunks) as a saved UI part. */
+/** Each tool result (Mastra's chunks) as a saved UI part: a lookup without its view. */
 export function partsOf(results: readonly unknown[]): SavedPart[] {
-  return results.map((r) => {
-    const x = (r && typeof r === 'object' && 'payload' in r ? r.payload : r) as RawToolResult;
-    return {
-      type: `tool-${x.toolName ?? 'tool'}`,
-      toolCallId: x.toolCallId ?? randomUUID(),
-      state: 'output-available',
-      input: x.args ?? {},
-      output: compact(x.result),
-    };
-  });
+  const raw = results.map(
+    (r) => (r && typeof r === 'object' && 'payload' in r ? r.payload : r) as RawToolResult,
+  );
+  const lookups = lookupsIn(raw.map((x) => x.result));
+  return raw.map((x, i) => ({
+    type: `tool-${x.toolName ?? 'tool'}`,
+    toolCallId: x.toolCallId ?? randomUUID(),
+    state: 'output-available',
+    input: x.args ?? {},
+    output: compact(x.result, lookups.has(i)),
+  }));
 }

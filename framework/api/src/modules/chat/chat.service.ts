@@ -5,6 +5,7 @@ import {
   type ChatResponse,
   isTimeZone,
   type Lang,
+  lookupsIn,
   type Present,
   type Principal,
   type Surface,
@@ -44,33 +45,45 @@ const INTERRUPTED = '(The reply was interrupted.)';
 
 /**
  * What a tool result keeps once saved: what the chat renders (the outcome, what it showed, an
- * approval, a refusal's reason), not the data. A list's rows are fetched again by its view.
+ * approval, a refusal's reason), not the data. A list's rows are fetched again by its view. A
+ * lookup (`lookupsIn`) shows nothing, so it keeps no view.
  */
-function compact(result: RawToolResult['result']) {
+function compact(result: RawToolResult['result'], lookup = false) {
   if (!result) return null;
   const { ok, present, speech, error } = result;
   const r = result.result;
   return {
     ok,
-    ...(present ? { present } : {}),
-    ...(speech ? { speech } : {}),
+    ...(present && !lookup ? { present } : {}),
+    ...(speech && !lookup ? { speech } : {}),
     ...(error ? { error: { reason: error.reason, message: error.message } } : {}),
     ...(r?.status ? { result: { status: r.status, approval: r.approval } } : {}),
   };
 }
 
-/** The reply's tool calls, as UI message parts, so a reloaded thread renders as it streamed. */
+/** A tool result as Mastra hands it over: bare, or in a chunk's payload. */
+const rawOf = (r: unknown) =>
+  (r && typeof r === 'object' && 'payload' in r ? r.payload : r) as RawToolResult & {
+    args?: unknown;
+  };
+
+/** The turn's lookups: reads whose view came before a write of the same turn (`lookupsIn`). */
+const lookupsOf = (results: unknown[]) => lookupsIn(results.map((r) => rawOf(r).result));
+
+/**
+ * The reply's tool calls, as UI message parts, so a reloaded thread renders as the app showed it
+ * once the turn was done: a lookup without its view.
+ */
 function partsOf(results: unknown[]): SavedPart[] {
-  return results.map((r) => {
-    const x = (r && typeof r === 'object' && 'payload' in r ? r.payload : r) as RawToolResult & {
-      args?: unknown;
-    };
+  const lookups = lookupsOf(results);
+  return results.map((r, i) => {
+    const x = rawOf(r);
     return {
       type: `tool-${x.toolName ?? 'tool'}`,
       toolCallId: x.toolCallId ?? randomUUID(),
       state: 'output-available',
       input: x.args ?? {},
-      output: compact(x.result),
+      output: compact(x.result, lookups.has(i)),
     };
   });
 }
@@ -87,15 +100,21 @@ type RawToolResult = {
   };
 };
 
-/** What each tool call amounted to: "ok" only means the API answered. */
+/**
+ * What each tool call amounted to: "ok" only means the API answered. A lookup (a read the
+ * assistant made to find what it then wrote) shows nothing: the write is the answer.
+ */
 export function summarize(results: unknown[]): ToolCallSummary[] {
-  return results.map((r) => {
-    const x = (r && typeof r === 'object' && 'payload' in r ? r.payload : r) as RawToolResult;
+  const lookups = lookupsOf(results);
+  return results.map((r, i) => {
+    const x = rawOf(r);
     const tool = String(x.toolName ?? 'tool');
-    const shown = {
-      ...(x.result?.present ? { present: x.result.present } : {}),
-      ...(x.result?.speech ? { speech: x.result.speech } : {}),
-    };
+    const shown = lookups.has(i)
+      ? {}
+      : {
+          ...(x.result?.present ? { present: x.result.present } : {}),
+          ...(x.result?.speech ? { speech: x.result.speech } : {}),
+        };
     if (x.result?.ok === false) {
       const reason = x.result.error?.reason ?? x.result.error?.message;
       return {
