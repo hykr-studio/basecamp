@@ -3,7 +3,8 @@
 // the deadline and its processors fill the register; notes expire two years after their last
 // change; and when the team files an erasure for someone, it waits for a second person
 // (`irreversible`), then forgets them and their notes, leaving their email nowhere: not in the
-// approval, its audit rows or the reply kept for a retry. Another customer's notes stay.
+// approval, its audit rows or the reply kept for a retry. Another customer's notes stay. A brief
+// is its customer's too, and goes with them (decisions V8).
 import { PrivacyService, readZip } from '@hykr/api';
 import {
   addMember,
@@ -122,7 +123,21 @@ describe('personal data in the sample', () => {
       keepReason: 'acceptance_evidence',
       keepBasis: expect.stringContaining('प्रमाण'),
     });
+    // A brief is its customer's (decisions V8); a job's files are kept on erasure, until their
+    // period ends.
+    expect(reg.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ entity: 'brief', erase: 'delete', retention: 'briefs.personal' }),
+      ]),
+    );
+    expect(reg.parts.find((x: Json) => x.name === 'jobs.files')).toMatchObject({
+      erase: 'keep',
+      keepReason: 'business_copy',
+      keepBasis: expect.stringContaining('एक्सपोर्ट'),
+    });
     const period = (name: string) => reg.retention.find((r: Json) => r.name === name)?.days;
+    expect(period('jobs.files')).toBe(30);
+    expect(period('briefs.personal')).toBe(365);
     expect(period('notes.personal')).toBe(730);
     expect(period('channel.inbound-payloads')).toBe(30);
     expect(period('privacy.archives')).toBe(90);
@@ -142,6 +157,19 @@ describe('personal data in the sample', () => {
   });
 
   it('an erasure the team files waits for a second person, then forgets the customer', async () => {
+    // What she asked for on the brief form, with her name and number (decisions V8).
+    const made = await call(owner, 'POST', '/api/briefs', {
+      name: 'Asha Privacy',
+      phone: '+91 98450 11111',
+      summary: 'A teak dining table for six',
+      currency: 'INR',
+    });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    const brief = made.body.value;
+    await pool.query('update app.briefs set customer_id = $2 where id = $1', [
+      brief.id,
+      customer[asha.name],
+    ]);
     const note = 'Asha wrote from her personal address';
     // As the back office files it: with a key, so its reply is kept for a retry.
     const res = await owner.call(
@@ -161,7 +189,11 @@ describe('personal data in the sample', () => {
         (r: Json) => r.subject.id === asha.id && r.status === 'completed',
       );
     }, 30_000);
-    expect(filed.outcome).toMatchObject({ records: { notes: { deleted: 1 } }, account: true });
+    expect(filed.outcome).toMatchObject({
+      records: { notes: { deleted: 1 }, briefs: { deleted: 1 } },
+      account: true,
+    });
+    expect((await call(owner, 'GET', `/api/briefs/${brief.id}`)).status).toBe(404);
     const left = await pool.query('select title from app.notes where customer_id = any($1)', [
       [customer[asha.name], customer[bala.name]],
     ]);
@@ -178,7 +210,7 @@ describe('personal data in the sample', () => {
        union all
        select 'reply' from app.idempotency
          where split_part(principal_id, ':', 3) = $1 and lower(response::text) like any($2)`,
-      [tenantId, [`%${asha.email.toLowerCase()}%`, `%${note.toLowerCase()}%`]],
+      [tenantId, [`%${asha.email.toLowerCase()}%`, `%${note.toLowerCase()}%`, '%98450 11111%']],
     );
     expect(copies.rows).toEqual([]);
   });

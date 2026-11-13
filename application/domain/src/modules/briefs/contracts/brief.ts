@@ -100,7 +100,24 @@ export const BriefSpec = entitySpec({
     pageSize: { default: 25, max: 100 },
     examples: { status: 'new', source: 'form', name: '{ "contains": "asha" }' },
   },
-  traits: { money: { fields: ['budget'] }, customFields: {} },
+  // A brief is its customer's personal data (their name, number and needs, from the public
+  // form): it goes when they ask to be forgotten, and a year after its last change. A brief
+  // the team typed in for nobody in particular has no customer, so it is no one's.
+  traits: {
+    money: { fields: ['budget'] },
+    customFields: {},
+    privacy: {
+      subject: { customer: ['customerId'] },
+      fields: ['name', 'phone', 'summary', 'notes', 'custom'],
+      erase: 'delete',
+      retention: { name: 'briefs.personal', days: 365, from: 'updatedAt', action: 'delete' },
+      purpose: {
+        en: 'What a customer asked for, on the brief form or of the team: name, number, needs',
+        hi: 'ग्राहक ने ब्रीफ़ फ़ॉर्म पर या टीम से जो माँगा: उनका नाम, नंबर और ज़रूरतें',
+        te: 'కస్టమర్ బ్రీఫ్ ఫారంలో లేదా బృందాన్ని అడిగినది: వారి పేరు, నంబర్, అవసరాలు',
+      },
+    },
+  },
   // An agent never deletes without the person.
   approval: { delete: (p) => p.actor.kind === 'agent' },
   views: { list: 'brief.list' },

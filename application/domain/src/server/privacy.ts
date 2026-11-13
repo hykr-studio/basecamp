@@ -49,7 +49,8 @@ export const Processors = [
 /**
  * A request is answered within 30 days, unless a business sets its own deadline. What stays when
  * someone is forgotten says why on the register: an order's acceptance is the business's proof
- * of what the customer agreed to.
+ * of what the customer agreed to; the business's own exports and imported files hold the records
+ * they copied until their period ends.
  */
 export const PrivacyPolicy = definePrivacyPolicy({
   name: 'app',
@@ -60,6 +61,11 @@ export const PrivacyPolicy = definePrivacyPolicy({
       hi: 'जो तय हुआ उसके प्रमाण के रूप में रखा जाता है, जब तक किसी भी पक्ष को इसे दिखाना पड़ सकता है',
       te: 'ఏం అంగీకరించారో దానికి రుజువుగా ఉంచుతాం, ఏ పక్షానికైనా చూపించాల్సిన అవసరం ఉన్నంత కాలం',
     },
+    business_copy: {
+      en: "In the business's own exports and imported files made before, until they expire",
+      hi: 'पहले बने व्यवसाय के अपने एक्सपोर्ट और इम्पोर्ट की गई फ़ाइलों में, जब तक वे समाप्त न हों',
+      te: 'ముందే చేసిన వ్యాపారం సొంత ఎగుమతులు, దిగుమతి ఫైల్‌లలో, అవి గడువు ముగిసే వరకు',
+    },
   },
 });
 
@@ -69,6 +75,9 @@ export const RetentionPeriods: RetentionPeriod[] = [
   { target: 'channel.inbound-payloads', days: 30 },
   // A person's copy of their data, once made.
   { target: 'privacy.archives', days: 90 },
+  // A business export's archive, an import's file and its error report (other people's
+  // records), a month after the job finished.
+  { target: 'jobs.files', days: 30 },
 ];
 
 /**
