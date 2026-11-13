@@ -14,6 +14,7 @@ import {
   type NestInterceptor,
 } from '@nestjs/common';
 import { from, type Observable, switchMap } from 'rxjs';
+import { TURN_METERS } from './budget.js';
 import { creditsService } from './credits.service.js';
 import { FrameworkMeters } from './meters.js';
 
@@ -22,13 +23,13 @@ export const creditsPaused = (refusal: UsageRefusal) =>
   new HttpException({ error: 'credits_paused', rule: refusal.rule, reason: refusal.reason }, 402);
 
 /**
- * The meters an agent's call spends: its tool call, and the model tokens its run spends around
- * it. An MCP client runs its own model, so only its tool calls are ours.
+ * The meters an agent's call spends: what a turn spends (the model tokens its run spends around
+ * it, and its tool call). An MCP client runs its own model, so only its tool calls are ours.
  */
 const metersFor = (channel: string | undefined) =>
   channel === 'mcp'
     ? [{ meter: FrameworkMeters.toolCalls.name }]
-    : [{ meter: FrameworkMeters.tokens.name }, { meter: FrameworkMeters.toolCalls.name }];
+    : TURN_METERS.map((m) => ({ meter: m.name }));
 
 @Injectable()
 export class CreditsAgentInterceptor implements NestInterceptor {
