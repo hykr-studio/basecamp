@@ -795,7 +795,14 @@ What the write path does with them:
   more: a higher level, or a larger amount, than was approved. It opens no undo window. A replay
   refused for good also ends as `failed`, with why: what was asked no longer validates (a field
   taken out of the stored input), or a 400, 401, 403, 404, 409, 410 or 422 from the write. A
-  5xx or a 429 leaves the request pending, to be decided again.
+  5xx or a 429 leaves the request pending, to be decided again. A refusal's own audit row
+  (`denied`) is written with the request's `failed`.
+- Code that runs `runWrite` inside a transaction of its own passes it as
+  `outer: { tx, refused }`. A refusal then rolls back with that transaction, so `runWrite` hands
+  its audit row to `refused` instead of asking the pool for a second connection, and the caller
+  writes it where it survives (`writeAuditMany`): its outer transaction, or `db` once that has
+  rolled back. Nothing inside a transaction may wait for another pooled connection: enough such
+  requests at once would hold the whole pool.
 - Rules, entity plugins, write hooks and level rules combine with `strongerDecision`: deny beats
   needs_approval beats allow; the higher-ranked level and the longest undo window survive, and between
   two decisions of the same kind the one at the higher level gives the rule and reason.
@@ -3773,8 +3780,7 @@ These are not built. Each has a workaround for now.
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Seeing failed stored events | A stored event the relay cannot read is kept with `failed_at` and `error` and logged; one a subscriber's `when` throws on is relayed to the others, with that subscriber's error in `error`. No screen or notification shows either, and a subscriber that missed an event never gets it later. A notification whose own `when`, `dedupe` or `schedule.at` throws on a stored event misses it too, kept only in the worker's log. Query `app.domain_events where error is not null`, fix the cause, and clear `failed_at` to relay a failed one again. |
-| A transaction that waits for another connection | A route's claim (`oneAtATime`) and the approval replay hold no pooled connection while they wait. Two places still ask for a second one inside a transaction: `runWrite` audits a refusal on `db` while its caller's `ctx.tx` (an approval replay, an SLA escalation, a platform route) is open, and the agents' trigger sweep reads the time zone on `this.db` inside its own. Each takes one extra connection per run; enough at once would wait for the pool's 30 s connection timeout. |
-| A transcription at the same moment | A file's presign and discard, a job's cancel, a back-office reply and a calendar sign-in's `complete` run one at a time per caller and `idempotency-key` (`oneAtATime`, a claim row that holds no connection), so two at the same moment run once. Work that runs longer than `CLAIM_STALE_MS` (2 min; a storage call has no timeout of its own) can be taken over by a retry and run twice; a request whose holder crashed waits for that long, answering 409 `idempotency_in_progress` meanwhile. A presign repeated after its upload expired is 409 `upload_expired`. A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
+| Requests with one key at the same moment | A file's presign and discard, a job's cancel, a back-office reply and a calendar sign-in's `complete` run one at a time per caller and `idempotency-key` (`oneAtATime`, a claim row that holds no connection), so two at the same moment run once. Work that runs longer than `CLAIM_STALE_MS` (2 min; a storage call has no timeout of its own) can be taken over by a retry and run twice; a request whose holder crashed waits for that long, answering 409 `idempotency_in_progress` meanwhile. A presign repeated after its upload expired is 409 `upload_expired`. A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
 | Retrying a chat turn, a new thread, a voice session or a WhatsApp link | `POST /api/chat`, `POST /api/threads`, `POST /api/voice/session` and `/end`, the WhatsApp link's code, `verify`, `number` and `DELETE` ignore `idempotency-key`: a retry is a second turn, thread, room token (and `voice.session.start` audit row) or code. Retry them only when the first answer never came. |
 | Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |
 | A summary's view of hiding | The field check reads one record of the reader's scope through `toRead` and assumes a projector hides a field on every record alike. A projector that hides a field on some records only lets a summary over it through. |
