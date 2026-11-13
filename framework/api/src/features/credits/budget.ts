@@ -2,8 +2,9 @@
 // service reads the counters and the wallet, this does the arithmetic.
 import type { UsageRefusal } from '@hykr/contracts';
 import { type Lang, t } from '@hykr/i18n';
+import { meterLabel } from './caps.js';
 import type { CreditsPlanResolved } from './config.js';
-import { FrameworkMeters, type MeterDef, meterLabel } from './meters.js';
+import { FrameworkMeters, type MeterDef } from './meters.js';
 
 /** One meter's use this period. */
 export interface Counter {

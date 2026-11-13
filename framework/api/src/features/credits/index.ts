@@ -50,6 +50,7 @@ export const creditsFeature = defineFeature({
 });
 
 export { CreditsAgentInterceptor, creditsPaused } from './agent-guard.js';
+export { meterLabel, meterLabels } from './caps.js';
 export { activeOverride, CreditsConfig, CreditsConfigError, creditsConfig } from './config.js';
 export { CreditsService, CreditsThreshold } from './credits.service.js';
 export {
@@ -58,8 +59,6 @@ export {
   defineMeter,
   FrameworkMeters,
   type MeterDef,
-  meterLabel,
-  meterLabels,
   meters,
   type PurchaseStart,
   type PurchaseStarted,

@@ -49,6 +49,7 @@ import {
   refusalFor,
   turnRefusal,
 } from './budget.js';
+import { meterLabel, meterLabels } from './caps.js';
 import {
   type CreditsPlanResolved,
   creditsConfig,
@@ -56,14 +57,7 @@ import {
   priceFor,
   resolvePlan,
 } from './config.js';
-import {
-  creditPurchaseProviders,
-  FrameworkMeters,
-  type MeterDef,
-  meterLabel,
-  meterLabels,
-  meters,
-} from './meters.js';
+import { creditPurchaseProviders, FrameworkMeters, type MeterDef, meters } from './meters.js';
 import {
   CREDIT_OPS,
   CreditPurchaseRequested,
