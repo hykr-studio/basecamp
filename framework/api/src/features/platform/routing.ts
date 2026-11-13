@@ -287,15 +287,19 @@ export class PlatformRoutingService {
             opts?: { customerId?: string },
           ) => {
             if (opts?.customerId) await this.customerOf(tx as Tx, tenantId, opts.customerId);
-            const { result, events } = await runWrite(
-              this.db,
-              {
-                principal: principal(opts?.customerId),
-                requestId,
-                outer: { tx: tx as Tx, refused: (audit) => refusals.push(audit) },
-              },
-              op,
-              input,
+            // In a savepoint of the delivery: a write refused after it ran (a hook) leaves no
+            // row behind when the router catches the refusal and goes on.
+            const { result, events } = await (tx as Tx).transaction((sp) =>
+              runWrite(
+                this.db,
+                {
+                  principal: principal(opts?.customerId),
+                  requestId,
+                  outer: { tx: sp as Tx, refused: (audit) => refusals.push(audit) },
+                },
+                op,
+                input,
+              ),
             );
             if (result.status !== 'done')
               throw new Parked('A delivery write cannot wait for approval');

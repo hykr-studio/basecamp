@@ -27,6 +27,8 @@ import {
   entityController,
   entityHandlers,
   entityOp,
+  RuleDenied,
+  type WriteHook,
 } from '@hykr/core';
 import type { Access } from '@hykr/policy';
 import { Module } from '@nestjs/common';
@@ -184,9 +186,20 @@ export const partsModule = defineModule({
 /** The test's codes: `#<code>` in a request's text routes it to that business. */
 export const codes = new Map<string, string>();
 
+/** A write hook: an issue marked #late is refused after its write ran (its row written). */
+export const lateGate: WriteHook = {
+  name: 'fixture.issue-late',
+  afterRun: ({ op, value }) => {
+    const title = (value as { title?: string } | null)?.title ?? '';
+    if (op.resourceType === 'issue' && title.includes('#late'))
+      throw new RuleDenied(deny('fixture_issue_late', 'Issues marked #late are refused late'));
+  },
+};
+
 /**
  * The application's router: a request whose text carries `#<code>` goes to the business with
  * that code, and becomes an issue there for the sender's customer. `#boom` fails after its write.
+ * `#anyway` goes on past a refused write and delivers a plain issue instead.
  */
 export const ByCode = defineInboundRouter({
   name: 'fixture-by-code',
@@ -197,11 +210,23 @@ export const ByCode = defineInboundRouter({
   },
   async deliver(req, target) {
     const who = await target.contact();
-    const issue = await target.write<{ id: string }>(
-      entityOp(IssueDef, 'create', null),
-      { title: (req.text ?? 'A request').slice(0, 200) },
-      who?.customerId ? { customerId: who.customerId } : {},
-    );
+    const opts = who?.customerId ? { customerId: who.customerId } : {};
+    const text = req.text ?? 'A request';
+    let issue: { id: string };
+    try {
+      issue = await target.write<{ id: string }>(
+        entityOp(IssueDef, 'create', null),
+        { title: text.slice(0, 200) },
+        opts,
+      );
+    } catch (e) {
+      if (!req.text?.includes('#anyway')) throw e;
+      issue = await target.write<{ id: string }>(
+        entityOp(IssueDef, 'create', null),
+        { title: `Refused once: ${text.replace(/#(refused|late)/g, '')}`.slice(0, 200) },
+        opts,
+      );
+    }
     if (req.text?.includes('#boom')) throw new Error('The fixture router failed after its write');
     return { resourceType: 'issue', resourceId: issue.id };
   },
@@ -216,6 +241,7 @@ export const PriorityFlag = defineFeatureFlag({
 
 export const platformContributions: Partial<Contributions> = {
   inboundRouters: [ByCode],
+  writeHooks: [lateGate],
   featureFlags: [PriorityFlag],
   capabilities: [
     // A read: support access may hold it when the business consents.
