@@ -15,10 +15,20 @@ export function storableInstant(text: unknown): Date | undefined {
 
 const STORABLE = 'A time from the year 1 to 9999';
 
-/** `z.iso.datetime(opts)`, refusing a time Postgres cannot store (the year 0000, or past 9999 in UTC). */
+/**
+ * A text Postgres can store, judged as the instant it names in UTC (years 1 to 9999) and as the
+ * text itself: `0000-12-31T23:30:00-01:00` is UTC 0001-01-01, but a `date` column, or a timestamp
+ * kept as text, gets the text, whose year 0000 Postgres refuses (22008). So no reader of the text
+ * depends on which it sends.
+ */
+const storableText = (v: string) => !v.startsWith('0000-') && storableInstant(v) !== undefined;
+
+/**
+ * `z.iso.datetime(opts)`, refusing a time Postgres cannot store: written in the year 0000, or
+ * in the year 0000 or past 9999 in UTC.
+ */
 export const storableDateTime = (opts?: { offset?: boolean }) =>
-  z.iso.datetime(opts).refine((v) => storableInstant(v) !== undefined, STORABLE);
+  z.iso.datetime(opts).refine(storableText, STORABLE);
 
 /** `z.iso.date()`, refusing the year 0000, which Postgres's date has no room for. */
-export const storableDate = () =>
-  z.iso.date().refine((v) => storableInstant(v) !== undefined, STORABLE);
+export const storableDate = () => z.iso.date().refine(storableText, STORABLE);

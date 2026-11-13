@@ -721,10 +721,12 @@ JSON:  { done: false, dueOn: { lte: '2026-10-31' }, sort: '-dueOn', limit: 20 }
   is the same 400, `where: 'query.custom'`), keyset cursors, an import's rows
   (docs/decisions/V10.md).
 - A time a list filter, a cursor or a query parameter carries is one Postgres can store: years 1
-  to 9999 in UTC (`storableInstant`, `storableDateTime`, `storableDate` in `@hykr/contracts`).
-  `z.iso.datetime()` alone takes the year 0000 and `new Date()` the year 99999, and Postgres
-  refuses both; a list's `date` filter, history's `since`, credits usage's `from`/`to` and the
-  platform's routing `before` answer 400 for one.
+  to 9999 in UTC, and not written in the year 0000 (`storableInstant`, `storableDateTime`,
+  `storableDate` in `@hykr/contracts`). `z.iso.datetime()` alone takes the year 0000 and
+  `new Date()` the year 99999, and Postgres refuses both; a `date` column gets the text's day, so
+  `0000-12-31T23:30:00-01:00` (UTC year 1) is refused as text too. A list's `date` filter,
+  history's `since`, credits usage's `from`/`to` and the platform's routing `before` answer 400
+  for one.
 
 Field types are a registry. A feature adds one in two halves, each in its own file: the grammar in contracts, declared on `ListFieldTypes` (and new operators on `ListFilterOps`) and defined with `defineListFieldType({ name, ops, value, opValue?, summary? })`, which every process (server, tools, apps) loads; and the SQL in the server, `listFieldSql` (contributed as `listFieldSql`), `{ name, where({ table, field, column, op, value }), order? }`. `order({ field, column, dir, filters })` is how a field of the type sorts when it is in `sortable` (a point: by distance to its `near` point); it returns `{ expr, at(value), check?(value) }`, where `expr` is never null so cursors neither skip nor repeat rows, and `check` says whether a cursor could hold that value (the row's field, or null). `summary` says what the type's fields do in a summary (section 5.16). A field of an undefined type fails when its schema is built, and one without SQL fails its request. Neither filters nothing. `toQueryString` sends an operator whose value is an object (`near`) as JSON, which the type reads back. A type that decodes text after the request's edge (JSON) refuses what Postgres cannot keep in it: a zod issue `{ code: 'custom', params: { rule } }` from `unstorableTextAt`, which the API's validation pipe answers as the edge does (`CustomFilter` does this).
 

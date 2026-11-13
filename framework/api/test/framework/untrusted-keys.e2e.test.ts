@@ -421,6 +421,8 @@ describe('a time Postgres cannot store, in a query string', () => {
   // JavaScript reads year 0 and years past 9999; Postgres refuses them (22008): a 500 before V10.
   const year0 = encodeURIComponent('0000-01-01T00:00:00Z');
   const past9999 = encodeURIComponent('9999-12-31T23:59:59-01:00');
+  // UTC 0001-01-01, written in the year 0000: a date column gets the text's day (V10 integration).
+  const text0 = encodeURIComponent('0000-12-31T23:30:00-01:00');
   const fine = encodeURIComponent('2026-01-01T00:00:00Z');
 
   it('is 400 in a list’s date filter, history, credits usage and the platform’s routing', async () => {
@@ -436,6 +438,9 @@ describe('a time Postgres cannot store, in a query string', () => {
       [a, `/api/tasks?dueOn[lt]=${year0}`],
       [a, `/api/tasks?dueOn[lt]=${past9999}`],
       [a, '/api/tasks/summary?dueOn[gte]=0000-01-01'],
+      [a, `/api/tasks?dueOn[gte]=${text0}`],
+      [a, `/api/tasks?dueOn[gte]=${text0}&sort=dueOn&limit=1`],
+      [a, `/api/tasks/summary?dueOn[gte]=${text0}`],
       [a, `/api/history?since=${year0}`],
       [a, `/api/history?since=${past9999}`],
       [a, '/api/credits/usage?from=99999'],
@@ -541,10 +546,17 @@ describe('routes that read their own query string', () => {
       `cursor=${Buffer.from(JSON.stringify({ d: '0000-01-01T00:00:00.000000', i: 'x' })).toString('base64url')}`,
       // Times JavaScript reads and Postgres refuses, on every name a route reads one by (V10).
       ...['since', 'before', 'after', 'from', 'to', 'until'].flatMap((name) =>
-        ['99999', '0000-01-01T00:00:00Z', '0000-01-01', '9999-12-31T23:59:59-01:00'].map(
-          (v) => `${name}=${encodeURIComponent(v)}`,
-        ),
+        [
+          '99999',
+          '0000-01-01T00:00:00Z',
+          '0000-01-01',
+          '9999-12-31T23:59:59-01:00',
+          '0000-12-31T23:30:00-01:00',
+        ].map((v) => `${name}=${encodeURIComponent(v)}`),
       ),
+      // A list's date filter, on a date column, gets the text's day: UTC 0001 written as 0000.
+      `dueOn[gte]=${encodeURIComponent('0000-12-31T23:30:00-01:00')}`,
+      `dueOn[gte]=${encodeURIComponent('0000-12-31T23:30:00-01:00')}&sort=dueOn&limit=1`,
       // A range both of whose ends Postgres refuses, and one whose computed end it does (V10).
       'from=0000-01-01&to=0000-06-01',
       'from=9999-12-15',

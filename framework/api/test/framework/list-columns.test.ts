@@ -12,6 +12,7 @@ import { and, type SQL, sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import {
   bigint,
+  date,
   doublePrecision,
   integer,
   numeric,
@@ -20,11 +21,12 @@ import {
   real,
   smallint,
   text,
+  timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
 import type { PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { ZodError, z } from 'zod';
 
 const url = process.env.DATABASE_URL ?? 'postgres://app:app@localhost:5432/app';
 const temp = pgSchema('pg_temp');
@@ -43,6 +45,9 @@ const things = temp.table('list_columns', {
   kind: kind('kind').notNull(),
   /** An id kept as a number elsewhere, filtered as an `id`: a string on an integer column. */
   seq: integer('seq').notNull(),
+  /** A `date` filter reaches a date column as text, and a timestamptz column as a Date. */
+  due: date('due').notNull(),
+  at: timestamp('at', { withTimezone: true }).notNull(),
 });
 const NUMBERS = ['small', 'rank', 'big', 'wide', 'price', 'amount', 'ratio', 'score'] as const;
 const Thing = z.object({
@@ -51,6 +56,8 @@ const Thing = z.object({
   roomId: z.string(),
   kind: z.string(),
   seq: z.string(),
+  due: z.string(),
+  at: z.string(),
 });
 const Spec = entitySpec({
   name: 'listColumnsThing',
@@ -63,6 +70,8 @@ const Spec = entitySpec({
       roomId: 'id',
       seq: 'id',
       kind: 'enum',
+      due: 'date',
+      at: 'date',
     },
     sortable: ['rank'],
     defaultSort: [['rank', 'asc']],
@@ -145,11 +154,11 @@ beforeAll(async () => {
       rank integer not null, big bigint not null, wide bigint not null,
       price numeric(6,2) not null, amount numeric not null, ratio real not null,
       score double precision not null, room_id uuid not null, kind pg_temp.list_columns_kind not null,
-      seq integer not null)`,
+      seq integer not null, due date not null, at timestamptz not null)`,
   );
   await db.execute(
     sql`insert into list_columns values ('t', 1, 1, 1, 1, 12.50, 12.5, 0.5, 0.5,
-      'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'a', 5)`,
+      'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'a', 5, '2026-01-01', '2026-01-01T00:00:00Z')`,
   );
 });
 
@@ -182,14 +191,19 @@ function byHand(column: PgColumn, value: unknown): SQL {
   throw new Error(`No comparison by hand for ${op}`);
 }
 
-/** What the builder and Postgres each make of `field = value`, when they differ. */
+/**
+ * What the builder and Postgres each make of `field = value`, when they differ. A refusal is the
+ * builder's 400 `invalid`, or the field type's schema refusing the value (a date in the year 0000).
+ */
 async function disagreement(field: string, value: unknown): Promise<string | null> {
   let built: ReturnType<typeof buildListSql> | undefined;
   try {
     built = buildListSql(things, Spec.list, listInputSchema(Spec).parse({ [field]: value }));
   } catch (e) {
-    if (!(e instanceof BadRequestException)) throw e;
-    expect(e.getResponse()).toMatchObject({ error: 'invalid', field });
+    if (e instanceof ZodError) expect(e.issues[0]?.path[0], JSON.stringify(e.issues)).toBe(field);
+    else if (e instanceof BadRequestException)
+      expect(e.getResponse()).toMatchObject({ error: 'invalid', field });
+    else throw e;
   }
   const column = things[field as keyof typeof things.$inferSelect] as PgColumn;
   // Refused: the same comparison, built by hand without the check, is what Postgres refuses.
@@ -246,5 +260,27 @@ describe('a filter value its column cannot hold, against Postgres (V10)', () => 
     expect(await disagreement('price', { in: [12.5, 1e12] })).toBeNull();
     expect(await disagreement('rank', { in: [1, 1e12] })).toBeNull();
     expect(await disagreement('ratio', { lt: 1e300 })).toBeNull();
+  });
+
+  it('a date filter: what its schema takes, a date and a timestamptz column both read', async () => {
+    // The schema judges the instant in UTC (decision 19), but a date column gets the text's day
+    // and a `PgDate` or `PgTimestampString` column the text itself: '0000-12-31T23:30:00-01:00'
+    // is UTC 0001-01-01 and the text year 0000, which Postgres refuses (22008) as a date and as
+    // a timestamptz. Found by the fourth review; the schema refuses the text year 0000 now.
+    const wrong: string[] = [];
+    for (const field of ['due', 'at'])
+      for (const v of [
+        '2026-01-01',
+        '2026-01-01T23:30:00-01:00',
+        '0001-01-01T00:00:00Z',
+        '9999-12-31T23:59:59+01:00',
+        '0000-01-01',
+        '0000-01-01T00:00:00Z',
+        '0000-12-31T23:30:00-01:00',
+      ]) {
+        const w = await disagreement(field, { lt: v });
+        if (w) wrong.push(w);
+      }
+    expect(wrong).toEqual([]);
   });
 });
