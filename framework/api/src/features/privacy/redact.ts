@@ -238,7 +238,11 @@ function slices(set: ErasedRecords): ErasedRecords[] {
  * id at any depth (a reply's nested record, a notification's rows), and an approval about the
  * record (on it, or naming it in its input) loses its summary and input fields in every copy:
  * the approval, its audit rows and stored events, its notification, its parked reply and its
- * park's row. The files erased with the records are redacted the same way, as a `file` set.
+ * park's row, and each feature's copies of it (a decider's inbox item). The files erased with
+ * the records are redacted the same way, as a `file` set. A set of approvals themselves (the
+ * person's, deleted with them: `approvalCopies`) reaches the park's row on the record each was
+ * about too. A `copiesOnly` set (records that stay, someone else's now) keeps its files and
+ * memory vectors (decisions V8).
  */
 export async function redactCopies(
   tx: Tx,

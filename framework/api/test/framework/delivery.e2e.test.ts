@@ -314,8 +314,8 @@ describe('personal data contributors', () => {
     // The framework's own (acceptance, agents, calendar, calls, comments, files, inbox,
     // integrations, invites, jobs, memory, parties, push, share links) run too: a contact has no
     // codes, agents, calendars, calls, comments, files, inbox items, payloads naming them,
-    // invitations, jobs, memories, party memberships, devices or links made for them. The channel's own trail
-    // anonymises its customer record (B18: a privacy request now).
+    // invitations, jobs, memories, party memberships, devices or links made for them. The
+    // channel's own trail anonymises its customer record (B18: a privacy request now).
     expect(rows).toEqual([
       {
         after: {
