@@ -660,7 +660,7 @@ export const meetings = defineModule({ ...meetingsSpec, server: MeetingsModule, 
 | `GET /api/<plural>` | list, with the list grammar |
 | `GET /api/<plural>/:id` | get |
 | `POST /api/<plural>` | create, 201 |
-| `PATCH /api/<plural>/:id` | update |
+| `PATCH /api/<plural>/:id` | update; a patch with nothing left to write (`{}`, or one an erasure's scrubbing emptied) is a 400 `nothing_to_change` |
 | `DELETE /api/<plural>/:id` | delete |
 | `spec.http.method spec.http.path` | the command, 200 |
 
@@ -794,15 +794,20 @@ What the write path does with them:
 - An approved replay keeps the level and the amount, and fails (status `failed`) when it now needs
   more: a higher level, or a larger amount, than was approved. It opens no undo window. A replay
   refused for good also ends as `failed`, with why: what was asked no longer validates (a field
-  taken out of the stored input), or a 400, 401, 403, 404, 409, 410 or 422 from the write. A
+  taken out of the stored input), or a 400, 401, 403, 404, 409, 410 or 422 from the write (an
+  update whose every field the scrubbing took out is the 400 `nothing_to_change`). A
   5xx or a 429 leaves the request pending, to be decided again. A refusal's own audit row
   (`denied`) is written with the request's `failed`.
 - Code that runs `runWrite` inside a transaction of its own passes it as
   `outer: { tx, refused }`. A refusal then rolls back with that transaction, so `runWrite` hands
   its audit row to `refused` instead of asking the pool for a second connection, and the caller
   writes it where it survives (`writeAuditMany`): its outer transaction, or `db` once that has
-  rolled back. Nothing inside a transaction may wait for another pooled connection: enough such
-  requests at once would hold the whole pool.
+  rolled back. A caller that goes on past a refused write (the platform router, whose router may
+  catch it) runs each write in a savepoint (`tx.transaction`), so a write refused after it ran
+  (by a hook) leaves nothing behind. Nothing inside a transaction may wait for another pooled
+  connection: enough such requests at once would hold the whole pool. That holds for everything
+  a write reaches: a command's `run`, write hooks, entity plugins and what they call (a job's
+  start, a file holder's `reaches`) read on the transaction they are given, never on the pool.
 - Rules, entity plugins, write hooks and level rules combine with `strongerDecision`: deny beats
   needs_approval beats allow; the higher-ranked level and the longest undo window survive, and between
   two decisions of the same kind the one at the higher level gives the rule and reason.
@@ -1229,7 +1234,9 @@ photos: fileColumns('photos'),   // text[]; fileColumn('cover') for one file
   no record, which its uploader (or a system principal, for `uploader: { kind: 'server' }`) attaches.
 - **Files kept on something else.** A feature whose own resource keeps files (a job's results,
   section 5.17) contributes a `fileHolders` entry `{ type, reaches({ p, resourceId, field, fileId, db }) }`:
-  the files service asks it whenever a file's resource type is no entity.
+  the files service asks it whenever a file's resource type is no entity. `reaches` reads on the
+  `db` it is given and nothing else: it may be a write's open transaction (a job's start checking
+  its input files), and nothing inside a transaction may wait for a second pooled connection.
 - **WhatsApp.** A photo, document or video someone sends is stored as their file by the `files` inbound
   hook (a business turns it off with the `files.keepInboundMedia` setting), the message row becomes
   `media`, and the turn reads a line with the file's id, so the assistant can put it on a record with a
@@ -1473,7 +1480,9 @@ run: async ({ tx, principal, loaded }) => ({
 - **Starting** is the application's command: its `expose`, `authorize` and `approval` decide who may
   start a job and whether the assistant's start waits for a person. `startJob` checks the input, that
   `p` reaches the `about` record (404) and every file `inputFiles(input)` names (`file_unavailable`),
-  audits `job.start` and stores `job.queued`.
+  audits `job.start` and stores `job.queued`. Every one of those reads is on the write's own
+  transaction (`FilesService.reachableIds(tx, p, ids)`, with no download URL), so many starts at
+  once hold no second connection each.
 - **Submitting.** The worker calls `submit(ctx)` once per job (leased), with `ctx.callback` (`url`,
   this job's own `secret`, `header`), `ctx.signal`, `ctx.fileUrl` / `ctx.fileBytes` for input files and
   `ctx.progress(percent, message)`. It returns `{ externalId?, update? }`. Work done in `submit` itself
@@ -3063,7 +3072,9 @@ Every business's use of what costs money is metered, priced and, when its plan s
   a meter with `defineMeter({ name, unit, per, fallbackPrice? })` (contributed as `meters`) and
   records with `CreditsService.record({ tenantId, meter, quantity, source, ref })`, or
   `metering()?.record(...)` from code that must not depend on the feature; `ref` makes a retried
-  report count once. A `tokens` use without a cost is priced like a turn's (`tokens.<model>`, then
+  report count once. Inside a command's `run`, pass the write's transaction,
+  `record(use, { tx })`: the uses are recorded in a savepoint of it, on its connection, and go
+  with the write (nothing inside a transaction may wait for a second pooled connection). A `tokens` use without a cost is priced like a turn's (`tokens.<model>`, then
   `tokens`, then the model's own price), with its input and output split when given
   (`UsageInput.tokens`). Before calling something costly, ask `metering()?.check({ tenantId,
   meter })` and refuse when it answers. Turns without a business (Studio) are not metered.

@@ -959,6 +959,45 @@ describe('triggers', () => {
     expect(detail.reply).toContain(t.id);
   });
 
+  it('more comments naming an agent at once than the pool holds all answer, and nothing else waits', async () => {
+    // A comment's mentions are resolved in its write's transaction: the agent's owner and what
+    // they read are looked up on that transaction, never on the pool, or enough comments at
+    // once hold the whole pool for 30 s.
+    const { sharedDb } = await import('../../dist/infra/db.js');
+    const n = 2 * ((sharedDb.pool.options.max as number | undefined) ?? 10) + 2;
+    const rexs = await agent(rex, {
+      name: 'Rex burst',
+      instructions: 'Report what started this run.',
+      triggers: [{ kind: 'mention' }],
+    });
+    const t = await task(ana, 'Burst me');
+    // Rex's agent cannot be named on Ana's task (its owner does not read it): every comment is
+    // refused in its transaction, after the lookup, and no run starts meanwhile.
+    const burst = () =>
+      Promise.all(
+        Array.from({ length: n }, (_, i) =>
+          ana.call(
+            'POST',
+            '/api/comments',
+            { entity: 'task', recordId: t.id, body: `@[Rex burst](agent:${rexs.id}) ${i}` },
+            inA(),
+          ),
+        ),
+      );
+    // Warm first: with the pool at its size, every comment reaches its transaction together.
+    await burst();
+    const started = Date.now();
+    const all = burst();
+    await new Promise((r) => setTimeout(r, 200));
+    const asking = Date.now();
+    expect((await ana.call('GET', '/api/me')).status).toBe(200);
+    expect(Date.now() - asking).toBeLessThan(5_000);
+    const answered = await all;
+    expect(answered.map((r) => r.status)).toEqual(Array(n).fill(403));
+    // Well under the pool's 30 s connection timeout, which a stall would take.
+    expect(Date.now() - started).toBeLessThan(20_000);
+  }, 120_000);
+
   it('an @-mention of an agent with no saved mention trigger starts no run', async () => {
     const unsaved = await agent(ana, {
       name: 'Unsaved helper',

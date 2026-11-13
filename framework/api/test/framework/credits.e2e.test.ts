@@ -1517,3 +1517,34 @@ describe('a purchase its gateway confirms by webhook (H3)', () => {
     expect((await purchaseOf(purchase.id)).status).toBe('open');
   });
 });
+
+describe('metering inside a write', () => {
+  it('more metered writes at once than the pool holds all run, and nothing else waits', async () => {
+    // A command that meters in its run records on the write's transaction (`record(…, { tx })`):
+    // a second pooled connection taken while that one is held would, with enough writes at
+    // once, hold the whole pool for 30 s.
+    const { sharedDb } = await import('../../dist/infra/db.js');
+    const n = 2 * ((sharedDb.pool.options.max as number | undefined) ?? 10) + 2;
+    const burst = () =>
+      Promise.all(
+        Array.from({ length: n }, () =>
+          ana.call('POST', '/api/credit-checks/render', { pages: 1 }),
+        ),
+      );
+    // Warm first: with the pool at its size, every write reaches its transaction together.
+    await burst();
+    const started = Date.now();
+    const all = burst();
+    await new Promise((r) => setTimeout(r, 200));
+    const asking = Date.now();
+    expect((await ana.call('GET', '/api/me')).status).toBe(200);
+    expect(Date.now() - asking).toBeLessThan(5_000);
+    const answered = await all;
+    expect(answered.map((r) => r.status)).toEqual(Array(n).fill(200));
+    // Well under the pool's 30 s connection timeout, which a stall would take.
+    expect(Date.now() - started).toBeLessThan(20_000);
+    expect(
+      (await uses(ana)).filter((u) => u.source === 'credit_checks.render').length,
+    ).toBeGreaterThanOrEqual(2 * n);
+  }, 120_000);
+});

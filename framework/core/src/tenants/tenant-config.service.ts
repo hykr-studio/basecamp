@@ -9,7 +9,7 @@ import {
 import { type Database, schema } from '@hykr/db';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
-import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
+import { type Conn, CORE_OPTIONS, type CoreOptions } from '../tokens.js';
 
 /** A business as its features need it: its name and its settings, defaults applied. */
 export interface TenantInfo {
@@ -39,10 +39,13 @@ export class TenantConfigService {
 
   /**
    * The business's name and settings. An unknown business has no name and the defaults (it is
-   * not cached, so a new one is seen at once). Stored settings that do not parse throw.
+   * not cached, so a new one is seen at once). Stored settings that do not parse throw. A caller
+   * inside a transaction passes it as `conn`: a miss in the cache then reads on it, not the pool.
    */
-  async get(tenantId: string): Promise<TenantInfo> {
-    return (await this.load(tenantId)) ?? { name: '', settings: parseTenantSettings(undefined) };
+  async get(tenantId: string, conn?: Conn): Promise<TenantInfo> {
+    return (
+      (await this.load(tenantId, conn)) ?? { name: '', settings: parseTenantSettings(undefined) }
+    );
   }
 
   /**
@@ -64,15 +67,17 @@ export class TenantConfigService {
   /**
    * One settings section of the business, defaults applied. When another part of its settings
    * does not parse, this section is parsed alone, so one feature's broken section does not take
-   * another feature down with it. This section not parsing throws.
+   * another feature down with it. This section not parsing throws. A caller inside a
+   * transaction passes it as `conn`: a miss in the cache then reads on it, not on the pool.
    */
   async section<K extends SettingsKey>(
     tenantId: string,
     key: K,
+    conn?: Conn,
   ): Promise<TenantSettingsSections[K]> {
     const hit = this.fresh(tenantId);
     if (hit) return hit.settings[key];
-    const row = await this.row(tenantId);
+    const row = await this.row(tenantId, conn);
     if (!row) return parseTenantSettings(undefined)[key];
     try {
       return this.remember(tenantId, row).settings[key];
@@ -93,10 +98,10 @@ export class TenantConfigService {
   }
 
   /** The business from the cache or the database; null when there is no such business. */
-  private async load(tenantId: string): Promise<TenantInfo | null> {
+  private async load(tenantId: string, conn?: Conn): Promise<TenantInfo | null> {
     const hit = this.fresh(tenantId);
     if (hit) return hit;
-    const row = await this.row(tenantId);
+    const row = await this.row(tenantId, conn);
     return row ? this.remember(tenantId, row) : null;
   }
 
@@ -106,8 +111,11 @@ export class TenantConfigService {
   }
 
   /** The stored row, as it is. An unknown business is dropped from the cache. */
-  private async row(tenantId: string): Promise<{ name: string; settings: unknown } | null> {
-    const [row] = await this.db
+  private async row(
+    tenantId: string,
+    conn: Conn = this.db,
+  ): Promise<{ name: string; settings: unknown } | null> {
+    const [row] = await conn
       .select({ name: schema.tenants.name, settings: schema.tenants.settings })
       .from(schema.tenants)
       .where(eq(schema.tenants.id, tenantId));

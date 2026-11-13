@@ -5,6 +5,7 @@
 import type { BusinessStanding, Channel, OnBehalfOf } from '@hykr/contracts';
 import { createHookRegistry } from '@hykr/contracts';
 import type { Database } from '@hykr/db';
+import type { Conn } from '../tokens.js';
 
 declare module '@hykr/contracts' {
   interface Contributions {
@@ -27,10 +28,12 @@ export interface StandingProvider {
   name: string;
   /**
    * This person, asking for this business (where they are no member and no participant), on
-   * this channel: their standing there, or null (the next provider decides; none: 403).
+   * this channel: their standing there, or null (the next provider decides; none: 403). Read
+   * on `db` only: it may be a write's open transaction (a comment's mentions are resolved in
+   * its write), and nothing inside a transaction may wait for a second pooled connection.
    */
   forUser(a: {
-    db: Database;
+    db: Conn;
     userId: string;
     tenantId: string;
     channel?: Channel;

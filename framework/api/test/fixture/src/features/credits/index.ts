@@ -132,16 +132,20 @@ export const RenderReport = defineCommand(RenderReportSpec, {
   resource: { type: 'report', id: () => null },
   authorize: () => allow('fixture_render'),
   summarize: (input) => `Render ${input.pages} report pages`,
-  run: async ({ principal, input }) => {
-    await metering()?.record({
-      tenantId: principal.tenantId as string,
-      meter: ReportPages.name,
-      quantity: input.pages,
-      subject: subjectKeyOf(principal),
-      runId: principal.runId ?? null,
-      channel: principal.channel ?? null,
-      source: 'credit_checks.render',
-    });
+  run: async ({ tx, principal, input }) => {
+    // Metered in the write's own transaction: the uses go with it, on its connection.
+    await metering()?.record(
+      {
+        tenantId: principal.tenantId as string,
+        meter: ReportPages.name,
+        quantity: input.pages,
+        subject: subjectKeyOf(principal),
+        runId: principal.runId ?? null,
+        channel: principal.channel ?? null,
+        source: 'credit_checks.render',
+      },
+      { tx },
+    );
     return { value: { pages: input.pages }, touched: [] };
   },
 });

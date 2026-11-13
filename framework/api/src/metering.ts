@@ -3,6 +3,7 @@
 // starts (setMetering); with nothing in it, nothing is metered or capped. Nothing here reads
 // the configuration or loads Nest.
 import type { UsageRefusal } from '@hykr/contracts';
+import type { Tx } from '@hykr/core';
 
 /** One use of something metered. */
 export interface UsageInput {
@@ -41,8 +42,13 @@ export interface Metering {
   }): Promise<UsageRefusal | null>;
   /** How much of this meter is left before the business is paused; undefined: no cap. */
   headroom(a: { tenantId: string; meter: string }): Promise<number | undefined>;
-  /** Record uses, in one transaction. Never throws: a failure is logged. */
-  record(uses: UsageInput | readonly UsageInput[]): Promise<void>;
+  /**
+   * Record uses, in one transaction. Never throws: a failure is logged. Inside a write's
+   * transaction (a command's `run`), pass it as `tx`: the uses are recorded in a savepoint of
+   * it, on its connection, and go with the write (nothing inside a transaction may wait for a
+   * second pooled connection).
+   */
+  record(uses: UsageInput | readonly UsageInput[], opts?: { tx?: Tx }): Promise<void>;
 }
 
 /** A use the business's caps refuse now: a feature throws it where it would have called out. */

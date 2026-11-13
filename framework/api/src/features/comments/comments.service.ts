@@ -284,10 +284,17 @@ export class CommentsService implements OnModuleInit {
     return { body: rewritten, mentions, refused };
   }
 
-  /** A member of this business as a principal of their own (their roles here, today). */
-  async memberPrincipal(userId: string, tenantId: string): Promise<Principal | undefined> {
+  /**
+   * A member of this business as a principal of their own (their roles here, today). Asked in a
+   * write's transaction (a comment's mentions), it reads on `conn`, never on the pool.
+   */
+  async memberPrincipal(
+    userId: string,
+    tenantId: string,
+    conn?: Conn,
+  ): Promise<Principal | undefined> {
     try {
-      const standing = await this.resolver.forUser(userId, { tenantId, channel: 'app' });
+      const standing = await this.resolver.forUser(userId, { tenantId, channel: 'app', conn });
       return { actor: { kind: 'user', id: userId }, ...standing, scopes: [], channel: 'app' };
     } catch {
       return undefined;
@@ -344,7 +351,7 @@ export class UserMentions implements MentionKind, OnModuleInit {
   }
 
   private async allowed(a: MentionContext, member: { id: string }) {
-    const p = await this.comments.memberPrincipal(member.id, a.tenantId);
+    const p = await this.comments.memberPrincipal(member.id, a.tenantId, a.conn);
     return !!p && (await this.comments.memberMayRead(a.conn, p, a.on, a.internal));
   }
 

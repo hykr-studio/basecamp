@@ -117,8 +117,9 @@ async function mentionable(a: MentionContext, where: ReturnType<typeof and>, lim
   const out: { id: string; label: string }[] = [];
   for (const agent of rows) {
     if (!Triggers.safeParse(agent.triggers).data?.some((t) => t.kind === 'mention')) continue;
-    const owner = await svc.ownerPrincipal(agent);
-    if (owner && (await svc.mayBeMentioned(owner, a.on, a.internal)))
+    // On the comment's connection (its write's transaction): nothing here waits on the pool.
+    const owner = await svc.ownerPrincipal(agent, undefined, a.conn);
+    if (owner && (await svc.mayBeMentioned(owner, a.on, a.internal, a.conn)))
       out.push({ id: agent.id, label: agent.name });
   }
   return out;

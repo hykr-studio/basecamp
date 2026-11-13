@@ -237,8 +237,11 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
    * The business's effective plan, and the zone its periods are in (`tenantZone`). Settings
    * that do not parse throw.
    */
-  async planOf(tenantId: string): Promise<{ plan: CreditsPlanResolved; zone: string }> {
-    const { settings } = await this.tenants.get(tenantId);
+  async planOf(
+    tenantId: string,
+    conn?: Conn,
+  ): Promise<{ plan: CreditsPlanResolved; zone: string }> {
+    const { settings } = await this.tenants.get(tenantId, conn);
     return {
       plan: resolvePlan(creditsConfig(), settings.credits),
       zone: tenantZone(settings),
@@ -251,10 +254,11 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
    */
   private async fallbackPlan(
     tenantId: string,
+    conn: Conn = this.db,
   ): Promise<{ plan: CreditsPlanResolved; zone: string }> {
     return {
       plan: resolvePlan(creditsConfig(), undefined),
-      zone: await tenantZoneOf(this.db, tenantId),
+      zone: await tenantZoneOf(conn, tenantId),
     };
   }
 
@@ -401,9 +405,11 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
    * Record uses, in one transaction: each a usage row (once per `ref`) added to its period's
    * counter, priced; for a business on credits, the part past the allowance debited from the
    * wallet (locked, so uses never race), and every level now reached stored and announced once.
-   * Never throws: metering must not fail what was already done.
+   * Never throws: metering must not fail what was already done. Inside a write's transaction
+   * (a command's `run`), the caller passes it as `tx`: the uses are recorded in a savepoint
+   * of it, on its connection, and go with the write.
    */
-  async record(input: UsageInput | readonly UsageInput[]): Promise<void> {
+  async record(input: UsageInput | readonly UsageInput[], opts: { tx?: Tx } = {}): Promise<void> {
     const uses = (Array.isArray(input) ? input : [input]) as readonly UsageInput[];
     const byTenant = new Map<string, UsageInput[]>();
     for (const u of uses) {
@@ -411,23 +417,23 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       byTenant.set(u.tenantId, [...(byTenant.get(u.tenantId) ?? []), u]);
     }
     for (const [tenantId, list] of byTenant)
-      await this.recordFor(tenantId, list).catch((e) =>
+      await this.recordFor(tenantId, list, opts.tx).catch((e) =>
         log.error(`Recording usage for business ${tenantId} failed: ${reasonOf(e)}`),
       );
   }
 
-  private async recordFor(tenantId: string, uses: readonly UsageInput[]) {
+  private async recordFor(tenantId: string, uses: readonly UsageInput[], outer?: Tx) {
     let resolved: { plan: CreditsPlanResolved; zone: string };
     try {
-      resolved = await this.planOf(tenantId);
+      resolved = await this.planOf(tenantId, outer);
     } catch (e) {
       log.warn(
         `Settings of business ${tenantId} do not parse; metering on the defaults: ${reasonOf(e)}`,
       );
-      resolved = await this.fallbackPlan(tenantId);
+      resolved = await this.fallbackPlan(tenantId, outer);
     }
     const { plan, zone } = resolved;
-    const events = await this.db.transaction(async (tx) => {
+    const work = async (tx: Tx) => {
       const enforced = plan.enforce && !!plan.currency;
       let walletOk = false;
       if (enforced && plan.currency) {
@@ -515,7 +521,8 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       if (!plan.enforce) return [];
       const { a } = await this.assessIn(tx, tenantId, plan, zone);
       return this.announce(tx, tenantId, period, a, false);
-    });
+    };
+    const events = outer ? await outer.transaction(work) : await this.db.transaction(work);
     for (const event of events) this.events.publish(event);
   }
 
