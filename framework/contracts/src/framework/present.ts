@@ -88,11 +88,13 @@ export const Present = z.discriminatedUnion('kind', [
   }),
   /**
    * Text and voice: the server already rendered the view into words. A list's rows come too,
-   * as choices, so a channel with buttons or lists (WhatsApp) can offer them to tap.
+   * as choices, so a channel with buttons or lists (WhatsApp) can offer them to tap, with the
+   * view's heading (its title) to head them.
    */
   z.object({
     kind: z.literal('text'),
     text: z.string(),
+    heading: z.string().optional(),
     choices: z.array(Choice).optional(),
   }),
 ]);

@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+import type { MigrationSet } from '@hykr/db';
+import type { ImportFileOptions } from './features/imports/cli.js';
 import { type Basecamp, setRuntime } from './runtime.js';
 
 // The server's configuration is read from the environment when a function here runs, not
@@ -15,7 +17,13 @@ export async function startApi(app: Basecamp) {
   const { AppModule } = await import('./app.module.js');
   // Better Auth reads the raw body; the auth module adds parsing back for other routes.
   const nest = await NestFactory.create(AppModule, { bodyParser: false });
-  nest.enableCors({ origin: config.webOrigins, credentials: true });
+  // TRUST_PROXY, and the caller's address on every request, before any route.
+  const { configureHttp } = await import('./infra/http.js');
+  configureHttp(nest);
+  // WEB_ORIGINS, the origins the application's auth plugins trust, and the ones they allow at
+  // run time (a business's verified domain).
+  const { corsOrigin } = await import('./infra/cors.js');
+  nest.enableCors({ origin: corsOrigin(), credentials: true });
   const { mountBullBoard } = await import('./channels/admin/bull-board.js');
   mountBullBoard(nest);
   nest.enableShutdownHooks();
@@ -87,30 +95,37 @@ export async function runTemplates(app: Basecamp, command: 'sync' | 'check'): Pr
 
 /**
  * Apply the framework's migrations, then the application's (MIGRATE_DATABASE_URL, falling back
- * to DATABASE_URL): `basecamp db migrate`.
+ * to DATABASE_URL): `basecamp db migrate`. `more` are applied last: the framework's e2e setup
+ * passes the fixture's per-feature sets.
  */
-export async function migrate(app: Basecamp) {
+export async function migrate(app: Basecamp, more: MigrationSet[] = []) {
   const { config } = await loadConfig();
   const { runMigrations } = await import('@hykr/db');
-  await runMigrations(
-    process.env.MIGRATE_DATABASE_URL ?? config.databaseUrl,
-    app.definition.migrations ?? [],
-  );
+  await runMigrations(process.env.MIGRATE_DATABASE_URL ?? config.databaseUrl, [
+    ...(app.definition.migrations ?? []),
+    ...more,
+  ]);
 }
 
-/** The assistant's eval suites, against the running API (`basecamp eval`). */
+/**
+ * The assistant's eval suites, against the running API (`basecamp eval`): every module's, or one
+ * module's (`--module`), each with a fresh user and its own setup.
+ */
 export async function runEval(
   app: Basecamp,
   suite: 'assistant' | 'voice' | 'whatsapp',
+  options: { module?: string } = {},
 ): Promise<boolean> {
   setRuntime(app);
+  // The features' contributions (their tools among them) for the agents built here.
+  (await import('./features/install.js')).installFeatures();
   const evals = await import('@hykr/agents/evals');
   const run = {
     assistant: evals.evalAssistant,
     voice: evals.evalVoice,
     whatsapp: evals.evalWhatsapp,
   };
-  return run[suite](app.agents);
+  return run[suite](app.agents, options);
 }
 
 /**
@@ -119,6 +134,89 @@ export async function runEval(
  */
 export async function startStudio(app: Basecamp, dir: string, options: { dev?: boolean } = {}) {
   setRuntime(app);
+  (await import('./features/install.js')).installFeatures();
   const { startStudio } = await import('@hykr/agents/studio');
   return startStudio(app.agents, { dir, dev: options.dev });
+}
+
+/**
+ * `basecamp operator add <email> [--capabilities a,b]` (every operator capability by default),
+ * `operator remove <email>` (disabled) and `operator list`: the deployment's operators without
+ * HTTP, for the first one above all (B19). Returns whether it succeeded.
+ */
+export async function operators(
+  app: Basecamp,
+  command: 'add' | 'remove' | 'list',
+  opts: { email?: string; capabilities?: string[] } = {},
+): Promise<boolean> {
+  setRuntime(app);
+  // The features' and the application's operator capabilities.
+  (await import('./features/install.js')).installFeatures();
+  const { sharedDb } = await import('./infra/db.js');
+  const { listOperators, saveOperator } = await import('./features/platform/operators.js');
+  try {
+    if (command === 'list') {
+      for (const o of await listOperators(sharedDb.db))
+        console.log(
+          `${o.email.padEnd(32)} ${o.disabledAt ? 'disabled' : 'enabled '} ${o.capabilities.join(', ')}`,
+        );
+      return true;
+    }
+    if (!opts.email) throw new Error(`operator ${command} needs an email`);
+    const id = await saveOperator(sharedDb.db, {
+      email: opts.email,
+      ...(opts.capabilities ? { capabilities: opts.capabilities } : {}),
+      disable: command === 'remove',
+    });
+    console.log(`${command === 'remove' ? 'disabled' : 'operator'} ${opts.email} (${id})`);
+    return true;
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : e);
+    return false;
+  } finally {
+    await sharedDb.pool.end();
+  }
+}
+
+/**
+ * `basecamp import <entity> <file>`: import a file as a member of a business (decisions B20),
+ * in a process of its own with no HTTP and no processors; the worker runs the job. Prints its
+ * progress and a summary, and saves the error report. Exit code: 0 every row was written (or
+ * would be, for a dry run), 1 some were not or it failed, 2 it waits for an approval.
+ */
+export async function runImport(app: Basecamp, options: ImportFileOptions): Promise<number> {
+  const { assertConfig } = await loadConfig();
+  assertConfig();
+  setRuntime(app);
+  const { filesConfig } = await import('./features/files/config.js');
+  if (filesConfig().driver === 'memory') {
+    console.error(
+      'basecamp import needs file storage the worker shares: set STORAGE_DRIVER to s3 or fs (memory keeps files inside one process).',
+    );
+    return 1;
+  }
+  const { NestFactory } = await import('@nestjs/core');
+  const { CliModule } = await import('./cli.module.js');
+  const { failureText, importFile, importSummary } = await import('./features/imports/cli.js');
+  const { sharedDb } = await import('./infra/db.js');
+  const context = await NestFactory.createApplicationContext(CliModule, {
+    logger: ['warn', 'error'],
+  });
+  try {
+    const out = await importFile(context, options);
+    for (const line of importSummary(out)) console.log(line);
+    if (out.status === 'needs_approval') return 2;
+    return out.status === 'finished' &&
+      out.job?.status === 'succeeded' &&
+      out.result &&
+      out.result.failed === 0
+      ? 0
+      : 1;
+  } catch (e) {
+    console.error(`basecamp import: ${failureText(e)}`);
+    return 1;
+  } finally {
+    await context.close();
+    await sharedDb.pool.end().catch(() => {});
+  }
 }

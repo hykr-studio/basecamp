@@ -1,3 +1,6 @@
+import { isTimeZone } from '@hykr/contracts';
+import { canListCurrencies, knownCurrency } from '@hykr/i18n';
+
 const env = process.env;
 
 const list = (value: string | undefined) =>
@@ -41,6 +44,8 @@ export const config = {
     /** HMAC key for X-Hub-Signature-256 on webhooks (whaloc's WHALOC_APP_SECRET). */
     appSecret: env.WA_APP_SECRET ?? '',
     verifyToken: env.WA_VERIFY_TOKEN ?? '',
+    /** The Meta app's id: templates with a DOCUMENT header are created with a sample file. */
+    appId: env.WA_APP_ID || undefined,
     /** Sends per second per number, below Meta's default throughput. */
     sendRatePerSec: Number(env.WA_SEND_RATE_PER_SEC ?? 60),
   },
@@ -54,10 +59,42 @@ export const config = {
   },
   /** Queue keys in Redis: tests run under their own prefix, alongside the dev server. */
   queuePrefix: env.BULL_PREFIX ?? 'bull',
+  /** Finished jobs in Redis: how long (seconds) and how many per queue (queues/define.ts). */
+  keepJobs: {
+    completed: {
+      age: Math.round(Number(env.JOBS_KEEP_COMPLETED_HOURS ?? 24) * 3600),
+      count: Number(env.JOBS_KEEP_COMPLETED ?? 1000),
+    },
+    failed: {
+      age: Math.round(Number(env.JOBS_KEEP_FAILED_DAYS ?? 7) * 86_400),
+      count: Number(env.JOBS_KEEP_FAILED ?? 5000),
+    },
+  },
   /** Run the queue workers inside this process (tests); otherwise worker.ts runs them. */
   workerInline: env.WORKER_INLINE === '1',
   /** Where links in messages point: the app (sign-in, a page, an approval). */
   appUrl: (env.APP_URL ?? 'http://localhost:8081').replace(/\/$/, ''),
+  /**
+   * The currency of a business that set none in its settings (ISO 4217, upper case). Unset:
+   * XXX, "no currency": the framework assumes none.
+   */
+  defaultCurrency: env.DEFAULT_CURRENCY?.trim() || undefined,
+  /**
+   * The time zone of a business that set none in its settings (UTC or an IANA Area/Location
+   * name, e.g. Europe/Berlin; never an offset or an abbreviation): its periods, business hours,
+   * quiet hours and dates. Unset: UTC. `assertConfig` checks its shape; at start, CoreModule
+   * checks that Postgres reads it as Intl does (`checkTimeZones`).
+   */
+  defaultTimeZone: env.DEFAULT_TIME_ZONE?.trim() || undefined,
+  /**
+   * Who to contact about personal data for a business that named nobody (an email, phone number
+   * or address): on its privacy register and in WhatsApp's HELP. Unset: none is named. Each
+   * business is the one its people's data is held for, so a deployment of many businesses
+   * leaves it unset.
+   */
+  defaultGrievanceContact: env.DEFAULT_GRIEVANCE_CONTACT?.trim() || undefined,
+  /** The largest JSON body a request may send (a whole order with its lines). */
+  jsonBodyLimit: env.JSON_BODY_LIMIT?.trim() || '1mb',
 };
 
 /** Refuse to start with a missing or guessable secret. */
@@ -77,6 +114,29 @@ export function assertConfig() {
   if (config.voiceAgentKey && config.voiceAgentKey === config.agentApiKey) {
     throw new Error('VOICE_AGENT_KEY must differ from AGENT_API_KEY: audit tells them apart');
   }
+  // Every money write checks its currency against the runtime's list (knownCurrency), which
+  // lets any code through where there is none: on the server that check must fail closed.
+  if (!canListCurrencies())
+    throw new Error(
+      'This Node cannot list its currencies (Intl.supportedValuesOf): run one built with full ICU data',
+    );
+  if (config.defaultCurrency !== undefined && !knownCurrency(config.defaultCurrency))
+    throw new Error(
+      `DEFAULT_CURRENCY must be an ISO 4217 currency such as EUR, not "${config.defaultCurrency}"`,
+    );
+  if (config.defaultTimeZone !== undefined && !isTimeZone(config.defaultTimeZone))
+    throw new Error(
+      `DEFAULT_TIME_ZONE must be UTC or an IANA zone name such as Europe/Berlin (not an offset or an abbreviation), not "${config.defaultTimeZone}"`,
+    );
+  if (
+    config.defaultGrievanceContact !== undefined &&
+    (config.defaultGrievanceContact.length < 3 || config.defaultGrievanceContact.length > 320)
+  )
+    throw new Error(
+      'DEFAULT_GRIEVANCE_CONTACT must be an email, phone number or address (3 to 320 characters)',
+    );
+  if (!/^\d+(?:\.\d+)?(?:b|kb|mb)?$/i.test(config.jsonBodyLimit))
+    throw new Error(`JSON_BODY_LIMIT must be a size such as 1mb, not "${config.jsonBodyLimit}"`);
   // LiveKit's dev-mode pair is fine on a laptop; in production it would let anyone mint tokens.
   const devLiveKit = config.livekit.apiKey === 'devkey' || config.livekit.apiSecret === 'secret';
   if (config.voiceAgentKey && process.env.NODE_ENV === 'production' && devLiveKit) {

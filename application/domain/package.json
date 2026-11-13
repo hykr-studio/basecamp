@@ -12,17 +12,25 @@
       "types": "./dist/views/index.d.ts",
       "default": "./dist/views/index.js"
     },
-    "./notifications": {
-      "types": "./dist/notifications/index.d.ts",
-      "default": "./dist/notifications/index.js"
-    },
-    "./agent": {
-      "types": "./dist/agent/index.d.ts",
-      "default": "./dist/agent/index.js"
-    },
     "./db": {
       "types": "./dist/db/index.d.ts",
       "default": "./dist/db/index.js"
+    },
+    "./languages": {
+      "types": "./dist/languages.d.ts",
+      "default": "./dist/languages.js"
+    },
+    "./modules": {
+      "types": "./dist/modules/index.d.ts",
+      "default": "./dist/modules/index.js"
+    },
+    "./modules/*/contracts": {
+      "types": "./dist/modules/*/contracts/index.d.ts",
+      "default": "./dist/modules/*/contracts/index.js"
+    },
+    "./modules/*/views": {
+      "types": "./dist/modules/*/views/index.d.ts",
+      "default": "./dist/modules/*/views/index.js"
     },
     "./server": {
       "types": "./dist/server/index.d.ts",
@@ -38,6 +46,8 @@
   },
   "dependencies": {
     "@hykr/agents": "workspace:*",
+    "@hykr/api": "workspace:*",
+    "@hykr/connectors": "workspace:*",
     "@hykr/contracts": "workspace:*",
     "@hykr/core": "workspace:*",
     "@hykr/db": "workspace:*",

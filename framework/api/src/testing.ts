@@ -26,7 +26,17 @@ export async function boot(application: Basecamp) {
   setRuntime(application);
   const { AppModule } = await import('./app.module.js');
   const app = await NestFactory.create(AppModule, { bodyParser: false, logger: false });
-  app.enableCors({ origin, credentials: true });
+  // As startApi does: TRUST_PROXY and the caller's address on every request.
+  const { configureHttp } = await import('./infra/http.js');
+  configureHttp(app);
+  // As startApi does (verified custom domains included), plus the tests' own origin.
+  const { corsOrigin } = await import('./infra/cors.js');
+  const check = corsOrigin();
+  app.enableCors({
+    origin: (o: string | undefined, cb: (err: Error | null, allow?: boolean) => void) =>
+      o === origin ? cb(null, true) : check(o, cb),
+    credentials: true,
+  });
   await app.listen(Number(process.env.TEST_PORT ?? 0)); // a random free port unless pinned
   server.app = app;
   server.base = (await app.getUrl()).replace('[::1]', 'localhost');
@@ -34,15 +44,11 @@ export async function boot(application: Basecamp) {
 }
 
 export async function shutdown() {
-  // This run's queues: emptied, so Redis keeps nothing from the tests.
+  // Every queue this run registered (the channel's, the features', the app's): emptied, so Redis
+  // keeps nothing from the tests.
   const { getQueueToken } = await import('@nestjs/bullmq');
-  for (const name of [
-    'wa-inbound',
-    'wa-send',
-    'notify-dispatch',
-    'templates-sync',
-    'channel-maintenance',
-  ]) {
+  const { queues } = await import('./hooks.js');
+  for (const { name } of queues.all()) {
     const queue = server.app?.get(getQueueToken(name), { strict: false });
     await queue?.obliterate({ force: true }).catch(() => {});
   }
@@ -128,6 +134,33 @@ export async function me(person: Person): Promise<{ tenantId: string; roles: str
   return (await person.call('GET', '/api/me')).body;
 }
 
+/**
+ * Settings written straight to the database, as tests do: the server caches each business's
+ * settings for a few seconds (and reads them on every request), so drop its copy right after.
+ */
+export async function settingsChanged(tenantId?: string) {
+  const { TenantConfigService } = await import('@hykr/core');
+  server.app?.get(TenantConfigService).invalidate(tenantId);
+}
+
+/**
+ * Change a business's settings straight in the database, as an operator would, then drop this
+ * process's cached copy (`TenantConfigService`), so the next request reads the change at once.
+ * Each key of `patch` replaces that whole section (`{ quietHours: {...} }`); null removes it.
+ * Use it instead of a bare UPDATE: any request before it (`GET /api/me`) caches the settings
+ * for a few seconds, and a stale copy makes a test depend on the hour or the timing.
+ */
+export async function setTenantSettings(tenantId: string, patch: Record<string, unknown>) {
+  const removed = Object.keys(patch).filter((k) => patch[k] === null);
+  const merged = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== null));
+  await pool.query(
+    'update app.tenants set settings = (settings || $2::jsonb) - $3::text[] where id = $1',
+    [tenantId, JSON.stringify(merged), removed],
+  );
+  const { TenantConfigService } = await import('@hykr/core');
+  server.app?.get(TenantConfigService, { strict: false }).invalidate(tenantId);
+}
+
 /** Give a person roles in another business (the invitation flow is not built yet). */
 export async function addMember(person: Person, tenantId: string, roles: string[]) {
   await pool.query(
@@ -135,6 +168,20 @@ export async function addMember(person: Person, tenantId: string, roles: string[
      on conflict (tenant_id, user_id) do update set roles = excluded.roles`,
     [tenantId, person.id, roles],
   );
+}
+
+/**
+ * Make a signed-up person a platform operator (B19) holding these operator capabilities (every
+ * one by default), as `basecamp operator add` does. Returns the operator's id.
+ */
+export async function makeOperator(person: Person, capabilities?: string[]): Promise<string> {
+  const { saveOperator } = await import('./features/platform/operators.js');
+  const { sharedDb } = await import('./infra/db.js');
+  return saveOperator(sharedDb.db, {
+    email: person.email,
+    ...(capabilities ? { capabilities } : {}),
+    by: 'test',
+  });
 }
 
 /**
@@ -191,5 +238,184 @@ export async function eventually<T>(
   throw new Error(`timed out waiting (last: ${JSON.stringify(last)})`);
 }
 
+/** The in-memory Google a test server talks to with GOOGLE_CALENDAR_TRANSPORT=fake. */
+export { type FakeGoogle, fakeGoogle } from '@hykr/connectors/google-calendar';
+
+/**
+ * Connect a person's Google calendar on the fake Google (GOOGLE_CALENDAR_TRANSPORT=fake), as the
+ * app does: the API's consent URL (the fake agrees at once), Google's redirect through the API's
+ * callback to the app, and the app finishing it under the person's session. `headers` go with
+ * both of the person's calls (`x-tenant-id`). Returns the finish's answer and where the browser
+ * landed.
+ */
+export async function connectGoogleCalendar(person: Person, headers: Record<string, string> = {}) {
+  const start = await person.call<{ url: string }>(
+    'POST',
+    '/api/calendar/connections',
+    { provider: 'google' },
+    headers,
+  );
+  if (start.status !== 201) throw new Error(`connecting: ${JSON.stringify(start.body)}`);
+  const back = await fetch(start.body.url, { redirect: 'manual' });
+  const landing = new URL(back.headers.get('location') ?? '');
+  const code = landing.searchParams.get('code') ?? '';
+  const state = landing.searchParams.get('state') ?? '';
+  const done = await person.call('POST', '/api/calendar/google/complete', { code, state }, headers);
+  return { ...done, landing };
+}
 /** The application the test booted (its catalog, registry, notifications and assistant). */
 export { runtime } from './runtime.js';
+
+/** What one MCP tool call answered: its text, and whether it is an error result. */
+export type McpToolOut = { text: string; isError: boolean };
+
+/** A tool's MCP annotations, as the client lists them. */
+export type McpToolAnnotations = {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+};
+
+/** An outside AI client a person connected over MCP (A1), with its tokens. */
+export interface McpConnection {
+  clientId: string;
+  accessToken: string;
+  refreshToken?: string;
+  /** The scopes the token holds. */
+  scope: string;
+  /** The tool names the MCP endpoint lists for this token, sorted. */
+  tools(): Promise<string[]>;
+  /** Each listed tool's MCP annotations (read-only, destructive…), by name. */
+  annotations(): Promise<Record<string, McpToolAnnotations>>;
+  /** Call one tool by its name (`todos_read`) over MCP. */
+  call(tool: string, args: object): Promise<McpToolOut>;
+  close(): Promise<void>;
+}
+
+/** A loopback redirect: a client on the person's computer. */
+export const MCP_TEST_REDIRECT = 'http://127.0.0.1:43123/callback';
+
+let mcpClients = 0;
+
+/**
+ * Connect an MCP client for a signed-in person, as a real one does: it registers itself, sends
+ * the person to authorize (they are signed in, so straight to consent), the person allows
+ * `accept` of the `scope` asked for, and it trades the code with its PKCE verifier. Then an MCP
+ * client over HTTP (protocol 2026-07-28) with the token.
+ */
+export async function connectMcp(
+  person: Person,
+  scope: string,
+  accept: string = scope,
+  name = `Client of ${person.name}`,
+): Promise<McpConnection> {
+  const { createHash, randomBytes } = await import('node:crypto');
+  const json = async (res: Response) => {
+    const text = await res.text();
+    if (!res.ok) throw new Error(`MCP connect: ${res.status} ${text}`);
+    return JSON.parse(text) as Json;
+  };
+  const resource = (
+    await json(await fetch(`${server.base}/.well-known/oauth-protected-resource/mcp`))
+  ).resource as string;
+  const client = await json(
+    await fetch(`${server.base}/api/auth/oauth2/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        client_name: name,
+        redirect_uris: [MCP_TEST_REDIRECT],
+        token_endpoint_auth_method: 'none',
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+      }),
+    }),
+  );
+  const verifier = randomBytes(32).toString('base64url');
+  const query = new URLSearchParams({
+    response_type: 'code',
+    client_id: client.client_id,
+    redirect_uri: MCP_TEST_REDIRECT,
+    code_challenge: createHash('sha256').update(verifier).digest('base64url'),
+    code_challenge_method: 'S256',
+    scope,
+    state: 'test',
+    resource,
+  });
+  const asked = await person.call('GET', `/api/auth/oauth2/authorize?${query}`, undefined, {
+    accept: 'application/json',
+  });
+  const consented = await person.call('POST', '/api/auth/oauth2/consent', {
+    accept: true,
+    scope: accept,
+    oauth_query: new URL(asked.body.url).search.slice(1),
+  });
+  if (consented.status !== 200) throw new Error(`MCP consent: ${JSON.stringify(consented.body)}`);
+  const code = new URL(consented.body.url).searchParams.get('code') ?? '';
+  const tokens = await json(
+    await fetch(`${server.base}/api/auth/oauth2/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: MCP_TEST_REDIRECT,
+        client_id: client.client_id,
+        code_verifier: verifier,
+        resource,
+      }).toString(),
+    }),
+  );
+  const { MCPClient } = await import('@mastra/mcp');
+  mcpClients += 1;
+  const mcp = new MCPClient({
+    id: `mcp-test-${stamp}-${mcpClients}`,
+    servers: {
+      app: {
+        url: new URL(`${server.base}/mcp`),
+        requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } },
+        protocolVersion: '2026-07-28',
+      },
+    },
+  });
+  const tools = () => mcp.listTools();
+  return {
+    clientId: client.client_id,
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token,
+    scope: tokens.scope,
+    tools: async () =>
+      Object.keys(await tools())
+        .map((n) => n.replace(/^app_/, ''))
+        .sort(),
+    annotations: async () =>
+      Object.fromEntries(
+        Object.entries(await tools()).map(([n, t]) => [
+          n.replace(/^app_/, ''),
+          ((t as { mcp?: { annotations?: McpToolAnnotations } }).mcp?.annotations ??
+            {}) as McpToolAnnotations,
+        ]),
+      ),
+    async call(tool, args) {
+      const found = (await tools())[`app_${tool}`];
+      if (!found?.execute) throw new Error(`No MCP tool ${tool}`);
+      try {
+        const out = (await found.execute(args as never, {} as never)) as {
+          content?: { type: string; text?: string }[];
+          isError?: boolean;
+          error?: boolean;
+          message?: string;
+        };
+        // The client checks the input against the tool's schema before sending anything.
+        if (out?.error === true) return { text: out.message ?? '', isError: true };
+        const text = (out?.content ?? []).map((c) => c.text ?? '').join('\n');
+        return { text, isError: !!out?.isError };
+      } catch (e) {
+        return { text: String((e as Error).message ?? e), isError: true };
+      }
+    },
+    close: () => mcp.disconnect(),
+  };
+}

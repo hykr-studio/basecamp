@@ -5,6 +5,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import { eq, like, sql } from 'drizzle-orm';
 import { DB } from '../infra/db.module.js';
+import { metering } from '../metering.js';
 import { QUEUES } from './queues.js';
 
 const { messages, inboundEvents } = schema;
@@ -20,8 +21,14 @@ export type SendJob = {
   cursor: number;
 };
 
-const kindOf = (m: OutboundMessage): 'text' | 'template' | 'interactive' =>
-  m.kind === 'text' ? 'text' : m.kind === 'template' ? 'template' : 'interactive';
+const kindOf = (m: OutboundMessage): 'text' | 'template' | 'interactive' | 'media' =>
+  m.kind === 'text'
+    ? 'text'
+    : m.kind === 'template'
+      ? 'template'
+      : m.kind === 'document'
+        ? 'media'
+        : 'interactive';
 
 /**
  * Everything that leaves goes through here: recorded first (so a crash never loses or doubles
@@ -47,6 +54,15 @@ export class OutboundService {
     } = {},
   ): Promise<string[]> {
     if (outbound.length === 0) return [];
+    // A paused business does not send the categories its plan pauses (marketing, say): they are
+    // recorded as failed, with why, and never queued. Replies, codes and approvals always go.
+    const refused = meta.category
+      ? await metering()?.check({
+          tenantId: target.tenantId,
+          meter: 'messages',
+          variant: meta.category,
+        })
+      : null;
     const rows = await this.db
       .insert(messages)
       .values(
@@ -59,14 +75,17 @@ export class OutboundService {
           body: m,
           template: m.kind === 'template' ? m.name : null,
           category: meta.category ?? null,
-          status: 'queued' as const,
+          status: refused ? ('failed' as const) : ('queued' as const),
           runId: meta.runId ?? null,
           notification: meta.notification ?? null,
-          meta: meta.extra ?? null,
+          meta: refused
+            ? { ...meta.extra, refused: { rule: refused.rule, reason: refused.reason } }
+            : (meta.extra ?? null),
         })),
       )
       .returning({ id: messages.id });
     const messageIds = rows.map((r) => r.id);
+    if (refused) return messageIds;
     await this.sendQueue.add(
       'send',
       { ...target, messageIds, cursor: 0 },
@@ -118,11 +137,30 @@ export class OutboundService {
     });
   }
 
+  /** The provider accepted it: from here it counts against the business's messages (once). */
   async markSent(id: string, providerMessageId: string) {
-    await this.db
+    const [row] = await this.db
       .update(messages)
       .set({ providerMessageId, status: 'sent', statusAt: sql`now()` })
-      .where(eq(messages.id, id));
+      .where(eq(messages.id, id))
+      .returning({
+        tenantId: messages.tenantId,
+        contactId: messages.contactId,
+        category: messages.category,
+        runId: messages.runId,
+      });
+    if (row)
+      await metering()?.record({
+        tenantId: row.tenantId,
+        meter: 'messages',
+        quantity: 1,
+        variant: row.category,
+        subject: row.contactId ? `contact:${row.contactId}` : null,
+        runId: row.runId,
+        channel: 'whatsapp',
+        source: 'outbound',
+        ref: id,
+      });
   }
 
   async markFailed(id: string, errorCode: number | undefined) {

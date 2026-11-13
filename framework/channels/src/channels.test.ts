@@ -1,8 +1,9 @@
 import { createHmac } from 'node:crypto';
+import { defineLanguages, resetLanguages, setLanguages } from '@hykr/i18n';
 import { describe, expect, it } from 'vitest';
 import { PermanentError, RetryableError } from './adapter.js';
 import { signApproval, verifyApproval } from './approval-token.js';
-import { keywordOf } from './keywords.js';
+import { keywordOf, keywordProblems } from './keywords.js';
 import { render } from './render.js';
 import { split } from './split.js';
 import { createWhatsAppAdapter, toGraph } from './whatsapp/adapter.js';
@@ -188,6 +189,123 @@ describe('the WhatsApp adapter', () => {
   });
 });
 
+describe('documents on WhatsApp', () => {
+  /** A Graph stand-in that keeps each request as it came: its URL, headers and body. */
+  function raw(answers: unknown[]) {
+    const calls: { url: string; headers: Record<string, string>; body: unknown }[] = [];
+    const fn = (async (url: string, init?: RequestInit) => {
+      calls.push({
+        url,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+        body: init?.body,
+      });
+      return new Response(JSON.stringify(answers[calls.length - 1] ?? {}), { status: 200 });
+    }) as unknown as typeof fetch;
+    return { fn, calls };
+  }
+  const wa = (fn: typeof fetch, appId?: string) =>
+    createWhatsAppAdapter({
+      graphUrl: 'http://graph.test',
+      apiVersion: 'v25.0',
+      accessToken: 't',
+      appSecret: secret,
+      wabaId: 'waba1',
+      fetch: fn,
+      ...(appId ? { appId } : {}),
+    });
+
+  it('a document message, by media id or link, with its file name and caption', () => {
+    expect(
+      toGraph({
+        kind: 'document',
+        to: '919',
+        mediaId: 'm1',
+        filename: 'ORD-1.pdf',
+        caption: 'Your order',
+      }),
+    ).toEqual({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: '919',
+      type: 'document',
+      document: { id: 'm1', filename: 'ORD-1.pdf', caption: 'Your order' },
+    });
+    expect(
+      toGraph({ kind: 'document', to: '919', link: 'https://x/y.pdf', filename: 'y.pdf' }),
+    ).toMatchObject({ document: { link: 'https://x/y.pdf', filename: 'y.pdf' } });
+  });
+
+  it('a template with a document header puts the file first', () => {
+    const graph = toGraph({
+      kind: 'template',
+      to: '919',
+      name: 'record_document_v1',
+      language: 'hi',
+      params: { number: 'A-1' },
+      header: { kind: 'document', mediaId: 'm9', filename: 'A-1.pdf' },
+    }) as { template: { components: { type: string }[] } };
+    expect(graph.template.components[0]).toEqual({
+      type: 'header',
+      parameters: [{ type: 'document', document: { id: 'm9', filename: 'A-1.pdf' } }],
+    });
+    expect(graph.template.components[1]).toMatchObject({ type: 'body' });
+  });
+
+  it('uploads a file as multipart for the number that sends it', async () => {
+    const f = raw([{ id: 'media-7' }]);
+    const out = await wa(f.fn).uploadMedia('pn1', {
+      bytes: new Uint8Array([37, 80, 68, 70]),
+      mime: 'application/pdf',
+      filename: 'a.pdf',
+    });
+    expect(out).toEqual({ mediaId: 'media-7' });
+    expect(f.calls[0].url).toBe('http://graph.test/v25.0/pn1/media');
+    expect(f.calls[0].headers).toEqual({ authorization: 'Bearer t' });
+    const body = f.calls[0].body as FormData;
+    expect(body.get('messaging_product')).toBe('whatsapp');
+    expect(body.get('type')).toBe('application/pdf');
+    const file = body.get('file') as File;
+    expect(file.name).toBe('a.pdf');
+    expect(file.type).toBe('application/pdf');
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(new Uint8Array([37, 80, 68, 70]));
+  });
+
+  it('creates a template with a DOCUMENT header; with an app id, with a sample to review', async () => {
+    const spec = {
+      name: 'record_document_v1',
+      language: 'en',
+      category: 'UTILITY' as const,
+      body: 'Here is {{number}}.',
+      examples: { number: 'A-1' },
+      header: { format: 'DOCUMENT' as const },
+    };
+    const plain = raw([{ id: 'tpl1' }]);
+    await wa(plain.fn).templates.create(spec);
+    expect(plain.calls).toHaveLength(1);
+    const sent = JSON.parse(String(plain.calls[0].body)) as { components: unknown[] };
+    expect(sent.components[0]).toEqual({ type: 'HEADER', format: 'DOCUMENT' });
+
+    const withApp = raw([{ id: 'upload:abc' }, { h: 'handle-1' }, { id: 'tpl2' }]);
+    await wa(withApp.fn, 'app9').templates.create(spec);
+    expect(withApp.calls[0].url).toMatch(/^http:\/\/graph\.test\/v25\.0\/app9\/uploads\?/);
+    expect(withApp.calls[0].url).toContain('file_type=application%2Fpdf');
+    expect(withApp.calls[1].url).toBe('http://graph.test/v25.0/upload:abc');
+    expect(withApp.calls[1].headers).toMatchObject({
+      authorization: 'OAuth t',
+      file_offset: '0',
+    });
+    const sample = Buffer.from(withApp.calls[1].body as Uint8Array).toString('latin1');
+    expect(sample.startsWith('%PDF-1.4')).toBe(true);
+    expect(sample.trimEnd().endsWith('%%EOF')).toBe(true);
+    const created = JSON.parse(String(withApp.calls[2].body)) as { components: unknown[] };
+    expect(created.components[0]).toEqual({
+      type: 'HEADER',
+      format: 'DOCUMENT',
+      example: { header_handle: ['handle-1'] },
+    });
+  });
+});
+
 describe('render', () => {
   const o = { to: '919', lang: 'en' as const, appUrl: 'http://app' };
   const rows = (n: number) =>
@@ -196,7 +314,11 @@ describe('render', () => {
   it('words first, then 2–3 rows as buttons, 4–10 as a list, more as a list plus a link', () => {
     expect(
       render(
-        { reply: 'Here.', views: [{ text: 'To-dos\n• a\n• b', choices: rows(2) }], approvals: [] },
+        {
+          reply: 'Here.',
+          views: [{ text: 'To-dos\n• a\n• b', heading: 'To-dos', choices: rows(2) }],
+          approvals: [],
+        },
         o,
       ),
     ).toEqual([
@@ -226,6 +348,26 @@ describe('render', () => {
     expect((many[1] as { rows: unknown[] }).rows).toHaveLength(10);
   });
 
+  it("the buttons' or list's body is the view's heading; without one, its words whole (V7)", () => {
+    // No heading line: the first line is the first row, never the body alone.
+    for (const n of [2, 5]) {
+      const [first] = render(
+        { reply: '', views: [{ text: '• a\n• b', choices: rows(n) }], approvals: [] },
+        o,
+      );
+      expect(first).toMatchObject({ kind: n === 2 ? 'buttons' : 'list', text: '• a\n• b' });
+    }
+    const [titled] = render(
+      {
+        reply: '',
+        views: [{ text: '• a\n• b', heading: 'To-dos', choices: rows(5) }],
+        approvals: [],
+      },
+      o,
+    );
+    expect(titled).toMatchObject({ kind: 'list', text: 'To-dos' });
+  });
+
   it('a view with no rows to pick is just words', () => {
     expect(render({ reply: 'Done.', views: [{ text: '• one to-do' }], approvals: [] }, o)).toEqual([
       { kind: 'text', to: '919', text: 'Done.\n\n• one to-do' },
@@ -253,7 +395,7 @@ describe('render', () => {
       ],
     });
     expect(render(turn, o)[0]).toMatchObject({
-      text: expect.stringContaining('Approve it in the app: http://app/approvals'),
+      text: 'It waits.\n\nDelete "Tiles". Approve it in the app: http://app/approvals/ap1',
     });
   });
 
@@ -274,6 +416,34 @@ describe('keywords', () => {
     expect(keywordOf('talk to a person')).toBe('human');
     expect(keywordOf('నా డేటా తొలగించు')).toBe('delete_my_data');
     expect(keywordOf('please stop the meeting at 4')).toBeUndefined();
+  });
+
+  it("adds each declared language's words, and refuses words for no keyword", () => {
+    expect(keywordOf('σταμάτα')).toBeUndefined();
+    const greek = defineLanguages({
+      el: {
+        name: 'Ελληνικά',
+        english: 'Greek',
+        keywords: { stop: ['Σταμάτα'], help: ['βοήθεια'] },
+      },
+    });
+    setLanguages(greek);
+    try {
+      expect(keywordOf('σταμάτα!')).toBe('stop');
+      expect(keywordOf('Βοήθεια')).toBe('help');
+      // The framework's own words still match.
+      expect(keywordOf('रोकें')).toBe('stop');
+      expect(keywordProblems(greek)).toEqual([]);
+      expect(
+        keywordProblems(
+          defineLanguages({
+            el: { name: 'Ελληνικά', english: 'Greek', keywords: { halt: ['x'] } },
+          }),
+        )[0],
+      ).toMatch(/"halt", which is not a keyword/);
+    } finally {
+      resetLanguages();
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-import type { EntitySpec, Surface } from '@hykr/contracts';
+import type { EntitySpec, Summary, SummaryInput, Surface } from '@hykr/contracts';
 import { count, firstFew, type Labels, type Lang, type Noun, pick } from '@hykr/i18n';
 import type { z } from 'zod';
 
@@ -24,6 +24,20 @@ export type TextContext = { timeZone: string; lang: Lang };
  */
 export type ViewLabels = { title?: Labels; empty?: Labels; noun?: Noun };
 
+/** What a view's own `check` may look up: the entities the registry knows, by plural. */
+export type ViewCheckContext = {
+  /** The entity by plural ('orders'). Absent where the registry was built without entities. */
+  entity?: (plural: string) => EntitySpec | undefined;
+};
+
+/** What a view's `load` may fetch, as the reader: the same API, scope and hidden fields. */
+export type ViewIO = TextContext & {
+  /** An entity's summary (GET /api/<plural>/summary). */
+  summary(plural: string, query: SummaryInput): Promise<Summary>;
+  /** The entity by plural, when the registry knows it. */
+  entity(plural: string): EntitySpec | undefined;
+};
+
 export interface ViewDef<P extends z.ZodObject = z.ZodObject> {
   /** Stable id used by tools, the canvas, saved pages and the client registry. */
   name: string;
@@ -35,10 +49,21 @@ export interface ViewDef<P extends z.ZodObject = z.ZodObject> {
   props: P;
   /**
    * Where the data comes from: the client fills `props[into]` through the entity's own list
-   * (by: 'query') or get (by: 'id', with props.id), with the person's session. Without a
-   * source, the intent carries the full props (kpi.row).
+   * (by: 'query'), get (by: 'id', with props.id) or summary (by: 'summary': counts and totals,
+   * the query in the summary grammar), with the person's session. Without a source, the intent
+   * carries the full props (kpi.row with `items`).
    */
-  source?: { entity: EntitySpec; into: string; by: 'query' | 'id' };
+  source?: { entity: EntitySpec; into: string; by: 'query' | 'id' | 'summary' };
+  /**
+   * More checks than the props schema can make, on the server before a result or a saved page
+   * is accepted (kpi.row's `of` against its entity's summary grammar). A message, or null.
+   */
+  check?: (props: z.infer<P>, ctx: ViewCheckContext) => string | null;
+  /**
+   * Data the view fetches for itself, beyond `source`, when the server puts it into words
+   * (text, speech): kpi.row's `of` becomes its tiles. Returns the props to render.
+   */
+  load?: (props: z.infer<P>, io: ViewIO) => Promise<z.infer<P>>;
   actions: Record<string, ViewAction<never>>;
   labels: ViewLabels;
   /** Words for WhatsApp. */
@@ -59,7 +84,11 @@ type ViewInput<P extends z.ZodObject> = Omit<
   ViewDef<P>,
   'actions' | 'textLimit' | 'source' | 'labels'
 > & {
-  source?: { entity: EntitySpec; into: keyof z.infer<P> & string; by?: 'query' | 'id' };
+  source?: {
+    entity: EntitySpec;
+    into: keyof z.infer<P> & string;
+    by?: 'query' | 'id' | 'summary';
+  };
   actions?: Record<string, ViewAction<never>>;
   labels?: ViewLabels;
   textLimit?: number;

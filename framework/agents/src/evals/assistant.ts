@@ -1,19 +1,28 @@
-// Runs the assistant through the application's eval conversation and scores every turn.
-// `basecamp eval` (scripted model) or `basecamp eval --live` (your AGENT_MODEL).
+// Runs the assistant through each module's eval conversation and scores every turn.
+// `basecamp eval [--module <m>]` (scripted model) or `basecamp eval --live` (your AGENT_MODEL).
 //
-// It needs the API running: the agent's tools call it as a fresh test user, so each run
-// starts from empty data. The cases and their setup come from the application's agent domain.
+// It needs the API running: the agent's tools call it as a fresh test user per module, so each
+// module starts from empty data. The cases and their setup come from the modules' agent parts.
 import type { Agents } from '../agents.js';
+import { suitesFor } from '../modules.js';
 import { expectedOutcome, listBeforeWrite, noRetryAfterRefusal } from '../scorers.js';
-import { prepare, report, runCases } from './harness.js';
+import { nothingRan, prepare, type Row, report, runCases } from './harness.js';
 
-export async function evalAssistant(agents: Agents): Promise<boolean> {
-  const userId = await prepare(agents, 'the assistant');
-  return report(
-    await runCases(agents, userId, agents.domain.evalCases, [
-      expectedOutcome,
-      listBeforeWrite(agents.catalog.commands),
-      noRetryAfterRefusal,
-    ]),
-  );
+export async function evalAssistant(
+  agents: Agents,
+  options: { module?: string } = {},
+): Promise<boolean> {
+  const rows: Row[] = [];
+  for (const suite of suitesFor(agents.domain, options.module)) {
+    if (!suite.evalCases.length) continue;
+    const userId = await prepare(`the assistant (${suite.module})`, suite.evalSetup);
+    rows.push(
+      ...(await runCases(agents, userId, suite.evalCases, [
+        expectedOutcome,
+        listBeforeWrite(agents.catalog.commands),
+        noRetryAfterRefusal,
+      ])),
+    );
+  }
+  return report(rows, nothingRan(options.module, 'eval cases (agent.evalCases)'));
 }

@@ -1,6 +1,11 @@
 import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
 
+// The repo's .env, into this process. The config runs in Vitest's main process, where
+// globalSetup migrates, so the migrations and the tests use the same database. Nothing already
+// set is overridden (loadEnv puts process.env over the file): in CI the workflow's env wins.
+Object.assign(process.env, loadEnv('test', '../..', ''));
+
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
@@ -10,8 +15,6 @@ export default defineConfig({
     // One app, one database: run files one after another.
     fileParallelism: false,
     env: {
-      // The repo's .env locally; in CI the workflow's env wins (loadEnv never overrides it).
-      ...loadEnv('test', '../..', ''),
       ...process.env,
       // Always the scripted model: tests need no key and cost nothing.
       MODEL_MODE: 'fake',
@@ -20,6 +23,10 @@ export default defineConfig({
       // Queue jobs run inside the test app, under their own keys in Redis.
       WORKER_INLINE: '1',
       BULL_PREFIX: `test-${Date.now()}`,
+      // Files in this process's memory: no object store needed.
+      STORAGE_DRIVER: 'memory',
+      // Documents drawn by the fake engine: plain text lines, fast and searchable.
+      DOCUMENTS_ENGINE: 'fake',
     },
   },
 });

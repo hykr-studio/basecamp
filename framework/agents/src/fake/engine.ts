@@ -5,7 +5,8 @@ import type {
   LanguageModelV2Prompt,
   LanguageModelV2StreamPart,
 } from '@ai-sdk/provider';
-import { LANG_ENGLISH_NAMES, LANGS, type Labels, type Lang, pick, scriptOf, t } from '@hykr/i18n';
+import { englishName, type Labels, type Lang, languages, pick, scriptOf, t } from '@hykr/i18n';
+import { parkedLine } from '../parked-line.js';
 
 /**
  * A scripted model for tests and CI: the real agent loop, no network, no cost. The engine
@@ -46,6 +47,12 @@ export type Turn = {
   spoken: boolean;
   /** The record the person is looking at, as the instructions state it ("close this one"). */
   record?: { type: string; id: string };
+  /**
+   * Whether this turn offers the tool (a switched-off feature's are not). A script's call to one
+   * it does not offer is answered for it ("I can't do that here."); true when the turn's tools
+   * are not known.
+   */
+  offered: (tool: string) => boolean;
 };
 
 /** One thing the scripted model knows how to do. The first script that matches runs. */
@@ -97,28 +104,42 @@ export function startOfDay(day: string, zone: string): Date {
   return new Date(utc.getTime() - (wall(utc, zone) - wall(utc, 'UTC')));
 }
 
+/** How a resumed call's approval was decided (durable runs), or undefined for any other result. */
+export function decided(
+  o: Outcome | undefined,
+): 'approved' | 'rejected' | 'expired' | 'failed' | undefined {
+  const status = (o?.result as { status?: unknown } | undefined)?.status;
+  return status === 'approved' ||
+    status === 'rejected' ||
+    status === 'expired' ||
+    status === 'failed'
+    ? status
+    : undefined;
+}
+
 /**
- * What a finished write says: done, or what is waiting for approval. Spoken, or in another
- * language, the waiting line is the framework's short one: the card on screen has the detail.
+ * What a finished write says: done, what is waiting for approval, or, when a run continues after
+ * the approval, how it was decided. Spoken, or in another language, the waiting line is the
+ * framework's short one: the card on screen has the detail. An approved call's replay keeps no
+ * value, so it says the framework's line unless the result has one.
  */
 export function written(
   o: Outcome,
   done: (value: Row) => string,
   turn?: Pick<Turn, 'lang' | 'spoken' | 'surfaces'>,
 ): string {
-  const r = o.result as { status: string; value?: Row; approval?: { summary: string | null } };
-  if (r.status === 'needs_approval') {
-    if (turn && (turn.spoken || turn.lang !== 'en')) {
-      // "It's on screen" only where there is one; otherwise where to approve it.
-      const screen = turn.surfaces.some((s) => s === 'inline' || s === 'canvas');
-      return screen
-        ? t(turn.lang, 'said.needsApproval')
-        : t(turn.lang, 'said.waitingApproval', {
-            summary: r.approval?.summary ?? t(turn.lang, 'said.aChange'),
-          });
-    }
-    return `I've asked for your approval: ${r.approval?.summary ?? 'see Approvals'}. Nothing changes until you approve it.`;
-  }
+  const r = o.result as {
+    status: string;
+    value?: Row;
+    approval?: { summary: string | null; canDecide?: boolean };
+  };
+  const lang = turn?.lang ?? 'en';
+  const summary = r.approval?.summary ?? t(lang, 'said.aChange');
+  if (r.status === 'needs_approval') return parkedLine(r.approval, turn);
+  if (r.status === 'approved')
+    return r.value ? done(r.value) : t(lang, 'run.approved', { summary });
+  if (r.status === 'rejected') return t(lang, 'run.rejected', { summary });
+  if (r.status === 'expired') return t(lang, 'run.expired', { summary });
   return done(r.value as Row);
 }
 
@@ -145,6 +166,15 @@ function lastUserText(prompt: LanguageModelV2Prompt): string {
   return '';
 }
 
+/**
+ * A tool's output as an outcome. An error output (a tool the loop could not find, or one that
+ * threw) is not the API's answer: a refusal with no reason, never its text (a developer's).
+ */
+function outcomeOf(output: { type?: string; value: unknown }): Outcome {
+  if (output.type?.startsWith('error')) return { ok: false };
+  return output.value as Outcome;
+}
+
 /** Tool results since the last user message, oldest first. */
 function stepsThisTurn(prompt: LanguageModelV2Prompt): Step[] {
   const steps: Step[] = [];
@@ -152,25 +182,32 @@ function stepsThisTurn(prompt: LanguageModelV2Prompt): Step[] {
     const message = prompt[i];
     if (message.role !== 'tool') continue;
     for (const part of [...message.content].reverse()) {
-      const output = part.output as { value: unknown };
-      steps.unshift({ toolName: part.toolName, outcome: output.value as Outcome });
+      const output = part.output as { type?: string; value: unknown };
+      steps.unshift({ toolName: part.toolName, outcome: outcomeOf(output) });
     }
   }
   return steps;
 }
 
-/** "Reply in Telugu." → 'te': the instruction line as assistant.ts writes it, from one list. */
-const PINNED = new Map<string, Lang>(LANGS.map((l) => [LANG_ENGLISH_NAMES[l], l]));
-const PIN_LINE = new RegExp(`^Reply in (${[...PINNED.keys()].join('|')})\\.`, 'm');
+/**
+ * "Reply in Greek." → 'el': the instruction line as assistant.ts writes it, for the languages
+ * this process speaks (read each turn: the application declares them after this loads).
+ */
+function pinnedLang(prompt: LanguageModelV2Prompt): Lang | undefined {
+  const named = new Map(languages().codes.map((l) => [englishName(l), l]));
+  const line = new RegExp(`^Reply in (${[...named.keys()].map(literally).join('|')})\\.`, 'm');
+  return fromSystem(prompt, line, (m) => named.get(m[1]));
+}
+const literally = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-function turnOf(prompt: LanguageModelV2Prompt): Turn {
+function turnOf(prompt: LanguageModelV2Prompt, offered?: ReadonlySet<string>): Turn {
   const steps = stepsThisTurn(prompt);
   // As the instructions state them (see INSTRUCTIONS in version.ts).
   const zone = fromSystem(prompt, /time zone is ([A-Za-z0-9_+\-/]+)/, (m) => m[1]) ?? 'UTC';
   const text = lastUserText(prompt).normalize('NFC');
   return {
     text,
-    lang: fromSystem(prompt, PIN_LINE, (m) => PINNED.get(m[1])) ?? scriptOf(text) ?? 'en',
+    lang: pinnedLang(prompt) ?? scriptOf(text) ?? 'en',
     spoken: fromSystem(prompt, /This turn is spoken/, () => true) ?? false,
     steps,
     result: (tool) => steps.find((s) => s.toolName === tool)?.outcome,
@@ -186,35 +223,67 @@ function turnOf(prompt: LanguageModelV2Prompt): Turn {
       type: m[1],
       id: m[2],
     })),
+    offered: (tool) => !offered || offered.has(tool),
   };
 }
 
-const why = (o: Outcome) => {
-  const body = o.error as { reason?: string; message?: unknown } | null;
-  return (
-    body?.reason ??
-    (typeof body?.message === 'string' ? body.message : `the API answered ${o.status}`)
-  );
+/** Why a call was refused: the API's reason, else its status, else no reason, in the language. */
+const why = (o: Outcome, lang: Lang) => {
+  const body = o.error as { reason?: string; message?: unknown } | null | undefined;
+  if (body?.reason) return body.reason;
+  if (typeof body?.message === 'string') return body.message;
+  return typeof o.status === 'number'
+    ? t(lang, 'said.apiAnswered', { status: o.status })
+    : t(lang, 'said.noReason');
 };
 
-/** Decide the next step from the conversation so far. */
+/**
+ * Decide the next step from the conversation so far. `offered`: the tools the turn offers (the
+ * call's own list); a step that calls one it does not offer says it cannot instead.
+ */
 export function runScripts(
   prompt: LanguageModelV2Prompt,
   scripts: readonly Script[],
   help: string,
+  offered?: ReadonlySet<string>,
 ): LanguageModelV2Content[] {
-  const turn = turnOf(prompt);
+  const turn = turnOf(prompt, offered);
   const last = turn.steps.at(-1);
   if (last && !last.outcome.ok)
-    return [say(t(turn.lang, 'said.couldNot', { reason: why(last.outcome) }))];
+    return [say(t(turn.lang, 'said.couldNot', { reason: why(last.outcome, turn.lang) }))];
   for (const script of scripts) {
     const intent = script.match(turn.text);
-    if (intent !== undefined) return script.step(intent, turn);
+    if (intent === undefined) continue;
+    const content = script.step(intent, turn);
+    const missing = content.some((p) => p.type === 'tool-call' && !turn.offered(p.toolName));
+    return missing ? [say(t(turn.lang, 'said.notAvailable'))] : content;
   }
   return [say(help)];
 }
 
-const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+/** The tools a model call offers, by name; undefined when the call lists none. */
+const offeredBy = (options: LanguageModelV2CallOptions) =>
+  options.tools ? new Set(options.tools.map((tool) => tool.name)) : undefined;
+
+/** Characters per token, as the scripted model counts them: roughly a real tokenizer's. */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * What a step "used", as a real model would report it: the prompt's characters and the reply's
+ * (its words and tool calls), a token per four, at least one out. Deterministic, so tests can
+ * price a turn.
+ */
+export function usageOf(prompt: LanguageModelV2Prompt, content: LanguageModelV2Content[]) {
+  const tokens = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN);
+  const inputTokens = tokens(JSON.stringify(prompt).length);
+  const out = content
+    .map((part) =>
+      part.type === 'text' ? part.text : part.type === 'tool-call' ? JSON.stringify(part) : '',
+    )
+    .join('');
+  const outputTokens = Math.max(1, tokens(out.length));
+  return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
+}
 
 export function fakeModel(scripts: readonly Script[], help: string): LanguageModelV2 {
   return {
@@ -224,13 +293,18 @@ export function fakeModel(scripts: readonly Script[], help: string): LanguageMod
     supportedUrls: {},
 
     async doGenerate(options: LanguageModelV2CallOptions) {
-      const content = runScripts(options.prompt, scripts, help);
+      const content = runScripts(options.prompt, scripts, help, offeredBy(options));
       const calledTool = content.some((part) => part.type === 'tool-call');
-      return { content, finishReason: calledTool ? 'tool-calls' : 'stop', usage, warnings: [] };
+      return {
+        content,
+        finishReason: calledTool ? 'tool-calls' : 'stop',
+        usage: usageOf(options.prompt, content),
+        warnings: [],
+      };
     },
 
     async doStream(options: LanguageModelV2CallOptions) {
-      const content = runScripts(options.prompt, scripts, help);
+      const content = runScripts(options.prompt, scripts, help, offeredBy(options));
       const calledTool = content.some((part) => part.type === 'tool-call');
       const parts: LanguageModelV2StreamPart[] = [{ type: 'stream-start', warnings: [] }];
       for (const part of content) {
@@ -244,7 +318,11 @@ export function fakeModel(scripts: readonly Script[], help: string): LanguageMod
           parts.push(part);
         }
       }
-      parts.push({ type: 'finish', finishReason: calledTool ? 'tool-calls' : 'stop', usage });
+      parts.push({
+        type: 'finish',
+        finishReason: calledTool ? 'tool-calls' : 'stop',
+        usage: usageOf(options.prompt, content),
+      });
       return {
         stream: new ReadableStream<LanguageModelV2StreamPart>({
           start(controller) {

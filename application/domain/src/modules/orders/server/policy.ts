@@ -1,0 +1,61 @@
+import {
+  type AuthorizeResult,
+  defineCapability,
+  exceeds,
+  type Money,
+  moneyAmount,
+  type Principal,
+} from '@hykr/contracts';
+import { allow, needsApproval } from '@hykr/core';
+import { can } from '@hykr/policy';
+import { Levels } from '../../../server/approval-levels.js';
+
+/**
+ * What the orders module asks before a save runs:
+ *   - the assistant writes an order for someone: that person confirms it;
+ *   - an order above the business's limit, made by someone who may not approve orders, or by
+ *     the assistant: it waits at the application's `irreversible` level, for someone who may
+ *     approve orders (the person it is for, when their own assistant asked and they may), in
+ *     the app, signed in.
+ * The limit is the business's `money.amounts['orders.approval']`; until it sets one, the
+ * module's default below. A limit in another currency than the order's counts as exceeded.
+ */
+export const APPROVAL_LIMIT_KEY = 'orders.approval';
+export const DEFAULT_APPROVAL_LIMIT: Money = { minor: 50_000_000, currency: 'INR' };
+
+/** Who approves a submitted order, and saves one above the limit without asking anyone. */
+export const OrdersApprove = defineCapability({
+  name: 'orders.approve',
+  label: {
+    en: 'Approve orders, and save large ones without asking',
+    hi: 'ऑर्डर मंज़ूर करें, और बड़े ऑर्डर बिना पूछे सहेजें',
+    te: 'ఆర్డర్లను ఆమోదించండి, పెద్దవాటిని అడగకుండా సేవ్ చేయండి',
+  },
+  roles: ['owner', 'admin'],
+});
+
+/** The decision for a save of an order with this total. */
+export function saveDecision(
+  p: Principal,
+  total: Money,
+  money: { amounts: Readonly<Record<string, Money>> },
+): AuthorizeResult {
+  const limit = moneyAmount(money, APPROVAL_LIMIT_KEY) ?? DEFAULT_APPROVAL_LIMIT;
+  const agent = p.actor.kind === 'agent';
+  const mayApprove = can(p, OrdersApprove.name);
+  if (exceeds(total, limit) && (agent || !mayApprove))
+    return needsApproval('order_over_limit', 'An order this large needs an owner to approve it', {
+      level: Levels.irreversible.name,
+      amount: total,
+      approver: {
+        by: mayApprove ? 'requester' : { capability: OrdersApprove.name },
+        channels: ['app'],
+        minAssurance: 'session',
+      },
+    });
+  if (agent)
+    return needsApproval('agent_saves_order', 'Orders the assistant saves need approval', {
+      amount: total,
+    });
+  return allow('person_saves_order');
+}

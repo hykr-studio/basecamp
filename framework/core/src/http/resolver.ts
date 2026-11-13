@@ -1,24 +1,77 @@
 import {
   type Assurance,
   type Channel,
+  checkRoles,
+  givenRoles,
   type Principal,
   parseSubjectKey,
+  type RolesSettings,
   type Subject,
-  TenantRole,
+  standingIn,
 } from '@hykr/contracts';
-import { contactById, ensureDefaultTenant, membershipOf, userExists } from '@hykr/db';
-import { ForbiddenException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
-import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
+import {
+  contactById,
+  customerOfUser,
+  ensureDefaultTenant,
+  latestParticipation,
+  membershipOf,
+  participatesIn,
+  userExists,
+} from '@hykr/db';
+import {
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { TenantConfigService } from '../tenants/tenant-config.service.js';
+import { CORE_OPTIONS, type Conn, type CoreOptions } from '../tokens.js';
+import { standingProviders } from './standing.js';
 
-/** The part of a principal that says who it is for and what they may do, in which business. */
-export type Standing = Required<Pick<Principal, 'subject' | 'tenantId' | 'roles' | 'assurance'>> &
-  Pick<Principal, 'customerId'>;
+/**
+ * The part of a principal that says who it is for and what they may do, in which business. No
+ * `tenantId`: a person in no business yet (sign-up made none); every scoped call refuses them.
+ * `standing`: a member of the business's team, or a participant (a member of one of its parties).
+ */
+export type Standing = Required<
+  Pick<Principal, 'subject' | 'roles' | 'capabilities' | 'assurance'>
+> &
+  Pick<Principal, 'customerId' | 'tenantId' | 'standing' | 'onBehalfOf'>;
 
-const roles = (values: readonly string[]) =>
-  values.flatMap((r) => {
-    const parsed = TenantRole.safeParse(r);
-    return parsed.success ? [parsed.data] : [];
-  });
+/**
+ * How sure a channel makes us, at most: WhatsApp vouches only for a number, and a share link
+ * for even less until it asks for a code. A channel can only lower assurance, never raise it.
+ */
+const CHANNEL_ASSURANCE: Record<Channel, Assurance> = {
+  app: 'session',
+  voice: 'session',
+  api: 'session',
+  mcp: 'session',
+  webmcp: 'session',
+  background: 'session',
+  whatsapp: 'whatsapp_number',
+  share: 'whatsapp_number',
+};
+
+const logger = new Logger('PrincipalResolver');
+const warned = new Set<string>();
+
+/**
+ * Roles and what they allow in this business, as a principal carries them: the declared roles
+ * (with the application's overrides and the business's edits) and the business's own. A name
+ * it does not have grants nothing, and is logged once.
+ */
+function standingOf(values: readonly string[], section: RolesSettings | null) {
+  const { roles, capabilities, unknown } = standingIn(values, section ? { roles: section } : {});
+  for (const r of unknown)
+    if (!warned.has(r)) {
+      warned.add(r);
+      logger.warn(`Role "${r}" is in a membership but nobody declared it: it grants nothing`);
+    }
+  // A roles section that does not parse may hide an edit that took capabilities away: allow none.
+  return { roles, capabilities: section ? capabilities : [] };
+}
 
 /**
  * Who a request is for, from facts the server holds: the session, the person or contact an
@@ -28,44 +81,168 @@ const roles = (values: readonly string[]) =>
  */
 @Injectable()
 export class PrincipalResolver {
-  constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {}
+  constructor(
+    @Inject(CORE_OPTIONS) private readonly options: CoreOptions,
+    @Inject(TenantConfigService) private readonly tenants: TenantConfigService,
+  ) {
+    // When the API or worker starts: a role, override or role default naming a capability or
+    // role nobody declares stops it.
+    checkRoles();
+  }
 
   /**
-   * A person, in a business they belong to (that one, or their default). A WhatsApp turn is
-   * only as sure as the number: 'whatsapp_number', even for a person with an account.
+   * A business's roles section. It is read alone, so another broken section (a feature's) leaves
+   * the capabilities in place and its owner can still repair it. A roles section that does not
+   * parse is null: the declared roles still reach their rows, but nobody holds a capability
+   * there until it is fixed (fail closed: a business's edit may have taken some away).
+   */
+  private async rolesOf(tenantId: string, conn?: Conn): Promise<RolesSettings | null> {
+    try {
+      return await this.tenants.section(tenantId, 'roles', conn);
+    } catch (e) {
+      logger.error(`Roles of business ${tenantId} do not parse; no capabilities there: ${e}`);
+      return null;
+    }
+  }
+
+  /**
+   * A person, in a business they are in (that one, or their default): as a member of its team,
+   * or, when they are no member there, as a participant (a member of one of its parties). A
+   * WhatsApp turn is only as sure as the number: 'whatsapp_number', even for a person with an
+   * account. Asked for a business they are not in: 403.
+   *
+   * Asked inside a transaction (a comment's mentions, resolved in its write), the caller passes
+   * it as `conn`: every read is on it, and nothing waits for a second pooled connection.
    */
   async forUser(
     userId: string,
-    opts: { tenantId?: string; channel?: Channel; name?: string } = {},
+    opts: { tenantId?: string; channel?: Channel; name?: string; conn?: Conn } = {},
   ): Promise<Standing> {
-    const db = this.options.db;
+    const db = opts.conn ?? this.options.db;
     let membership = await membershipOf(db, userId, opts.tenantId);
-    if (!membership && opts.tenantId)
+    if (!membership && opts.tenantId) {
+      if (await participatesIn(db, userId, opts.tenantId))
+        return this.participant(userId, opts.tenantId, opts.channel, db);
+      // Neither: a platform standing there (an operator's consented support access), if any.
+      const other = await this.otherStanding(userId, opts.tenantId, opts.channel, db);
+      if (other) return other;
       throw new ForbiddenException({ error: 'forbidden', rule: 'not_a_member' });
-    // A person without a business yet (signed up before the hook, or it failed): give them one.
+    }
     if (!membership) {
       if (!(await userExists(db, userId))) throw new UnauthorizedException('Unknown person');
+      // No membership: where they participate, most recently first.
+      const participating = await latestParticipation(db, userId);
+      if (participating) return this.participant(userId, participating, opts.channel);
+      // A person without a business yet (signed up before the hook, or it failed): give them
+      // one, unless the application gives none on sign-up. Then they are in no business.
+      if (this.options.createBusinessOnSignUp === false)
+        return {
+          subject: { kind: 'user', userId },
+          roles: [],
+          capabilities: [],
+          assurance: this.assurance(opts.channel),
+        };
       membership = await ensureDefaultTenant(db, userId, opts.name ?? '');
     }
     return {
       subject: { kind: 'user', userId },
       tenantId: membership.tenantId,
-      roles: roles(membership.roles),
+      ...standingOf(membership.roles, await this.rolesOf(membership.tenantId, opts.conn)),
       ...(membership.customerId ? { customerId: membership.customerId } : {}),
       assurance: this.assurance(opts.channel),
+      standing: 'member',
     };
   }
 
   /**
-   * A WhatsApp contact. Linked to an account (and a member of this business): that person,
-   * at 'whatsapp_number'. Otherwise the business's customer, seeing only their own records.
+   * A person who is no member of this business but a member of one of its parties: the roles
+   * the application gives participants, their customer record there if one is theirs, and only
+   * what those roles' access rules (the participant grant above all) reach. Never a membership.
    */
-  async forContact(contactId: string, opts: { channel?: Channel } = {}): Promise<Standing> {
+  private async participant(
+    userId: string,
+    tenantId: string,
+    channel: Channel | undefined,
+    db: Conn = this.options.db,
+  ): Promise<Standing> {
+    const customerId = await customerOfUser(db, userId, tenantId);
+    return {
+      subject: { kind: 'user', userId },
+      tenantId,
+      ...standingOf(givenRoles('participant'), await this.rolesOf(tenantId, db)),
+      ...(customerId ? { customerId } : {}),
+      assurance: this.assurance(channel),
+      standing: 'participant',
+    };
+  }
+
+  /**
+   * A person who is neither a member nor a participant here: the first standing provider's answer
+   * (`standingProviders`), with the roles the business has among those it names and only the
+   * capabilities it names. Checked on every request, so an ended grant ends at once.
+   */
+  private async otherStanding(
+    userId: string,
+    tenantId: string,
+    channel: Channel | undefined,
+    db: Conn = this.options.db,
+  ): Promise<Standing | undefined> {
+    for (const provider of standingProviders.all()) {
+      const other = await provider.forUser({ db, userId, tenantId, channel });
+      if (!other) continue;
+      const { roles } = standingOf(other.roles, await this.rolesOf(tenantId, db));
+      return {
+        subject: { kind: 'user', userId },
+        tenantId,
+        roles,
+        capabilities: [...new Set(other.capabilities)].sort(),
+        assurance: this.assurance(channel),
+        standing: other.standing,
+        onBehalfOf: other.onBehalfOf,
+      };
+    }
+    return undefined;
+  }
+
+  /**
+   * Does this person still stand in this business through the platform as `onBehalfOf` says
+   * (`onBehalfOfKey`: the standing something was made under)? The first provider that knows the
+   * key answers; a key none knows counts as ended. A membership never counts: what was made under
+   * support access ends with that access, whatever the person is now.
+   */
+  async standsOnBehalf(userId: string, tenantId: string, onBehalfOf: string): Promise<boolean> {
+    for (const provider of standingProviders.all()) {
+      const holds = await provider.stillStands?.({
+        db: this.options.db,
+        userId,
+        tenantId,
+        onBehalfOf,
+      });
+      if (holds !== null && holds !== undefined) return holds;
+    }
+    return false;
+  }
+
+  /**
+   * A WhatsApp contact. Linked to an account (a member or participant of this business): that
+   * person, at 'whatsapp_number'. Otherwise the contact, with the roles the application gives
+   * contacts: their own customer records, and the records their parties participate in.
+   * A contact belongs to one business: asked for another one (a credential or header that
+   * fixes it), it is refused, never moved there.
+   */
+  async forContact(
+    contactId: string,
+    opts: { tenantId?: string; channel?: Channel } = {},
+  ): Promise<Standing> {
     const contact = await contactById(this.options.db, contactId);
     if (!contact) throw new UnauthorizedException('Unknown contact');
+    if (opts.tenantId && opts.tenantId !== contact.tenantId)
+      throw new ForbiddenException({ error: 'forbidden', rule: 'tenant_mismatch' });
+    // A number linked to an account acts as its person there: a member, or a participant.
     if (contact.userId) {
-      const member = await membershipOf(this.options.db, contact.userId, contact.tenantId);
-      if (member)
+      const db = this.options.db;
+      const member = await membershipOf(db, contact.userId, contact.tenantId);
+      if (member || (await participatesIn(db, contact.userId, contact.tenantId)))
         return this.forUser(contact.userId, {
           tenantId: contact.tenantId,
           channel: opts.channel ?? 'whatsapp',
@@ -74,7 +251,8 @@ export class PrincipalResolver {
     return {
       subject: { kind: 'contact', contactId },
       tenantId: contact.tenantId,
-      roles: ['customer'],
+      // The roles the application gives a contact (the framework's: customer).
+      ...standingOf(givenRoles('contact'), await this.rolesOf(contact.tenantId)),
       ...(contact.customerId ? { customerId: contact.customerId } : {}),
       assurance: 'whatsapp_number',
     };
@@ -97,10 +275,74 @@ export class PrincipalResolver {
   }
 
   /**
+   * A share link's guest (decisions B9), from the link as stored now: actor `guest` (the link's
+   * id), channel `share`, no roles and no capability, the link's recipient as subject (a contact)
+   * and customer, and `otp` assurance once its code was entered. A shared page's guest reads with
+   * the maker's roles in that business (`reach: 'sharer'`), still without their capabilities;
+   * when the maker is no longer there, nobody is (403 from `forUser`). A link made through the
+   * platform (`onBehalfOf`: an operator's support access) reaches nothing once that standing has
+   * ended (403 `maker_gone`), whatever kind it is (docs/decisions/S1.md).
+   */
+  async forShareLink(
+    link: {
+      id: string;
+      tenantId: string;
+      kind: 'record' | 'page' | 'form';
+      createdBy: string;
+      contactId: string | null;
+      customerId: string | null;
+      onBehalfOf: string | null;
+    },
+    opts: { verified: boolean; reach?: 'link' | 'form' },
+  ): Promise<Principal> {
+    if (
+      link.onBehalfOf &&
+      !(await this.standsOnBehalf(link.createdBy, link.tenantId, link.onBehalfOf))
+    )
+      throw new ForbiddenException({ error: 'forbidden', rule: 'maker_gone' });
+    const assurance: Assurance = opts.verified ? 'otp' : 'whatsapp_number';
+    const base = {
+      actor: { kind: 'guest' as const, id: link.id },
+      tenantId: link.tenantId,
+      capabilities: [],
+      assurance,
+      channel: 'share' as const,
+      scopes: [],
+    };
+    if (link.kind === 'page') {
+      const maker = await this.forUser(link.createdBy, {
+        tenantId: link.tenantId,
+        channel: 'share',
+      });
+      return {
+        ...base,
+        subject: maker.subject,
+        roles: maker.roles,
+        ...(maker.customerId ? { customerId: maker.customerId } : {}),
+        ...(maker.standing ? { standing: maker.standing } : {}),
+        share: { linkId: link.id, reach: 'sharer' },
+      };
+    }
+    const contact = link.contactId ? await contactById(this.options.db, link.contactId) : undefined;
+    const ours = contact && contact.tenantId === link.tenantId ? contact : undefined;
+    const customerId = link.customerId ?? ours?.customerId ?? undefined;
+    return {
+      ...base,
+      roles: [],
+      ...(ours ? { subject: { kind: 'contact' as const, contactId: ours.id } } : {}),
+      ...(customerId ? { customerId } : {}),
+      share: { linkId: link.id, reach: opts.reach ?? 'link' },
+    };
+  }
+
+  /**
    * A stored principal (a parked approval), checked again before it acts: the person must
    * still belong to the business, the contact must still exist. Its roles are today's.
    */
   async refresh(stored: Principal): Promise<Principal> {
+    // A guest never parks (decisions B9, 18): its stored request has nobody to act as.
+    if (stored.actor.kind === 'guest')
+      throw new ForbiddenException({ error: 'forbidden', rule: 'guest_cannot_wait' });
     const subject =
       stored.subject ??
       (stored.actor.kind === 'user'
@@ -113,10 +355,13 @@ export class PrincipalResolver {
       tenantId: stored.tenantId,
       channel: stored.channel,
     });
-    return { ...stored, ...standing };
+    // Today's standing only: a platform standing it had then (support access) is not kept.
+    const { onBehalfOf: _then, ...kept } = stored;
+    return { ...kept, ...standing };
   }
 
   private assurance(channel: Channel | undefined): Assurance {
-    return channel === 'whatsapp' ? 'whatsapp_number' : 'session';
+    // An unknown channel (an old stored principal) counts as the weakest.
+    return channel ? (CHANNEL_ASSURANCE[channel] ?? 'whatsapp_number') : 'session';
   }
 }

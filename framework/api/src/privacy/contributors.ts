@@ -1,0 +1,153 @@
+import type { Conn, Tx } from '@hykr/core';
+import { events as auditEvents } from '@hykr/db';
+import { and, eq, inArray, or, type SQL, sql } from 'drizzle-orm';
+import {
+  type DataSubject,
+  type ErasedRecords,
+  type ErasureResult,
+  erasureContributors,
+  exportContributors,
+  type KeptData,
+} from '../hooks.js';
+
+/**
+ * The ids of the records of this type a person or contact created (their `<type>.create` audit
+ * rows, or the `actions` given, as themselves or through their assistant), in one business or
+ * every one. A contributor erases the copies of these too: a record they deleted before is
+ * gone, but its copies are not (decisions V8).
+ */
+export async function createdBy(
+  conn: Conn,
+  a: {
+    type: string;
+    userId?: string;
+    contactId?: string;
+    tenantId?: string;
+    actions?: readonly string[];
+  },
+): Promise<string[]> {
+  const who = a.userId
+    ? (['user', a.userId] as const)
+    : a.contactId
+      ? (['contact', a.contactId] as const)
+      : null;
+  if (!who) return [];
+  const [kind, id] = who;
+  const rows = await conn
+    .selectDistinct({ id: auditEvents.resourceId })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.resourceType, a.type),
+        inArray(auditEvents.action, [...(a.actions ?? [`${a.type}.create`])]),
+        or(
+          and(eq(auditEvents.actorKind, kind), eq(auditEvents.actorId, id)),
+          eq(auditEvents.actingFor, id),
+          eq(auditEvents.actingFor, `${kind}:${id}`),
+        ),
+        a.tenantId ? eq(auditEvents.tenantId, a.tenantId) : undefined,
+      ) as SQL,
+    );
+  return rows.flatMap((r) => (r.id ? [r.id] : []));
+}
+
+/**
+ * The approvals a person or contact asked for, deleted with them: every copy loses its summary
+ * and input (its audit rows and stored events, the park's row on its record, its notification,
+ * the reply kept for a retry), and the items in other people's inboxes that asked them to
+ * decide go (decisions V8).
+ */
+export const approvalCopies = (ids: readonly string[]): ErasedRecords => ({
+  type: 'approval',
+  ids,
+  fields: ['summary', 'input', 'payload'],
+  deleted: true,
+});
+
+/**
+ * The ids of the records of this type whose audit rows (before or after) contain one of these
+ * JSON values, in one business or every one: records about the person removed or edited before
+ * the erasure (a party member taken off, a comment naming them since deleted). A contributor
+ * erases their copies too: the live rows no longer name them, but the copies do (decisions V8).
+ */
+export async function auditedWith(
+  conn: Conn,
+  a: { type: string; contains: readonly object[]; tenantId?: string },
+): Promise<string[]> {
+  if (!a.contains.length) return [];
+  const rows = await conn
+    .selectDistinct({ id: auditEvents.resourceId })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.resourceType, a.type),
+        or(
+          ...a.contains.flatMap((v) => {
+            const json = JSON.stringify(v);
+            return [
+              sql`${auditEvents.after} @> ${json}::jsonb`,
+              sql`${auditEvents.before} @> ${json}::jsonb`,
+            ];
+          }),
+        ),
+        a.tenantId ? eq(auditEvents.tenantId, a.tenantId) : undefined,
+      ) as SQL,
+    );
+  return rows.flatMap((r) => (r.id ? [r.id] : []));
+}
+
+/** These ids and those, once each. */
+export const both = (a: readonly string[], b: readonly string[]) => [...new Set([...a, ...b])];
+
+/** What every erasure contributor did for one subject. */
+export interface ContributorsErasure {
+  /** Each contributor's count, by name, for the audit row. */
+  counts: Record<string, number>;
+  /** The records they deleted or blanked, whose copies the erasure redacts. */
+  erased: ErasedRecords[];
+  /** What they kept on purpose, and why. */
+  kept: KeptData[];
+  /** Assistant runs whose turns they erased: Mastra's rows of them go too. */
+  runs: string[];
+  /** Their work outside the database, for once the erasure has committed. */
+  afterCommit: NonNullable<ErasureResult['afterCommit']>[];
+}
+
+/**
+ * Every erasure contributor, in order, inside the erasure's transaction: what each feature holds
+ * about this person goes with the rest, or none of it does.
+ */
+export async function eraseWithContributors(
+  a: DataSubject & { tx: Tx },
+): Promise<ContributorsErasure> {
+  const out: ContributorsErasure = { counts: {}, erased: [], kept: [], runs: [], afterCommit: [] };
+  for (const c of erasureContributors.all()) {
+    const r = await c.erase(a);
+    out.counts[c.name] = r.count;
+    out.erased.push(...(r.erased ?? []).filter((s) => s.ids.length));
+    out.kept.push(...(r.kept ?? []).filter((k) => k.count > 0));
+    out.runs.push(...(r.runs ?? []));
+    if (r.afterCommit) out.afterCommit.push(r.afterCommit);
+  }
+  return out;
+}
+
+/**
+ * Everything the export contributors hold about this person, by kind ({ files: [...] }). Two
+ * contributors that return the same kind stop the export instead of one hiding the other.
+ */
+export async function exportPersonalData(
+  a: DataSubject & { db: Conn },
+): Promise<Record<string, readonly unknown[]>> {
+  const out: Record<string, readonly unknown[]> = {};
+  const from: Record<string, string> = {};
+  for (const c of exportContributors.all()) {
+    for (const [kind, records] of Object.entries(await c.export(a))) {
+      if (from[kind])
+        throw new Error(`Both ${from[kind]} and ${c.name} export "${kind}": rename one kind`);
+      from[kind] = c.name;
+      out[kind] = records;
+    }
+  }
+  return out;
+}

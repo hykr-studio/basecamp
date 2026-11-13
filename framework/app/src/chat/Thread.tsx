@@ -5,6 +5,7 @@ import {
   ThreadPrimitive,
   useAuiState,
 } from '@assistant-ui/react-native';
+import type { MessageKey } from '@hykr/i18n';
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, TextInput, View } from 'react-native';
 import { Button } from '../components/ui/button';
@@ -14,13 +15,15 @@ import { LeaveChat, useApprovalStatus } from '../framework/ApprovalCard';
 import { AssistantMark } from '../framework/AssistantMark';
 import { clock } from '../framework/dates';
 import { Icon } from '../framework/Icon';
+import { useT } from '../framework/lang';
 import { inApp, webHref } from '../framework/web-link';
-import { getAppDomain } from '../runtime';
+import { getApp } from '../runtime';
 import { colors } from '../theme';
 import { MicButton, VoiceBar } from '../voice/VoiceBar';
 import { useVoice } from '../voice/VoiceProvider';
 import { useAssistantRuntime, useClearConversation } from './ChatRuntime';
 import { useDraft } from './draft';
+import { replyError } from './replyError';
 import { ToolPart } from './ToolPart';
 
 const INPUT_ID = 'assistant-input';
@@ -75,46 +78,33 @@ function useParkedInMessage(): { approvalId: string; texts: string[] } | null {
   return useMemo(() => (key ? JSON.parse(key) : null), [key]);
 }
 
-const SINCE: Record<string, string> = {
-  approved: 'Since approved by you',
-  rejected: 'Since rejected by you; nothing changed',
-  expired: 'Since expired; nothing changed',
-  failed: "Since approved, but it couldn't be done",
+const SINCE: Record<string, MessageKey> = {
+  approved: 'approval.since.approvedByYou',
+  rejected: 'approval.since.rejectedByYou',
+  expired: 'approval.since.expired',
+  failed: 'approval.since.failed',
+};
+/** The same notes for a request someone else decided (its `canDecide` is false): not "by you". */
+const SINCE_TEAM: Record<string, MessageKey> = {
+  ...SINCE,
+  approved: 'approval.since.approved',
+  rejected: 'approval.since.rejected',
 };
 
 function useSuperseded(): Superseded {
   const parked = useParkedInMessage();
   const { approval, status } = useApprovalStatus(parked?.approvalId);
+  const { t } = useT();
   return useMemo(() => {
     if (!parked || !status || status === 'pending' || !SINCE[status]) return null;
     const at = approval?.decidedAt ? ` · ${clock(approval.decidedAt)}` : '';
-    return { texts: new Set(parked.texts), note: `${SINCE[status]}${at}` };
-  }, [parked, status, approval?.decidedAt]);
-}
-
-/**
- * Why a reply failed, in words: the model provider's message (it arrives as the serialised
- * error, stack and all), never its stack trace. The trace link below keeps the detail.
- */
-function replyError(error: unknown): string {
-  let detail: { message?: unknown; statusCode?: unknown } = {};
-  if (typeof error === 'string') {
-    try {
-      detail = JSON.parse(error);
-    } catch {
-      detail = { message: error };
-    }
-  } else if (error instanceof Error) detail = { message: error.message };
-  else if (error && typeof error === 'object') detail = error;
-  const message = typeof detail.message === 'string' ? detail.message.split('\n')[0] : '';
-  if (detail.statusCode === 429 || /rate.?limit/i.test(message))
-    return 'The model is busy right now (rate-limited). Wait a moment, then send it again.';
-  return message
-    ? `The assistant couldn't answer: ${message.slice(0, 200)}`
-    : "The assistant couldn't answer. Send it again.";
+    const notes = approval?.canDecide === false ? SINCE_TEAM : SINCE;
+    return { texts: new Set(parked.texts), note: `${t(notes[status])}${at}` };
+  }, [parked, status, approval?.decidedAt, approval?.canDecide, t]);
 }
 
 function ReplyError() {
+  const { t } = useT();
   const error = useAuiState((s) => {
     const status = s.message.status;
     return status?.type === 'incomplete' && status.reason === 'error' ? status.error : undefined;
@@ -122,7 +112,7 @@ function ReplyError() {
   return (
     <View className="flex-row items-start gap-2">
       <Icon name="alert-circle" color={colors.danger} size={16} />
-      <Text className="shrink text-danger">{replyError(error)}</Text>
+      <Text className="shrink text-danger">{replyError(error, t)}</Text>
     </View>
   );
 }
@@ -256,7 +246,7 @@ function Composer({ compact }: { compact: boolean }) {
               ? 'Enter sends; Shift+Enter starts a new line. Press / anywhere to come back here.'
               : undefined
           }
-          placeholder={`e.g. ${getAppDomain().suggestions[0]?.text ?? 'what can you do?'}`}
+          placeholder={`e.g. ${getApp().suggestions[0]?.text ?? 'what can you do?'}`}
           placeholderTextColor={colors.placeholder}
           textAlignVertical="top"
           style={Platform.OS === 'web' ? undefined : { height }}
@@ -285,9 +275,9 @@ function Help({ onPick }: { onPick: (text: string) => void }) {
   return (
     <View className="gap-1">
       <Text variant="muted">
-        It acts for you through the same API as this app. Anything risky waits for your approval.
+        It acts for you through the same API as this app. Anything risky waits for approval.
       </Text>
-      {getAppDomain().suggestions.map((c) => (
+      {getApp().suggestions.map((c) => (
         <Pressable
           key={c.text}
           accessibilityRole="button"

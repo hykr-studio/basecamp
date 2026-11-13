@@ -4,17 +4,18 @@ import {
   useFonts,
 } from '@expo-google-fonts/schibsted-grotesk';
 import { ApiError } from '@hykr/api-client';
-import { type Catalog, createCatalog, type Domain } from '@hykr/contracts';
-import { createUiRegistry, type Registry, type UiDomain } from '@hykr/ui-registry';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { Catalog } from '@hykr/contracts';
+import type { Registry } from '@hykr/ui-registry';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { router, Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -33,14 +34,24 @@ import { type AppConfig, configure } from './config';
 import { ApprovalCard } from './framework/ApprovalCard';
 import { ApprovalsAnnouncer } from './framework/ApprovalsAnnouncer';
 import { ASSISTANT_ICON } from './framework/AssistantMark';
-import type { AppDomain, NavItem as Destination } from './framework/app-domain';
+import type {
+  AppModule,
+  AppPlugin,
+  AppSettings,
+  NavItem as Destination,
+} from './framework/app-domain';
 import { AssistantProvider, useAssistant } from './framework/assistant-context';
+import { bindAll, composeApp, type ModuleList, matchRoute } from './framework/compose-app';
 import { isFocused, isHovered } from './framework/hover';
 import { Icon } from './framework/Icon';
 import { LangProvider } from './framework/lang';
+import { forgetSession, lastSession, rememberSession } from './framework/last-session';
+import { keepPlace, useHere, useReturnToKeptPlace } from './framework/place';
+import { SignedIn, useNavFilters, useRedrawKey, wrapProviders } from './framework/plugins';
+import { createShellSession, type Shown } from './framework/shell-session';
 import { ToastProvider } from './framework/Toast';
 import { inApp, webHref } from './framework/web-link';
-import { type AppRuntime, getAppDomain, setRuntime } from './runtime';
+import { getApp, setRuntime } from './runtime';
 import { SignIn } from './screens/SignIn';
 import { colors, space, styles } from './theme';
 import { bindPlatformViews } from './views';
@@ -56,45 +67,149 @@ const queryClient = new QueryClient({
   },
 });
 
-/** The framework's own destinations, after the application's. */
-const FRAMEWORK_NAV: Destination[] = [
-  { href: '/pages', label: 'Pages', icon: 'layout', match: (p) => p.startsWith('/pages') },
-];
-
 /**
- * What the application passes in: its shell settings (`app`), and its domain either as a
- * catalog and registry it built itself, or as the raw declarations (`domain`, `views`) for
- * the shell to build them from. `config` carries what the app read from its environment.
+ * What the application passes in: its own settings (`app`: name, home screen), its app modules,
+ * the framework plugins it uses, and the catalog and registry it built from its modules' specs
+ * and views. `modules` may be a list or the namespace of a barrel (`import * as modules`).
+ * `config` carries what the app read from its environment.
  */
 export type AppShellProps = {
-  app: AppDomain;
+  app: AppSettings;
+  modules: ModuleList;
+  plugins?: readonly AppPlugin[];
+  catalog: Catalog;
+  registry: Registry;
   config?: Partial<AppConfig>;
-} & (
-  | { catalog: Catalog; registry: Registry; domain?: never; views?: never }
-  | { domain: Domain; views?: UiDomain; catalog?: never; registry?: never }
-);
+};
 
-let installed: AppRuntime | undefined;
+type Installed = {
+  app: AppSettings;
+  modules: readonly AppModule[];
+  plugins: readonly AppPlugin[];
+  catalog: Catalog;
+  registry: Registry;
+  /** Counts installations: the shell remounts on a new one, so plugin hooks keep their order. */
+  generation: number;
+};
+let installed: Installed | undefined;
+
+const listOf = (modules: ModuleList): readonly AppModule[] =>
+  Array.isArray(modules)
+    ? (modules as readonly AppModule[])
+    : Object.keys(modules)
+        .sort()
+        .map((k) => (modules as Readonly<Record<string, AppModule>>)[k]);
+const sameList = <T,>(a: readonly T[], b: readonly T[]) =>
+  a.length === b.length && a.every((x, i) => x === b[i]);
 
 /**
- * Hands the application's catalog, registry and settings to the framework, and binds every
- * component to its view or screen. Once: a re-render with the same app does nothing.
+ * Composes the application's settings, modules and plugins (refusing any collision), hands the
+ * result, the catalog and the registry to the framework, and binds every component to its view
+ * or screen. Again only when one of them changes (Fast Refresh): the same members in a new list
+ * do nothing.
  */
-function install(props: AppShellProps) {
-  if (installed?.appDomain === props.app) return;
+function install(props: AppShellProps): Installed {
+  const modules = listOf(props.modules);
+  const plugins = props.plugins ?? [];
+  if (
+    installed &&
+    installed.app === props.app &&
+    installed.catalog === props.catalog &&
+    installed.registry === props.registry &&
+    sameList(installed.modules, modules) &&
+    sameList(installed.plugins, plugins)
+  )
+    return installed;
   if (props.config) configure(props.config);
-  const runtime: AppRuntime = props.domain
-    ? {
-        appDomain: props.app,
-        catalog: createCatalog(props.domain),
-        registry: createUiRegistry(props.views),
+  const app = composeApp({
+    app: props.app,
+    modules: props.modules,
+    plugins,
+    catalog: props.catalog,
+  });
+  setRuntime({ catalog: props.catalog, registry: props.registry, app });
+  bindAll(
+    [
+      {
+        owner: 'framework',
+        bind: () => {
+          bindPlatformViews();
+          bindPlatformScreens();
+        },
+      },
+      ...app.modules.map((m) => ({ owner: m.name, bind: m.bind })),
+    ],
+    props.registry,
+  );
+  installed = {
+    app: props.app,
+    modules,
+    plugins,
+    catalog: props.catalog,
+    registry: props.registry,
+    generation: (installed?.generation ?? 0) + 1,
+  };
+  return installed;
+}
+
+/** Signed out on a plugin's public route: that screen alone, without the shell. */
+function PublicRoute({ fallback }: { fallback: ReactNode }) {
+  const path = usePathname();
+  const hit = matchRoute(
+    getApp().routes.filter((r) => r.public),
+    path,
+  );
+  if (!hit) return fallback;
+  const Screen = hit.route.screen;
+  return (
+    <View style={styles.screen}>
+      <Screen params={hit.params} />
+    </View>
+  );
+}
+
+/**
+ * The public route gate (decisions B9): a plugin's standalone route (a share link's page) is
+ * drawn on its own for everyone, signed in or not, before any session is looked for.
+ */
+function standaloneRoute(path: string) {
+  return matchRoute(
+    getApp().routes.filter((r) => r.public && r.standalone),
+    path,
+  );
+}
+
+/** The plugins' strips above the screen (offline, changes waiting to sync), in plugin order. */
+function Banners() {
+  const banners = getApp().plugins.filter((p) => p.Banner);
+  if (!banners.length) return null;
+  return (
+    <>
+      {banners.map((p) => {
+        const Banner = p.Banner as NonNullable<typeof p.Banner>;
+        return <Banner key={p.name} />;
+      })}
+    </>
+  );
+}
+
+/** The plugins' sign-out steps (forget what they kept on the device), each on its own. */
+async function signOutPlugins(user: SessionUser) {
+  await Promise.all(
+    getApp().plugins.map(async (p) => {
+      try {
+        await p.onSignOut?.(user);
+      } catch (e) {
+        console.error(`App plugin "${p.name}" failed at sign-out:`, e);
       }
-    : { appDomain: props.app, catalog: props.catalog, registry: props.registry };
-  setRuntime(runtime);
-  bindPlatformViews();
-  bindPlatformScreens();
-  props.app.bind();
-  installed = runtime;
+    }),
+  );
+}
+
+/** The business's mark when a plugin draws one (the settings plugin's logo and name), else the title. */
+function Brand({ fallback }: { fallback: string }) {
+  const Mark = getApp().plugins.find((p) => p.Brand)?.Brand;
+  return Mark ? <Mark fallback={fallback} /> : <Text style={styles.heading}>{fallback}</Text>;
 }
 
 /** The parts of the page the browser draws: focus ring, selection, caret, themed from the palette. */
@@ -185,9 +300,28 @@ function SkipLink() {
   );
 }
 
-function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }) {
-  const app = getAppDomain();
-  const nav = [...app.nav, ...FRAMEWORK_NAV];
+/**
+ * The signed-in shell, drawn again from scratch when a plugin's redraw key changes (the
+ * business's colours arriving after sign-in): its navigator then starts again at its first
+ * route, so the place the person was at (a link they opened) is kept, and the new layout goes
+ * back to it. Only the layout starts again; the plugins stay signed in.
+ */
+function Shell(props: { user: SessionUser; onSignOut: () => void }) {
+  const key = useRedrawKey(getApp().plugins);
+  const here = useHere();
+  const drawn = useRef(key);
+  if (drawn.current !== key) {
+    // In render: the old screens unmount in this very commit, while `here` is still theirs.
+    keepPlace(here);
+    drawn.current = key;
+  }
+  return <ShellLayout key={key} {...props} />;
+}
+
+function ShellLayout({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }) {
+  const app = getApp();
+  // The plugins' nav filters (flags, roles) may hide destinations, never add one.
+  const nav = useNavFilters(app.nav, app.plugins);
   const wide = useWindowDimensions().width >= 900;
   const path = usePathname();
   const [chatOpen, setChatOpen] = useState(false);
@@ -195,6 +329,8 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
   const canvasOpen = useCanvas((c) => c.state.kind !== 'closed');
   const closeCanvas = useCanvas((c) => c.close);
   const { registerReveal } = useAssistant();
+  // Drawn again (a plugin's redraw key): back where the person was.
+  useReturnToKeptPlace();
   // A screen's "Try: …" prompt opens the phone's sheet so the reply is in sight; wide
   // layouts always show the thread.
   useEffect(() => {
@@ -218,13 +354,16 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
         <ApprovalsAnnouncer />
         <View style={s.rail} role="navigation">
           <View style={{ gap: 2, paddingHorizontal: space.md, paddingBottom: space.lg }}>
-            <Text style={styles.heading}>{app.title}</Text>
+            <Brand fallback={app.title} />
             <Text style={styles.muted}>{app.tagline}</Text>
           </View>
-          {nav.map((n) => (
-            <NavItem key={n.href} item={n} active={n.match(path)} vertical />
-          ))}
-          <View style={{ flex: 1 }} />
+          {/* The destinations scroll when the rail runs out of height (a short window, the
+              WhatsApp form open below), so the person's part stays in sight. */}
+          <ScrollView style={s.railNav} contentContainerStyle={{ gap: space.xs }}>
+            {nav.map((n) => (
+              <NavItem key={n.href} item={n} active={n.match(path)} vertical />
+            ))}
+          </ScrollView>
           <View style={{ gap: space.xs, paddingHorizontal: space.md }}>
             <Text style={styles.label} numberOfLines={1}>
               {user.name}
@@ -257,6 +396,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
               alignSelf: 'center',
             }}
           >
+            <Banners />
             <ApprovalCard />
           </View>
           {stack}
@@ -279,7 +419,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
         <SkipLink />
         <ApprovalsAnnouncer />
         <View style={s.topBar}>
-          <Text style={styles.heading}>{app.title}</Text>
+          <Brand fallback={app.title} />
           {confirmSignOut ? (
             <View style={styles.row}>
               <Button title="Stay" variant="subtle" onPress={() => setConfirmSignOut(false)} />
@@ -295,6 +435,7 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
             />
           )}
         </View>
+        <Banners />
         <View style={{ flex: 1 }} role="main" id="main">
           {stack}
           {/* A canvas intent opens as a sheet over the screen, between the top bar and the
@@ -362,8 +503,8 @@ function Shell({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }
  * the assistant's thread, the canvas and approvals. An application's root _layout renders it.
  */
 export function AppShell(props: AppShellProps) {
-  // Before anything below renders: they read the catalog and registry.
-  install(props);
+  // Before anything below renders: they read the catalog, the registry and the composed app.
+  const { generation } = install(props);
   useBrowserSurfaces();
   // Headings' face. If it fails to load, the platform font stands in; nothing waits on it twice.
   const [fontsLoaded, fontError] = useFonts({
@@ -371,13 +512,23 @@ export function AppShell(props: AppShellProps) {
     SchibstedGrotesk_700Bold,
   });
   // undefined while the session loads, null when signed out.
-  const [user, setUser] = useState<SessionUser | null | undefined>(undefined);
-  useEffect(() => {
-    auth
-      .me()
-      .then(setUser)
-      .catch(() => setUser(null));
-  }, []);
+  const [user, setUser] = useState<Shown>(undefined);
+  // Opened without a network: on the last person signed in here, until the network is back and
+  // the session can be checked. Another person (or nobody) shown drops the cached answers first.
+  const [session] = useState(() =>
+    createShellSession({
+      me: () => auth.me(),
+      render: setUser,
+      clear: () => queryClient.clear(),
+      last: lastSession,
+      remember: rememberSession,
+      forget: forgetSession,
+      onNetwork: (listener) => onlineManager.subscribe(listener),
+    }),
+  );
+  useEffect(() => session.start(), [session]);
+  const standalone = standaloneRoute(usePathname());
+  const Standalone = standalone?.route.screen;
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -385,30 +536,44 @@ export function AppShell(props: AppShellProps) {
         <LangProvider>
           <AssistantProvider>
             <StatusBar style="dark" />
-            {user === undefined || !(fontsLoaded || fontError) ? (
-              <View style={styles.screen}>
-                <ActivityIndicator
-                  style={{ marginTop: 96 }}
-                  color={colors.primary}
-                  accessibilityLabel="Loading your session"
+            {wrapProviders(
+              getApp().plugins,
+              Standalone && standalone ? (
+                <View style={styles.screen}>
+                  <Standalone params={standalone.params} />
+                </View>
+              ) : user === undefined || !(fontsLoaded || fontError) ? (
+                <View style={styles.screen}>
+                  <ActivityIndicator
+                    style={{ marginTop: 96 }}
+                    color={colors.primary}
+                    accessibilityLabel="Loading your session"
+                  />
+                </View>
+              ) : user === null ? (
+                <PublicRoute
+                  fallback={
+                    <View style={styles.screen}>
+                      <SignIn onSignedIn={(u) => session.signedIn(u)} />
+                    </View>
+                  }
                 />
-              </View>
-            ) : user === null ? (
-              <View style={styles.screen}>
-                <SignIn onSignedIn={setUser} />
-              </View>
-            ) : (
-              <ChatRuntime key={user.id}>
-                <Shell
-                  user={user}
-                  onSignOut={() => {
-                    auth.signOut().finally(() => {
-                      queryClient.clear();
-                      setUser(null);
-                    });
-                  }}
-                />
-              </ChatRuntime>
+              ) : (
+                <ChatRuntime key={user.id}>
+                  {/* Its one child, keyed by installation: a new one unmounts the old shell and
+                      runs the old plugins' sign-out cleanups before the new ones sign in. */}
+                  <SignedIn key={generation} user={user} plugins={getApp().plugins}>
+                    <Shell
+                      user={user}
+                      onSignOut={() => {
+                        signOutPlugins(user)
+                          .then(() => auth.signOut())
+                          .finally(() => session.signedOut());
+                      }}
+                    />
+                  </SignedIn>
+                </ChatRuntime>
+              ),
             )}
           </AssistantProvider>
         </LangProvider>
@@ -437,6 +602,8 @@ const s = StyleSheet.create({
     paddingHorizontal: space.sm,
     gap: space.xs,
   },
+  // Takes the rail's free height and gives it back when the parts below need it.
+  railNav: { flexGrow: 1, flexShrink: 1, minHeight: 0 },
   railItem: {
     flexDirection: 'row',
     alignItems: 'center',

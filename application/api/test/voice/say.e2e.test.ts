@@ -44,7 +44,7 @@ describe('say (fake voice)', () => {
   });
 
   it('Hindi delete by voice parks an approval card for the screen; nothing is deleted', async () => {
-    const turn = await say({ person: person(), text: 'Call the plumber हटाओ', lang: 'hi-IN' });
+    const turn = await say({ person: person(), text: 'Call the plumber हटाओ', lang: 'hi' });
     expect(turn.spoken).toBe('इसके लिए आपकी मंज़ूरी चाहिए। मैंने इसे स्क्रीन पर दिखा दिया है।');
     const card = turn.uiParts.find((p) => p.type === 'tool-delete-todo');
     expect(card?.output).toMatchObject({

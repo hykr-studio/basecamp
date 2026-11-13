@@ -8,8 +8,11 @@ import { WHATSAPP_LIMITS } from './whatsapp/adapter.js';
 export type RenderTurn = {
   /** What the assistant said. */
   reply: string;
-  /** Views its tools showed, already in words (the text surface), with a list's rows to tap. */
-  views: { text: string; choices?: Choice[] }[];
+  /**
+   * Views its tools showed, already in words (the text surface), with a list's rows to tap and
+   * its heading (the view's title), which heads the buttons or the list.
+   */
+  views: { text: string; heading?: string; choices?: Choice[] }[];
   /** Actions parked for a person's approval. */
   approvals: { id: string; summary: string }[];
   /** Pages the assistant composed: a channel without a canvas links to them. */
@@ -28,8 +31,12 @@ export type RenderOptions = {
   approvalButtons?: (approvalId: string) => { approve: string; reject: string } | undefined;
 };
 
-/** A list's heading: its first line, without the list. */
-const heading = (text: string) => text.split('\n')[0]?.trim() || text.trim();
+/**
+ * What heads a list's buttons or rows: the view's heading, else its words whole (the adapter
+ * cuts them to the channel's limit). Never the first line alone: without a title, that is the
+ * first row.
+ */
+const bodyOf = (view: RenderTurn['views'][number]) => view.heading?.trim() || view.text.trim();
 
 /**
  * One agent turn as the messages that carry it, in order: the words first (split to the
@@ -47,7 +54,7 @@ export function render(turn: RenderTurn, o: RenderOptions): OutboundMessage[] {
       words.push(view.text);
       continue;
     }
-    const text = heading(view.text);
+    const text = bodyOf(view);
     if (rows.length <= WHATSAPP_LIMITS.maxButtons)
       interactive.push({
         kind: 'buttons',
@@ -84,7 +91,11 @@ export function render(turn: RenderTurn, o: RenderOptions): OutboundMessage[] {
       });
     else
       words.push(
-        t(o.lang, 'channel.approveInApp', { summary: a.summary, url: `${o.appUrl}/approvals` }),
+        t(o.lang, 'channel.approveInApp', {
+          summary: a.summary,
+          // The request itself: the deep link the app routes.
+          url: `${o.appUrl}/approvals/${encodeURIComponent(a.id)}`,
+        }),
       );
   }
   for (const page of turn.pages ?? [])

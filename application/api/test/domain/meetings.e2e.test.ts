@@ -1,7 +1,7 @@
 // Step 13: meetings, notes and to-dos on the framework, the two commands, and the
 // agent's scripted flows, against the real compiled API.
 
-import { boot, Person, pool, shutdown } from '@hykr/api/testing';
+import { boot, eventually, Person, pool, shutdown } from '@hykr/api/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 // Compiled, like the app runs: Nest's DI needs the decorator metadata tsc emits.
 import { server as application } from '../../dist/server.js';
@@ -32,6 +32,22 @@ async function newMeeting(who: Person, title: string, offsetDays = 1) {
   return res.body.value as { id: string; title: string; status: string; startsAt: string };
 }
 
+/** What a run said after the turn that parked: its next message in Ana's thread. */
+async function continuationOf(threadId: string, runId: string) {
+  type Message = {
+    parts: { type: string; text?: string }[];
+    metadata: { runId: string | null };
+  };
+  const next = await eventually(async () => {
+    const res = await ana.call('GET', `/api/threads/${threadId}/messages`);
+    return (res.body as Message[]).filter((m) => m.metadata.runId === runId)[1];
+  }, 20_000);
+  return {
+    text: next.parts.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('\n'),
+    tools: next.parts.filter((p) => p.type.startsWith('tool-')).map((p) => p.type),
+  };
+}
+
 const pendingFor = async (who: Person) =>
   (await who.call('GET', '/api/approvals')).body as {
     id: string;
@@ -50,6 +66,21 @@ describe('meetings, end to end', () => {
     expect((await ana.call('GET', '/api/meetings?colour=red')).status).toBe(400);
     // Someone else's meeting is not found, not forbidden.
     expect((await bob.call('GET', `/api/meetings/${siteReview.id}`)).status).toBe(404);
+  });
+
+  it('a meeting time Postgres cannot store is refused, not a 500', async () => {
+    // `z.iso.datetime({ offset: true })` takes a time past the year 9999 in UTC (V10).
+    const past9999 = '9999-12-31T23:59:59-01:00';
+    const made = await ana.call('POST', '/api/meetings', {
+      title: 'Never',
+      startsAt: past9999,
+      endsAt: past9999,
+      attendees: [],
+    });
+    expect(made.status).toBe(400);
+    const kept = await newMeeting(ana, 'Some day');
+    const moved = await ana.call('PATCH', `/api/meetings/${kept.id}`, { endsAt: past9999 });
+    expect(moved.status).toBe(400);
   });
 
   it('a plain PATCH cannot close a meeting: that is what close-meeting is for', async () => {
@@ -71,18 +102,8 @@ describe('meetings, end to end', () => {
       record: { type: 'meeting', id: siteReview.id },
     });
     expect(chat.body.toolCalls).toEqual([
-      {
-        tool: 'list-meetings',
-        ok: true,
-        outcome: 'done',
-        // A JSON caller has no screen: the list comes back in words.
-        // …with its rows, for a channel that can offer them to tap.
-        present: {
-          kind: 'text',
-          text: expect.stringContaining('• Site review'),
-          choices: [{ id: siteReview.id, title: 'Site review' }],
-        },
-      },
+      // The list it read to find the meeting is no answer: it shows nothing (V13).
+      { tool: 'list-meetings', ok: true, outcome: 'done' },
       // Parked, not done: the trace says so, with what is waiting.
       {
         tool: 'close-meeting',
@@ -145,6 +166,29 @@ describe('meetings, end to end', () => {
     expect(new Set(rows.map((r) => `${r.actor_kind}/${r.approved_by}/${r.outcome}`))).toEqual(
       new Set([`agent/${ana.id}/committed`]),
     );
+
+    // The assistant's run waited for the approval, then went on: in Ana's thread, under the same
+    // run, it looked up what is left to follow up (durable runs, A7).
+    const next = await continuationOf(chat.body.threadId, chat.body.runId);
+    expect(next.text).toBe('Closed Site review. 3 to-dos to follow up.');
+    expect(next.tools).toEqual(['tool-close-meeting', 'tool-list-todos']);
+  });
+
+  it('a rejected close: the run says nothing changed, and stops', async () => {
+    const retro = await newMeeting(ana, 'Retro');
+    const chat = await ana.chat('close Retro\nNothing new.\n- Fix the door');
+    const parked = chat.body.toolCalls.find((c: { tool: string }) => c.tool === 'close-meeting');
+    expect(parked.outcome).toBe('parked');
+    const no = await ana.call('POST', `/api/approvals/${parked.approvalId}/reject`);
+    expect(no.body.status).toBe('rejected');
+    const next = await continuationOf(chat.body.threadId, chat.body.runId);
+    expect(next.text).toBe(
+      'That was rejected, so nothing changed: Close Retro with 1 note and 1 to-do.',
+    );
+    expect(next.tools).toEqual(['tool-close-meeting']);
+    expect((await ana.call('GET', `/api/meetings/${retro.id}`)).body.status).toBe('scheduled');
+    // Not Bob's to read.
+    expect((await bob.call('GET', `/api/threads/${chat.body.threadId}/messages`)).status).toBe(404);
   });
 
   it("the meeting's history shows who asked, who approved, and the approval's outcome", async () => {
@@ -287,6 +331,44 @@ describe('meetings, end to end', () => {
     ]);
     expect(chat.body.reply).toContain('Tile showroom visit');
     expect(chat.body.reply).toContain('Pay the electrician');
+    // Read to answer, the lists show: a JSON caller has no screen, so in words, with their rows
+    // for a channel that can offer them to tap, headed by the view's title (V7).
+    expect(chat.body.toolCalls[0].present).toMatchObject({
+      kind: 'text',
+      text: expect.stringContaining('• Tile showroom visit'),
+      heading: 'Meetings',
+      choices: expect.arrayContaining([expect.objectContaining({ title: 'Tile showroom visit' })]),
+    });
+  });
+
+  it('open <meeting>: the meeting is the answer, never the list it was found in (V13)', async () => {
+    const meeting = await newMeeting(ana, 'Lookup review', 2);
+    const tools = (turn: { body: { toolCalls: { tool: string }[] } }) =>
+      turn.body.toolCalls.map((c) => c.tool);
+    // In words (WhatsApp): the meeting, and no meetings list with picks after it.
+    const words = await ana.chat('open Lookup review', undefined, ['text']);
+    expect(tools(words)).toEqual(['list-meetings', 'get-meeting']);
+    expect(words.body.toolCalls[0]).not.toHaveProperty('present');
+    expect(words.body.toolCalls[1].present).toMatchObject({
+      kind: 'text',
+      text: expect.stringContaining('Lookup review'),
+    });
+    // On a screen with no canvas: the meeting's own view, with no list above it.
+    const inline = await ana.chat('open Lookup review', undefined, ['inline']);
+    expect(tools(inline)).toEqual(['list-meetings', 'get-meeting']);
+    expect(inline.body.toolCalls[0]).not.toHaveProperty('present');
+    expect(inline.body.toolCalls[1].present).toMatchObject({
+      kind: 'inline',
+      props: { id: meeting.id },
+    });
+    // On a screen with a canvas: it opens there, with no list beside the chip.
+    const app = await ana.chat('open Lookup review', undefined, ['inline', 'canvas']);
+    expect(tools(app)).toEqual(['list-meetings', 'canvas-open']);
+    expect(app.body.toolCalls[0]).not.toHaveProperty('present');
+    expect(app.body.toolCalls[1].present).toMatchObject({
+      kind: 'open',
+      params: { id: meeting.id },
+    });
   });
 
   it('agents cannot delete meetings: the tool does not exist and the API refuses', async () => {

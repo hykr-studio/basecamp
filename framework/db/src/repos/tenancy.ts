@@ -1,3 +1,4 @@
+import { givenRoles } from '@hykr/contracts';
 import { and, desc, eq } from 'drizzle-orm';
 import type { DbOrTx } from '../database.js';
 import { contacts } from '../schema/channel.js';
@@ -8,10 +9,17 @@ export type Contact = typeof contacts.$inferSelect;
 
 /**
  * The person's own business: a new sign-up owns one, so the template works for one person as
- * it always has. Safe to call twice (or from two places at once): the partial unique index on
- * the default membership makes the second a no-op.
+ * it always has. They hold the roles the application gives a business's creator
+ * (`givenRoles('creator')` in @hykr/contracts; the framework's is `owner`). Safe to call twice
+ * (or from two places at once): the partial unique index on the default membership makes the
+ * second a no-op.
  */
-export async function ensureDefaultTenant(db: DbOrTx, userId: string, name: string) {
+export async function ensureDefaultTenant(
+  db: DbOrTx,
+  userId: string,
+  name: string,
+  roles: readonly string[] = givenRoles('creator'),
+) {
   const existing = await membershipOf(db, userId);
   if (existing) return existing;
   const [tenant] = await db
@@ -20,7 +28,7 @@ export async function ensureDefaultTenant(db: DbOrTx, userId: string, name: stri
     .returning();
   await db
     .insert(memberships)
-    .values({ tenantId: tenant.id, userId, roles: ['owner'], isDefault: true })
+    .values({ tenantId: tenant.id, userId, roles: [...roles], isDefault: true })
     .onConflictDoNothing();
   const created = await membershipOf(db, userId);
   if (!created) throw new Error(`No business for user ${userId}`);

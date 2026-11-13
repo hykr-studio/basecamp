@@ -1,19 +1,16 @@
-import { TenantSettings } from '@hykr/contracts';
-import { type Database, schema } from '@hykr/db';
-import { Inject, Injectable } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
-import { DB } from '../infra/db.module.js';
+import { TenantConfigService, type TenantInfo } from '@hykr/core';
+import { Injectable } from '@nestjs/common';
 
-/** A business as its channels need it: its name and how it works (settings, with defaults). */
+/**
+ * The channels' handle on a business's name and settings: TenantConfigService (@hykr/core),
+ * which caches them. It only delegates, so there is one cache per process. The processors that
+ * inject it switch to TenantConfigService when their owners next edit them (decisions F4).
+ */
 @Injectable()
 export class TenantsService {
-  constructor(@Inject(DB) private readonly db: Database) {}
+  constructor(private readonly config: TenantConfigService) {}
 
-  async get(tenantId: string): Promise<{ name: string; settings: TenantSettings }> {
-    const [row] = await this.db
-      .select({ name: schema.tenants.name, settings: schema.tenants.settings })
-      .from(schema.tenants)
-      .where(eq(schema.tenants.id, tenantId));
-    return { name: row?.name ?? '', settings: TenantSettings.parse(row?.settings ?? {}) };
+  get(tenantId: string): Promise<TenantInfo> {
+    return this.config.get(tenantId);
   }
 }

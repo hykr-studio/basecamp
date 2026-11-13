@@ -1,4 +1,5 @@
-import type { Approval } from '@hykr/contracts';
+import type { Approval, Money } from '@hykr/contracts';
+import type { Lang } from '@hykr/i18n';
 import { useQuery } from '@tanstack/react-query';
 import {
   type ComponentProps,
@@ -232,6 +233,33 @@ function actionLabel(a: Approval): string {
   return `Apply change to ${noun}`;
 }
 
+/**
+ * An amount in its own currency, in the reader's language: Intl knows each currency's minor
+ * units. An unknown currency code shows the bare minor units and the code.
+ */
+export function amountText(amount: Money, lang: Lang): string {
+  try {
+    const format = new Intl.NumberFormat(lang, { style: 'currency', currency: amount.currency });
+    const digits = format.resolvedOptions().maximumFractionDigits ?? 2;
+    return format.format(amount.minor / 10 ** digits);
+  } catch {
+    return `${amount.minor} ${amount.currency}`;
+  }
+}
+
+/**
+ * What is at stake, in a line: the application's level for it (its label) and the amount, when
+ * the decision gave them. Nothing when it gave neither.
+ */
+export function useStakes(approval: Approval): string | undefined {
+  const { lang, pick } = useT();
+  const parts = [
+    approval.level ? (approval.level.label ? pick(approval.level.label) : approval.level.name) : '',
+    approval.amount ? amountText(approval.amount, lang) : '',
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
 /** How long a newly shown decision ignores clicks, so a double-click can't land on it. */
 const ARM_MS = 600;
 
@@ -253,6 +281,9 @@ export function ApprovalItem({
   const summary = approval.summary ?? approval.action;
   const deciding = decide.isPending && decide.variables?.id === approval.id;
   const confirm = actionLabel(approval);
+  const stakes = useStakes(approval);
+  // The requester can open their own request; someone else decides it then.
+  const mine = approval.canDecide !== false;
   const { anchor, title } = useReveal(approval.id);
   const [armed, setArmed] = useState(false);
   useEffect(() => {
@@ -305,7 +336,12 @@ export function ApprovalItem({
             {expiresIn(approval.expiresAt)}
           </Text>
         </View>
-        <Text style={styles.muted}>Why it waits: {approval.reason}.</Text>
+        {stakes && <Text style={[styles.label, { color: colors.approvalText }]}>{stakes}</Text>}
+        {/* Why it waits, for whoever decides: an application's reason may say "your approval",
+            which is not the requester's when someone else decides it. */}
+        {mine && (
+          <Text style={styles.muted}>{t('approval.whyItWaits', { reason: approval.reason })}</Text>
+        )}
         {destructive && !open && (
           <Text style={[styles.muted, { color: colors.danger, fontWeight: '600' }]}>
             Approving deletes it permanently.
@@ -333,9 +369,16 @@ export function ApprovalItem({
           <ApprovalPreview approval={approval} />
         </View>
       )}
+      {!mine && (
+        <View style={[styles.row, { gap: space.xs }]}>
+          <Icon name="users" color={colors.muted} size={16} />
+          <Text style={styles.muted}>{t('approval.someoneElseDecides')}</Text>
+        </View>
+      )}
       <View
         style={[
           styles.row,
+          !mine && { display: 'none' },
           narrow && { alignSelf: 'stretch' },
           // On a phone, the safe choice takes the first slot and the delete sits apart from it.
           narrow && destructive && { flexDirection: 'row-reverse' },

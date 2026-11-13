@@ -18,8 +18,11 @@ import { DelayedError, type Job, type Queue } from 'bullmq';
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { config } from '../../config.js';
+import { grievanceContactOf } from '../../features/privacy/contact.js';
+import { type InboundInfo, inboundHooks } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
 import { ChatService } from '../../modules/chat/chat.service.js';
+import { TurnRefused } from '../../modules/chat/turn-hooks.js';
 import { ThreadsService } from '../../modules/threads/threads.service.js';
 import { runtime } from '../../runtime.js';
 import { type Contact, ContactsService } from '../contacts.service.js';
@@ -32,7 +35,7 @@ import { QUEUES } from '../queues.js';
 import { TenantsService } from '../tenants.service.js';
 import { REDIS, WHATSAPP } from './adapter.provider.js';
 import { SttService } from './stt.service.js';
-import { toRenderTurn } from './turn.js';
+import { ownApprovals, toRenderTurn } from './turn.js';
 import type { InboundJob } from './webhook.controller.js';
 
 /** What the assistant helps with, in one sentence: the application's words, or the framework's. */
@@ -41,7 +44,7 @@ const does = (lang: Lang) => {
   return words ? pick(words, lang) : t(lang, 'channel.does');
 };
 
-const { inboundEvents, contacts, messages, approvals } = schema;
+const { inboundEvents, contacts, messages } = schema;
 const log = new Logger('WhatsAppInbound');
 
 /** The quick reply a marketing template offers to stop offers (see monthly_update_v1). */
@@ -151,7 +154,11 @@ export class InboundProcessor extends WorkerHost {
       );
       return;
     }
-    const contact = await this.contacts.findOrCreate(tenantId, from, last.profileName);
+    const business = await this.tenants.get(tenantId);
+    // Someone new: the business's customer, or only a contact if it says so (parties settings).
+    const contact = await this.contacts.findOrCreate(tenantId, from, last.profileName, {
+      customer: business.settings.parties.unknownSenders === 'customer',
+    });
     // Voice notes become their words; the audio is dropped once heard.
     let unheard = false;
     for (const [i, m] of burst.entries()) {
@@ -182,7 +189,6 @@ export class InboundProcessor extends WorkerHost {
       .trim();
     const lang = await this.languageOf(contact, text);
     const target = { tenantId, contactId: contact.id, from: phoneNumberId };
-    const business = await this.tenants.get(tenantId);
     const say = (line: string) =>
       this.outbound.queue(target, [{ kind: 'text', to: from, text: line }]);
     if (unheard) await say(t(lang, 'channel.notHeard'));
@@ -202,25 +208,25 @@ export class InboundProcessor extends WorkerHost {
 
     // Buttons the code answers, not the agent: Approve / Reject (signed), and a
     // notification's own (snooze, …).
-    let handled = 0;
+    const answered = new Set<InboundMessage>();
     for (const m of burst) {
       if (m.body.kind !== 'button') continue;
       const { payload } = m.body;
       if (isApprovalPayload(payload)) {
         await say(await this.decideByButton(contact, payload, lang, m.providerMessageId));
-        handled++;
+        answered.add(m);
       } else if (payload.startsWith('ntf:') && payload.endsWith(`:${OPT_OUT_BUTTON}`)) {
         // A marketing template's opt-out: no more offers, whichever template carried it.
         await this.setConsent(contact, 'marketing', false, 'button');
         await say(t(lang, 'channel.stoppedOffers'));
-        handled++;
+        answered.add(m);
       } else if (payload.startsWith('ntf:')) {
         const reply = await this.notify.tapped(contact.id, payload, m.replyTo);
-        await say(reply ? reply[lang] : t(lang, 'said.failed'));
-        handled++;
+        await say(reply ? pick(reply, lang) : t(lang, 'said.failed'));
+        answered.add(m);
       }
     }
-    if (handled === burst.length) {
+    if (answered.size === burst.length) {
       await this.done(pending.map((e) => e.id));
       return;
     }
@@ -235,15 +241,27 @@ export class InboundProcessor extends WorkerHost {
       const keyword = keywordOfMessage(m);
       return keyword ? [{ keyword, words: wordsOf(m) ?? '' }] : [];
     });
+    const erasing = keywords.some((k) => k.keyword === 'delete_my_data');
     for (const { keyword, words } of keywords)
       await this.keyword(keyword, contact, lang, say, business.settings, words);
-    const rest = burst
-      .filter((m) => !keywordOfMessage(m))
-      .flatMap((m) => wordsOf(m) ?? [])
+    // They asked for their data to go, and the erasure is queued: the rest of the burst is
+    // dropped before any hook sees it (a stored photo would outlive the erasure), and the
+    // assistant takes no turn.
+    if (erasing) {
+      await this.done(pending.map((e) => e.id));
+      return;
+    }
+    // What is left passes the inbound hooks (a photo stored, its file named for the turn).
+    const rest = (
+      await this.throughHooks(
+        burst.filter((m) => !answered.has(m) && !keywordOfMessage(m)),
+        { tenantId, contactId: contact.id, ...(contact.userId ? { userId: contact.userId } : {}) },
+      )
+    )
       .join('\n')
       .trim();
-    // Nothing else said, or they asked for their data to go: no turn for the assistant.
-    if (keywords.length && (!rest || keywords.some((k) => k.keyword === 'delete_my_data'))) {
+    // Nothing else said: no turn for the assistant.
+    if (keywords.length && !rest) {
       await this.done(pending.map((e) => e.id));
       return;
     }
@@ -267,13 +285,46 @@ export class InboundProcessor extends WorkerHost {
     await this.done(pending.map((e) => e.id));
   }
 
+  /**
+   * Each message through the inbound hooks, in order: its words and the hooks' context lines,
+   * unless a hook handled it (later hooks don't see it then). A hook that throws is logged and
+   * skipped: retrying the burst would repeat what the code already answered.
+   */
+  private async throughHooks(
+    burst: InboundMessage[],
+    who: Omit<InboundInfo, 'message'>,
+  ): Promise<string[]> {
+    const lines: string[] = [];
+    for (const message of burst) {
+      const context: string[] = [];
+      let handled = false;
+      for (const hook of inboundHooks.all()) {
+        const decision = await hook.onMessage({ ...who, message }).catch((e) => {
+          log.error(`inbound hook ${hook.name} failed: ${e instanceof Error ? e.message : e}`);
+          return null;
+        });
+        if (!decision) continue;
+        if ('handled' in decision) {
+          handled = true;
+          break;
+        }
+        context.push(...decision.context);
+      }
+      if (handled) continue;
+      const words = wordsOf(message);
+      if (words) lines.push(words);
+      lines.push(...context);
+    }
+    return lines;
+  }
+
   /** STOP, START, HELP, a person, erasure, linking: each with its confirmation. */
   private async keyword(
     keyword: Keyword,
     contact: Contact,
     lang: Lang,
     say: (line: string) => Promise<unknown>,
-    settings: { grievanceContact: string; replyTime: string },
+    settings: { grievanceContact?: string; replyTime: string },
     text: string,
   ) {
     const consent = (topic: 'reminders' | 'marketing', granted: boolean) =>
@@ -290,10 +341,15 @@ export class InboundProcessor extends WorkerHost {
         await consent('reminders', true);
         await this.contacts.markUnreachable(contact.id, false);
         return say(t(lang, 'channel.started'));
-      case 'help':
+      case 'help': {
+        // The business's privacy contact, else the deployment's; with none, HELP says so.
+        const grievance = grievanceContactOf(settings);
         return say(
-          t(lang, 'channel.help', { does: does(lang), grievance: settings.grievanceContact }),
+          grievance
+            ? t(lang, 'channel.help', { does: does(lang), grievance })
+            : t(lang, 'channel.helpNoContact', { does: does(lang) }),
         );
+      }
       case 'human': {
         const handoff = await this.handoffs.open(contact, 'customer_asked');
         const reply = t(lang, 'channel.handoff', { replyTime: settings.replyTime });
@@ -345,42 +401,35 @@ export class InboundProcessor extends WorkerHost {
     target: { tenantId: string; contactId: string; from: string },
   ) {
     const p = await this.principalOf(contact);
-    const turn = await this.chat.once(p, {
-      message: text,
-      surfaces: ['text'],
-      timeZone: contact.timeZone,
-      lang,
-    });
-    const rendered = toRenderTurn(turn);
-    // What this turn parked, and who decides each: this person here, with buttons; or the
-    // business (a customer's request), which they are told has been asked.
-    const parked = rendered.approvals.length
-      ? await this.db
-          .select()
-          .from(approvals)
-          .where(
-            inArray(
-              approvals.id,
-              rendered.approvals.map((a) => a.id),
-            ),
-          )
-      : [];
-    const byId = new Map(parked.map((a) => [a.id, a]));
-    const self = p.subject?.kind === 'user' ? p.subject.userId : undefined;
-    const forTeam = rendered.approvals.filter((a) => !byId.get(a.id)?.approverUserId);
-    if (forTeam.length) {
-      rendered.approvals = rendered.approvals.filter((a) => !forTeam.includes(a));
-      rendered.reply = [rendered.reply, t(lang, 'approval.askedTeam')].filter(Boolean).join('\n\n');
+    let turn: Awaited<ReturnType<ChatService['once']>>;
+    try {
+      turn = await this.chat.once(p, {
+        message: text,
+        surfaces: ['text'],
+        timeZone: contact.timeZone,
+        lang,
+      });
+    } catch (e) {
+      if (!(e instanceof TurnRefused)) throw e;
+      // A hook refused the turn (a cap reached): an answer, not a failure to retry.
+      const { say } = e.refusal;
+      await this.outbound.queue(target, [
+        { kind: 'text', to: contact.address, text: say ? pick(say, lang) : t(lang, 'said.failed') },
+      ]);
+      return;
     }
+    // What this turn parked that this person decides, here, with buttons. The rest are someone
+    // else's, asked on their own: the reply's waiting line already says the team was asked (the
+    // same fact: see ownApprovals), so they get no buttons and no "approve it in the app".
+    const { turn: rendered, own } = await ownApprovals(this.db, p, toRenderTurn(turn));
     const outbound = render(rendered, {
       to: contact.address,
       lang,
       appUrl: config.appUrl,
       approvalButtons: (id) => {
-        const a = byId.get(id);
+        const a = own.get(id);
         const here = !a?.approverChannels || a.approverChannels.includes('whatsapp');
-        if (!a || !self || a.approverUserId !== self || !here || !config.approvalSecret)
-          return undefined;
+        if (!a || !here || !config.approvalSecret) return undefined;
         const expiresAt = Date.now() + APPROVAL_BUTTON_MS;
         const sign = (approve: boolean) =>
           signApproval(config.approvalSecret, { approvalId: id, approve, expiresAt }, contact.id);
@@ -407,33 +456,37 @@ export class InboundProcessor extends WorkerHost {
         ? t(lang, 'approval.notYours')
         : t(lang, 'approval.expired', { url: `${config.appUrl}/approvals` });
     const { approvalId, approve } = verified.decision;
+    // The request itself, in the app: the deep link every answer below points to.
+    const url = `${config.appUrl}/approvals/${encodeURIComponent(approvalId)}`;
     try {
       const p = await this.principalOf(contact);
       const a = await this.approvals.decide(p, approvalId, approve, `wa:${messageId}`);
       const summary = a.summary ?? '';
       if (a.status === 'approved') return t(lang, 'approval.done', { summary });
       if (a.status === 'rejected') return t(lang, 'approval.rejectedDone', { summary });
-      if (a.status === 'expired')
-        return t(lang, 'approval.expired', { url: `${config.appUrl}/approvals` });
+      if (a.status === 'expired') return t(lang, 'approval.expired', { url });
       return a.failureReason ?? t(lang, 'said.failed');
     } catch (e) {
       if (!(e instanceof HttpException)) throw e;
       const status = e.getStatus();
       if (status === 409) return t(lang, 'approval.alreadyDecided');
-      if (status === 403)
-        return t(lang, 'approval.decideInApp', { url: `${config.appUrl}/approvals` });
+      // Their own request, which someone else decides (nobody approves their own).
+      if (status === 403 && (e.getResponse() as { rule?: string }).rule === 'own_request')
+        return t(lang, 'approval.someoneElse', { url });
+      if (status === 403) return t(lang, 'approval.decideInApp', { url });
       return t(lang, 'approval.notYours');
     }
   }
 
   /**
-   * The language to answer in: the script they wrote in (Hindi or Telugu stick to the
-   * contact), else the contact's own.
+   * The language to answer in: the application's language whose letters they wrote in (one
+   * other than English sticks to the contact), else the contact's own.
    */
   private async languageOf(contact: Contact, text: string): Promise<Lang> {
     const written = scriptOf(text);
     if (written && written !== 'en') {
-      const locale = `${written}-IN`;
+      // The language alone: the script says nothing of where they are.
+      const locale = written;
       if (contact.locale !== locale)
         await this.db.update(contacts).set({ locale }).where(eq(contacts.id, contact.id));
       return written;

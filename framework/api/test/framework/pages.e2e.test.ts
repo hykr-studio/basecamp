@@ -61,16 +61,18 @@ describe('saved pages', () => {
 });
 
 describe('present intents by surface', () => {
-  it('on the app: a list is a view and a query; opening is a canvas intent', async () => {
+  it('on the app: opening is a canvas intent; the list it was found in shows nothing', async () => {
     const res = await ana.chat('open my Focus board page', undefined, APP);
     expect(tools(res.body)).toEqual(['list-pages', 'canvas-open']);
-    expect(res.body.toolCalls[0].present).toMatchObject({ kind: 'inline', view: 'page.list' });
+    // A lookup (V13): the page opened is the answer.
+    expect(res.body.toolCalls[0]).not.toHaveProperty('present');
     expect(res.body.toolCalls[1].present).toMatchObject({ kind: 'open', screen: 'page.view' });
   });
 
-  it('inline only: no canvas tools, so nothing opens', async () => {
+  it('inline only: no canvas tools, so nothing opens; the list is a view and a query', async () => {
     const res = await ana.chat('open my Focus board page', undefined, ['inline']);
     expect(tools(res.body)).toEqual(['list-pages']);
+    expect(res.body.toolCalls[0].present).toMatchObject({ kind: 'inline', view: 'page.list' });
   });
 
   it('text: the same list in words, and no screen mentioned', async () => {
@@ -78,6 +80,7 @@ describe('present intents by surface', () => {
     expect(res.body.toolCalls[0].present).toEqual({
       kind: 'text',
       text: 'Your pages\n• Focus board',
+      heading: 'Your pages',
       choices: [{ id: expect.any(String), title: 'Focus board' }],
     });
     expect(res.body.reply).not.toMatch(/canvas|screen|opened/i);
@@ -98,10 +101,19 @@ describe('spoken turns with a screen', () => {
       lang: 'te',
     });
     const [list, open] = res.body.toolCalls;
-    expect(list.present).toMatchObject({ kind: 'inline', view: 'page.list' });
-    expect(list.speech).toBe('1 సేవ్ చేసిన పేజీ: Focus board.');
+    // The list it was found in is a lookup (V13): neither shown nor said.
+    expect(list).not.toHaveProperty('present');
+    expect(list).not.toHaveProperty('speech');
     expect(open.present).toMatchObject({ kind: 'open', screen: 'page.view' });
     expect(open.speech).toBe('నేను దీన్ని స్క్రీన్‌పై చూపించాను.');
+    // With no canvas to open it on, the list is the answer: shown, and said in short.
+    const listed = await ana.call('POST', '/api/chat/once', {
+      message: 'open my Focus board page',
+      surfaces: ['inline', 'speech'],
+      lang: 'te',
+    });
+    expect(listed.body.toolCalls[0].present).toMatchObject({ kind: 'inline', view: 'page.list' });
+    expect(listed.body.toolCalls[0].speech).toBe('1 సేవ్ చేసిన పేజీ: Focus board.');
   });
 
   it('without speech, nothing extra is said', async () => {

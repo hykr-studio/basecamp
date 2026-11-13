@@ -1,10 +1,13 @@
 // basecamp: run an application on the Basecamp framework (see HELP). The bin is bin/basecamp.js.
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { dropBranchMigrations } from './db-rebase.js';
+import { IMPORT_OPTIONS, IMPORT_USAGE, type ImportFlags, importArgs } from './import-args.js';
+import { moduleAdd } from './module-add.js';
 
 /** The "basecamp" block of the application's package.json. */
 type Config = {
@@ -14,7 +17,10 @@ type Config = {
   watch?: string[];
   /** Expo apps, started with their `dev` script. */
   apps?: string[];
-  /** The package with drizzle.config.ts and the application's migrations. */
+  /**
+   * The package with drizzle.config.ts and the application's migrations: the domain, whose
+   * src/modules/<name>/ folders are the application's modules.
+   */
   db?: string;
   /** The Docker Compose project for `basecamp infra` (default: basecamp). */
   project?: string;
@@ -26,10 +32,29 @@ const HELP = `basecamp: run an application on the Basecamp framework
   basecamp start api|worker|voice    run one process (production)
   basecamp infra up|down             the local services (Postgres, Redis, WhatsApp emulator, LiveKit…)
   basecamp db migrate                the framework's migrations, then the application's
-  basecamp db generate [--name n]    a migration for the application's own tables
+  basecamp db generate [--name n]    a migration for the modules' tables (one journal)
+  basecamp db rebase [--base b] [--name n]
+                                     drop this branch's migrations (not on b, default main) and
+                                     generate them again on top of b's
+  basecamp module add <name> [--entity e]
+                                     a new module: both halves and the lines that register it
+  basecamp import <entity> <file> --as <email> [--dry-run] [options]
+                                     import a CSV, JSON or NDJSON file of records through the
+                                     write path, as that member (the worker runs it); rows
+                                     imported before (same key, --source) are updated, not
+                                     made again; rows not written go to an error report
+                                     (--tenant, --key, --format, --existing update|skip,
+                                     --empty omit|null, --map col=field, --ref field=entity,
+                                     --report path)
   basecamp templates sync|check      WhatsApp templates at the provider
-  basecamp eval [assistant|voice|whatsapp] [--live]
-                                     score the assistant (scripted model, or your AGENT_MODEL)
+  basecamp operator add <email> [--capabilities a,b]
+                                     make an account a platform operator (every operator
+                                     capability by default); operator remove <email> disables
+                                     one; operator list
+  basecamp eval [assistant|voice|whatsapp] [--module m] [--live [--model <provider>/<model>]]
+                                     score the assistant (scripted model, or the deployment's
+                                     default model, or one model of MODEL_PROVIDERS), every
+                                     module's evals or one module's
   basecamp studio                    Mastra Studio for the assistant
 
 Run it anywhere inside an application: the nearest package.json with a "basecamp" block is the
@@ -80,6 +105,22 @@ async function loadServer(root: string, config: Config) {
   return { api, server };
 }
 
+/**
+ * The English names of the application's languages other than English, from its built server
+ * definition; undefined when it is not built (or does not load), so `module add` still works.
+ */
+async function otherLanguages(root: string, config: Config): Promise<string[] | undefined> {
+  const file = resolve(root, config.server);
+  if (!existsSync(file)) return undefined;
+  try {
+    const { server } = await import(pathToFileURL(file).href);
+    const list = server?.languages?.list as { english: string }[] | undefined;
+    return list?.slice(1).map((l) => l.english);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The package manager the application uses, from its lockfile. */
 function packageManager(root: string): string {
   for (let dir = root; ; dir = dirname(dir)) {
@@ -87,6 +128,24 @@ function packageManager(root: string): string {
     if (existsSync(join(dir, 'yarn.lock'))) return 'yarn';
     if (existsSync(join(dir, 'bun.lock'))) return 'bun';
     if (existsSync(join(dir, 'package-lock.json')) || dirname(dir) === dir) return 'npm';
+  }
+}
+
+/**
+ * Format what `module add` wrote with the project's Biome, if it has one (the Basecamp repository
+ * does; a new application may not), so the new files and lines match its style.
+ */
+function formatIfBiome(root: string, files: string[]) {
+  for (let dir = root; ; dir = dirname(dir)) {
+    const bin = join(dir, 'node_modules', '.bin', 'biome');
+    if (existsSync(join(dir, 'biome.json')) && existsSync(bin)) {
+      spawnSync(bin, ['check', '--write', ...files.map((f) => resolve(root, f))], {
+        cwd: dir,
+        stdio: 'ignore',
+      });
+      return;
+    }
+    if (dirname(dir) === dir) return;
   }
 }
 
@@ -138,8 +197,14 @@ async function main() {
     allowPositionals: true,
     options: {
       live: { type: 'boolean', default: false },
+      model: { type: 'string' },
       name: { type: 'string' },
+      module: { type: 'string' },
+      entity: { type: 'string' },
+      capabilities: { type: 'string' },
+      base: { type: 'string', default: 'main' },
       help: { type: 'boolean', short: 'h', default: false },
+      ...IMPORT_OPTIONS,
     },
   });
   const [command, sub] = positionals;
@@ -200,7 +265,7 @@ async function main() {
         console.log('migrations applied');
         process.exit(0);
       }
-      if (sub === 'generate') {
+      if (sub === 'generate' || sub === 'rebase') {
         if (!config.db) fail('set "db" in the basecamp block: the package with drizzle.config.ts');
         const dir = resolve(root, config.db);
         // drizzle-kit's bin sits next to its entry point (its exports hide the file itself).
@@ -208,15 +273,59 @@ async function main() {
           dirname(createRequire(join(dir, 'package.json')).resolve('drizzle-kit')),
           'bin.cjs',
         );
-        run(
-          'db',
-          process.execPath,
-          [kit, 'generate', ...(values.name ? ['--name', values.name] : [])],
-          dir,
-        );
+        let name = values.name;
+        if (sub === 'rebase') {
+          const { dropped, name: again } = dropBranchMigrations(dir, values.base, values.name);
+          if (!dropped.length) {
+            console.log(`basecamp: no migrations beyond ${values.base}; nothing to rebase`);
+            return;
+          }
+          console.log(`dropped ${dropped.join(', ')}; generating ${again} on ${values.base}`);
+          console.log(
+            'A database that applied the dropped migrations must be recreated before db migrate.',
+          );
+          name = again;
+        }
+        run('db', process.execPath, [kit, 'generate', ...(name ? ['--name', name] : [])], dir);
         return;
       }
-      fail('db migrate or db generate');
+      fail('db migrate, db generate or db rebase');
+      break;
+    }
+    case 'module': {
+      const name = positionals[2];
+      if (sub !== 'add' || !name) fail('module add <name> [--entity <singular>]');
+      if (!config.db) fail('set "db" in the basecamp block: the package the modules live in');
+      const app = (config.apps ?? []).find((a) => existsSync(resolve(root, a, 'src', 'app')));
+      const languages = await otherLanguages(root, config);
+      try {
+        const result = moduleAdd({
+          root,
+          db: config.db,
+          app,
+          name,
+          entity: values.entity,
+          languages,
+        });
+        for (const file of result.created) console.log(`created     ${file}`);
+        for (const file of result.registered) console.log(`registered  ${file}`);
+        formatIfBiome(root, [...result.created, ...result.registered]);
+        console.log('\nNext:');
+        for (const step of result.todo) console.log(`- ${step}`);
+      } catch (error) {
+        fail(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
+    case 'import': {
+      let options: ReturnType<typeof importArgs>;
+      try {
+        options = importArgs(positionals.slice(1), values as ImportFlags);
+      } catch (error) {
+        fail(error instanceof Error ? error.message : `usage: basecamp ${IMPORT_USAGE}`);
+      }
+      const { api, server: app } = await loadServer(root, config);
+      process.exit(await api.runImport(app, options));
       break;
     }
     case 'templates': {
@@ -225,13 +334,35 @@ async function main() {
       process.exit((await api.runTemplates(app, sub)) ? 0 : 1);
       break;
     }
+    case 'operator': {
+      if (sub !== 'add' && sub !== 'remove' && sub !== 'list')
+        fail('operator add <email> [--capabilities a,b], operator remove <email> or operator list');
+      const email = positionals[2];
+      if (sub !== 'list' && !email) fail(`operator ${sub} <email>`);
+      const { api, server: app } = await loadServer(root, config);
+      const capabilities = values.capabilities
+        ?.split(',')
+        .map((c) => c.trim())
+        .filter(Boolean);
+      process.exit(
+        (await api.operators(app, sub, { email, ...(capabilities ? { capabilities } : {}) }))
+          ? 0
+          : 1,
+      );
+      break;
+    }
     case 'eval': {
       const suite = sub ?? 'assistant';
       if (!['assistant', 'voice', 'whatsapp'].includes(suite))
         fail('eval assistant, eval voice or eval whatsapp');
       process.env.MODEL_MODE = values.live ? 'live' : 'fake';
+      // One registered model for this run: check a model before a business allows it.
+      if (values.model) {
+        if (!values.live) fail('--model needs --live: the scripted model answers otherwise');
+        process.env.AGENT_MODEL = values.model;
+      }
       const { api, server: app } = await loadServer(root, config);
-      process.exit((await api.runEval(app, suite)) ? 0 : 1);
+      process.exit((await api.runEval(app, suite, { module: values.module })) ? 0 : 1);
       break;
     }
     case 'studio': {

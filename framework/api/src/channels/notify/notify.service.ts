@@ -1,64 +1,180 @@
-import { isNamedEvent } from '@hykr/core';
+import type { DomainEventEnvelope } from '@hykr/contracts';
 import { type Database, type DbOrTx, schema } from '@hykr/db';
 import type { Labels } from '@hykr/i18n';
-import type { NotificationDef, Row } from '@hykr/notifications';
+import { channelsOf, type NotificationDef, type Row } from '@hykr/notifications';
 import { InjectQueue } from '@nestjs/bullmq';
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
-import { EventBus } from '@nestjs/cqrs';
+import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import { and, desc, eq } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { config } from '../../config.js';
+import { deliveryChannels, type NotificationMeta } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
 import { runtime } from '../../runtime.js';
 import { QUEUES } from '../queues.js';
 import { REDIS } from '../whatsapp/adapter.provider.js';
+import { queueNotification } from './queue.js';
+
+const log = new Logger('Notify');
 
 /** Read when used: this module may load before the application registers. */
 const notifications = () => runtime().notifications.notifications;
 
-const log = new Logger('Notify');
+/**
+ * What one stored event asks of one notification, from the notification's own functions only:
+ * send now (its dedupe key), and schedule or cancel one (its dedupe key and when). Each part is
+ * asked on its own: one whose function throws goes to `skip` and is left out, and the other
+ * still goes. `when` decides both, so when it throws, neither goes.
+ */
+function planOf(
+  def: NotificationDef<Row>,
+  event: string,
+  row: Row,
+  skip: (part: 'when' | 'send' | 'schedule', e: unknown) => void,
+): { now?: string; later?: { dedupe: string; at: Date | null | 'cancel' } } {
+  const tried = <T>(part: 'when' | 'send' | 'schedule', ask: () => T): T | undefined => {
+    try {
+      return ask();
+    } catch (e) {
+      skip(part, e);
+      return undefined;
+    }
+  };
+  const plan: ReturnType<typeof planOf> = {};
+  if (def.send?.on.includes(event)) {
+    // Sent on this event, but not for this row: nothing else of it either.
+    const when = def.when;
+    if (when && !tried('when', () => when(row))) return plan;
+    plan.now = tried('send', () => def.dedupe(row));
+  }
+  const schedule = def.schedule;
+  if (!schedule) return plan;
+  plan.later = tried('schedule', () =>
+    schedule.cancelOn?.includes(event)
+      ? { dedupe: def.dedupe(row), at: 'cancel' as const }
+      : schedule.on.includes(event)
+        ? { dedupe: def.dedupe(row), at: schedule.at(row) }
+        : undefined,
+  );
+  return plan;
+}
 
 /** One notify-dispatch job: a notification about one record, now or at a time. */
 export type DispatchJob = {
   key: string;
   tenantId: string;
   row: Row;
+  /**
+   * The record's type ('visit', 'approval'): each recipient's words read the row as that type
+   * (decisions H1). Absent on a template sent by hand, whose row is the sender's own input.
+   */
+  resourceType?: string;
   dedupe: string;
   /** When it was scheduled for (a scheduled one checks it is still the latest). */
   scheduledFor?: string;
-  /** Fallback: only these channels, for this one recipient. */
-  only?: { channels: ('whatsapp' | 'email')[]; recipient: Record<string, string> };
+  /** Fallback or retry: only these channels, for this one recipient. */
+  only?: { channels: string[]; recipient: Record<string, string> };
+  /** A retry of a channel that failed for now: how many tries so far. */
+  attempt?: number;
 };
+
+/** The channels the dispatcher itself knows; every other name is a registered delivery channel. */
+export const BUILT_IN_CHANNELS: readonly string[] = ['whatsapp', 'email'];
 
 /** The dispatch job for a notification (BullMQ ids may not contain ':'). */
 export const jobIdOf = (dedupe: string) => dedupe.replaceAll(':', '_');
 export const scheduledJobId = (dedupe: string, scheduledFor: string) =>
   jobIdOf(`${dedupe}@${scheduledFor}`);
 
-/** Dates as ISO strings: what a job and the notification functions see. */
-const plain = (row: unknown): Row => JSON.parse(JSON.stringify(row)) as Row;
+/** Every event a notification names: what the stored-event subscriber passes on. */
+let named: Set<string> | undefined;
+export function namedByNotifications(name: string): boolean {
+  named ??= new Set(
+    notifications().flatMap((d) => [
+      ...(d.send?.on ?? []),
+      ...(d.schedule?.on ?? []),
+      ...(d.schedule?.cancelOn ?? []),
+    ]),
+  );
+  return named.has(name);
+}
+
+/** The record type a notification is about, from the first event it names ('visit.created'). */
+export const typeFromEvents = (def: NotificationDef<Row>): string | undefined =>
+  (def.send?.on[0] ?? def.schedule?.on[0])?.split('.')[0];
 
 /**
- * Notifications, in: scheduled from the events notifications name (a reschedule replaces the
- * pending one, a cancel removes it), or sent now with notify(). Everything ends in
- * notify-dispatch, which decides how.
+ * Applies an event's schedule only when no later event's was applied for this notification:
+ * `KEYS[1]` holds the time of the last one applied, `ARGV[1]` is this event's, `ARGV[2]` how long
+ * to keep it (ms).
+ */
+const NEWEST = `
+local cur = redis.call('GET', KEYS[1])
+if cur and cur > ARGV[1] then return 0 end
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+return 1`;
+const KEEP_EVENT_MS = 2 * 86_400_000;
+
+/**
+ * Notifications, in: scheduled from the stored events notifications name (a reschedule replaces
+ * the pending one, a cancel removes it), or sent now through the outbox. Everything ends in
+ * notify-dispatch, which decides how. Stored events, not in-process ones: an event exists only
+ * once its write committed, a crash after commit still schedules it, and an undoable write's
+ * events (held for its window, withdrawn by an undo) schedule nothing until the window closes.
  */
 @Injectable()
-export class NotifyService implements OnModuleInit {
+export class NotifyService implements OnApplicationBootstrap {
   constructor(
     @Inject(DB) private readonly db: Database,
-    @Inject(EventBus) private readonly events: EventBus,
     @Inject(REDIS) private readonly redis: Redis,
     @InjectQueue(QUEUES.dispatch) private readonly dispatch: Queue<DispatchJob>,
   ) {}
 
-  onModuleInit() {
-    this.events.subscribe((event) => {
-      if (!isNamedEvent(event)) return;
-      this.onEvent(event.eventName, plain(event.row)).catch((e) =>
-        log.error(`scheduling on ${event.eventName} failed: ${e instanceof Error ? e.message : e}`),
-      );
+  /**
+   * Every channel a notification names is built in or registered: checked once everything has
+   * registered, so a missing feature stops the start instead of a notification going nowhere.
+   */
+  onApplicationBootstrap() {
+    for (const name of deliveryChannels.all().map((c) => c.name))
+      if (BUILT_IN_CHANNELS.includes(name))
+        throw new Error(`The delivery channel "${name}" is built in: pick another name`);
+    for (const def of notifications())
+      for (const channel of channelsOf(def))
+        if (!BUILT_IN_CHANNELS.includes(channel) && !deliveryChannels.has(channel))
+          throw new Error(
+            `Notification ${def.key} goes by ${channel}, which is not a registered delivery channel`,
+          );
+  }
+
+  /**
+   * A channel failed for good after it had accepted the send (WhatsApp says the number is not on
+   * WhatsApp, a push receipt says the token is gone): the notification moves on to the channels
+   * after it, for that one recipient. `ref` (the failed message) keeps the job unique.
+   */
+  async fallback(meta: NotificationMeta, ref: string) {
+    if (!meta.next.length) return;
+    await this.dispatch.add(
+      'fallback',
+      {
+        key: meta.key,
+        tenantId: meta.row.tenantId,
+        row: meta.row,
+        ...(meta.resourceType ? { resourceType: meta.resourceType } : {}),
+        dedupe: meta.dedupe,
+        only: { channels: meta.next, recipient: meta.recipient as Record<string, string> },
+      },
+      { jobId: jobIdOf(`${meta.dedupe}:fallback:${ref}`), attempts: 3 },
+    );
+  }
+
+  /** The same dispatch for one recipient again, later: a channel that failed for now. */
+  async retry(job: DispatchJob, delayMs: number, channel: string) {
+    const who = Object.entries(job.only?.recipient ?? {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join(',');
+    await this.dispatch.add('retry', job, {
+      jobId: jobIdOf(`${job.dedupe}:retry:${channel}:${who}:${job.attempt ?? 0}`),
+      delay: delayMs,
     });
   }
 
@@ -70,22 +186,50 @@ export class NotifyService implements OnModuleInit {
     return (await this.redis.get(this.latestKey(job.dedupe))) === job.scheduledFor;
   }
 
-  private async onEvent(name: string, row: Row) {
+  /**
+   * One stored event (the `notify.events` subscriber): every notification that names it is sent
+   * now, scheduled or cancelled. A schedule moves only forward in time: an event older than the
+   * last one applied to the same notification (relayed late, or by another worker) is skipped.
+   * A notification whose own function throws on this row misses that part alone, logged (a
+   * throwing `schedule.at` its schedule, not its send now; a throwing `when` both); the other
+   * notifications still go. A queue or Redis that fails fails the whole event, so
+   * the subscriber's retry tries again.
+   */
+  async onStored(event: DomainEventEnvelope) {
+    const stored = event.row;
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return;
+    const row = { ...(stored as Row), tenantId: event.tenantId } as Row;
+    if (typeof row.id !== 'string') return;
+    const resourceType = event.resourceType;
     for (const def of notifications()) {
-      if (def.send?.on.includes(name)) {
-        if (def.when && !def.when(row)) continue;
-        const dedupe = def.dedupe(row);
+      const plan = planOf(def, event.name, row, (part, e) =>
+        log.error(
+          `notification ${def.key} skipped its ${part} of ${event.name} ${row.id}: ${e instanceof Error ? e.message : e}`,
+        ),
+      );
+      if (plan.now)
         await this.dispatch.add(
           'now',
-          { key: def.key, tenantId: row.tenantId, row, dedupe },
-          { jobId: jobIdOf(dedupe), attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
+          { key: def.key, tenantId: row.tenantId, row, resourceType, dedupe: plan.now },
+          { jobId: jobIdOf(plan.now), attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
         );
-      }
-      const schedule = def.schedule;
-      if (!schedule) continue;
-      if (schedule.cancelOn?.includes(name)) await this.cancel(def.dedupe(row));
-      else if (schedule.on.includes(name)) await this.schedule(def, row, schedule.at(row));
+      const later = plan.later;
+      if (!later || !(await this.newest(later.dedupe, event.occurredAt))) continue;
+      if (later.at === 'cancel') await this.cancel(later.dedupe);
+      else await this.schedule(def, row, later.at, resourceType);
     }
+  }
+
+  /** Is this the newest event applied to this notification yet? Marks it applied when it is. */
+  private async newest(dedupe: string, occurredAt: string): Promise<boolean> {
+    const applied = await this.redis.eval(
+      NEWEST,
+      1,
+      `${config.queuePrefix}:ntf-ev:${dedupe}`,
+      occurredAt,
+      String(KEEP_EVENT_MS),
+    );
+    return applied === 1;
   }
 
   /**
@@ -93,7 +237,7 @@ export class NotifyService implements OnModuleInit {
    * is its own job (`<dedupe>@<time>`), so a job can move itself (quiet hours) while it runs;
    * the latest time, kept in Redis, says which one stands.
    */
-  async schedule(def: NotificationDef, row: Row, at: Date | null) {
+  async schedule(def: NotificationDef, row: Row, at: Date | null, resourceType?: string) {
     const dedupe = def.dedupe(row);
     if (!at || at.getTime() <= Date.now()) return this.cancel(dedupe);
     const scheduledFor = at.toISOString();
@@ -102,7 +246,14 @@ export class NotifyService implements OnModuleInit {
     await this.redis.set(this.latestKey(dedupe), scheduledFor, 'PXAT', at.getTime() + 86_400_000);
     await this.dispatch.add(
       'scheduled',
-      { key: def.key, tenantId: row.tenantId, row, dedupe, scheduledFor },
+      {
+        key: def.key,
+        tenantId: row.tenantId,
+        row,
+        ...(resourceType ? { resourceType } : {}),
+        dedupe,
+        scheduledFor,
+      },
       {
         jobId: scheduledJobId(dedupe, scheduledFor),
         delay: at.getTime() - Date.now(),
@@ -130,17 +281,11 @@ export class NotifyService implements OnModuleInit {
   }
 
   /**
-   * Send a notification about this record now. Inside a command, pass its transaction: the
-   * notification is written to the outbox with the change, so a rollback sends nothing and a
-   * crash after commit still sends it.
+   * Send a notification about this record now, through the outbox (`queueNotification`). Inside
+   * a write, pass its transaction: a rollback sends nothing, and an undoable write holds it.
    */
-  async notify(def: NotificationDef, row: unknown, tx?: DbOrTx) {
-    const r = plain(row);
-    await (tx ?? this.db).insert(schema.outbox).values({
-      tenantId: r.tenantId,
-      key: def.key,
-      payload: { row: r, dedupe: def.dedupe(r), queues: config.queuePrefix },
-    });
+  async notify(def: NotificationDef, row: unknown, opts: { type: string; tx?: DbOrTx }) {
+    await queueNotification(opts.tx ?? this.db, def, row, { type: opts.type });
   }
 
   /**
@@ -169,10 +314,11 @@ export class NotifyService implements OnModuleInit {
       )
       .orderBy(desc(messages.at))
       .limit(1);
-    const row = (sent?.meta as { row?: Row } | null)?.row;
+    const meta = sent?.meta as { row?: Row; resourceType?: string } | null;
+    const row = meta?.row;
     if (!row) return undefined;
     const result = handler(row as never);
-    if (result?.reschedule) await this.schedule(def, row, result.reschedule);
+    if (result?.reschedule) await this.schedule(def, row, result.reschedule, meta?.resourceType);
     return result?.reply;
   }
 }

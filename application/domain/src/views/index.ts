@@ -1,28 +1,25 @@
 /**
- * THE DOMAIN's views and screens: what the assistant may show for meetings, notes and
- * to-dos. Replace this folder with another domain's; the framework reads only `uiDomain`.
+ * Every module's views and screens, for the apps (`@application/domain/views`): isomorphic, like
+ * the module folders it gathers. One line per module, in module order.
  */
-import type { ScreenDef, ViewDef } from '@hykr/ui-registry';
-import { CalendarDayView, CalendarWeekView, MeetingCardView, MeetingListView } from './meeting.js';
-import { NoteCardView, NoteListView } from './note.js';
-import { MeetingDetailScreen, NoteDetailScreen } from './screens.js';
-import { TodoItemView, TodoListView } from './todo.js';
+import { briefsViews } from '../modules/briefs/views/index.js';
+import { meetingsViews } from '../modules/meetings/views/index.js';
+import { notesViews } from '../modules/notes/views/index.js';
+import { ordersViews } from '../modules/orders/views/index.js';
+import { todosViews } from '../modules/todos/views/index.js';
 
-export * from './meeting.js';
-export * from './note.js';
-export * from './screens.js';
-export * from './todo.js';
+export * from '../modules/briefs/views/index.js';
+export * from '../modules/meetings/views/index.js';
+export * from '../modules/notes/views/index.js';
+export * from '../modules/orders/views/index.js';
+export * from '../modules/todos/views/index.js';
 
-export const uiDomain = {
-  views: [
-    TodoListView,
-    TodoItemView,
-    NoteListView,
-    NoteCardView,
-    MeetingListView,
-    MeetingCardView,
-    CalendarDayView,
-    CalendarWeekView,
-  ] as unknown as readonly ViewDef[],
-  screens: [MeetingDetailScreen, NoteDetailScreen] as unknown as readonly ScreenDef[],
-};
+/** Every module's views and screens, in module order: `createUiRegistry(...moduleViews)`. */
+export const moduleViews = [
+  todosViews,
+  notesViews,
+  meetingsViews,
+  ordersViews,
+  briefsViews,
+  // basecamp module add: one line per module, above this one.
+] as const;

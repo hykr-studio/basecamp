@@ -1,6 +1,7 @@
-import type { Principal } from '@hykr/contracts';
-import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@hykr/core';
+import { FrameworkCapabilities, isTimeZone, Lang, type Principal } from '@hykr/contracts';
+import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard, tenantZoneOf } from '@hykr/core';
 import { type Database, schema } from '@hykr/db';
+import { can } from '@hykr/policy';
 import {
   BadRequestException,
   Body,
@@ -28,22 +29,14 @@ const { contacts } = schema;
 /** wa_id: digits only, no plus, no spaces. */
 export const toWaId = (phone: string) => phone.replace(/\D/g, '');
 
-const validZone = (zone: string) => {
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: zone });
-    return zone;
-  } catch {
-    return 'Asia/Kolkata';
-  }
-};
-
 const Phone = z.string().regex(/^\+?[\d\s()-]{7,20}$/, 'A phone number, with the country code');
 
 class CodeDto extends createZodDto(
   z.object({
     phone: Phone,
-    timeZone: z.string().min(1).max(64).default('Asia/Kolkata'),
-    lang: z.enum(['en', 'hi', 'te']).default('en'),
+    /** The person's IANA zone (their device's); left out or unknown: their business's. */
+    timeZone: z.string().min(1).max(64).optional(),
+    lang: Lang.default('en'),
   }),
 ) {}
 
@@ -83,8 +76,11 @@ export class WhatsAppLinkController {
 
   /** Send a one-time code to the number (login_code_v1): proof the person holds it. */
   @Post('code')
-  sendCode(@CurrentPrincipal() p: Principal, @Body() body: CodeDto) {
-    return this.linking.sendCode(p, toWaId(body.phone), validZone(body.timeZone), body.lang);
+  async sendCode(@CurrentPrincipal() p: Principal, @Body() body: CodeDto) {
+    const zone = isTimeZone(body.timeZone)
+      ? body.timeZone
+      : await tenantZoneOf(this.db, p.tenantId ?? '');
+    return this.linking.sendCode(p, toWaId(body.phone), zone, body.lang);
   }
 
   /** The code they received: the number is linked to their account. */
@@ -104,11 +100,12 @@ export class WhatsAppLinkController {
 
   /**
    * Make a WhatsApp Business number this business's (the configured one by default): messages
-   * to it are this business's conversations. Owners and admins only.
+   * to it are this business's conversations. Only roles with `channels.manage` (owners and
+   * admins by default).
    */
   @Post('number')
   async claim(@CurrentPrincipal() p: Principal, @Body() body: NumberDto) {
-    if (!(p.roles ?? []).some((r) => r === 'owner' || r === 'admin'))
+    if (!can(p, FrameworkCapabilities.channelSetup))
       throw new ForbiddenException('Only an owner or admin can set the business number');
     // The configured number is a development convenience; production names the number.
     const phoneNumberId =

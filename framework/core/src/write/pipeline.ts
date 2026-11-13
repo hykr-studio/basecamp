@@ -1,27 +1,68 @@
-import { createHash } from 'node:crypto';
-import type {
-  Approval,
-  ApprovalRule,
-  AuthorizeResult,
-  Principal,
-  WriteResult,
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  type Approval,
+  type ApprovalRule,
+  type AuthorizeResult,
+  approverOf,
+  type DecisionDetails,
+  onBehalfOfKey,
+  type Principal,
+  rankOf,
+  type TenantConfig,
+  type WriteResult,
 } from '@hykr/contracts';
-import { type WriteCtx as AuditCtx, type Database, idempotencyKeys, writeAudit } from '@hykr/db';
+import {
+  type WriteCtx as AuditCtx,
+  type AuditInput,
+  type Database,
+  idempotencyKeys,
+  writeAudit,
+  writeAuditMany,
+} from '@hykr/db';
 import { subjectKeyOf, subjectOf } from '@hykr/policy';
 import { ConflictException, ForbiddenException, HttpException } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { z } from 'zod';
-import { RuleDenied } from '../authorize.js';
+import { allow, RuleDenied } from '../authorize.js';
+import { referenceRefusal } from '../entity/references.js';
+import { writeHooks } from '../hooks.js';
 import type { Tx } from '../tokens.js';
 import { parkForApproval } from './approvals.js';
+import { strongerDecision } from './decisions.js';
+import { recordEvents } from './events.js';
+import { applyLevels, settingsIn } from './levels.js';
+import { openUndoWindow, undoWindowMs } from './undo.js';
 
 /** Who is writing and how to recognise a repeat. Carried by every command. */
 export interface WriteCtx {
   principal: Principal;
   requestId: string;
   idempotencyKey?: string;
-  /** Run inside this transaction instead of opening one (an approval replay). */
-  tx?: Tx;
+  /**
+   * What the caller sent, when the op's input also carries values the server made for this
+   * request (a fresh id, a sealed secret, a token's hash). A repeat is then recognised by this
+   * instead of the input, so the same body under the same key answers the first answer, and a
+   * different body is a 409. Omitted: the input.
+   */
+  requestBody?: unknown;
+  /**
+   * The request's `If-Match`: the record version the caller based its write on (B12). Entity
+   * updates and deletes check it against the row they load; nothing else takes one.
+   */
+  ifMatch?: string;
+  /**
+   * Run inside the caller's transaction instead of opening one (an approval replay, an SLA
+   * escalation, a routed delivery, an import row). Nothing then asks the pool for a second
+   * connection while the caller holds this one: a refusal's audit row goes to `refused`, and the
+   * caller writes it where it survives, since its transaction or savepoint rolls back with the
+   * refusal.
+   */
+  outer?: { tx: Tx; refused: (audit: AuditInput) => void };
+  /**
+   * An approval replay: what the decider approved (the level and amount it parked with). A
+   * replay that now needs more (a higher level, a larger amount) fails instead of running.
+   */
+  approved?: DecisionDetails;
 }
 
 /** One row a write changed: one audit row each. */
@@ -55,13 +96,23 @@ export interface WriteOp<I, L, V> {
   authorize(p: Principal, loaded: L, input: I): AuthorizeResult;
   summarize(input: I, loaded: L): string;
   run(a: { tx: Tx; principal: Principal; input: I; loaded: L }): Promise<RunResult<V>>;
-  /** The value as it leaves the API (rows → contract shapes). */
-  present(value: V): unknown;
+  /** The value as it leaves the API for this principal (rows → contract shapes, projected). */
+  present(value: V, p: Principal): unknown;
+  /**
+   * The framework's own operation (undoing a write): level rules skip it, and it opens no undo
+   * window of its own.
+   */
+  system?: boolean;
 }
 
 export interface WriteOutcome {
   result: WriteResult;
   events: object[];
+  /**
+   * The stored answer to an earlier request with this key: nothing ran. Whatever a caller adds
+   * to the answer after the write (a secret shown once, a retry now) it must not do again.
+   */
+  repeat?: true;
 }
 
 export function auditCtx(
@@ -87,21 +138,195 @@ export function auditCtx(
     channel: p.channel ?? null,
     requestId: ctx.requestId,
     approvedBy: p.approvedBy ?? null,
+    // Through the platform: an operator's action, or an operator's support access.
+    onBehalfOf: onBehalfOfKey(p.onBehalfOf),
     rule: result.rule,
     reason: result.reason,
   };
 }
 
-/** Keys are per caller: the agent acting for Ana never shares a key with Ana herself. */
+/**
+ * Does a replay now need more than was approved: a higher level, or a larger amount (another
+ * currency, or an amount where none was approved, counts as larger)?
+ */
+function raisedSince(asked: DecisionDetails, now: AuthorizeResult): boolean {
+  if (rankOf(now.level) > rankOf(asked.level)) return true;
+  if (!now.amount) return false;
+  if (!asked.amount || asked.amount.currency !== now.amount.currency) return true;
+  return now.amount.minor > asked.amount.minor;
+}
+
+/**
+ * Keys are per caller: the agent acting for Ana never shares a key with Ana herself, and one
+ * operator's action (a system job on their behalf) never shares a key with another's.
+ */
 const principalKey = (p: Principal) =>
-  [p.actor.kind, p.actor.id, p.tenantId ?? '', subjectKeyOf(p) ?? ''].join(':');
+  [
+    p.actor.kind,
+    p.actor.id,
+    p.tenantId ?? '',
+    subjectKeyOf(p) ?? '',
+    ...(p.onBehalfOf ? [onBehalfOfKey(p.onBehalfOf)] : []),
+  ].join(':');
 
 const verbs = { created: 'create', updated: 'update', deleted: 'delete' } as const;
 
+/** What a repeat is recognised by: the op, its arguments and what was asked. */
+const hashOf = (op: { name: string; args?: unknown }, request: unknown) =>
+  createHash('sha256')
+    .update(JSON.stringify([op.name, op.args ?? null, request]))
+    .digest('hex');
+
+/** The stored answer for (key, principal), if any; another request under the key is a 409. */
+async function stored(
+  conn: Database | Tx,
+  p: Principal,
+  key: string,
+  requestHash: string,
+): Promise<WriteOutcome | undefined> {
+  const [hit] = await conn
+    .select()
+    .from(idempotencyKeys)
+    .where(and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.principalId, principalKey(p))));
+  if (!hit) return undefined;
+  if (hit.requestHash !== requestHash)
+    throw new ConflictException('idempotency-key was already used for a different request');
+  return { result: hit.response as WriteResult, events: [], repeat: true };
+}
+
+/**
+ * Before any work a route does ahead of its write (exchanging a one-time code, minting a
+ * secret): the stored outcome when this request repeats an earlier one with the same key, or
+ * undefined. A key used for a different request is a 409. `request` is what `runWrite` will be
+ * given as `requestBody` (or as its input).
+ */
+export async function findRepeat(
+  db: Database | Tx,
+  ctx: Pick<WriteCtx, 'principal' | 'idempotencyKey'>,
+  op: { name: string; args?: unknown },
+  request: unknown,
+): Promise<WriteOutcome | undefined> {
+  if (!ctx.idempotencyKey) return undefined;
+  return stored(db, ctx.principal, ctx.idempotencyKey, hashOf(op, request));
+}
+
+/**
+ * For a write that does not go through `runWrite` (a file's upload, a job's cancel): keep its
+ * answer under the caller's key, so `findRepeat` answers it again. Nothing secret belongs in
+ * `response`: it is kept for IDEMPOTENCY_KEEP_DAYS.
+ */
+export async function saveReply(
+  db: Database | Tx,
+  ctx: Pick<WriteCtx, 'principal' | 'idempotencyKey'>,
+  op: { name: string; args?: unknown },
+  request: unknown,
+  response: unknown,
+): Promise<void> {
+  if (!ctx.idempotencyKey) return;
+  await db
+    .insert(idempotencyKeys)
+    .values({
+      key: ctx.idempotencyKey,
+      principalId: principalKey(ctx.principal),
+      requestHash: hashOf(op, request),
+      response,
+    })
+    .onConflictDoNothing({ target: [idempotencyKeys.key, idempotencyKeys.principalId] });
+}
+
+/**
+ * How long a claim on a key (`oneAtATime`) stands before another request with the key may take
+ * it over: its holder stopped (a crash, a lost connection) without letting it go. Longer than any
+ * such route's slowest step (Google's code exchange gives up at 15 s, a pooled connection at 30 s).
+ */
+export const CLAIM_STALE_MS = 120_000;
+/** How long a request waits for another with its key to finish: then 409 `idempotency_in_progress`. */
+export const CLAIM_WAIT_MS = 30_000;
+/** A claim's key: U+0001 is in no HTTP header, so no caller's own key is ever one. */
+const CLAIM_PREFIX = '\u0001claim\u0001';
+
+/**
+ * Claim (caller, key) in `app.idempotency`, in a row of its own that no lookup of a reply reads,
+ * committed at once: true when this request holds it now. A claim older than `staleMs` is taken
+ * over in the same statement.
+ */
+async function claim(
+  db: Database,
+  c: { key: string; principalId: string; token: string },
+  staleMs: number,
+): Promise<boolean> {
+  const [won] = await db
+    .insert(idempotencyKeys)
+    .values({ key: c.key, principalId: c.principalId, requestHash: c.token, response: {} })
+    .onConflictDoUpdate({
+      target: [idempotencyKeys.key, idempotencyKeys.principalId],
+      set: { requestHash: c.token, createdAt: sql`now()` },
+      setWhere: sql`${idempotencyKeys.createdAt} < now() - make_interval(secs => ${staleMs / 1000})`,
+    })
+    .returning({ token: idempotencyKeys.requestHash });
+  return won?.token === c.token;
+}
+
+/**
+ * For a route that honours idempotency-key without `runWrite` (a back-office reply, a file's
+ * upload or discard, a job's cancel, a calendar sign-in's completion): one request at a time per
+ * (caller, key). A second request with the key, sent while the first still runs (a client that
+ * timed out and tried again), waits for it to finish, then finds its reply: `work` looks for the
+ * repeat (`findRepeat`) first, and saves its reply (`saveReply`) before it returns.
+ *
+ * The claim is a row in `app.idempotency` (under a key no caller can send), committed before
+ * `work` starts and deleted when it ends, whether it succeeded or threw. Nothing holds a pooled
+ * connection or a transaction meanwhile: a waiting request tries again every few milliseconds,
+ * so many at once never use up the pool. It waits up to `waitMs` (CLAIM_WAIT_MS), then answers
+ * 409 `idempotency_in_progress`; a claim older than `staleMs` (CLAIM_STALE_MS), whose holder
+ * stopped, is taken over. `work` may call `runWrite` with the same key: it keeps its replies
+ * under the key itself, never the claim's. Without a key, `work` runs at once.
+ */
+export async function oneAtATime<T>(
+  db: Database,
+  ctx: Pick<WriteCtx, 'principal' | 'idempotencyKey'>,
+  work: () => Promise<T>,
+  limits: { waitMs?: number; staleMs?: number } = {},
+): Promise<T> {
+  const key = ctx.idempotencyKey;
+  if (!key) return work();
+  const c = {
+    key: `${CLAIM_PREFIX}${key}`,
+    principalId: principalKey(ctx.principal),
+    token: `claim:${randomUUID()}`,
+  };
+  const until = Date.now() + (limits.waitMs ?? CLAIM_WAIT_MS);
+  for (let pause = 10; !(await claim(db, c, limits.staleMs ?? CLAIM_STALE_MS)); ) {
+    if (Date.now() + pause > until)
+      throw new ConflictException({
+        error: 'idempotency_in_progress',
+        reason: 'A request with this idempotency-key is still running: try again shortly',
+      });
+    await new Promise((r) => setTimeout(r, pause));
+    pause = Math.min(pause * 2, 200);
+  }
+  try {
+    return await work();
+  } finally {
+    // Its own claim only: one taken over meanwhile is the other request's to let go.
+    await db
+      .delete(idempotencyKeys)
+      .where(
+        and(
+          eq(idempotencyKeys.key, c.key),
+          eq(idempotencyKeys.principalId, c.principalId),
+          eq(idempotencyKeys.requestHash, c.token),
+        ),
+      )
+      .catch(() => undefined);
+  }
+}
+
 /**
  * The write path every command takes:
- * validate → idempotency → load → authorize → (park | run) → audit → events after commit.
- * Change how audit or approvals work here, once.
+ * validate → idempotency → load → authorize (the op, then write hooks) → (park | run) → audit
+ * → stored events → write hooks' afterRun, all in one transaction; in-process events are
+ * published by the caller after commit. Change how audit or approvals work here, once.
  */
 export async function runWrite<I, L, V>(
   db: Database,
@@ -113,38 +338,69 @@ export async function runWrite<I, L, V>(
   // 1. Validate again: commands also arrive from the agent and from approval replays.
   const input = op.input.parse(rawInput);
 
-  // 2. Idempotency: a repeat of (key, principal) returns the stored result.
-  const requestHash = createHash('sha256')
-    .update(JSON.stringify([op.name, op.args ?? null, input]))
-    .digest('hex');
+  // 2. Idempotency: a repeat of (key, principal) returns the stored result. It is recognised
+  // by what the caller sent when the input also holds what the server made for this request.
+  const requestHash = hashOf(op, ctx.requestBody !== undefined ? ctx.requestBody : input);
   const key = ctx.idempotencyKey;
-  if (key) {
-    const [hit] = await (ctx.tx ?? db)
-      .select()
-      .from(idempotencyKeys)
-      .where(and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.principalId, principalKey(p))));
-    if (hit) {
-      if (hit.requestHash !== requestHash) {
-        throw new ConflictException('idempotency-key was already used for a different request');
-      }
-      return { result: hit.response as WriteResult, events: [] };
-    }
-  }
+  const storedReply = async (conn: Database | Tx): Promise<WriteOutcome | undefined> =>
+    key ? stored(conn, p, key, requestHash) : undefined;
+  // A repeat answers at once, without a transaction.
+  const repeat = await storedReply(ctx.outer?.tx ?? db);
+  if (repeat) return repeat;
 
   let refusal: { result: AuthorizeResult; resourceId: string | null } | undefined;
   const work = async (tx: Tx): Promise<WriteOutcome> => {
+    // Two requests with one key at the same moment: the second waits here for the first to
+    // commit, then answers with its stored reply (B12). One write, one audit row.
+    if (key) {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${`idempotency:${principalKey(p)}:${key}`}, 0))`,
+      );
+      const first = await storedReply(tx);
+      if (first) return first;
+    }
     // 3. Load what the rules need, scoped to the principal (404 if not theirs).
     const loaded = (op.load ? await op.load(tx, p, input) : undefined) as L;
     const resourceId = op.resourceId(input, loaded);
 
-    // 4. Authorize. A person's approval turns needs_approval into allow for the replay.
+    // 4. Authorize: the operation's decision, tightened by every write hook (never loosened).
     let decision = op.authorize(p, loaded, input);
+    for (const hook of writeHooks.all()) {
+      if (!hook.decide) continue;
+      const tighter = hook.decide({ ctx, op, input, loaded, decision });
+      decision = strongerDecision(decision, tighter) ?? decision;
+    }
+    // Then the application's approval levels: its level rules on the input and the row, and
+    // the level's policy in this business (does it wait, how long can it be undone).
+    let settings: TenantConfig | undefined;
+    if (!op.system)
+      decision = await applyLevels({
+        decision,
+        p,
+        op,
+        input,
+        loaded,
+        settings: async () => (settings ??= await settingsIn(tx, p.tenantId)),
+      });
+    // A park names the level its approval rule declares, when nothing else named one.
+    const ruleLevel = approverOf(op.approval).level;
+    if (decision.decision === 'needs_approval' && decision.level === undefined && ruleLevel)
+      decision = { ...decision, level: ruleLevel };
+    // A person's approval turns needs_approval into allow for the replay, keeping what is at
+    // stake (the level, the amount), unless it now needs more than was approved. The approval
+    // ends the undo window: the replay opens none.
     if (decision.decision === 'needs_approval' && p.approvedBy) {
-      decision = {
-        decision: 'allow',
-        rule: `approved:${decision.rule}`,
-        reason: `Approved by the owner: ${decision.reason}`,
-      };
+      if (ctx.approved && raisedSince(ctx.approved, decision))
+        throw new ConflictException({
+          error: 'changed_since_asked',
+          reason: 'It needs more approval now than when it was asked: ask again',
+        });
+      const { undoMs: _ended, ...kept } = decision;
+      decision = allow(
+        `approved:${decision.rule}`,
+        `Approved by the owner: ${decision.reason}`,
+        kept,
+      );
     }
     if (decision.decision === 'deny') {
       refusal = { result: decision, resourceId };
@@ -153,8 +409,11 @@ export async function runWrite<I, L, V>(
 
     let result: WriteResult;
     let events: object[] = [];
+    let value: unknown;
+    let touched: Touched[] = [];
+    let undoMs = 0;
     if (decision.decision === 'needs_approval') {
-      const parked = await parkForApproval(tx, ctx, op, input, loaded, decision);
+      const parked = await parkForApproval(tx, ctx, op, input, loaded, decision, settings);
       const approval: Approval = parked.approval;
       events = [parked.event];
       await writeAudit(tx, {
@@ -163,37 +422,75 @@ export async function runWrite<I, L, V>(
         resourceType: op.resourceType,
         resourceId,
         outcome: 'needs_approval',
-        after: { approvalId: approval.id, summary: approval.summary },
+        after: {
+          approvalId: approval.id,
+          summary: approval.summary,
+          ...(decision.level !== undefined ? { level: decision.level } : {}),
+        },
       });
       result = { status: 'needs_approval', approval };
     } else {
       // 5. Do the work. The handler sees tx, principal and loaded rows; never the raw request.
       const out = await op.run({ tx, principal: p, input, loaded });
 
-      // 6. Audit in the same transaction: one row per entity touched, plus one for a command.
-      for (const t of out.touched) {
-        await writeAudit(tx, {
-          ...auditCtx(p, decision, ctx),
+      // 6. Audit in the same transaction: one row per entity touched, plus one for a command,
+      // inserted together (a 200-line write is one statement, not 200).
+      const by = auditCtx(p, decision, ctx);
+      await writeAuditMany(tx, [
+        ...out.touched.map((t) => ({
+          ...by,
           action: `${t.type}.${verbs[t.change]}`,
           resourceType: t.type,
           resourceId: t.id,
           before: t.before ?? null,
           after: t.after ?? null,
-        });
-      }
-      if (op.kind === 'command') {
-        await writeAudit(tx, {
-          ...auditCtx(p, decision, ctx),
-          action: op.name,
-          resourceType: op.resourceType,
-          resourceId,
-          after: { touched: out.touched.map(({ type, id, change }) => ({ type, id, change })) },
-        });
-      }
-      result = { status: 'done', value: op.present(out.value) };
-      // 7. Events are collected here and published by the caller after commit.
+        })),
+        ...(op.kind === 'command'
+          ? [
+              {
+                ...by,
+                action: op.name,
+                resourceType: op.resourceType,
+                resourceId,
+                after: {
+                  touched: out.touched.map(({ type, id, change }) => ({ type, id, change })),
+                },
+              },
+            ]
+          : []),
+      ]);
+      result = { status: 'done', value: op.present(out.value, p) };
+      value = out.value;
+      touched = out.touched;
+      // 7. Events: stored here, in the transaction; published by the caller after commit.
       events = out.events ?? [];
+      undoMs = undoWindowMs(p, op, decision, touched);
     }
+
+    // 8. The durable outbox: each named event. A write that can be undone is held back for its
+    // undo window (undoing it withdraws them); a park's approval.requested goes at once.
+    const stored = await recordEvents(tx, {
+      principal: p,
+      requestId: ctx.requestId,
+      events,
+      delayMs: undoMs || undefined,
+    });
+    if (undoMs && result.status === 'done') {
+      const undo = await openUndoWindow(tx, {
+        p,
+        op,
+        resourceId,
+        touched,
+        eventIds: stored.map((e) => e.id),
+        undoMs,
+        requestId: ctx.requestId,
+      });
+      result = { ...result, undo };
+    }
+
+    // 9. Write hooks, still in the transaction: throwing rolls the whole write back.
+    for (const hook of writeHooks.all())
+      await hook.afterRun?.({ ctx, op, input, loaded, tx, value, touched, result });
 
     if (key) {
       await tx
@@ -205,18 +502,21 @@ export async function runWrite<I, L, V>(
   };
 
   try {
-    return ctx.tx ? await work(ctx.tx) : await db.transaction(work);
+    return ctx.outer ? await work(ctx.outer.tx) : await db.transaction(work);
   } catch (e) {
     if (e instanceof RuleDenied) {
-      // The transaction rolled back; the refusal is evidence, so record it on its own.
+      // The refusal is evidence. Its own transaction rolled back: record it on its own. In the
+      // caller's, still open: hand it over, never waiting on the pool for a second connection.
       const result = e.result;
-      await writeAudit(db, {
+      const audit: AuditInput = {
         ...auditCtx(p, result, ctx),
         action: op.name,
         resourceType: op.resourceType,
         resourceId: refusal?.resourceId ?? null,
         outcome: 'denied',
-      });
+      };
+      if (ctx.outer) ctx.outer.refused(audit);
+      else await writeAudit(db, audit);
       throw new ForbiddenException({
         error: 'forbidden',
         rule: result.rule,
@@ -224,6 +524,8 @@ export async function runWrite<I, L, V>(
       });
     }
     if (e instanceof HttpException) throw e;
-    throw e;
+    // A key the database refused in the write's own code (a command's insert, a child's bulk
+    // insert): a 404 without the database's detail, never a 500 that tells an id exists (V2).
+    throw referenceRefusal(e, 'write');
   }
 }

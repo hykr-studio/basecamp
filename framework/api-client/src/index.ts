@@ -1,27 +1,168 @@
 import {
+  type AcceptanceChallengeInput,
+  AcceptanceChallengeSpec,
+  type AcceptanceInfo,
+  type AcceptanceKindInfo,
+  type AcceptanceStatus,
+  type AcceptedInvite,
+  type AcceptInput,
+  AcceptSpec,
+  type AddCommentInput,
+  AddCommentSpec,
+  type AddedPartyMember,
+  type AddGrantInput,
+  type AddOperatorInput,
+  type AddParticipantInput,
+  type AddPartyMemberInput,
+  type AgentRunDetail,
+  type AgentRunPage,
+  type AgentRunsQuery,
+  AgentSpec,
+  type AgentTemplates,
   type Approval,
+  type BusinessRoles,
+  type BusyTimes,
+  type CalendarConnectionInfo,
+  type CalendarFeedInfo,
+  type CalendarProviderInfo,
+  type CallInfo,
+  type CallProviderInfo,
   type ChatRequest,
   type ChatResponse,
   type ChatStreamRequest,
+  type ClientSettings,
   type CommandSpec,
+  type Comment,
+  type CommentPage,
+  type ConfigurePrivacyInput,
+  ConfigurePrivacySpec,
+  type CreatedInvite,
+  type CreateInviteInput,
+  type CreatePartyInput,
+  type CreditPurchase,
+  type CreditsStatus,
+  type DefineRoleInput,
+  type DialCallInput,
+  DialCallSpec,
+  type DocumentChannel,
+  type DocumentInfo,
+  type DocumentKindInfo,
+  type DocumentRecipient,
+  type EditableSettingsKey,
+  type EditableSettingsValue,
+  EditCommentSpec,
+  type EditPartyInput,
+  type EditRoleInput,
   type EntitySpec,
+  type ESignStartInput,
+  ESignStartSpec,
+  type FeatureState,
+  type FileInfo,
+  type FilePrivacyRequestInput,
+  FilePrivacyRequestSpec,
+  type FileTarget,
+  type FileTranscript,
+  type FreeTimeQuery,
+  type FreeTimes,
   type HandoffThread,
   type HistoryEntry,
+  IMPORT_UPLOAD,
+  type ImportOptionsInput,
   type Inbox,
+  type InboxPage,
+  type Invite,
+  type InviteInfo,
+  type JobInfo,
+  type Lang,
+  type LedgerEntry,
   type ListInput,
+  type ListJobsQuery,
+  type ListPrivacyRequestsQuery,
+  type LogCallInput,
+  LogCallSpec,
+  type McpConnection,
   type Me,
+  type Member,
+  type MentionablePage,
+  type Operator,
   type Page,
+  type ParticipantRoleView,
+  type Participation,
+  type PartiesQuery,
+  type Party,
+  type PartyMember,
+  type PlatformMe,
+  type PlatformTenant,
+  type PresignFileInput,
+  type PresignFileResult,
+  type PrivacyConfiguration,
+  type PrivacyRegister,
+  type PrivacyRequest,
+  ProcessPrivacyRequestSpec,
+  type ProvisionTenantInput,
+  type PublicBranding,
+  type PushDevice,
   pathParams,
+  type RecallQuery,
+  type RecallResult,
+  type RecordGrant,
+  type RecordVersion,
+  RefusePrivacyRequestSpec,
+  type RegisterPushToken,
+  RemoveCommentSpec,
+  type RenderDocumentInput,
+  RenderDocumentSpec,
+  type RoleView,
+  type RoutedRequest,
+  RunAgentSpec,
+  SendDocumentSpec,
+  type SendInviteInput,
+  SendInviteSpec,
+  type SettingsPatch,
+  type SettingsSectionView,
+  type SlaListInput,
+  type SlaPage,
+  type SlaTimer,
+  StartImportSpec,
+  type Summary,
+  type SummaryInput,
+  type SupportActivity,
+  type SupportConsentInput,
+  type SupportGrant,
+  type SupportRequestInput,
+  type SupportSettings,
+  type SupportSettingsInput,
   type TemplateStatus,
+  type TenantDomain,
   type Thread,
   type ThreadMessage,
   toQueryString,
+  type UndoResult,
+  UpdateCallSpec,
+  type UpdateOperatorInput,
+  type UsageReport,
   type VoiceSessionEnd,
   type VoiceSessionRequest,
   type VoiceSessionResponse,
   type WriteResult,
 } from '@hykr/contracts';
 import type { z } from 'zod';
+import { type LiveMessage, liveMessages, textOf } from './live.js';
+import { sharesMethods } from './share.js';
+
+export {
+  type LiveMessage,
+  liveMessages,
+  readServerSentEvents,
+  type ServerSentEvent,
+  textOf,
+} from './live.js';
+export {
+  createShareClient,
+  type ShareClient,
+  type ShareClientOptions,
+  ShareError,
+} from './share.js';
 
 export class ApiError extends Error {
   constructor(
@@ -31,6 +172,42 @@ export class ApiError extends Error {
     super(`HTTP ${status}`);
   }
 }
+
+/**
+ * The request never reached the API (no network, the server unreachable): nothing was answered,
+ * so a write may or may not have happened. Retry it with the same idempotency key.
+ */
+export class NetworkError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'The network request failed', { cause });
+    this.name = 'NetworkError';
+  }
+}
+
+/** Did this call fail for want of a network, rather than an answer? */
+export const isNetworkError = (e: unknown): boolean =>
+  e instanceof NetworkError ||
+  (!(e instanceof ApiError) && e instanceof TypeError) ||
+  (e instanceof Error && e.name === 'NetworkError');
+
+/**
+ * How a write is sent. `key`: its idempotency key (a fresh one by default; a retry passes the
+ * same). `ifMatch`: the record version it was based on (an entity update or delete: 409 `stale`
+ * when the record moved on). `headers`: extra headers for this call only (a queued write's
+ * business, `x-tenant-id`). A string is the key alone.
+ */
+export type WriteOptions = {
+  key?: string;
+  ifMatch?: string | number;
+  headers?: Record<string, string>;
+};
+
+const writeOptions = (opts: string | WriteOptions | undefined): WriteOptions =>
+  typeof opts === 'string' ? { key: opts } : (opts ?? {});
+
+/** A version as `If-Match` sends it: '"3"'; a tag already quoted (or `*`) as it is. */
+const ifMatchHeader = (v: string | number) =>
+  typeof v === 'number' || /^\d+$/.test(v) ? `"${v}"` : v;
 
 export type ApiClientOptions = {
   baseUrl: string;
@@ -82,34 +259,55 @@ function eventOf(event: string): ChatChunk | undefined {
 /** Every write gets a fresh idempotency key by default. A caller that retries passes the same key. */
 const newKey = () => crypto.randomUUID();
 
+/** A write's options, with a fresh key unless it brings its own. */
+const keyed = (o: string | WriteOptions | undefined): WriteOptions => {
+  const w = writeOptions(o);
+  return w.key ? w : { ...w, key: newKey() };
+};
+
 /** Typed methods for one entity, from its spec: the Expo app and the agent's tools use these. */
 export type EntityClient<S extends EntitySpec> = {
   list(query?: ListInput): Promise<Page<z.infer<S['schemas']['read']>>>;
   get(id: string): Promise<z.infer<S['schemas']['read']>>;
   create(
     input: z.input<S['schemas']['create']>,
-    key?: string,
+    opts?: string | WriteOptions,
   ): Promise<WriteResult<z.infer<S['schemas']['read']>>>;
   update(
     id: string,
     patch: z.input<S['schemas']['update']>,
-    key?: string,
+    opts?: string | WriteOptions,
   ): Promise<WriteResult<z.infer<S['schemas']['read']>>>;
-  remove(id: string, key?: string): Promise<WriteResult<null>>;
+  remove(id: string, opts?: string | WriteOptions): Promise<WriteResult<null>>;
+  /** Counts and totals (GET /api/<plural>/summary): the list's filters, groupBy, sum, avg… */
+  summary(query?: SummaryInput): Promise<Summary>;
 };
 
 export function createApiClient(opts: ApiClientOptions) {
-  async function call<T>(method: string, path: string, body?: unknown, key?: string): Promise<T> {
-    const res = await fetch(`${opts.baseUrl}${path}`, {
-      method,
-      credentials: opts.credentials,
-      headers: {
-        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        ...(key ? { 'idempotency-key': key } : {}),
-        ...(await opts.headers?.()),
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    write?: string | WriteOptions,
+  ): Promise<T> {
+    const w = writeOptions(write);
+    let res: Response;
+    try {
+      res = await fetch(`${opts.baseUrl}${path}`, {
+        method,
+        credentials: opts.credentials,
+        headers: {
+          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+          ...(w.key ? { 'idempotency-key': w.key } : {}),
+          ...(w.ifMatch !== undefined ? { 'if-match': ifMatchHeader(w.ifMatch) } : {}),
+          ...(await opts.headers?.()),
+          ...w.headers,
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch (e) {
+      throw new NetworkError(e);
+    }
     const json = parseBody(await res.text());
     if (!res.ok) throw new ApiError(res.status, json);
     return json as T;
@@ -146,15 +344,36 @@ export function createApiClient(opts: ApiClientOptions) {
     if (last) yield last;
   }
 
+  /**
+   * The live stream (GET /api/live): `ready`, then one `change` per event about a record the
+   * person may read. Resolves when the server closes it; rejects on a refusal or a network
+   * error. Abort with `signal`.
+   */
+  async function live(onMessage: (m: LiveMessage) => void, signal?: AbortSignal): Promise<void> {
+    const res = await fetch(`${opts.baseUrl}/api/live`, {
+      credentials: opts.credentials,
+      headers: { accept: 'text/event-stream', ...(await opts.headers?.()) },
+      signal,
+    });
+    if (!res.ok || !res.body) throw new ApiError(res.status, parseBody(await res.text()));
+    for await (const m of liveMessages(textOf(res.body))) onMessage(m);
+  }
+
+  /** An entity's summary by its plural ('orders'), for views that name it (kpi.row's `of`). */
+  function summary(plural: string, query: SummaryInput = {}): Promise<Summary> {
+    return call('GET', `/api/${encodeURIComponent(plural)}/summary${toQueryString(query)}`);
+  }
+
   function entity<S extends EntitySpec>(spec: S): EntityClient<S> {
     const base = `/api/${spec.plural}`;
     const one = (id: string) => `${base}/${encodeURIComponent(id)}`;
     return {
       list: (query) => call('GET', `${base}${toQueryString(query)}`),
+      summary: (query) => summary(spec.plural, query),
       get: (id) => call('GET', one(id)),
-      create: (input, key = newKey()) => call('POST', base, input, key),
-      update: (id, patch, key = newKey()) => call('PATCH', one(id), patch, key),
-      remove: (id, key = newKey()) => call('DELETE', one(id), undefined, key),
+      create: (input, o) => call('POST', base, input, keyed(o)),
+      update: (id, patch, o) => call('PATCH', one(id), patch, keyed(o)),
+      remove: (id, o) => call('DELETE', one(id), undefined, keyed(o)),
     };
   }
 
@@ -162,7 +381,7 @@ export function createApiClient(opts: ApiClientOptions) {
   function command<S extends CommandSpec>(
     spec: S,
     input: z.input<S['input']>,
-    key = newKey(),
+    write?: string | WriteOptions,
   ): Promise<WriteResult<z.infer<S['output']>>> {
     const values = { ...(input as Record<string, unknown>) };
     let path = spec.http.path;
@@ -170,14 +389,289 @@ export function createApiClient(opts: ApiClientOptions) {
       path = path.replace(`:${name}`, encodeURIComponent(String(values[name])));
       delete values[name];
     }
-    return call(spec.http.method, path, values, key);
+    return call(spec.http.method, path, values, keyed(write));
   }
+
+  /** `?a=1&b=x` from the values that are set. */
+  const query = (values: Record<string, string | number | boolean | undefined>) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(values)) if (v !== undefined) params.set(k, String(v));
+    const qs = params.toString();
+    return qs ? `?${qs}` : '';
+  };
+
+  /** Comments on records: reached only through a record the caller can read. */
+  const comments = {
+    /** One record's comments, newest first (`nextCursor` for older ones). */
+    list: (q: { entity: string; id: string; cursor?: string; limit?: number }) =>
+      call<CommentPage>('GET', `/api/comments${query(q)}`),
+    /** Who a comment on this record may name, for a word typed after @. */
+    mentionable: (q: { entity: string; id: string; q?: string; internal?: boolean }) =>
+      call<MentionablePage>('GET', `/api/comments/mentionable${query(q)}`),
+    /** A comment on a record (it may wait for approval: see the result's status). */
+    add: (input: AddCommentInput, key?: string) => command(AddCommentSpec, input, key),
+    /** Your comment's new text. */
+    edit: (commentId: string, body: string, key?: string) =>
+      command(EditCommentSpec, { commentId, body }, key) as Promise<WriteResult<Comment>>,
+    /** Your comment, or any with comments.moderate. */
+    remove: (commentId: string, key?: string) => command(RemoveCommentSpec, { commentId }, key),
+  };
+
+  /**
+   * The business's agents (A6): the definitions are an entity (`agents.list`, `.create`, …); their
+   * runs are in the run log, the owner's and the managers'.
+   */
+  const agents = {
+    ...entity(AgentSpec),
+    /** Run one now; its run is queued (see `runs`). Only the agent's owner may add a note. */
+    runNow: (agentId: string, note?: string, key = newKey()) =>
+      command(RunAgentSpec, { agentId, ...(note ? { note } : {}) }, key) as Promise<
+        WriteResult<{ id: string; agentId: string; status: 'queued' }>
+      >,
+    /** The run log, newest first: one agent's, or every one the caller may see. */
+    runs: (q: AgentRunsQuery = {}) => call<AgentRunPage>('GET', `/api/agent-runs${query(q)}`),
+    /** One run, with what it said and did. */
+    run: (id: string) => call<AgentRunDetail>('GET', `/api/agent-runs/${encodeURIComponent(id)}`),
+    /** The application's ready-made agents in this language, and the tools an agent may use. */
+    templates: (lang?: string) =>
+      call<AgentTemplates>(
+        'GET',
+        `/api/agent-templates${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`,
+      ),
+  };
+
+  /** The signed-in person's in-app inbox, in their business (people only). */
+  const inbox = {
+    list: (q: { unread?: boolean; cursor?: string; limit?: number } = {}) =>
+      call<InboxPage>('GET', `/api/inbox${query(q)}`),
+    /** These items are read. */
+    read: (ids: readonly string[]) => call<null>('POST', '/api/inbox/read', { ids }),
+    /** Everything is read. */
+    readAll: () => call<null>('POST', '/api/inbox/read', { all: true }),
+  };
+
+  /** A URL the API gave relative to itself (a local store's), made absolute. */
+  const absolute = (url: string) => (url.startsWith('/') ? `${opts.baseUrl}${url}` : url);
+  const withUrl = (f: FileInfo): FileInfo => (f.url ? { ...f, url: absolute(f.url) } : f);
+  const fileUrl = (id: string, rest = '') => `/api/files/${encodeURIComponent(id)}${rest}`;
+
+  const files = {
+    /** Step one of an upload: a pending file, and where to PUT its bytes. */
+    presign: async (input: PresignFileInput) => {
+      const out = await call<PresignFileResult>('POST', '/api/files', input);
+      return { ...out, upload: { ...out.upload, url: absolute(out.upload.url) } };
+    },
+    /** Step three: the bytes are there. */
+    confirm: async (id: string) => withUrl(await call<FileInfo>('POST', fileUrl(id, '/confirm'))),
+    /** One file, with a short-lived download URL (none for the assistant). */
+    get: async (id: string) => withUrl(await call<FileInfo>('GET', fileUrl(id))),
+    /** The files of these ids the caller reaches; the others are left out. */
+    getMany: async (ids: readonly string[]) => {
+      if (!ids.length) return [] as FileInfo[];
+      const out = await call<{ items: FileInfo[] }>(
+        'GET',
+        `/api/files?ids=${ids.map(encodeURIComponent).join(',')}`,
+      );
+      return out.items.map(withUrl);
+    },
+    /** Throw away an upload that is on no record yet. */
+    remove: (id: string) => call<null>('DELETE', fileUrl(id)),
+    /** An audio file's words (kept once heard). */
+    transcribe: (id: string) => call<FileTranscript>('POST', fileUrl(id, '/transcribe')),
+    /**
+     * Presign, PUT the bytes, confirm: a ready file for one entity's file field, whose id the
+     * record's create or update then carries.
+     */
+    upload: async (
+      body: Blob | ArrayBuffer | Uint8Array,
+      o: { name: string; mime: string; for: FileTarget },
+    ): Promise<FileInfo> => {
+      const size = body instanceof Blob ? body.size : body.byteLength;
+      const { file, upload } = await files.presign({
+        name: o.name,
+        mime: o.mime,
+        size,
+        for: o.for,
+      });
+      const put = await fetch(upload.url, {
+        method: 'PUT',
+        headers: upload.headers,
+        body: body as BodyInit,
+        credentials: 'omit',
+      });
+      if (!put.ok) throw new ApiError(put.status, parseBody(await put.text()));
+      return files.confirm(file.id);
+    },
+  };
+
+  const jobUrl = (id: string, rest = '') => `/api/jobs/${encodeURIComponent(id)}${rest}`;
+  const jobs = {
+    /** One job: its status, progress, message, output and result files' ids. */
+    get: (id: string) => call<JobInfo>('GET', jobUrl(id)),
+    /** A record's jobs (`entity` and `id`), or else the caller's own; newest first. */
+    list: async (q: ListJobsQuery = {}) => {
+      const params = new URLSearchParams();
+      for (const [k, v] of Object.entries(q)) if (v !== undefined) params.set(k, String(v));
+      const qs = params.toString();
+      return (await call<{ items: JobInfo[] }>('GET', `/api/jobs${qs ? `?${qs}` : ''}`)).items;
+    },
+    /** Stop a job that has not finished (people only). */
+    cancel: (id: string) => call<JobInfo>('POST', jobUrl(id, '/cancel')),
+  };
+
+  const imports = {
+    /** Upload a file to import (CSV, JSON or NDJSON): a ready file whose id `start` takes. */
+    upload: (body: Blob | ArrayBuffer | Uint8Array, o: { name: string; mime: string }) =>
+      files.upload(body, { ...o, for: { ...IMPORT_UPLOAD } }),
+    /**
+     * Import one entity's records from an uploaded file, through the write path: a job
+     * (`imports.records`) the worker runs, whose output is the counts and whose file is the error
+     * report. People with `imports.run`; it may wait for an approval.
+     */
+    start: (options: ImportOptionsInput, key = newKey()) => command(StartImportSpec, options, key),
+  };
+
+  const privacyUrl = (id: string, rest = '') =>
+    `/api/privacy/requests/${encodeURIComponent(id)}${rest}`;
+  const privacy = {
+    /**
+     * Ask for a copy of your own personal data (`export`) or to be forgotten (`erase`); someone
+     * with `privacy.manage` files one `for` someone the business knows. It may wait for review.
+     */
+    request: (input: FilePrivacyRequestInput, key = newKey()) =>
+      command(FilePrivacyRequestSpec, input, key),
+    /** Carry out a request that waits, or failed (`privacy.manage`). It may wait for approval. */
+    process: (requestId: string, key = newKey()) =>
+      command(ProcessPrivacyRequestSpec, { requestId }, key),
+    /** Refuse a request that waits, saying why (`privacy.manage`). */
+    refuse: (requestId: string, reason: string, key = newKey()) =>
+      command(RefusePrivacyRequestSpec, { requestId, reason }, key),
+    /** Your own requests, or (`privacy.manage`) the business's; newest first. */
+    list: async (q: ListPrivacyRequestsQuery = {}) => {
+      const params = new URLSearchParams();
+      for (const [k, v] of Object.entries(q)) if (v !== undefined) params.set(k, String(v));
+      const qs = params.toString();
+      return (
+        await call<{ items: PrivacyRequest[] }>('GET', `/api/privacy/requests${qs ? `?${qs}` : ''}`)
+      ).items;
+    },
+    get: (id: string) => call<PrivacyRequest>('GET', privacyUrl(id)),
+    /** The business's own privacy settings (`privacy.manage`). */
+    settings: () => call<PrivacyConfiguration>('GET', '/api/privacy/settings'),
+    /**
+     * Change them (`privacy.manage`): the deadline, the requests it reviews, its own retention
+     * periods and processors, its privacy contact and notice. A field left out stays as it is; a
+     * list replaces the stored one; null goes back to the default.
+     */
+    configure: (input: ConfigurePrivacyInput, key = newKey()) =>
+      command(ConfigurePrivacySpec, input, key),
+    /** Who holds personal data in the business, what, and for how long. */
+    register: (lang?: string) =>
+      call<PrivacyRegister>(
+        'GET',
+        `/api/privacy/register${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`,
+      ),
+  };
+
+  const documentUrl = (id: string) => `/api/documents/${encodeURIComponent(id)}`;
+  const withDocumentUrl = (d: DocumentInfo): DocumentInfo =>
+    d.url ? { ...d, url: absolute(d.url) } : d;
+
+  const documents = {
+    /** Make a new version of a record's document; it starts `pending` (made in the background). */
+    render: (input: RenderDocumentInput, key = newKey()) => command(RenderDocumentSpec, input, key),
+    /** Send a document by WhatsApp or email (the assistant's send to others waits for approval). */
+    send: (documentId: string, to: DocumentRecipient, channel?: DocumentChannel, key = newKey()) =>
+      command(SendDocumentSpec, { documentId, to, ...(channel ? { channel } : {}) }, key),
+    /** One document, with its sends and, for people once it is made, a short-lived URL. */
+    get: async (id: string) => withDocumentUrl(await call<DocumentInfo>('GET', documentUrl(id))),
+    /** A record's documents the caller reaches, newest first. */
+    list: async (entity: string, id: string) =>
+      (
+        await call<{ items: DocumentInfo[] }>(
+          'GET',
+          `/api/documents?entity=${encodeURIComponent(entity)}&id=${encodeURIComponent(id)}`,
+        )
+      ).items,
+    /** The kinds of document an entity has (every kind without one). */
+    kinds: async (entity?: string) =>
+      (
+        await call<{ items: DocumentKindInfo[] }>(
+          'GET',
+          `/api/documents/kinds${entity ? `?entity=${encodeURIComponent(entity)}` : ''}`,
+        )
+      ).items,
+  };
+
+  const acceptanceUrl = (rest = '') => `/api/acceptances${rest}`;
+  const acceptances = {
+    /** One PDF: what accepting it means, where a code would go (masked), whether you may. */
+    status: (documentId: string, lang?: string) =>
+      call<AcceptanceStatus>(
+        'GET',
+        acceptanceUrl(
+          `/documents/${encodeURIComponent(documentId)}${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`,
+        ),
+      ),
+    /** Send a one-time code to your own WhatsApp number or email, to accept this PDF. */
+    challenge: (input: AcceptanceChallengeInput, key = newKey()) =>
+      command(AcceptanceChallengeSpec, input, key),
+    /** Accept with the code received. */
+    accept: (input: AcceptInput, key = newKey()) => command(AcceptSpec, input, key),
+    /** Sign at the acceptance's e-sign provider: where to go. */
+    esign: (input: ESignStartInput, key = newKey()) => command(ESignStartSpec, input, key),
+    /** A record's acceptances you may see, newest first. */
+    list: async (entity: string, id: string) =>
+      (
+        await call<{ items: AcceptanceInfo[] }>(
+          'GET',
+          acceptanceUrl(`?entity=${encodeURIComponent(entity)}&id=${encodeURIComponent(id)}`),
+        )
+      ).items,
+    /** One acceptance, and whether its evidence still matches its hash. */
+    get: (id: string) => call<AcceptanceInfo>('GET', acceptanceUrl(`/${encodeURIComponent(id)}`)),
+    /** The acceptances an entity's records have. */
+    kinds: async (entity?: string) =>
+      (
+        await call<{ items: AcceptanceKindInfo[] }>(
+          'GET',
+          acceptanceUrl(`/kinds${entity ? `?entity=${encodeURIComponent(entity)}` : ''}`),
+        )
+      ).items,
+  };
 
   return {
     entity,
+    summary,
     command,
-    /** Who is signed in, in which business, with which roles. */
+    /** Files: uploads, and files reached through the records they are on. */
+    files,
+    /** Long-running jobs: a record's, or the caller's own. */
+    jobs,
+    /** Bulk import: a file of one entity's records, through the write path. */
+    imports,
+    /** Documents (PDFs) of records: make, read, send. */
+    documents,
+    /** Accepting a record's PDF with a one-time code, and the evidence each acceptance leaves. */
+    acceptances,
+    /** Requests about personal data: a copy, erasure, and the register. */
+    privacy,
+    /** Share links: a record, a page or a form shown by link (people only). */
+    shares: sharesMethods(call, newKey),
+    /** Comments and @-mentions on records. */
+    comments,
+    /** The signed-in person's in-app inbox. */
+    inbox,
+    /** The business's agents and their run log. */
+    agents,
+    /**
+     * Who is signed in, in which business (as a member or a participant), with which roles, and
+     * every business they are in. Send `x-tenant-id` (the client's `headers`) to work in another.
+     */
     me: () => call<Me>('GET', '/api/me'),
+    /** Work in this business by default (one of the person's memberships). */
+    setDefaultBusiness: (tenantId: string, key = newKey()) =>
+      call<WriteResult<{ tenantId: string }>>('PUT', '/api/me/default', { tenantId }, key),
     /** The back office: conversations staff have taken from the assistant (staff only). */
     backoffice: {
       inbox: () => call<Inbox>('GET', '/api/backoffice/inbox'),
@@ -213,6 +707,188 @@ export function createApiClient(opts: ApiClientOptions) {
           input,
         ),
     },
+    /**
+     * The business's people, roles and invitations (people only). Reading needs `members.read`,
+     * changing anything `members.manage`.
+     */
+    members: {
+      list: () => call<Member[]>('GET', '/api/members'),
+      setRoles: (userId: string, roles: string[], key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'PATCH',
+          `/api/members/${encodeURIComponent(userId)}`,
+          { roles },
+          key,
+        ),
+      remove: (userId: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/members/${encodeURIComponent(userId)}`,
+          undefined,
+          key,
+        ),
+      /** Every role the business has (declared, with its edits, and its own), and every capability. */
+      roles: () => call<BusinessRoles>('GET', '/api/members/roles'),
+      defineRole: (input: DefineRoleInput, key = newKey()) =>
+        call<WriteResult<RoleView>>('POST', '/api/members/roles', input, key),
+      /** `null` puts a declared role's label or capabilities back as the application has them. */
+      editRole: (name: string, input: EditRoleInput, key = newKey()) =>
+        call<WriteResult<RoleView>>(
+          'PATCH',
+          `/api/members/roles/${encodeURIComponent(name)}`,
+          input,
+          key,
+        ),
+      removeRole: (name: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/members/roles/${encodeURIComponent(name)}`,
+          undefined,
+          key,
+        ),
+      invites: () => call<Invite[]>('GET', '/api/members/invites'),
+      /** The answer carries the link's token, this once. */
+      invite: (input: CreateInviteInput) =>
+        call<WriteResult<CreatedInvite>>('POST', '/api/members/invites', input),
+      revokeInvite: (id: string, key = newKey()) =>
+        call<WriteResult<Invite>>(
+          'DELETE',
+          `/api/members/invites/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+      /** Join the business an invitation is for, signed in with the email it was sent to. */
+      acceptInvite: (token: string, key = newKey()) =>
+        call<WriteResult<AcceptedInvite>>('POST', '/api/members/invites/accept', { token }, key),
+    },
+    /**
+     * The people and organisations the business works with (people only). Reading needs
+     * `parties.read`, changing anything `parties.manage`.
+     */
+    parties: {
+      list: (query: PartiesQuery = {}) =>
+        call<Party[]>('GET', `/api/parties${toQueryString(query as Record<string, unknown>)}`),
+      get: (id: string) => call<Party>('GET', `/api/parties/${encodeURIComponent(id)}`),
+      create: (input: CreatePartyInput, key = newKey()) =>
+        call<WriteResult<Party>>('POST', '/api/parties', input, key),
+      edit: (id: string, input: EditPartyInput, key = newKey()) =>
+        call<WriteResult<Party>>('PATCH', `/api/parties/${encodeURIComponent(id)}`, input, key),
+      remove: (id: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/parties/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+      /** By WhatsApp number, or by email: an invitation's answer carries its token, this once. */
+      addMember: (id: string, input: AddPartyMemberInput) =>
+        call<WriteResult<AddedPartyMember>>(
+          'POST',
+          `/api/parties/${encodeURIComponent(id)}/members`,
+          input,
+        ),
+      removeMember: (id: string, memberId: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/parties/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
+          undefined,
+          key,
+        ),
+      /** Join the party an invitation is for, signed in with the email it was sent to. */
+      join: (token: string, key = newKey()) =>
+        call<WriteResult<{ member: PartyMember; tenantId: string }>>(
+          'POST',
+          '/api/parties/join',
+          { token },
+          key,
+        ),
+    },
+    /** Who participates in a record, and as what (participant roles are the application's). */
+    participants: {
+      roles: () => call<ParticipantRoleView[]>('GET', '/api/participants/roles'),
+      list: (resourceType: string, resourceId: string) =>
+        call<Participation[]>(
+          'GET',
+          `/api/participants?resourceType=${encodeURIComponent(resourceType)}&resourceId=${encodeURIComponent(resourceId)}`,
+        ),
+      add: (input: AddParticipantInput, key = newKey()) =>
+        call<WriteResult<Participation>>('POST', '/api/participants', input, key),
+      remove: (id: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/participants/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+    },
+    /** Who reaches one record by a grant (`records.grant`), and giving or taking it. */
+    grants: {
+      list: (resourceType: string, resourceId: string) =>
+        call<RecordGrant[]>(
+          'GET',
+          `/api/grants?resourceType=${encodeURIComponent(resourceType)}&resourceId=${encodeURIComponent(resourceId)}`,
+        ),
+      add: (input: AddGrantInput, key = newKey()) =>
+        call<WriteResult<RecordGrant>>('POST', '/api/grants', input, key),
+      remove: (id: string, key = newKey()) =>
+        call<WriteResult<unknown>>(
+          'DELETE',
+          `/api/grants/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+    },
+    /**
+     * The business's setup (A11). Changes go through `command(SetFeatureSpec | UpdateBrandingSpec
+     * | UpdateWordingSpec | SetTimeZoneSpec | AddDomainSpec | VerifyDomainSpec | RemoveDomainSpec,
+     * input)`, custom fields through `entity(CustomFieldSpec)`, and every editable section
+     * (approvals, money, businessHours, sla, memory, shares, files, parties, members, and
+     * `general`: the time zone, quiet hours, reply time and marketing limit) through
+     * `updateSection` (H2).
+     */
+    settings: {
+      /** The editable sections this person may change (`general` first), with their values. */
+      sections: () => call<SettingsSectionView[]>('GET', '/api/settings/sections'),
+      /** One editable section, defaults applied (its capability needed). */
+      section: <K extends EditableSettingsKey>(key: K) =>
+        call<SettingsSectionView & { key: K; value: EditableSettingsValue<K> | null }>(
+          'GET',
+          `/api/settings/sections/${encodeURIComponent(key)}`,
+        ),
+      /**
+       * Change one editable section with a merge patch: an object changes key by key, `null`
+       * restores a key's default, anything else (a list too) replaces. 400 `settings_invalid`
+       * lists the problems.
+       */
+      updateSection: <K extends EditableSettingsKey>(
+        key: K,
+        patch: SettingsPatch<EditableSettingsValue<K>>,
+        write: string | WriteOptions = newKey(),
+      ) =>
+        call<WriteResult<{ key: K; value: EditableSettingsValue<K> }>>(
+          'PATCH',
+          `/api/settings/sections/${encodeURIComponent(key)}`,
+          { value: patch },
+          write,
+        ),
+      /** Flags on, what is off, branding and the business's phrases: what the apps need. */
+      get: () => call<ClientSettings>('GET', '/api/settings'),
+      /** Every declared flag, on or off here, and who switches it. */
+      features: () => call<FeatureState[]>('GET', '/api/features'),
+      /** The business's web addresses (settings managers only). */
+      domains: () => call<TenantDomain[]>('GET', '/api/settings/domains'),
+      /**
+       * Branding on a verified custom domain, before signing in: of `origin` (a web page passes
+       * its own, `window.location.origin`), else of the request's Origin. 404 anywhere else.
+       */
+      publicBranding: (origin?: string) =>
+        call<PublicBranding>(
+          'GET',
+          origin
+            ? `/api/branding/public?origin=${encodeURIComponent(origin)}`
+            : '/api/branding/public',
+        ),
+    },
     /** People only: the agent gets 403. */
     listApprovals: () => call<Approval[]>('GET', '/api/approvals'),
     getApproval: (id: string) => call<Approval>('GET', `/api/approvals/${encodeURIComponent(id)}`),
@@ -220,8 +896,11 @@ export function createApiClient(opts: ApiClientOptions) {
     whatsapp: {
       get: () =>
         call<{ address: string; timeZone: string } | null>('GET', '/api/channels/whatsapp'),
-      /** A one-time code to the number (WhatsApp's login_code_v1): proof the person holds it. */
-      sendCode: (phone: string, timeZone: string, lang: 'en' | 'hi' | 'te' = 'en') =>
+      /**
+       * A one-time code to the number (WhatsApp's login_code_v1): proof the person holds it.
+       * `timeZone` is theirs (their device's); undefined: their business's.
+       */
+      sendCode: (phone: string, timeZone: string | undefined, lang: Lang = 'en') =>
         call<{ sentTo: string; expiresInSeconds: number }>('POST', '/api/channels/whatsapp/code', {
           phone,
           timeZone,
@@ -235,6 +914,41 @@ export function createApiClient(opts: ApiClientOptions) {
         }),
       unlink: () => call<void>('DELETE', '/api/channels/whatsapp'),
     },
+    /**
+     * Move a record along its state machine (POST /api/transitions): done with the record, or
+     * needs_approval when the transition waits. `input`: the transition's own fields.
+     */
+    transition: <S extends EntitySpec>(
+      spec: S,
+      id: string,
+      name: string,
+      input: Partial<z.input<S['schemas']['update']>> = {},
+      key = newKey(),
+    ): Promise<WriteResult<z.infer<S['schemas']['read']>>> =>
+      call(
+        'POST',
+        `/api/transitions/${spec.plural}/${encodeURIComponent(id)}/${encodeURIComponent(name)}`,
+        input,
+        key,
+      ),
+    /** SLA clocks: a record's (by its entity's plural), or the business's in one status. */
+    sla: {
+      of: (plural: string, id: string) =>
+        call<SlaTimer[]>('GET', `/api/sla/${plural}/${encodeURIComponent(id)}`),
+      /** One page, earliest due first; pass its `nextCursor` as `cursor` for the next. */
+      list: (q: SlaListInput = {}) => {
+        const params = new URLSearchParams();
+        for (const [k, v] of Object.entries(q)) if (v !== undefined) params.set(k, String(v));
+        const qs = params.toString();
+        return call<SlaPage>('GET', `/api/sla${qs ? `?${qs}` : ''}`);
+      },
+    },
+    /** The revisions of a versioned record's series, oldest first (people only). */
+    versions: (resourceType: string, resourceId: string) =>
+      call<RecordVersion[]>(
+        'GET',
+        `/api/history/versions?resourceType=${resourceType}&resourceId=${encodeURIComponent(resourceId)}`,
+      ),
     /** A record's history from the audit trail (people only). */
     /** `resourceType`: any entity name in the catalog (see entityNames). */
     history: (resourceType: string, resourceId: string) =>
@@ -255,13 +969,300 @@ export function createApiClient(opts: ApiClientOptions) {
         'POST',
         `/api/approvals/${encodeURIComponent(id)}/${approve ? 'approve' : 'reject'}`,
       ),
+    /**
+     * Undo a write within its undo window: the `undo.id` its result carried (people only, the
+     * person it was for). 409 when it changed since or was undone already; 403 once the window
+     * closed.
+     */
+    undo: (id: string) => call<UndoResult>('POST', `/api/undo/${encodeURIComponent(id)}`),
     chat: (input: ChatRequest) => call<ChatResponse>('POST', '/api/chat/once', input),
     chatStream,
+    live,
+    /** This device, for push (people only); forget needs no session. */
+    push: {
+      register: (input: RegisterPushToken) => call<PushDevice>('POST', '/api/push/tokens', input),
+      devices: () => call<PushDevice[]>('GET', '/api/push/tokens'),
+      forget: (token: string) => call<null>('POST', '/api/push/tokens/forget', { token }),
+    },
     /** Voice: a person starts a session; the voice worker reports its end. */
     voice: {
       session: (input: Partial<VoiceSessionRequest> = {}) =>
         call<VoiceSessionResponse>('POST', '/api/voice/session', input),
       end: (input: VoiceSessionEnd) => call<null>('POST', '/api/voice/end', input),
+    },
+    /** The business's credits (people only): status for its team, the rest for its managers. */
+    credits: {
+      /** In `lang`, the reader's: each meter's label and why it is paused. */
+      status: (lang?: string) =>
+        call<CreditsStatus>(
+          'GET',
+          `/api/credits${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`,
+        ),
+      /**
+       * Newest first; `before`: the `next` of the page before (or an ISO time). In `lang`, the
+       * reader's: what each debit was for.
+       */
+      ledger: (before?: string, lang?: string) => {
+        const q = new URLSearchParams({
+          ...(before ? { before } : {}),
+          ...(lang ? { lang } : {}),
+        }).toString();
+        return call<{ items: LedgerEntry[]; next: string | null }>(
+          'GET',
+          `/api/credits/ledger${q ? `?${q}` : ''}`,
+        );
+      },
+      /** Buy credits: the answer carries the checkout, or waits for an approval. */
+      buy: (amount: number, provider?: string, key = newKey()) =>
+        call<WriteResult<CreditPurchase>>(
+          'POST',
+          '/api/credits/purchases',
+          { amount, ...(provider ? { provider } : {}) },
+          key,
+        ),
+      purchase: (id: string) =>
+        call<CreditPurchase>('GET', `/api/credits/purchases/${encodeURIComponent(id)}`),
+      /** The business's own alert threshold, in per cent. */
+      setAlertAt: (alertAt: number, key = newKey()) =>
+        call<WriteResult<{ alertAt: number }>>('PUT', '/api/credits/alerts', { alertAt }, key),
+    },
+    /**
+     * Calendars: the person's connections (people only), busy and free time, invites to a
+     * record, and private feeds (people only).
+     */
+    calendar: {
+      providers: () => call<CalendarProviderInfo[]>('GET', '/api/calendar/providers'),
+      /**
+       * The consent screen's URL: open it. Google sends the browser back to the API, which sends
+       * it on to the app (`returnTo`: the web app, or the native app's link) with a code and a
+       * state for `complete`.
+       */
+      connect: (provider: 'google' = 'google', returnTo?: 'web' | 'app') =>
+        call<{ url: string }>('POST', '/api/calendar/connections', {
+          provider,
+          ...(returnTo ? { returnTo } : {}),
+        }),
+      /** Finish connecting, as the person who started it, in the business they started it in. */
+      complete: (input: { code: string; state: string }, key = newKey()) =>
+        call<WriteResult<CalendarConnectionInfo>>(
+          'POST',
+          '/api/calendar/google/complete',
+          input,
+          key,
+        ),
+      connections: () => call<CalendarConnectionInfo[]>('GET', '/api/calendar/connections'),
+      disconnect: (id: string, key = newKey()) =>
+        call<WriteResult<null>>(
+          'DELETE',
+          `/api/calendar/connections/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+      busy: (from: string, to: string, userId?: string) =>
+        call<BusyTimes>(
+          'GET',
+          `/api/calendar/busy?${new URLSearchParams({ from, to, ...(userId ? { userId } : {}) })}`,
+        ),
+      free: (query: FreeTimeQuery) => {
+        const params = new URLSearchParams();
+        for (const [k, v] of Object.entries(query)) if (v !== undefined) params.set(k, String(v));
+        return call<FreeTimes>('GET', `/api/calendar/free?${params}`);
+      },
+      /** Email invites to a record (the assistant's to others wait for approval). */
+      invite: (input: SendInviteInput, key = newKey()) => command(SendInviteSpec, input, key),
+      invites: async (entity: string, id: string) =>
+        (
+          await call<{ items: InviteInfo[] }>(
+            'GET',
+            `/api/calendar/invites?entity=${encodeURIComponent(entity)}&id=${encodeURIComponent(id)}`,
+          )
+        ).items,
+      feeds: () => call<CalendarFeedInfo[]>('GET', '/api/calendar/feeds'),
+      /** A new feed: its URL is in the answer this once. */
+      createFeed: (label?: string, key = newKey()) =>
+        call<WriteResult<CalendarFeedInfo> & { url?: string }>(
+          'POST',
+          '/api/calendar/feeds',
+          label ? { label } : {},
+          key,
+        ),
+      revokeFeed: (id: string, key = newKey()) =>
+        call<WriteResult<null>>(
+          'DELETE',
+          `/api/calendar/feeds/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+    },
+    /** Outside AI clients the person connected over MCP, in this business (people only). */
+    mcp: {
+      connections: () => call<{ items: McpConnection[] }>('GET', '/api/mcp/connections'),
+      /** Disconnect one: its tokens stop working at once. */
+      disconnect: (clientId: string, key = newKey()) =>
+        call<WriteResult<{ revoked: true }>>(
+          'DELETE',
+          `/api/mcp/connections/${encodeURIComponent(clientId)}`,
+          undefined,
+          key,
+        ),
+    },
+    /** Phone calls: a record's log, logging one, click-to-call through the business's provider. */
+    calls: {
+      log: (input: LogCallInput, key = newKey()) => command(LogCallSpec, input, key),
+      dial: (input: DialCallInput, key = newKey()) => command(DialCallSpec, input, key),
+      update: (
+        callId: string,
+        patch: {
+          status?: CallInfo['status'];
+          endedAt?: string;
+          durationS?: number;
+          notes?: string | null;
+        },
+        key = newKey(),
+      ) => command(UpdateCallSpec, { callId, ...patch }, key),
+      /** Whether the business can place calls (a telephony provider it may use). */
+      provider: () => call<CallProviderInfo>('GET', '/api/calls/provider'),
+      get: (id: string) => call<CallInfo>('GET', `/api/calls/${encodeURIComponent(id)}`),
+      /** A record's calls (`entity` and `id`), or else the ones the person may see. */
+      list: async (about?: { entity: string; id: string }) =>
+        (
+          await call<{ items: CallInfo[] }>(
+            'GET',
+            `/api/calls${about ? `?entity=${encodeURIComponent(about.entity)}&id=${encodeURIComponent(about.id)}` : ''}`,
+          )
+        ).items,
+    },
+    /** What is remembered, by meaning: memories the caller may read now, best first. */
+    memory: {
+      recall: (q: RecallQuery) => {
+        const params = new URLSearchParams({ q: q.q });
+        if (q.about) params.set('about', q.about);
+        if (q.limit) params.set('limit', String(q.limit));
+        if (q.kinds) params.set('kinds', q.kinds);
+        return call<RecallResult>('GET', `/api/memory/recall?${params}`);
+      },
+    },
+    /**
+     * The platform's operators (B19): signed-in people above the businesses. `me` answers anyone
+     * signed in; everything else needs an operator holding the route's capability.
+     */
+    platform: {
+      me: () => call<PlatformMe>('GET', '/api/platform/me'),
+      operators: () => call<Operator[]>('GET', '/api/platform/operators'),
+      addOperator: (input: AddOperatorInput, key = newKey()) =>
+        call<WriteResult<Operator>>('POST', '/api/platform/operators', input, key),
+      updateOperator: (id: string, input: UpdateOperatorInput, key = newKey()) =>
+        call<WriteResult<Operator>>(
+          'PATCH',
+          `/api/platform/operators/${encodeURIComponent(id)}`,
+          input,
+          key,
+        ),
+      tenants: (query: { q?: string; after?: string; limit?: number } = {}) =>
+        call<{ items: PlatformTenant[]; next: string | null }>(
+          'GET',
+          `/api/platform/tenants${toQueryString(query as Record<string, unknown>)}`,
+        ),
+      tenant: (id: string) =>
+        call<PlatformTenant>('GET', `/api/platform/tenants/${encodeURIComponent(id)}`),
+      /** Make a business for a person who has an account: they own it. */
+      provision: (input: ProvisionTenantInput, key = newKey()) =>
+        call<WriteResult<PlatformTenant>>('POST', '/api/platform/tenants', input, key),
+      rename: (id: string, name: string, key = newKey()) =>
+        call<WriteResult<PlatformTenant>>(
+          'PATCH',
+          `/api/platform/tenants/${encodeURIComponent(id)}`,
+          { name },
+          key,
+        ),
+      /** A business's feature flag, the platform-managed ones included. */
+      setFeature: (id: string, flag: string, on: boolean, key = newKey()) =>
+        call<WriteResult<{ key: string; on: boolean }>>(
+          'PUT',
+          `/api/platform/tenants/${encodeURIComponent(id)}/features/${encodeURIComponent(flag)}`,
+          { on },
+          key,
+        ),
+      /** The operator's own support access, newest first. */
+      support: (tenantId?: string) =>
+        call<SupportGrant[]>(
+          'GET',
+          `/api/platform/support${tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ''}`,
+        ),
+      /** Ask a business for access: it waits for the business's consent. */
+      askSupport: (input: z.input<typeof SupportRequestInput>, key = newKey()) =>
+        call<WriteResult<SupportGrant>>('POST', '/api/platform/support', input, key),
+      endSupport: (id: string, key = newKey()) =>
+        call<WriteResult<SupportGrant>>(
+          'DELETE',
+          `/api/platform/support/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+      supportActivity: (id: string) =>
+        call<SupportActivity[]>('GET', `/api/platform/support/${encodeURIComponent(id)}/activity`),
+      /** What every business used of each meter, and its wallet, over a range (UTC days). */
+      usage: (
+        query: {
+          from?: string;
+          to?: string;
+          tenantId?: string;
+          after?: string;
+          limit?: number;
+        } = {},
+      ) =>
+        call<UsageReport>(
+          'GET',
+          `/api/platform/usage${toQueryString(query as Record<string, unknown>)}`,
+        ),
+      routing: (
+        query: {
+          status?: RoutedRequest['status'];
+          tenantId?: string;
+          before?: string;
+          limit?: number;
+        } = {},
+      ) =>
+        call<RoutedRequest[]>(
+          'GET',
+          `/api/platform/routing${toQueryString(query as Record<string, unknown>)}`,
+        ),
+    },
+    /**
+     * Support access from the business's side (people holding `support.consent`): what the
+     * platform's operators asked, consent, decline, end it, and what was done under it.
+     */
+    supportAccess: {
+      list: () => call<SupportGrant[]>('GET', '/api/support-access'),
+      get: (id: string) =>
+        call<SupportGrant>('GET', `/api/support-access/${encodeURIComponent(id)}`),
+      activity: (id: string) =>
+        call<SupportActivity[]>('GET', `/api/support-access/${encodeURIComponent(id)}/activity`),
+      /** As asked, or shorter (`minutes`), or read only. */
+      consent: (id: string, input: SupportConsentInput = {}, key = newKey()) =>
+        call<WriteResult<SupportGrant>>(
+          'POST',
+          `/api/support-access/${encodeURIComponent(id)}/consent`,
+          input,
+          key,
+        ),
+      decline: (id: string, key = newKey()) =>
+        call<WriteResult<SupportGrant>>(
+          'POST',
+          `/api/support-access/${encodeURIComponent(id)}/decline`,
+          undefined,
+          key,
+        ),
+      revoke: (id: string, key = newKey()) =>
+        call<WriteResult<SupportGrant>>(
+          'POST',
+          `/api/support-access/${encodeURIComponent(id)}/revoke`,
+          undefined,
+          key,
+        ),
+      settings: () => call<SupportSettings>('GET', '/api/support-access/settings'),
+      setSettings: (input: SupportSettingsInput, key = newKey()) =>
+        call<WriteResult<SupportSettings>>('PUT', '/api/support-access/settings', input, key),
     },
     /** The person's conversations, kept on the server so every channel shares them (people only). */
     threads: {
@@ -277,3 +1278,5 @@ export function createApiClient(opts: ApiClientOptions) {
 }
 
 export type ApiClient = ReturnType<typeof createApiClient>;
+
+export { type ReadToolResult, runReadTool } from './read-tools.js';

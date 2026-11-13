@@ -3,10 +3,11 @@ import { Inject, type Type } from '@nestjs/common';
 import { CommandHandler, EventBus } from '@nestjs/cqrs';
 import type { z } from 'zod';
 import type { RuleContext } from '../entity/define-entity.js';
-import { toJson } from '../entity/define-entity.js';
 import { CORE_OPTIONS, type CoreOptions, type Tx } from '../tokens.js';
+import { checkPins, type Pins, type PinTarget, pinsOf } from '../versions/pins.js';
 import { registerOp } from '../write/approvals.js';
 import { type RunResult, runWrite, type WriteCtx, type WriteOp } from '../write/pipeline.js';
+import { presentOutput } from '../write/present.js';
 
 export interface CommandConfig<S extends CommandSpec, L, V> {
   /** What the rules need, loaded through entity repositories (owner-scoped: 404 if not theirs). */
@@ -32,6 +33,20 @@ export interface CommandConfig<S extends CommandSpec, L, V> {
    * the person it is for (a customer's request: the business's owner and ops).
    */
   approval?: ApproverRule;
+  /**
+   * The result as this principal may see it. Default: the output schema parses it, each part
+   * that reuses an entity's read schema is projected as that entity, then the read projectors
+   * run with the command's name. Give this when the output hides an entity in a union or a
+   * new schema (`.extend()`), so its fields are projected too.
+   */
+  present?: (value: V, p: Principal) => unknown;
+  /**
+   * The records `load` loaded that an approval must find unchanged (each one's plugins say how:
+   * a version). When the command parks, their pins are kept with it; the approved replay loads
+   * them again and refuses (409) if one moved on. Give it for a command that can park and
+   * changes a versioned record.
+   */
+  pin?: (loaded: L, input: z.output<S['input']>) => readonly PinTarget[];
 }
 
 export class AppCommand {
@@ -46,7 +61,8 @@ export interface CommandDef<S extends CommandSpec = CommandSpec, L = unknown, V 
   spec: S;
   name: string;
   Command: Type<AppCommand>;
-  op(): WriteOp<z.output<S['input']>, L, V>;
+  /** Its write op; `args` are what a parked one stored (its pins), handed back on the replay. */
+  op(args?: Record<string, unknown> | null): WriteOp<z.output<S['input']>, L, V>;
 }
 // biome-ignore lint/suspicious/noExplicitAny: a registry of heterogeneous commands
 export type AnyCommandDef = CommandDef<any, any, any>;
@@ -70,25 +86,47 @@ export function defineCommand<S extends CommandSpec, L, V>(
     spec,
     name: spec.name,
     Command,
-    op: () => ({
-      name: spec.name,
-      kind: 'command',
-      resourceType: config.resource.type,
-      resourceId: config.resource.id,
-      input: spec.input as unknown as z.ZodType<z.output<S['input']>>,
-      load: config.load,
-      authorize: config.authorize,
-      summarize: config.summarize,
-      approval: config.approval,
-      run: (a) => config.run({ ...a, via }),
-      present: (value) => spec.output.parse(toJson(value)),
-    }),
+    op: (args) => {
+      // On a replay, what the request pinned; otherwise what load pins now (read when it parks).
+      const pinned = (args as { pins?: Pins } | null | undefined)?.pins;
+      let pins = pinned;
+      const pin = config.pin;
+      const load = config.load;
+      return {
+        name: spec.name,
+        kind: 'command',
+        resourceType: config.resource.type,
+        resourceId: config.resource.id,
+        input: spec.input as unknown as z.ZodType<z.output<S['input']>>,
+        get args() {
+          return pins ? { pins } : undefined;
+        },
+        load:
+          load && pin
+            ? async (tx, p, input) => {
+                const loaded = await load(tx, p, input);
+                const targets = pin(loaded, input);
+                if (pinned) checkPins(targets, pinned);
+                else pins = pinsOf(targets);
+                return loaded;
+              }
+            : load,
+        authorize: config.authorize,
+        summarize: config.summarize,
+        approval: config.approval,
+        run: (a) => config.run({ ...a, via }),
+        present: (value, p) =>
+          config.present
+            ? config.present(value, p)
+            : presentOutput(spec.output, value, p, spec.name),
+      };
+    },
   };
 }
 
 /** The CQRS handler for one command: it calls runWrite and publishes events after commit. */
 export function commandHandler(def: AnyCommandDef): Type {
-  registerOp(def.name, () => def.op());
+  registerOp(def.name, (args) => def.op(args), def);
 
   @CommandHandler(def.Command)
   class Handler {

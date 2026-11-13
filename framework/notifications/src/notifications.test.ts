@@ -1,7 +1,18 @@
+import { defineLanguages } from '@hykr/i18n';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { contentHash, defineTemplate, toTemplateSpec } from './define-template.js';
-import { createNotificationCatalog } from './index.js';
+import { defineNotification } from './define-notification.js';
+import {
+  contentHash,
+  defineTemplate,
+  templateLanguages,
+  toTemplateSpec,
+} from './define-template.js';
+import {
+  CommentMentionNotification,
+  createNotificationCatalog,
+  overrideNotification,
+} from './index.js';
 
 const { notifications, templates } = createNotificationCatalog();
 
@@ -24,6 +35,28 @@ describe('defineTemplate refuses what Meta would reject', () => {
     expect(() => defineTemplate({ ...ok, body: { ...body, hi: '' } })).toThrow(/no hi body/);
   });
 
+  it('needs English only; the languages it is synced in are the declared ones it has', () => {
+    const english = defineTemplate({ ...ok, body: { en: 'Hi {{name}}' } });
+    expect(() => defineTemplate({ ...ok, body: { en: '', hi: 'नमस्ते {{name}}' } })).toThrow(
+      /no en body/,
+    );
+    const set = defineLanguages({
+      hi: { name: 'हिंदी', english: 'Hindi' },
+      el: { name: 'Ελληνικά', english: 'Greek' },
+    });
+    expect(templateLanguages(english, set)).toEqual(['en']);
+    // Telugu is not declared, Greek has no body: neither is synced.
+    expect(templateLanguages(defineTemplate(ok), set)).toEqual(['en', 'hi']);
+    // A language without words reads its buttons and footer in English.
+    const withButton = defineTemplate({
+      ...ok,
+      buttons: [{ type: 'quick_reply', id: 'ok', text: { en: 'OK', hi: 'ठीक' } }],
+    });
+    expect(toTemplateSpec(withButton, 'te', 'http://app').buttons).toEqual([
+      { type: 'QUICK_REPLY', text: 'OK' },
+    ]);
+  });
+
   it('a marketing template without an opt-out; no example for a parameter', () => {
     expect(() => defineTemplate({ ...ok, category: 'marketing' })).toThrow(/opt-out/);
     expect(() => defineTemplate({ ...ok, example: { name: '' } })).toThrow(/no example for name/);
@@ -40,6 +73,19 @@ describe('defineTemplate refuses what Meta would reject', () => {
     expect(spec.examples).toEqual({ summary: 'Cancel the site visit', outcome: 'approved' });
   });
 
+  it('a document header: in the provider spec and the hash; refused on an authentication template', () => {
+    const plain = defineTemplate(ok);
+    const carrying = defineTemplate({ ...ok, header: { type: 'document' } });
+    expect(toTemplateSpec(carrying, 'en', 'http://app').header).toEqual({ format: 'DOCUMENT' });
+    expect(toTemplateSpec(plain, 'en', 'http://app').header).toBeUndefined();
+    expect(contentHash(carrying, 'en')).not.toBe(contentHash(plain, 'en'));
+    // A template without a header keeps the hash it had before headers existed.
+    expect(contentHash(plain, 'en')).toBe('1df8f97f4ae7ed0a');
+    expect(() =>
+      defineTemplate({ ...ok, category: 'authentication', header: { type: 'document' } }),
+    ).toThrow(/cannot carry a document/);
+  });
+
   it('an application template defined twice is refused', () => {
     const twice = defineTemplate({
       name: 'approval_outcome_v1',
@@ -53,6 +99,172 @@ describe('defineTemplate refuses what Meta would reject', () => {
 
   it('notifications name only templates that exist', () => {
     const names = new Set(templates.map((t) => t.name));
-    for (const n of notifications) expect(names.has(n.whatsapp.template.name)).toBe(true);
+    for (const n of notifications)
+      if (n.whatsapp) expect(names.has(n.whatsapp.template.name)).toBe(true);
+  });
+});
+
+describe('defineNotification', () => {
+  const base = {
+    key: 'x.done',
+    topic: 'service' as const,
+    to: () => [{ userId: 'u1' }],
+    dedupe: (row: { id: string }) => `x.done:${row.id}`,
+    email: { subject: () => 'Done', body: () => 'It is done.' },
+  };
+
+  it('needs no WhatsApp template when WhatsApp is not a channel', () => {
+    expect(defineNotification({ ...base, channels: ['email'] }).whatsapp).toBeUndefined();
+  });
+
+  it('needs a template for WhatsApp, and WhatsApp for buttons; a channel once', () => {
+    expect(() => defineNotification({ ...base, channels: ['whatsapp', 'email'] })).toThrow(
+      /WhatsApp is a channel but has no template/,
+    );
+    expect(() =>
+      defineNotification({ ...base, channels: ['email'], onButton: { ok: () => undefined } }),
+    ).toThrow(/quick replies/);
+    expect(() => defineNotification({ ...base, channels: ['email', 'email'] })).toThrow(
+      /named twice/,
+    );
+  });
+
+  it('needs a title and body for push, and nothing else', () => {
+    expect(() => defineNotification({ ...base, channels: ['push', 'email'] })).toThrow(
+      /push is a channel but has no title and body/,
+    );
+    const push = { title: () => 'Done', body: () => 'It is done.', url: () => '/x' };
+    expect(defineNotification({ ...base, channels: ['push', 'email'], push }).push).toBe(push);
+  });
+
+  it('needs a title and body for the in-app inbox', () => {
+    expect(() => defineNotification({ ...base, channels: ['inapp'] })).toThrow(
+      /inapp is a channel but has no title and body/,
+    );
+    const inapp = { title: () => 'Done', body: () => 'It is done.' };
+    expect(defineNotification({ ...base, channels: ['inapp', 'email'], inapp }).inapp).toBe(inapp);
+  });
+
+  it("the framework's mention notification: the inbox, for a person named, in their words", () => {
+    const n = CommentMentionNotification;
+    expect(n.channels).toEqual(['inapp']);
+    expect(n.send?.on).toEqual(['comment.mentioned']);
+    const row = {
+      id: 'c1',
+      tenantId: 't1',
+      commentId: 'c1',
+      on: { entity: 'task', id: 'r1' },
+      target: { kind: 'user', id: 'u2', label: 'Ravi' },
+      author: { id: 'u1', name: 'Ana' },
+      internal: false,
+      excerpt: 'Can you check @Ravi?',
+    };
+    expect(n.when?.(row)).toBe(true);
+    expect(n.when?.({ ...row, target: { kind: 'other', id: 'a1', label: 'Bot' } })).toBe(false);
+    expect(n.to(row)).toEqual([{ userId: 'u2' }]);
+    expect(n.inapp?.title(row, { lang: 'en', timeZone: 'UTC' })).toBe('Ana mentioned you');
+    expect(n.inapp?.title(row, { lang: 'hi', timeZone: 'UTC' })).toContain('Ana');
+    expect(n.inapp?.body(row, { lang: 'en', timeZone: 'UTC' })).toBe('Can you check @Ravi?');
+    expect(n.inapp?.record?.(row)).toEqual({ type: 'task', id: 'r1' });
+    expect(n.dedupe(row)).toBe('comment.mention:c1:user:u2');
+    expect(notifications.map((x) => x.key)).toContain('comment.mention');
+  });
+});
+
+describe('an approval request', () => {
+  const request = notifications.find((n) => n.key === 'approval.request');
+  const row = (fields: Record<string, unknown>) =>
+    ({
+      id: 'a1',
+      tenantId: 't1',
+      summary: 'Pay the supplier',
+      status: 'pending',
+      ownerId: 'u-asked',
+      approverUserId: null,
+      approverCapability: null,
+      approverChannels: null,
+      minAssurance: null,
+      requesterContactId: null,
+      ...fields,
+    }) as never;
+  const reader = { lang: 'en' as const, timeZone: 'UTC', appUrl: 'https://app.example' };
+
+  it("goes to a capability's holders, never to the requester", () => {
+    const a = row({ approverCapability: 'approvals.decide' });
+    expect(request?.when?.(a)).toBe(true);
+    expect(request?.to(a)).toEqual([{ capability: 'approvals.decide', except: ['u-asked'] }]);
+  });
+
+  it('goes to a named person alone', () => {
+    const a = row({ approverUserId: 'u-named' });
+    expect(request?.when?.(a)).toBe(true);
+    expect(request?.to(a)).toEqual([{ userId: 'u-named' }]);
+  });
+
+  it('not when the requester decides it; an app-only request still goes', () => {
+    expect(request?.when?.(row({ approverUserId: 'u-asked' }))).toBe(false);
+    expect(
+      request?.when?.(row({ approverCapability: 'approvals.decide', approverChannels: ['app'] })),
+    ).toBe(true);
+  });
+
+  it('by push, WhatsApp, then email, and always into the inbox', () => {
+    expect(request?.channels).toEqual(['push', 'whatsapp', 'email']);
+    expect(request?.also).toEqual(['inapp']);
+  });
+
+  it('on WhatsApp only where it may be decided there, on a number alone', () => {
+    const gate = request?.channelWhen?.whatsapp;
+    expect(gate?.(row({}))).toBe(true);
+    expect(gate?.(row({ approverChannels: ['app', 'whatsapp'] }))).toBe(true);
+    expect(gate?.(row({ approverChannels: ['app'] }))).toBe(false);
+    expect(gate?.(row({ minAssurance: 'whatsapp_number' }))).toBe(true);
+    expect(gate?.(row({ minAssurance: 'session' }))).toBe(false);
+    expect(gate?.(row({ minAssurance: 'otp' }))).toBe(false);
+  });
+
+  it('every channel opens /approvals/<id>', () => {
+    const a = row({ approverCapability: 'approvals.decide' });
+    expect(request?.push?.url?.(a)).toBe('/approvals/a1');
+    expect(request?.push?.title(a, reader)).toBe('Waiting for your approval');
+    expect(request?.push?.body(a, reader)).toBe('Pay the supplier');
+    expect(request?.inapp?.url?.(a)).toBe('/approvals/a1');
+    expect(request?.email?.subject(a, reader)).toBe('Waiting for your approval: Pay the supplier');
+    expect(request?.email?.body(a, reader)).toContain('https://app.example/approvals/a1');
+    expect(request?.email?.body(a, { ...reader, lang: 'hi' })).toContain(
+      'https://app.example/approvals/a1',
+    );
+  });
+});
+
+describe('channels a notification goes by as well, and channels it skips', () => {
+  const base = {
+    key: 'thing.done',
+    topic: 'service' as const,
+    to: () => [{ userId: 'u1' }],
+    dedupe: (r: { id: string }) => r.id,
+    inapp: { title: () => 't', body: () => 'b' },
+    email: { subject: () => 's', body: () => 'b' },
+  };
+
+  it('also: its content is required, and a channel is named once', () => {
+    expect(() => defineNotification({ ...base, channels: ['email'], also: ['push'] })).toThrow(
+      /push is a channel but has no title/,
+    );
+    expect(() => defineNotification({ ...base, channels: ['email'], also: ['email'] })).toThrow(
+      /named twice/,
+    );
+    expect(defineNotification({ ...base, channels: ['email'], also: ['inapp'] }).also).toEqual([
+      'inapp',
+    ]);
+  });
+
+  it('an override changes the chain and what it goes by as well', () => {
+    const { notifications: changed } = createNotificationCatalog({
+      overrides: [overrideNotification('approval.request', { channels: ['email'], also: [] })],
+    });
+    const def = changed.find((n) => n.key === 'approval.request');
+    expect(def?.channels).toEqual(['email']);
+    expect(def?.also).toEqual([]);
   });
 });

@@ -1,7 +1,22 @@
-import { ApiError, type EntityClient } from '@hykr/api-client';
-import type { Catalog, CommandSpec, ListInput, WriteResult } from '@hykr/contracts';
+import { ApiError, type EntityClient, isNetworkError } from '@hykr/api-client';
+import {
+  type Catalog,
+  type CommandSpec,
+  commandQueuesOffline,
+  type EntitySpec,
+  type ListInput,
+  type ModuleSpec,
+  queuesOffline,
+  type Summary,
+  type SummaryInput,
+  versionedOf,
+  versionField,
+  type WriteAction,
+  type WriteResult,
+} from '@hykr/contracts';
 import {
   type InfiniteData,
+  type QueryClient,
   type UseMutationResult,
   type UseQueryResult,
   useInfiniteQuery,
@@ -12,21 +27,49 @@ import {
 import type { z } from 'zod';
 import { api } from '../api';
 import { getCatalog } from '../runtime';
+import { cachedRecord, cacheWritten, patchCached, patched } from './cached-rows';
 import { useToast } from './Toast';
+import { isQueued, type QueuedWrite, writeQueue } from './write-queue';
 
 /**
  * Where an application tells the type system which catalog it runs, so entity names and rows
- * are typed in its screens. Without it, any name is accepted and rows are loosely typed.
+ * are typed in its screens. Without it, any name is accepted and rows are loosely typed. Either
+ * its catalog, or its modules' isomorphic specs (`ModuleSpec`), whose entities are merged:
  *
  *   declare module '@hykr/app' {
- *     interface Register { catalog: typeof catalog }
+ *     interface Register { catalog: typeof catalog }      // or: { modules: typeof modules }
  *   }
  */
 // biome-ignore lint/suspicious/noEmptyInterface: filled in by the application's declaration.
 export interface Register {}
 
+type UnionToIntersection<U> = (U extends unknown ? (u: U) => void : never) extends (
+  i: infer I,
+) => void
+  ? I
+  : never;
+
+/** Every module's entities in one map: the intersection of their `entities`. */
+export type MergedEntities<M extends readonly { entities: Record<string, EntitySpec> }[]> = [
+  M[number],
+] extends [never]
+  ? Record<never, EntitySpec>
+  : UnionToIntersection<M[number]['entities']> extends infer E extends Record<string, EntitySpec>
+    ? E
+    : never;
+
+/**
+ * The catalog type a registration declares: its `catalog`, or a catalog of its `modules`'
+ * merged entities (plus the platform's), or the general Catalog.
+ */
+export type CatalogOf<R> = R extends { catalog: infer C extends Catalog }
+  ? C
+  : R extends { modules: infer M extends readonly ModuleSpec[] }
+    ? Catalog<MergedEntities<M>>
+    : Catalog;
+
 /** The application's catalog type, once registered; the general Catalog until then. */
-export type RegisteredCatalog = Register extends { catalog: infer C extends Catalog } ? C : Catalog;
+export type RegisteredCatalog = CatalogOf<Register>;
 type Entities = RegisteredCatalog['entities'];
 
 /**
@@ -39,7 +82,11 @@ type Read<N extends EntityName> = z.infer<Entities[N]['schemas']['read']>;
 // Return types are spelled out below, so the published declarations keep them in terms of
 // Register (and so typed by the application's catalog), not the catalog seen at build time.
 type Client<N extends EntityName> = EntityClient<Entities[N]>;
-type Written<N extends EntityName> = WriteResult<Read<N>>;
+/**
+ * A write's answer: done or waiting for approval, or, for an entity or command its module marks
+ * `offline`, kept on the device to sync later (`queued`, decisions B12).
+ */
+type Written<N extends EntityName> = WriteResult<Read<N>> | QueuedWrite;
 
 /** One entity's list, loaded a page at a time. */
 export type EntityList<N extends EntityName> = {
@@ -49,6 +96,8 @@ export type EntityList<N extends EntityName> = {
   refresh: () => unknown;
   loading: boolean;
   error: Error | null;
+  /** Waiting for a network: what it shows (if anything) is what was kept on the device. */
+  offline: boolean;
 };
 
 /** create / update / remove for one entity. */
@@ -59,7 +108,7 @@ export type EntityMutations<N extends EntityName> = {
     Error,
     { id: string; patch: Parameters<Client<N>['update']>[1] }
   >;
-  remove: UseMutationResult<WriteResult<null>, Error, string>;
+  remove: UseMutationResult<WriteResult<null> | QueuedWrite, Error, string>;
 };
 
 export const entityApi = <N extends EntityName>(name: N): Client<N> =>
@@ -83,7 +132,23 @@ export function useEntityList<N extends EntityName>(name: N, query: ListInput = 
     refresh: q.refetch,
     loading: q.isLoading,
     error: q.error,
+    offline: q.fetchStatus === 'paused',
   };
+}
+
+/**
+ * Counts and totals of an entity's records (GET /api/<plural>/summary), with the person's
+ * session. Keyed under the entity, so its writes, the assistant's and live events refresh it
+ * like its lists. Takes any plural: views name entities by plural (kpi.row's `of`).
+ */
+export function useEntitySummary(
+  name: EntityName | (string & {}),
+  query: SummaryInput = {},
+): UseQueryResult<Summary> {
+  return useQuery({
+    queryKey: [name, 'summary', query],
+    queryFn: () => api.summary(name, query),
+  });
 }
 
 export function useEntity<N extends EntityName>(
@@ -109,31 +174,131 @@ function useInvalidate() {
     );
 }
 
-/** create / update / remove, each with a fresh idempotency key (the client makes one). */
+const titleOf = (...from: (Record<string, unknown> | undefined)[]) => {
+  for (const v of from) if (typeof v?.title === 'string' && v.title) return v.title;
+  return undefined;
+};
+
+/**
+ * One entity write, the way the app's hooks and views make it: to the offline outbox when the
+ * entity's module marks this write `offline` and the offline plugin runs (kept on the device,
+ * sent with a key fixed now, based on the version the person saw), otherwise straight to the
+ * API. A queued update shows in the cached lists at once, and a queued delete leaves them.
+ */
+export async function writeEntity(
+  client: QueryClient,
+  name: EntityName | (string & {}),
+  action: WriteAction,
+  args: { id?: string; input?: Record<string, unknown> },
+): Promise<WriteResult<unknown> | QueuedWrite> {
+  const spec = (specs() as Record<string, EntitySpec>)[name];
+  if (!spec) throw new Error(`No entity called ${name}`);
+  const queue = writeQueue();
+  if (!queue || !queuesOffline(spec, action)) {
+    const c = api.entity(spec);
+    const result =
+      action === 'create'
+        ? await c.create(args.input as never)
+        : action === 'update'
+          ? await c.update(String(args.id), args.input as never)
+          : await c.remove(String(args.id));
+    if (args.id && result.status === 'done') cacheWritten(client, name, args.id, result.value);
+    return result;
+  }
+  const trait = versionedOf(spec);
+  const field = trait ? versionField(trait) : undefined;
+  // The freshest copy: an older one kept by a list not shown now would send a stale If-Match.
+  const row = args.id ? cachedRecord(client, name, args.id, { versionField: field }) : undefined;
+  const input =
+    action === 'create'
+      ? { id: crypto.randomUUID(), ...args.input }
+      : action === 'update'
+        ? { ...args.input }
+        : {};
+  const recordId = action === 'create' ? String(input.id) : args.id;
+  const seen = field && row ? Number(row[field]) : undefined;
+  const result = await queue.submit({
+    op: { kind: 'entity', entity: name, action, ...(recordId ? { recordId } : {}) },
+    input,
+    title: titleOf(input, row),
+    versioned: trait !== undefined,
+    ...(seen !== undefined && Number.isFinite(seen) ? { baseVersion: seen } : {}),
+  });
+  if (!args.id) return result;
+  if (isQueued(result)) {
+    const next = result.item.ifMatch !== undefined ? result.item.ifMatch + 1 : undefined;
+    patchCached(client, name, args.id, (r) =>
+      action === 'delete'
+        ? null
+        : { ...patched(r, input), ...(field && next !== undefined ? { [field]: next } : {}) },
+    );
+  } else if (result.status === 'done') cacheWritten(client, name, args.id, result.value);
+  return result;
+}
+
+/** One command, the same way: queued when its module marks it `offline`, else straight to the API. */
+export async function writeCommand<S extends CommandSpec>(
+  spec: S,
+  input: z.input<S['input']>,
+): Promise<WriteResult<z.infer<S['output']>> | QueuedWrite> {
+  const queue = writeQueue();
+  if (!queue || !commandQueuesOffline(spec))
+    return api.command(spec, input) as Promise<WriteResult<z.infer<S['output']>>>;
+  const values = input as Record<string, unknown>;
+  return queue.submit({
+    op: { kind: 'command', command: spec.name },
+    input: values,
+    title: titleOf(values),
+  }) as Promise<WriteResult<z.infer<S['output']>> | QueuedWrite>;
+}
+
+/**
+ * create / update / remove. A write on an entity its module marks `offline` goes through the
+ * outbox (one idempotency key for all its tries; `queued` while it cannot be sent); any other
+ * gets a fresh key per call and fails at once without a network.
+ */
 export function useEntityMutation<N extends EntityName>(name: N): EntityMutations<N> {
   const invalidate = useInvalidate();
-  const onSuccess = () => invalidate([name]);
+  const client = useQueryClient();
+  // Kept for later: nothing to refresh until it syncs (the outbox refreshes then).
+  const onSuccess = (r: unknown) => (isQueued(r) ? undefined : invalidate([name]));
   const create = useMutation({
-    mutationFn: (input: Parameters<Client<N>['create']>[0]) => entityApi(name).create(input),
+    networkMode: 'always',
+    mutationFn: (input: Parameters<Client<N>['create']>[0]) =>
+      writeEntity(client, name, 'create', { input: input as Record<string, unknown> }) as Promise<
+        Written<N>
+      >,
     onSuccess,
   });
   const update = useMutation({
+    networkMode: 'always',
     mutationFn: (a: { id: string; patch: Parameters<Client<N>['update']>[1] }) =>
-      entityApi(name).update(a.id, a.patch),
+      writeEntity(client, name, 'update', {
+        id: a.id,
+        input: a.patch as Record<string, unknown>,
+      }) as Promise<Written<N>>,
     onSuccess,
   });
-  const remove = useMutation({ mutationFn: (id: string) => entityApi(name).remove(id), onSuccess });
+  const remove = useMutation({
+    networkMode: 'always',
+    mutationFn: (id: string) =>
+      writeEntity(client, name, 'delete', { id }) as Promise<WriteResult<null> | QueuedWrite>,
+    onSuccess,
+  });
   return { create, update, remove };
 }
 
-/** Send a command; the result is done or needs_approval, so the screen can show either. */
+/**
+ * Send a command; the result is done or needs_approval (or `queued`, for a command its module
+ * marks `offline`), so the screen can show each.
+ */
 export function useCommand<S extends CommandSpec>(spec: S) {
   const invalidate = useInvalidate();
   return useMutation({
-    mutationFn: (input: z.input<S['input']>) =>
-      api.command(spec, input) as Promise<WriteResult<z.infer<S['output']>>>,
+    networkMode: 'always',
+    mutationFn: (input: z.input<S['input']>) => writeCommand(spec, input),
     // A command can touch any entity: refresh them all.
-    onSuccess: () => invalidate(Object.keys(specs())),
+    onSuccess: (r) => (isQueued(r) ? undefined : invalidate(Object.keys(specs()))),
   });
 }
 
@@ -155,6 +320,8 @@ export function useApprovals() {
 
 /** A sentence a person can read, from whatever the API sent back. */
 export function errorMessage(e: unknown): string {
+  if (isNetworkError(e))
+    return "You're offline, or the server can't be reached. Try again when you're back online.";
   if (e instanceof ApiError) {
     const body = e.body as {
       message?: unknown;

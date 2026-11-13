@@ -19,7 +19,8 @@ export type InboundMessage = {
     | { kind: 'button'; payload: string; text?: string }
     | { kind: 'list'; rowId: string; title?: string }
     | { kind: 'audio'; mediaId: string; mime: string }
-    | { kind: 'media'; mediaId: string; mime: string; caption?: string };
+    /** A photo, document or video; a document's own file name when it has one. */
+    | { kind: 'media'; mediaId: string; mime: string; caption?: string; filename?: string };
   /** The message being answered, if any. */
   replyTo?: string;
 };
@@ -32,9 +33,20 @@ export type StatusUpdate = {
   at: Date;
 };
 
+/**
+ * A file a message carries: uploaded to the provider first (`uploadMedia`, its id), or at a
+ * public HTTPS address the provider fetches itself.
+ */
+export type MediaRef = { mediaId: string } | { link: string };
+
+/** A template's header, filled when sent: the document it carries. */
+export type TemplateHeader = { kind: 'document'; filename: string } & MediaRef;
+
 /** A message to send, normalized. Buttons: at most 3; list rows: at most 10. */
 export type OutboundMessage =
   | { kind: 'text'; to: string; text: string }
+  /** A file as a document message (inside the 24-hour window only, like any free-form message). */
+  | ({ kind: 'document'; to: string; filename: string; caption?: string } & MediaRef)
   | { kind: 'buttons'; to: string; text: string; buttons: { id: string; title: string }[] }
   | {
       kind: 'list';
@@ -52,6 +64,8 @@ export type OutboundMessage =
       params: Record<string, string>;
       /** One payload per quick-reply button, in order; URL buttons take their parameter. */
       buttons?: ({ payload: string } | { urlParam: string })[];
+      /** The template's header, when it has one (a DOCUMENT header carries this file). */
+      header?: TemplateHeader;
     };
 
 /** A template as the provider holds it. */
@@ -77,7 +91,15 @@ export type TemplateSpec = {
     | { type: 'QUICK_REPLY'; text: string }
     | { type: 'URL'; text: string; url: string; example?: string }
   )[];
+  /**
+   * A header that carries a document, filled when the template is sent. The provider's review
+   * wants a sample file: the adapter uploads one when it can (WhatsApp: an app id is set).
+   */
+  header?: { format: 'DOCUMENT' };
 };
+
+/** A file to upload to the provider, for a message that carries it. */
+export type MediaUpload = { bytes: Uint8Array; mime: string; filename: string };
 
 /** A failure worth trying again (rate limits, the provider's own errors). */
 export class RetryableError extends Error {
@@ -119,6 +141,8 @@ export interface ChannelAdapter {
   markRead(from: string, providerMessageId: string): Promise<void>;
   /** A received file, by its id; the number it was sent to scopes the lookup. */
   downloadMedia(mediaId: string, phoneNumberId?: string): Promise<{ bytes: Buffer; mime: string }>;
+  /** Upload a file for a message the number `from` will send: its media id. */
+  uploadMedia(from: string, file: MediaUpload): Promise<{ mediaId: string }>;
   templates: {
     list(): Promise<RemoteTemplate[]>;
     create(t: TemplateSpec): Promise<{ id: string }>;

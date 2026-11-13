@@ -1,0 +1,6 @@
+legacy_id,title,dueOn,done,cost
+T-1001,Order the floor tiles,2026-11-20,,450000
+T-1002,Book the electrician,2026-11-12,,
+T-1003,Measure the kitchen,,true,
+T-1004,"Confirm the paint colours, both rooms",2026-11-25,,
+T-1005,Collect the spare keys,2026-11-10,false,

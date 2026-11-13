@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   bigserial,
   check,
   index,
@@ -9,6 +10,7 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { agents } from './agents.js';
 import { user } from './auth.js';
 import { app, id } from './base.js';
 import { contacts } from './channel.js';
@@ -24,9 +26,16 @@ export const approvals = app.table(
     /** Who asked, when they have an account; a contact's request names the contact instead. */
     ownerId: text('owner_id').references(() => user.id),
     requesterContactId: text('requester_contact_id'),
-    /** Who decides: one person (their own assistant's request), or anyone with these roles. */
+    /**
+     * Who decides: one person (the requester, for their own assistant's request, or a person
+     * the policy names), or anyone holding `approverCapability`, never the requester.
+     */
     approverUserId: text('approver_user_id'),
+    /** No longer written (decisions A5): deciders are chosen by capability. */
     approverRoles: text('approver_roles').array().notNull().default(sql`'{}'::text[]`),
+    approverCapability: text('approver_capability'),
+    /** The application's approval level it parked at ('internal'), when one was named. */
+    level: text('level'),
     /** Where it may be decided (null: anywhere the decider may act). */
     approverChannels: text('approver_channels').array(),
     minAssurance: text('min_assurance'),
@@ -40,7 +49,8 @@ export const approvals = app.table(
     summary: text('summary'),
     /** The parked operation: { op, args, principal }, replayed as-is on approval. */
     payload: jsonb('payload'),
-    requestedBy: text('requested_by', { enum: ['user', 'agent'] })
+    /** The requester's actor kind (Principal.actor.kind in @hykr/contracts). */
+    requestedBy: text('requested_by', { enum: ['user', 'agent', 'system', 'guest'] })
       .notNull()
       .default('agent'),
     runId: text('run_id'),
@@ -66,7 +76,11 @@ export const idempotencyKeys = app.table(
     response: jsonb('response').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
-  (table) => [primaryKey({ columns: [table.key, table.principalId] })],
+  (table) => [
+    primaryKey({ columns: [table.key, table.principalId] }),
+    // The hourly purge of replies past their retention (B12).
+    index('idempotency_created_at_idx').on(table.createdAt),
+  ],
 );
 
 /** A canvas page the person saved: a PageSpec of queries, so it always shows today's data. */
@@ -130,6 +144,15 @@ export const threads = app.table(
     ownerId: text('owner_id').references(() => user.id, { onDelete: 'cascade' }),
     contactId: text('contact_id').references(() => contacts.id, { onDelete: 'cascade' }),
     title: text('title'),
+    /**
+     * 'chat': a person's conversation with the assistant (every channel's); 'agent': one of their
+     * agents' runs (A6), which never becomes their current conversation.
+     */
+    kind: text('kind', { enum: ['chat', 'agent'] })
+      .notNull()
+      .default('chat'),
+    /** The agent whose runs it holds, for an 'agent' thread. */
+    agentId: text('agent_id').references(() => agents.id, { onDelete: 'cascade' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()
@@ -139,6 +162,7 @@ export const threads = app.table(
   (table) => [
     index('threads_owner_updated_idx').on(table.ownerId, table.updatedAt),
     index('threads_contact_updated_idx').on(table.contactId, table.updatedAt),
+    index('threads_agent_idx').on(table.agentId).where(sql`${table.agentId} is not null`),
     check('threads_one_subject', sql`(${table.ownerId} is null) <> (${table.contactId} is null)`),
   ],
 );
@@ -158,10 +182,14 @@ export const threadMessages = app.table(
     text: text('text').notNull().default(''),
     /** UI message parts after the text: tool calls with their inputs and outputs. */
     parts: jsonb('parts').notNull().default([]),
-    channel: text('channel', { enum: ['app', 'voice', 'whatsapp'] })
+    /** Channel in @hykr/contracts: a turn's channel, kept as text. */
+    channel: text('channel', {
+      enum: ['app', 'voice', 'whatsapp', 'mcp', 'webmcp', 'api', 'background', 'share'],
+    })
       .notNull()
       .default('app'),
-    lang: text('lang', { enum: ['en', 'hi', 'te'] }),
+    /** The language the turn was in: one of the application's (`defineLanguages`). */
+    lang: text('lang'),
     runId: text('run_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     /** Insertion order: two messages in the same millisecond still read in the order saved. */
@@ -170,13 +198,16 @@ export const threadMessages = app.table(
   (table) => [
     index('thread_messages_thread_created_idx').on(table.threadId, table.createdAt),
     index('thread_messages_thread_seq_idx').on(table.threadId, table.seq),
+    // A run's reply, and so its thread: a run that waited for an approval goes on there (A7).
+    index('thread_messages_run_idx').on(table.runId).where(sql`${table.runId} is not null`),
   ],
 );
 
 /**
  * Notifications to send, written in the same transaction as the business change that causes
  * them: if it rolls back, nothing is sent; if the process stops after commit, a relay still
- * delivers them.
+ * delivers them. A write that can be undone holds its sends until its window closes
+ * (`available_at`); undoing it withdraws them (`cancelled_at`).
  */
 export const outbox = app.table(
   'outbox',
@@ -188,6 +219,17 @@ export const outbox = app.table(
     payload: jsonb('payload').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     relayedAt: timestamp('relayed_at', { withTimezone: true }),
+    /** Not passed on before this time: the undo window of the write that wrote it. */
+    availableAt: timestamp('available_at', { withTimezone: true }).defaultNow().notNull(),
+    /** Withdrawn before it was passed on: the write was undone in its window. */
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    /** The undo window (`app.undo_windows`) that holds it, if any. */
+    undoId: text('undo_id'),
+    /**
+     * The top-level transaction that wrote it (`pg_current_xact_id()`, savepoints included), so
+     * the write that wrote it finds it again before it commits.
+     */
+    xact: bigint('xact', { mode: 'number' }).default(sql`(pg_current_xact_id()::text)::bigint`),
   },
   (table) => [index('outbox_pending_idx').on(table.id).where(sql`${table.relayedAt} is null`)],
 );
