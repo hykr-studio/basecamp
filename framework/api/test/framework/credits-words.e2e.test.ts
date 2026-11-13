@@ -6,6 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { boot, makeOperator, me, Person, pool, shutdown } from '../../dist/testing.js';
 import { creditsApp } from '../fixture/dist/features/credits/index.js';
 
+// Connections keep their credentials sealed with it; set before the app reads its configuration.
+process.env.SECRETS_KEY ||= 'test-secrets-key-0123456789abcdef0123456789';
+
 const ENV = ['CREDITS_CONFIG'];
 const saved = Object.fromEntries(ENV.map((n) => [n, process.env[n]]));
 
@@ -96,6 +99,13 @@ describe("a limit's refusal, in people's words", () => {
     expect(refused.status).toBe(402);
     expect(refused.body.reason).toBe(en.paused.reason);
     expect(JSON.stringify(refused.body)).not.toMatch(/tool_calls|calls of/);
+    // A turn in Hindi is refused in Hindi; a turn that names no language, in English.
+    const inHindi = await mia.call('POST', '/api/chat/once', {
+      message: 'add words task 3',
+      lang: 'hi',
+    });
+    expect(inHindi.status).toBe(402);
+    expect(inHindi.body.reason).toBe(hi.paused.reason);
   });
 
   it("names a module's meter by the label it declares", async () => {
