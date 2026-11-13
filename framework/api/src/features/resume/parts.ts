@@ -1,7 +1,8 @@
 // A resumed run's tool calls as thread parts, the way the chat service saves a turn's: what the
 // chat renders (the outcome, what it showed, an approval, a refusal's reason), never the data.
 import { randomUUID } from 'node:crypto';
-import { lookupsIn, type Present } from '@hykr/contracts';
+import type { Present } from '@hykr/contracts';
+import { lookupsOf } from '../../modules/chat/chat.service.js';
 import type { SavedPart } from '../../modules/threads/threads.service.js';
 
 type RawToolResult = {
@@ -36,7 +37,7 @@ export function partsOf(results: readonly unknown[]): SavedPart[] {
   const raw = results.map(
     (r) => (r && typeof r === 'object' && 'payload' in r ? r.payload : r) as RawToolResult,
   );
-  const lookups = lookupsIn(raw.map((x) => x.result));
+  const lookups = lookupsOf(raw);
   return raw.map((x, i) => ({
     type: `tool-${x.toolName ?? 'tool'}`,
     toolCallId: x.toolCallId ?? randomUUID(),

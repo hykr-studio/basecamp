@@ -62,6 +62,30 @@ describe('a lookup before a change', () => {
   });
 });
 
+describe('a lookup before what it found', () => {
+  it('on a screen with a canvas: "open my <page> view" opens the page, with no pages list', async () => {
+    const spec = {
+      title: 'Monday',
+      layout: 'stack',
+      blocks: [{ id: 'k', view: 'kpi.row', props: { items: [{ label: 'Open', value: 1 }] } }],
+    };
+    expect((await ana.call('POST', '/api/pages', { name: 'Monday', spec })).status).toBeLessThan(
+      300,
+    );
+    const turn = await ana.chat('open my Monday view', undefined, ['inline', 'canvas']);
+    const calls = turn.body.toolCalls as Call[];
+    expect(calls.map((c) => `${c.tool}:${c.outcome}`)).toEqual([
+      'list-pages:done',
+      'canvas-open:done',
+    ]);
+    expect(calls[0]).not.toHaveProperty('present');
+    expect(calls[1].present).toMatchObject({ kind: 'open', screen: 'page.view' });
+    const saved = await savedParts(turn.body.threadId);
+    expect(saved[0].output).not.toHaveProperty('present');
+    expect(saved[1].output).toHaveProperty('present');
+  });
+});
+
 describe('a read with no change after it', () => {
   it('is the answer: it shows', async () => {
     // Nothing by that title: the list is what the assistant read, and nothing was changed.

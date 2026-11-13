@@ -326,6 +326,28 @@ describe('meetings, end to end', () => {
     });
   });
 
+  it('open <meeting>: the meeting is the answer, never the list it was found in (V13)', async () => {
+    const meeting = await newMeeting(ana, 'Lookup review', 2);
+    const tools = (turn: { body: { toolCalls: { tool: string }[] } }) =>
+      turn.body.toolCalls.map((c) => c.tool);
+    // In words (WhatsApp): the meeting, and no meetings list with picks after it.
+    const words = await ana.chat('open Lookup review', undefined, ['text']);
+    expect(tools(words)).toEqual(['list-meetings', 'get-meeting']);
+    expect(words.body.toolCalls[0]).not.toHaveProperty('present');
+    expect(words.body.toolCalls[1].present).toMatchObject({
+      kind: 'text',
+      text: expect.stringContaining('Lookup review'),
+    });
+    // On a screen with a canvas: it opens there, with no list beside the chip.
+    const app = await ana.chat('open Lookup review', undefined, ['inline', 'canvas']);
+    expect(tools(app)).toEqual(['list-meetings', 'canvas-open']);
+    expect(app.body.toolCalls[0]).not.toHaveProperty('present');
+    expect(app.body.toolCalls[1].present).toMatchObject({
+      kind: 'open',
+      params: { id: meeting.id },
+    });
+  });
+
   it('agents cannot delete meetings: the tool does not exist and the API refuses', async () => {
     const m = await newMeeting(ana, 'Temp');
     const key = process.env.AGENT_API_KEY ?? '';

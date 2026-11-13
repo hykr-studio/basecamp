@@ -579,6 +579,25 @@ describe('who decides, and who sees the cost', () => {
       present: { kind: 'text' },
     });
   });
+
+  it('a move refused in words (WhatsApp): no list of the orders it was found in (V13)', async () => {
+    const words = (message: string) =>
+      owner.call('POST', '/api/chat/once', { message, surfaces: ['text'] }, inTenant());
+    const outcomes = (turn: { body: { toolCalls: { tool: string; outcome: string }[] } }) =>
+      turn.body.toolCalls.map((c) => `${c.tool}:${c.outcome}`);
+    await save(owner, { title: 'Lookup refused', items: rooms });
+    // A draft cannot be approved: the API refuses the move. The list was how the assistant
+    // found the order, so it is no answer, refused or not.
+    const refused = await words('apply approve to orders "Lookup refused"');
+    expect(outcomes(refused)).toEqual(['list-orders:done', 'transition-orders:refused']);
+    expect(refused.body.toolCalls[0]).not.toHaveProperty('present');
+    expect(refused.body.reply).toMatch(/^I couldn't do that/);
+    // Fulfil is a move only people make: the tool refuses its input before it runs, which is
+    // refused too, and shows no list either.
+    const invalid = await words('apply fulfil to orders "Lookup refused"');
+    expect(outcomes(invalid)).toEqual(['list-orders:done', 'transition-orders:refused']);
+    expect(invalid.body.toolCalls[0]).not.toHaveProperty('present');
+  });
 });
 
 describe('a currency that does not exist (V4)', () => {

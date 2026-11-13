@@ -10,6 +10,7 @@ import {
   type Principal,
   type Surface,
   type ToolCallSummary,
+  writeToolIds,
 } from '@hykr/contracts';
 import { TenantConfigService, tenantZone } from '@hykr/core';
 import { toolsFor } from '@hykr/core/tools';
@@ -67,8 +68,19 @@ const rawOf = (r: unknown) =>
     args?: unknown;
   };
 
-/** The turn's lookups: reads whose view came before a write of the same turn (`lookupsIn`). */
-const lookupsOf = (results: unknown[]) => lookupsIn(results.map((r) => rawOf(r).result));
+/**
+ * The turn's lookups (`lookupsIn`): reads whose view came before a write of the same turn, or
+ * before a call that showed one of their rows. A call is a write by its tool, from the catalog.
+ */
+export const lookupsOf = (results: readonly unknown[]) =>
+  lookupsIn(
+    results.map((r) => ({ tool: rawOf(r).toolName, output: rawOf(r).result })),
+    writeToolIds(runtime().catalog),
+  );
+
+/** Mastra's answer to an input the tool's schema refused: the tool never ran. */
+const inputRefused = (result: unknown) =>
+  !!result && typeof result === 'object' && (result as { error?: unknown }).error === true;
 
 /**
  * The reply's tool calls, as UI message parts, so a reloaded thread renders as the app showed it
@@ -102,7 +114,8 @@ type RawToolResult = {
 
 /**
  * What each tool call amounted to: "ok" only means the API answered. A lookup (a read the
- * assistant made to find what it then wrote) shows nothing: the write is the answer.
+ * assistant made to find what it then wrote, opened or showed) shows nothing: what it found is
+ * the answer.
  */
 export function summarize(results: unknown[]): ToolCallSummary[] {
   const lookups = lookupsOf(results);
@@ -115,6 +128,8 @@ export function summarize(results: unknown[]): ToolCallSummary[] {
           ...(x.result?.present ? { present: x.result.present } : {}),
           ...(x.result?.speech ? { speech: x.result.speech } : {}),
         };
+    // Its input refused, the call did nothing: refused too, with no reason for people.
+    if (inputRefused(x.result)) return { tool, ok: false, outcome: 'refused' };
     if (x.result?.ok === false) {
       const reason = x.result.error?.reason ?? x.result.error?.message;
       return {
