@@ -413,6 +413,20 @@ describe('JSON and NDJSON', () => {
     expect(j.output).toMatchObject({ created: 2, failed: 0 });
     expect(await itemByTitle('From NDJSON')).toMatchObject({ done: true });
   });
+
+  it('a key column named like a built-in is read from the row alone', async () => {
+    // A row without the column read Object's own `constructor` as its key before V10.
+    const j = await importText(
+      owner,
+      'item',
+      JSON.stringify([{ constructor: 'K1', title: 'Keyed oddly' }, { title: 'Keyless oddly' }]),
+      { source: 'odd-key', key: 'constructor' },
+      { name: 'items.json', mime: 'application/json' },
+    );
+    expect(j.output).toMatchObject({ created: 1, failed: 1, errors: { missing_key: 1 } });
+    expect(await itemByTitle('Keyed oddly')).toBeTruthy();
+    expect(await itemByTitle('Keyless oddly')).toBeUndefined();
+  });
 });
 
 describe('hidden fields', () => {

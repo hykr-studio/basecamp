@@ -56,6 +56,7 @@ import { JOBS } from '../../queues/define.js';
 import { serverContext } from '../../queues/jobs.service.js';
 import { runtime } from '../../runtime.js';
 import { matchesEvent } from '../events/subscriber.js';
+import { badKeyset, type Keyset, keysetOf } from '../inbox/cursor.js';
 import { liveResources } from '../live/resources.js';
 import { allToolIds, scopesFor } from './scope.js';
 import { agentTemplates, setAgentWebhookSink } from './templates.js';
@@ -967,14 +968,17 @@ export const AgentRunsQueryParsed = AgentRunsQuery;
 function encodeCursor(r: RunRow) {
   return Buffer.from(JSON.stringify([r.createdAt.toISOString(), r.id])).toString('base64url');
 }
-function decodeCursor(c: string): { at: Date; id: string } | undefined {
+/** A page's cursor back, read as every keyset cursor is (`keysetOf`); anything else is 400. */
+function decodeCursor(c: string): Keyset {
+  let parts: unknown;
   try {
-    const [at, id] = JSON.parse(Buffer.from(c, 'base64url').toString()) as [string, string];
-    const d = new Date(at);
-    return Number.isNaN(d.getTime()) || typeof id !== 'string' ? undefined : { at: d, id };
+    parts = JSON.parse(Buffer.from(c, 'base64url').toString());
   } catch {
-    return undefined;
+    throw badKeyset();
   }
+  const keyset = Array.isArray(parts) ? keysetOf(parts[0], parts[1]) : undefined;
+  if (!keyset) throw badKeyset();
+  return keyset;
 }
 
 /**

@@ -7,6 +7,7 @@ import {
 import { ensureDefaultTenant, schema } from '@hykr/db';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
 import type { NextFunction, Request, Response } from 'express';
 import { config } from '../config.js';
 import { authPlugins } from '../hooks.js';
@@ -14,6 +15,7 @@ import { createsBusinessOnSignUp, runtime } from '../runtime.js';
 import { sharedDb } from './db.js';
 import { nativeAppOrigin } from './native-origin.js';
 import { authRateLimit } from './throttle.js';
+import { NUL_REFUSAL, nulAt } from './untrusted-text.js';
 
 /**
  * The caller's address as Express sees it (`req.ip`, which honours `trust proxy`), handed to
@@ -89,6 +91,15 @@ function createAuth() {
     // default (one x-forwarded-for entry, else one bucket for everyone) only for its own calls.
     rateLimit: authRateLimit(),
     advanced: { ipAddress: { ipAddressHeaders: [CLIENT_ADDRESS_HEADER, 'x-forwarded-for'] } },
+    // The request edge on Better Auth's own routes, which no Nest guard sees: a NUL anywhere in
+    // the body or the query is 400, as on every other route (UntrustedTextGuard). Its text
+    // reaches Postgres too (a name, an email), and an update with one was a 500.
+    hooks: {
+      before: createAuthMiddleware(async (ctx) => {
+        const where = nulAt(ctx.body, 'body') ?? nulAt(ctx.query, 'query');
+        if (where) throw new APIError('BAD_REQUEST', { ...NUL_REFUSAL, where });
+      }),
+    },
     // A new person gets their own business, as its creator: the template works for one person
     // as before, and their records are theirs alone. (The guard does the same if this ever
     // fails.) Unless the application gives none on sign-up (`signUp.createBusiness: false`): then

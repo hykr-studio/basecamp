@@ -7,6 +7,7 @@ import {
   type ImportErrorCode,
   type ImportOptions,
   type ImportResult,
+  ownValue,
   type Principal,
   type WriteResult,
 } from '@hykr/contracts';
@@ -278,7 +279,7 @@ export class Importer {
     const seen = new Set<string>();
     return parsed.rows.map((raw) => {
       if (raw.problem) return { raw, problem: new RowProblem('invalid', raw.problem) };
-      const k = raw.values[o.key];
+      const k = ownValue(raw.values, o.key);
       const key = k === undefined || k === null ? '' : String(k).trim();
       if (!key) return { raw, problem: new RowProblem('missing_key', `No ${o.key}`, o.key) };
       if (key.length > 200)

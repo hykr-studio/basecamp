@@ -385,7 +385,14 @@ describe('who sees the clocks', () => {
   });
 
   it('a cursor that does not parse is a 400', async () => {
-    for (const cursor of ['nope', Buffer.from('{"d":"x","i":"y"}').toString('base64url')]) {
+    for (const cursor of [
+      'nope',
+      Buffer.from('{"d":"x","i":"y"}').toString('base64url'),
+      // An id Postgres's text cannot hold (V10): a 500 before.
+      Buffer.from(JSON.stringify({ d: '2026-01-01T00:00:00.000000', i: 'a\u0000b' })).toString(
+        'base64url',
+      ),
+    ]) {
       const res = await owner.call('GET', `/api/sla?status=breached&cursor=${cursor}`);
       expect(res.status).toBe(400);
       expect(res.body).toMatchObject({ error: 'bad_cursor' });

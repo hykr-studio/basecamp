@@ -11,6 +11,7 @@ import { HealthController } from './health/health.controller.js';
 import { authMiddleware, getAuth } from './infra/auth.js';
 import { coreImports } from './infra/core-imports.js';
 import { CallerThrottlerGuard, throttleStorage } from './infra/throttle.js';
+import { UntrustedTextGuard } from './infra/untrusted-text.js';
 import { ChatModule } from './modules/chat/chat.module.js';
 import { HistoryController } from './modules/history/history.controller.js';
 import { MeModule } from './modules/me/me.controller.js';
@@ -63,6 +64,8 @@ function authWithFeatures() {
   controllers: [HealthController, HistoryController],
   providers: [
     { provide: APP_GUARD, useClass: CallerThrottlerGuard },
+    // A NUL character anywhere in what a request sends is 400, before any handler reads it.
+    { provide: APP_GUARD, useClass: UntrustedTextGuard },
     { provide: APP_PIPE, useClass: ZodValidationPipe },
   ],
 })

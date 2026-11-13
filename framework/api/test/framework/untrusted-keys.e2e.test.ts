@@ -211,6 +211,106 @@ describe('a tampered list cursor', () => {
   });
 });
 
+describe('a NUL character in what someone sends', () => {
+  // Postgres's text and jsonb hold no U+0000: before V10, any that reached it was a 500.
+  const nul = (res: { status: number; body: unknown }, what: string) => {
+    expect(res.status, `${what}: ${JSON.stringify(res.body)}`).toBe(400);
+    expect(res.body, what).toMatchObject({ error: 'invalid', rule: 'nul_character' });
+  };
+
+  it('is 400 in a query string, a body or a path, on every route, and nothing is stored', async () => {
+    const task = await a.call('POST', '/api/tasks', { title: 'NUL target' });
+    expect(task.status).toBe(201);
+    const id = task.body.value.id as string;
+    const on = `entity=task&id=${id}`;
+    for (const path of [
+      '/api/tasks?title=a%00b',
+      '/api/tasks?q=a%00b',
+      '/api/tasks/summary?title=a%00b',
+      '/api/gadgets?title=a%00b',
+      '/api/jobs?kind=a%00b',
+      '/api/calls?entity=task&id=a%00b',
+      `/api/comments/mentionable?${on}&q=a%00b`,
+      '/api/comments?entity=task&id=a%00b',
+      '/api/tasks/a%00b',
+      '/api/tasks?a%00b=1',
+    ])
+      nul(await a.call('GET', path), path);
+    for (const [method, path, body] of [
+      ['POST', '/api/tasks', { title: 'a\u0000b' }],
+      ['POST', '/api/tasks', { title: 'ok', extra: ['deep', { in: 'a\u0000b' }] }],
+      ['POST', '/api/tasks', raw('{"title":"ok","a\\u0000b":1}')],
+      ['PATCH', `/api/tasks/${id}`, { title: 'a\u0000b' }],
+      ['POST', '/api/gadgets', { title: 'ok', custom: { colour: 'a\u0000b' } }],
+      ['POST', '/api/comments', { entity: 'task', recordId: id, body: 'a\u0000b' }],
+      ['PATCH', '/api/settings/wording', { phrases: { greeting: { en: 'a\u0000b' } } }],
+    ] as const) {
+      nul(await a.call(method, path, body), `${method} ${path} ${JSON.stringify(body)}`);
+      await othersUnharmed(`${method} ${path}`);
+    }
+    // Not stored with the character dropped either: the patch changed nothing.
+    expect((await a.call('GET', `/api/tasks/${id}`)).body.title).toBe('NUL target');
+  });
+
+  it('with a genuine cursor, a NUL filter is the filter’s fault, not the cursor’s', async () => {
+    for (const title of ['Paged one', 'Paged two'])
+      expect((await a.call('POST', '/api/tasks', { title })).status).toBe(201);
+    const first = await a.call('GET', '/api/tasks?sort=title&limit=1');
+    const cursor = first.body.nextCursor as string;
+    expect(cursor).toBeTruthy();
+    const at = `/api/tasks?sort=title&limit=1&cursor=${cursor}`;
+    expect((await a.call('GET', at)).status).toBe(200);
+    nul(await a.call('GET', `${at}&title=a%00b`), 'paged');
+  });
+
+  it('Better Auth’s routes refuse one too: an update of the name was a 500', async () => {
+    // Its routes are not Nest's: a hook in front of its endpoints checks them (infra/auth.ts).
+    const odd = new Person('Odd Name');
+    const signUp = await odd.call('POST', '/api/auth/sign-up/email', {
+      name: 'Odd\u0000Name',
+      email: odd.email,
+      password: 'password123',
+    });
+    nul(signUp, 'sign-up');
+    expect((await odd.signUp()).status).toBe(200);
+    nul(await odd.call('POST', '/api/auth/update-user', { name: 'Odd\u0000Again' }), 'update');
+    nul(await odd.call('GET', '/api/auth/get-session?x=a%00b'), 'session');
+    expect((await odd.call('GET', '/api/auth/get-session')).body.user.name).toBe('Odd Name');
+  });
+});
+
+describe('a tampered keyset cursor (inbox, comments, agent runs)', () => {
+  const b64 = (s: string) => Buffer.from(s).toString('base64url');
+  const now = new Date().toISOString();
+  /** A time Postgres cannot store, a NUL in the id, and an id longer than any id. */
+  const bad = [
+    ['99999', 'x'],
+    ['-100000-01-01T00:00:00Z', 'x'],
+    [now, 'a\u0000b'],
+    [now, 'x'.repeat(129)],
+  ];
+
+  it('is 400 bad_cursor for a far-off time, a NUL id or an over-long id, never a 500', async () => {
+    const task = await a.call('POST', '/api/tasks', { title: 'Cursor target' });
+    const on = `entity=task&id=${task.body.value.id}`;
+    for (const [path, encode] of [
+      ['/api/inbox', ([at, id]: string[]) => b64(`${at}|${id}`)],
+      [`/api/comments?${on}`, ([at, id]: string[]) => b64(`${at}|${id}`)],
+      ['/api/agent-runs', (x: string[]) => b64(JSON.stringify(x))],
+    ] as const)
+      for (const parts of bad) {
+        const res = await a.call(
+          'GET',
+          `${path}${path.includes('?') ? '&' : '?'}cursor=${encode(parts)}`,
+        );
+        const what = `${path} ${JSON.stringify(parts).slice(0, 60)}`;
+        expect(res.status, `${what}: ${JSON.stringify(res.body)}`).toBe(400);
+        // The query's schema refuses a cursor that long before it is read; the rest are its own.
+        if (parts[1].length <= 128) expect(res.body.error, what).toBe('bad_cursor');
+      }
+  });
+});
+
 describe('routes that read their own query string', () => {
   it('answer a malformed one with a 4xx or a page, never a 500', async () => {
     const operator = new Person('Operator Keys');
@@ -251,6 +351,17 @@ describe('routes that read their own query string', () => {
       'form=a&form=b',
       'kind=a&kind=b',
       'origin=a&origin=b',
+      // A NUL character, which no Postgres text holds (V10).
+      'q=a%00b',
+      'kind=a%00b',
+      'status=a%00b',
+      'id=a%00b',
+      'entity=a%00b',
+      `cursor=${Buffer.from('99999|x').toString('base64url')}`,
+      `cursor=${Buffer.from(`${new Date().toISOString()}|a\u0000b`).toString('base64url')}`,
+      `cursor=${Buffer.from(JSON.stringify(['99999', 'x'])).toString('base64url')}`,
+      `cursor=${Buffer.from(JSON.stringify([new Date().toISOString(), 'a\u0000b'])).toString('base64url')}`,
+      `cursor=${Buffer.from(JSON.stringify({ d: '2026-01-01T00:00:00.000000', i: 'a\u0000b' })).toString('base64url')}`,
     ];
     const task = await a.call('POST', '/api/tasks', { title: 'Fuzzed' });
     const on = `entity=task&id=${task.body.value.id}`;
