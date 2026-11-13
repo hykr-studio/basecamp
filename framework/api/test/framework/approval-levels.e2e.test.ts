@@ -584,6 +584,18 @@ describe('an approved replay is bounded by what was approved', () => {
     expect(decided.rowCount).toBe(1);
   });
 
+  it('more approvals at once than the pool holds all replay, and nothing else waits', async () => {
+    const { sharedDb } = await import('../../dist/infra/db.js');
+    const n = 2 * ((sharedDb.pool.options.max as number | undefined) ?? 10) + 2;
+    await approvalsSettings({ thresholds: LIMIT, levels: { fixture_internal: { parks: true } } });
+    const ids: string[] = [];
+    for (let i = 0; i < n; i++) ids.push((await pay(owner, 10_00 + i)).body.approval.id);
+    const started = Date.now();
+    const all = await Promise.all(ids.map((id) => approve(owner, id)));
+    expect(all.map((r) => r.body.status)).toEqual(Array(n).fill('approved'));
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 60_000);
+
   it('fails when its amount grew', async () => {
     await approvalsSettings({ thresholds: LIMIT });
     const made = await pay(owner, 50_00);

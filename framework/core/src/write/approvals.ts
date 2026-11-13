@@ -620,6 +620,10 @@ export class ApprovalService {
     }
 
     try {
+      // Replay as the original requester, as they stand today (still in the business, still
+      // allowed). Looked up before the transaction: nothing in it may wait for another pooled
+      // connection, or enough approvals at once would hold the whole pool waiting.
+      const requester = await this.resolver.refresh(stored.principal);
       const { approval, events } = await this.db.transaction(async (tx) => {
         // Lock it: two approvals of the same request must not both replay.
         const [current] = await tx
@@ -630,10 +634,8 @@ export class ApprovalService {
         if (current?.status !== 'pending')
           throw new ConflictException({ error: 'already_decided' });
 
-        // Replay as the original requester, as they stand today (still in the business, still
-        // allowed), marked approved by the decider, under this request. What was approved (the
-        // level and the amount) bounds it: a replay that now needs more fails.
-        const requester = await this.resolver.refresh(stored.principal);
+        // Marked approved by the decider, under this request. What was approved (the level and
+        // the amount) bounds it: a replay that now needs more fails.
         const replayCtx: WriteCtx = {
           principal: { ...requester, approvedBy: deciderKey },
           requestId,
