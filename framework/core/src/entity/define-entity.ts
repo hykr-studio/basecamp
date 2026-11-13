@@ -51,6 +51,7 @@ import { buildListSql, decodeCursor, encodeCursor } from '../query/list-grammar.
 import type { Conn, Tx } from '../tokens.js';
 import { strongerDecision } from '../write/decisions.js';
 import { defineEntityCqrs, type EntityCqrs } from './cqrs-classes.js';
+import { checkReferences, referenceRefusal } from './references.js';
 
 type Row<T extends Table> = T['$inferSelect'];
 type Values = Record<string, unknown>;
@@ -464,6 +465,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     async insert(tx, p, input, ctx = { via: 'crud' }) {
       const parsed = spec.schemas.create.parse(input) as Record<string, unknown>;
       checkRules(p, 'create', null, parsed, ctx);
+      await checkReferences(tx, p, spec, null, parsed);
       const owned = await ownership(tx, p, parsed);
       const clientId = await clientIdOf(tx, p, input);
       const [row] = await tx
@@ -484,20 +486,24 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
         .returning()
         .catch((e: unknown) => {
           if (clientId && isIdClash(e)) throw idTaken();
-          throw e;
+          throw referenceRefusal(e, 'write');
         });
       return row as Row<T>;
     },
     async update(tx, p, row, patch, ctx = { via: 'crud' }) {
       const parsed = spec.schemas.update.parse(patch) as Record<string, unknown>;
       checkRules(p, 'update', row, parsed, ctx);
+      await checkReferences(tx, p, spec, row as Values, parsed);
       const id = (row as { id: string }).id;
       const stale = staleWhere(row, parsed);
       const [updated] = await tx
         .update(table as Table)
         .set(toValues(p, 'update', row, parsed) as never)
         .where(scoped(p, 'write', eq(idCol, id), ...stale))
-        .returning();
+        .returning()
+        .catch((e: unknown) => {
+          throw referenceRefusal(e, 'write');
+        });
       if (!updated) return missed(tx, p, id, stale);
       return updated as Row<T>;
     },
@@ -508,7 +514,10 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       const [deleted] = await tx
         .delete(table as Table)
         .where(scoped(p, 'write', eq(idCol, id), ...stale))
-        .returning();
+        .returning()
+        .catch((e: unknown) => {
+          throw referenceRefusal(e, 'delete', label);
+        });
       if (!deleted) return missed(tx, p, id, stale);
       return deleted as Row<T>;
     },

@@ -1,4 +1,5 @@
 import { assertNoProblems, MODULE_NAME, PLATFORM_MODULE, stampModule } from './framework/module.js';
+import { referenceProblems } from './framework/references.js';
 import type { CommandSpec, EntitySpec, WriteAction } from './framework/spec.js';
 import { platformCommands, platformEntities } from './platform/index.js';
 
@@ -273,6 +274,9 @@ export function createCatalog<const P extends readonly CatalogPart[]>(
       for (const name of spec.touches ?? [])
         if (!names.has(name))
           problems.push(`${module}: the command ${spec.name} touches ${name}, which is no entity`);
+  // A reference names an entity of the catalog, from a field a write sets (V2).
+  for (const { entities } of all)
+    for (const spec of entities) problems.push(...referenceProblems(spec, names));
 
   assertNoProblems(problems);
 

@@ -26,6 +26,7 @@ import { checkPins, type Pins, pinsOf, versionNote } from '../versions/pins.js';
 import { registerOp } from '../write/approvals.js';
 import { runWrite, type WriteCtx, type WriteOp } from '../write/pipeline.js';
 import type { AnyEntityDef } from './define-entity.js';
+import { checkReferences } from './references.js';
 import { registerEntityDef } from './registry.js';
 
 type Row = Record<string, unknown> & { id: string };
@@ -109,8 +110,10 @@ export function entityOp(
       return id ? { id, ...(pins ? { pins } : {}), ...(ifMatch ? { ifMatch } : {}) } : undefined;
     },
     approval: def.spec.approval[action],
+    // A reference the writer may not name is refused here, before a write could park (V2); the
+    // repository checks again when it runs, so an approved replay is checked as it is then.
     load: id
-      ? async (tx, p) => {
+      ? async (tx, p, input) => {
           const row = (await repo.get(tx, p, id)) as Row;
           if (ifMatch && !ifMatchHolds(spec, row, ifMatch))
             throw new ConflictException({
@@ -119,9 +122,15 @@ export function entityOp(
             });
           if (pinned) checkPins([{ def, row }], pinned);
           else pins = pinsOf([{ def, row }]);
+          if (action === 'update') await checkReferences(tx, p, spec, row, input);
           return row;
         }
-      : undefined,
+      : action === 'create' && spec.traits?.references
+        ? async (tx, p, input) => {
+            await checkReferences(tx, p, spec, null, input);
+            return null;
+          }
+        : undefined,
     authorize: (p, loaded, input) =>
       def.decide(p, action, loaded, action === 'delete' ? null : input),
     summarize: (input, loaded) => {

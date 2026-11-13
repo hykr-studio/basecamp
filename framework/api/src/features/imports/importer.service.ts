@@ -82,7 +82,9 @@ function databaseProblem(e: unknown): RowProblem | undefined {
     return new RowProblem('conflict', 'Another import wrote this key first');
   if (code === '23505')
     return new RowProblem('conflict', 'Another record already has one of these values');
-  if (code === '23503') return new RowProblem('invalid', 'It names a record that does not exist');
+  // The same code as a reference the write path refused (V2): which one is not said.
+  if (code === '23503')
+    return new RowProblem('unknown_reference', 'It names a record that does not exist');
   if (code === '23502') return new RowProblem('invalid', 'A value it needs is missing');
   if (code === '23514') return new RowProblem('invalid', 'A value is outside what is allowed');
   if (code.startsWith('22')) return new RowProblem('invalid', 'A value does not fit its field');
@@ -105,7 +107,9 @@ export function problemOf(e: unknown): RowProblem {
   }
   if (e instanceof HttpException) {
     const status = e.getStatus();
-    const body = e.getResponse() as { rule?: string; reason?: string; message?: unknown } | string;
+    const body = e.getResponse() as
+      | { rule?: string; reason?: string; message?: unknown; field?: unknown }
+      | string;
     const said =
       typeof body === 'string'
         ? body
@@ -115,6 +119,9 @@ export function problemOf(e: unknown): RowProblem {
         'forbidden',
         typeof body === 'object' && body.rule ? `${said} (${body.rule})` : said,
       );
+    // A reference field naming a record the importer cannot reach (V2), with its field.
+    if (status === 404 && typeof body === 'object' && typeof body.field === 'string')
+      return new RowProblem('unknown_reference', said, body.field);
     if (status === 404) return new RowProblem('not_found', said);
     if (status === 409) return new RowProblem('conflict', said);
     if (status === 400 || status === 422) return new RowProblem('invalid', said);
