@@ -4,6 +4,7 @@ import { type Mention, rewriteMentions } from '@hykr/contracts';
 import { comments } from '@hykr/db';
 import { and, eq, type SQL, sql } from 'drizzle-orm';
 import type { DataSubject, ErasureContributor, ExportContributor } from '../../hooks.js';
+import { both, createdBy } from '../../privacy/contributors.js';
 
 const inBusiness = (a: DataSubject) => (a.tenantId ? eq(comments.tenantId, a.tenantId) : undefined);
 
@@ -53,7 +54,16 @@ export const CommentsErasure: ErasureContributor = {
     return {
       count: own.length + naming.length,
       erased: [
-        { type: 'comment', ids: own.map((c) => c.id), fields: WORDS, deleted: true },
+        {
+          type: 'comment',
+          // With those they removed before: their copies stay otherwise.
+          ids: both(
+            own.map((c) => c.id),
+            await createdBy(a.tx, { type: 'comment', userId, tenantId: a.tenantId }),
+          ),
+          fields: WORDS,
+          deleted: true,
+        },
         {
           type: 'comment',
           ids: naming.map((c) => c.id),

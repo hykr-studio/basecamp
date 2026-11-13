@@ -1,4 +1,6 @@
 import type { Conn, Tx } from '@hykr/core';
+import { events as auditEvents } from '@hykr/db';
+import { and, eq, or, type SQL } from 'drizzle-orm';
 import {
   type DataSubject,
   type ErasedRecords,
@@ -7,6 +9,37 @@ import {
   exportContributors,
   type KeptData,
 } from '../hooks.js';
+
+/**
+ * The ids of the records of this type a person created (their `<type>.create` audit rows, as
+ * themselves or through their assistant), in one business or every one. A contributor erases
+ * the copies of these too: a record they deleted before is gone, but its copies are not
+ * (decisions V8).
+ */
+export async function createdBy(
+  conn: Conn,
+  a: { type: string; userId: string; tenantId?: string },
+): Promise<string[]> {
+  const rows = await conn
+    .selectDistinct({ id: auditEvents.resourceId })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.resourceType, a.type),
+        eq(auditEvents.action, `${a.type}.create`),
+        or(
+          and(eq(auditEvents.actorKind, 'user'), eq(auditEvents.actorId, a.userId)),
+          eq(auditEvents.actingFor, a.userId),
+          eq(auditEvents.actingFor, `user:${a.userId}`),
+        ),
+        a.tenantId ? eq(auditEvents.tenantId, a.tenantId) : undefined,
+      ) as SQL,
+    );
+  return rows.flatMap((r) => (r.id ? [r.id] : []));
+}
+
+/** These ids and those, once each. */
+export const both = (a: readonly string[], b: readonly string[]) => [...new Set([...a, ...b])];
 
 /** What every erasure contributor did for one subject. */
 export interface ContributorsErasure {

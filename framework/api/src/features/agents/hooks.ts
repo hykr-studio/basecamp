@@ -8,6 +8,7 @@ import { Logger } from '@nestjs/common';
 import { and, eq, exists, ilike, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ErasureContributor, ExportContributor, InboundHook, TurnHook } from '../../hooks.js';
+import { both, createdBy } from '../../privacy/contributors.js';
 import type { MentionContext, MentionKind } from '../comments/mention-kinds.js';
 import type { LiveResource } from '../live/resources.js';
 import { agentsService } from './agents.service.js';
@@ -199,18 +200,22 @@ export const AgentsErasure: ErasureContributor = {
       };
     }
     const mine = await ownedBy(tx, subject.userId, tenantId);
-    if (!mine.length) return { count: 0 };
+    // With those they deleted before: their copies stay otherwise.
+    const made = await createdBy(tx, { type: 'agent', userId: subject.userId, tenantId });
+    if (!mine.length && !made.length) return { count: 0 };
     const agentIds = mine.map((m) => m.id);
     // Read before the cascade takes them.
-    const runs = await tx
-      .select({ id: agentRuns.id, runId: agentRuns.runId })
-      .from(agentRuns)
-      .where(inArray(agentRuns.agentId, agentIds));
-    await tx.delete(agents).where(inArray(agents.id, agentIds));
+    const runs = agentIds.length
+      ? await tx
+          .select({ id: agentRuns.id, runId: agentRuns.runId })
+          .from(agentRuns)
+          .where(inArray(agentRuns.agentId, agentIds))
+      : [];
+    if (agentIds.length) await tx.delete(agents).where(inArray(agents.id, agentIds));
     return {
       count: mine.length,
       erased: [
-        { type: 'agent', ids: agentIds, fields: AGENT_WORDS, deleted: true },
+        { type: 'agent', ids: both(agentIds, made), fields: AGENT_WORDS, deleted: true },
         { type: 'agent_run', ids: runs.map((r) => r.id), fields: RUN_WORDS, deleted: true },
       ],
       runs: runs.map((r) => r.runId),

@@ -2149,7 +2149,9 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
   type their audit rows and events use), data it keeps on purpose (`outcome.kept`, with a
   `keepReason` code), assistant runs whose turns it erased (their Mastra rows go too), and work
   outside the database once the erasure has committed (a calendar's grant revoked at Google;
-  best effort). Every framework feature's contributor returns its sets (`docs/decisions/V8.md`):
+  best effort). Every framework feature's contributor returns its sets (`docs/decisions/V8.md`),
+  with the records of its type the person created and deleted before (`createdBy`, from their
+  `<type>.create` audit rows), whose copies would stay otherwise:
   - Comments: the person's comments are deleted, and their copies lose the words and the author;
     a comment that named them is rewritten (`@—`), and its copies lose its words and mentions
     (a token and a mention carry the name they were written with).

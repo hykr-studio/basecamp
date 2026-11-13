@@ -33,6 +33,7 @@ const M3 = `v8three${stamp}`; // Sam's agent's instructions
 const M4 = `v8four${stamp}`; // a job started for Sam
 const WK = `v8wen${stamp}`; // the contact's name
 const M5 = `v8five${stamp}`; // the contact's message
+const M6 = `v8gone${stamp}`; // what Sam wrote and deleted before he asked
 const KEEP = `v8keep${stamp}`; // Ana's own words: they stay
 const NUMBER = `9198${String(Date.now()).slice(-8)}`;
 
@@ -45,7 +46,7 @@ const here = { 'x-tenant-id': '' };
 const call = (p: Person, method: string, path: string, body?: unknown) =>
   p.call(method, path, body, here);
 
-const MARKERS = [MK, M1, M2, M3, M4, WK, M5, NUMBER];
+const MARKERS = [MK, M1, M2, M3, M4, WK, M5, M6, NUMBER];
 
 /** Every row of every table, in every schema, that holds one of these texts. */
 async function rowsHolding(texts: readonly string[]) {
@@ -266,6 +267,32 @@ describe('erasing a member and a contact (decisions V8)', () => {
       return rows.length ? true : undefined;
     }, 20_000);
 
+    // What Sam wrote and deleted himself before: a comment, a memory, an agent.
+    const removed = await call(sam, 'POST', '/api/comments', {
+      entity: 'task',
+      recordId: samTask.body.value.id,
+      body: `${M6} comment`,
+    });
+    const gone = [
+      await call(sam, 'DELETE', `/api/comments/${removed.body.value.id}`),
+      await call(
+        sam,
+        'DELETE',
+        `/api/memories/${
+          (await call(sam, 'POST', '/api/memories', { text: `${M6} memory` })).body.value.id
+        }`,
+      ),
+      await call(
+        sam,
+        'DELETE',
+        `/api/agents/${
+          (await call(sam, 'POST', '/api/agents', { name: 'Gone', instructions: `${M6} agent` }))
+            .body.value.id
+        }`,
+      ),
+    ];
+    for (const res of gone) expect(res.status, JSON.stringify(res.body)).toBeLessThan(300);
+
     // 7. A job about no record started for Sam, with a result file and its upload's audit row.
     const job = await pool.query(
       `insert into app.jobs (tenant_id, kind, started_for, started_by_kind, started_by_id, input,
@@ -298,6 +325,7 @@ describe('erasing a member and a contact (decisions V8)', () => {
 
     await queuesIdle();
     expect((await rowsHolding([M1, M2, M3, M4, M5])).length).toBeGreaterThan(5);
+    expect((await rowsHolding([M6])).length).toBeGreaterThanOrEqual(3);
     expect((await keysHolding([MK, M1])).length).toBeGreaterThan(0);
 
     // Sam asks to be forgotten; Carol files the contact's erasure, and Ana approves it.

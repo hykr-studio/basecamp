@@ -3,6 +3,7 @@ import type { Tx } from '@hykr/core';
 import { memories, memoryIndex } from '@hykr/db';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { ErasureContributor, ExportContributor } from '../../hooks.js';
+import { both, createdBy } from '../../privacy/contributors.js';
 
 /**
  * A person asks to be forgotten: the vectors of what they said go (a deleted message's vector
@@ -36,7 +37,16 @@ export const EraseMemory: ErasureContributor = {
     return {
       count: said.length + written.length,
       erased: [
-        { type: MemorySpec.name, ids: written.map((m) => m.id), fields: ['text'], deleted: true },
+        {
+          type: MemorySpec.name,
+          // With those they deleted before: their copies stay otherwise.
+          ids: both(
+            written.map((m) => m.id),
+            await createdBy(tx, { type: MemorySpec.name, userId: subject.userId, tenantId }),
+          ),
+          fields: ['text'],
+          deleted: true,
+        },
       ],
     };
   },
