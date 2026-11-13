@@ -158,6 +158,23 @@ describe('entity plugins', () => {
     expect((await owner.call('GET', `/api/chores/${id}`)).body.title).toBe('[review] Send photos');
   });
 
+  it("the assistant says the team was asked for a request a capability's holders decide (V7)", async () => {
+    // The owner's own request, through the assistant: the reviewers decide it, never her.
+    const turn = await owner.call('POST', '/api/chat/once', {
+      message: 'chore [review] Fix the roof',
+    });
+    expect(turn.status).toBeLessThan(300);
+    const parked = (
+      turn.body.toolCalls as { tool: string; outcome: string; approvalId?: string }[]
+    ).filter((c) => c.tool === 'create-chore');
+    expect(parked).toEqual([expect.objectContaining({ outcome: 'parked' })]);
+    expect(turn.body.reply).toMatch(/^I've asked the team for approval: .+Fix the roof/);
+    expect(turn.body.reply).toContain('Nothing changes until they decide.');
+    expect(turn.body.reply).not.toMatch(/your approval|until you approve/);
+    const approval = await owner.call('GET', `/api/approvals/${parked[0].approvalId}`);
+    expect(approval.body).toMatchObject({ canDecide: false, rule: 'chore_review' });
+  });
+
   it("an entity's own rule parks a plain write", async () => {
     const made = await chore(owner, { title: 'Paint' });
     const res = await owner.call('PATCH', `/api/chores/${made.body.value.id}`, {

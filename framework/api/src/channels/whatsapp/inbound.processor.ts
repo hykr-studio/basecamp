@@ -35,7 +35,7 @@ import { QUEUES } from '../queues.js';
 import { TenantsService } from '../tenants.service.js';
 import { REDIS, WHATSAPP } from './adapter.provider.js';
 import { SttService } from './stt.service.js';
-import { toRenderTurn } from './turn.js';
+import { ownApprovals, toRenderTurn } from './turn.js';
 import type { InboundJob } from './webhook.controller.js';
 
 /** What the assistant helps with, in one sentence: the application's words, or the framework's. */
@@ -44,7 +44,7 @@ const does = (lang: Lang) => {
   return words ? pick(words, lang) : t(lang, 'channel.does');
 };
 
-const { inboundEvents, contacts, messages, approvals } = schema;
+const { inboundEvents, contacts, messages } = schema;
 const log = new Logger('WhatsAppInbound');
 
 /** The quick reply a marketing template offers to stop offers (see monthly_update_v1). */
@@ -418,39 +418,18 @@ export class InboundProcessor extends WorkerHost {
       ]);
       return;
     }
-    const rendered = toRenderTurn(turn);
-    // What this turn parked, and who decides each: this person here, with buttons; or someone
-    // else (the business, for a customer's request, or whoever the approval level names), who
-    // is asked on their own. The reply's waiting line already says which (the approval's own
-    // `canDecide`, the same fact: see parkedLine); a request someone else decides gets no
-    // buttons and no "approve it in the app".
-    const parked = rendered.approvals.length
-      ? await this.db
-          .select()
-          .from(approvals)
-          .where(
-            inArray(
-              approvals.id,
-              rendered.approvals.map((a) => a.id),
-            ),
-          )
-      : [];
-    const byId = new Map(parked.map((a) => [a.id, a]));
-    const self = p.subject?.kind === 'user' ? p.subject.userId : undefined;
-    const forTeam = rendered.approvals.filter((a) => {
-      const row = byId.get(a.id);
-      return !row || !self || row.approverUserId !== self;
-    });
-    rendered.approvals = rendered.approvals.filter((a) => !forTeam.includes(a));
+    // What this turn parked that this person decides, here, with buttons. The rest are someone
+    // else's, asked on their own: the reply's waiting line already says the team was asked (the
+    // same fact: see ownApprovals), so they get no buttons and no "approve it in the app".
+    const { turn: rendered, own } = await ownApprovals(this.db, p, toRenderTurn(turn));
     const outbound = render(rendered, {
       to: contact.address,
       lang,
       appUrl: config.appUrl,
       approvalButtons: (id) => {
-        const a = byId.get(id);
+        const a = own.get(id);
         const here = !a?.approverChannels || a.approverChannels.includes('whatsapp');
-        if (!a || !self || a.approverUserId !== self || !here || !config.approvalSecret)
-          return undefined;
+        if (!a || !here || !config.approvalSecret) return undefined;
         const expiresAt = Date.now() + APPROVAL_BUTTON_MS;
         const sign = (approve: boolean) =>
           signApproval(config.approvalSecret, { approvalId: id, approve, expiresAt }, contact.id);

@@ -58,8 +58,11 @@ export function useAct(viewName: string) {
       }
       if (isQueued(result)) toast.show({ message: t('offline.queued') });
       else if (result.status === 'needs_approval')
+        // Who decides it: them, or someone else (a capability's holders, a named person).
         toast.show({
-          message: `Waiting for your approval: ${result.approval.summary ?? 'a change'}`,
+          message: t(result.approval.canDecide === false ? 'said.cardTeam' : 'said.cardWaiting', {
+            summary: result.approval.summary ?? t('said.aChange'),
+          }),
         });
     } catch (e) {
       toast.show({ tone: 'error', message: errorMessage(e) });

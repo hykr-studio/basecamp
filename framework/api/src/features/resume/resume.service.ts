@@ -23,7 +23,7 @@ import { and, asc, eq } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { ContactsService } from '../../channels/contacts.service.js';
 import { OutboundService } from '../../channels/outbound.service.js';
-import { toRenderTurn } from '../../channels/whatsapp/turn.js';
+import { ownApprovals, toRenderTurn } from '../../channels/whatsapp/turn.js';
 import { config } from '../../config.js';
 import type { TurnInfo, TurnOutcome } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
@@ -454,8 +454,10 @@ export class ResumeService implements OnApplicationShutdown {
     }
     const from = await contactsSvc.numberOfTenant(tenantId);
     if (!from) return;
-    // A request the continuation parks again is approved in the app (no buttons here).
-    const messages = render(toRenderTurn(turn), {
+    // A request the continuation parks again that this person decides is approved in the app
+    // (no buttons here); one someone else decides leaves the turn, as on the inbound turn.
+    const { turn: rendered } = await ownApprovals(this.db, p, toRenderTurn(turn));
+    const messages = render(rendered, {
       to: contact.address,
       lang,
       appUrl: config.appUrl,

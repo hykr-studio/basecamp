@@ -2806,6 +2806,8 @@ Helpers you will use, all from `@hykr/agents/script`: `call`, `say`, `sayIn(turn
 
 A write that waits for approval suspends the run: the script's next step runs when the request is decided, with the tool's result saying `approved`, `rejected` or `expired` (section 5.8.3). The steps before the park are still in `turn.steps`.
 
+The scripted model knows which tools the turn offers (the call's tool list): `turn.offered('create-todo')` says whether a script may call it. A tool can be missing because its feature flag is off for the business, or the person may not use it. A step that calls a tool the turn does not offer is not sent: the engine answers "I can't do that here." (`said.notAvailable`, in every language) instead, so a script needs no check of its own. Check `turn.offered` only to say something else. A tool that fails reads as a refusal with its reason, and never as "the API answered undefined".
+
 The framework's own scripts (saved pages, handoff, the failing turn) run before the domain's. Each feature keeps them in `framework/agents/src/fake/scripts/<feature>.ts` as `defineScriptSet({ name, order, scripts })`, with one line in `scripts/index.ts`. The first script that matches runs, so `order` places the set: pages 100, handoff 200, testing 900. A set or script name used twice throws. A new framework tool gets its script there.
 
 The fake model reads the language, surfaces and canvas from the system prompt with regular expressions. If you change the wording of `buildInstructions` in `framework/agents/src/version.ts`, scripted tests can break silently.

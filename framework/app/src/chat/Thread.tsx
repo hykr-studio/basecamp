@@ -81,6 +81,12 @@ const SINCE: Record<string, string> = {
   expired: 'Since expired; nothing changed',
   failed: "Since approved, but it couldn't be done",
 };
+/** The same notes for a request someone else decided (its `canDecide` is false): not "by you". */
+const SINCE_TEAM: Record<string, string> = {
+  ...SINCE,
+  approved: 'Since approved',
+  rejected: 'Since rejected; nothing changed',
+};
 
 function useSuperseded(): Superseded {
   const parked = useParkedInMessage();
@@ -88,8 +94,9 @@ function useSuperseded(): Superseded {
   return useMemo(() => {
     if (!parked || !status || status === 'pending' || !SINCE[status]) return null;
     const at = approval?.decidedAt ? ` · ${clock(approval.decidedAt)}` : '';
-    return { texts: new Set(parked.texts), note: `${SINCE[status]}${at}` };
-  }, [parked, status, approval?.decidedAt]);
+    const notes = approval?.canDecide === false ? SINCE_TEAM : SINCE;
+    return { texts: new Set(parked.texts), note: `${notes[status]}${at}` };
+  }, [parked, status, approval?.decidedAt, approval?.canDecide]);
 }
 
 /**

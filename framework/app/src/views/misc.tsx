@@ -31,14 +31,26 @@ const DECIDED = {
   expired: ['clock', colors.muted, 'Expired; nothing changed'],
   failed: ['x-circle', colors.danger, "Approved, but it couldn't be done"],
 } as const;
+/** The same, for a request someone else decided (its `canDecide` is false): not "by you". */
+const DECIDED_TEAM = {
+  ...DECIDED,
+  approved: ['check-circle', colors.success, 'Approved, and done'],
+  rejected: ['slash', colors.muted, 'Rejected; nothing changed'],
+} as const;
 
 /**
  * A parked request in the chat. It is decided in exactly one place: here, when nothing else
  * shows it; otherwise this is a pointer to the place that does (the screen's own draft, or an
  * earlier card in the thread). Once decided, only what became of it.
  */
-export function ApprovalCardComponent({ approvalId, summary }: ViewProps<typeof ApprovalCardView>) {
+export function ApprovalCardComponent({
+  approvalId,
+  summary,
+  canDecide,
+}: ViewProps<typeof ApprovalCardView>) {
   const { approval, status } = useApprovalStatus(approvalId);
+  // Someone else decides it: the words never say "you".
+  const theirs = canDecide === false || approval?.canDecide === false;
   const pending = status === 'pending' ? approval : undefined;
   const place = useDecisionPlace(pending?.id);
   const leaveChat = useContext(LeaveChat);
@@ -50,9 +62,10 @@ export function ApprovalCardComponent({ approvalId, summary }: ViewProps<typeof 
     );
   }
   if (pending && !place.here) {
+    const who = theirs ? 'the team' : 'you';
     const where = place.onScreen
-      ? `Waiting for you on ${place.where ?? 'the page'}`
-      : 'Waiting for you above';
+      ? `Waiting for ${who} on ${place.where ?? 'the page'}`
+      : `Waiting for ${who} above`;
     return (
       <Pressable
         accessibilityRole="button"
@@ -71,7 +84,7 @@ export function ApprovalCardComponent({ approvalId, summary }: ViewProps<typeof 
     );
   }
   if (!status || status === 'pending') return null;
-  const [icon, tone, label] = DECIDED[status];
+  const [icon, tone, label] = (theirs ? DECIDED_TEAM : DECIDED)[status];
   return (
     <View className="flex-row items-start gap-2">
       <Icon name={icon} color={tone} size={16} />
