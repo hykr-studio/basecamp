@@ -2,7 +2,7 @@
 // service reads the counters and the wallet, this does the arithmetic.
 import type { UsageRefusal } from '@hykr/contracts';
 import type { CreditsPlanResolved } from './config.js';
-import { FrameworkMeters, type MeterDef } from './meters.js';
+import { FrameworkMeters, type MeterDef, meters } from './meters.js';
 
 /** One meter's use this period. */
 export interface Counter {
@@ -48,7 +48,10 @@ export interface Assessment {
   /** Null when the business is not on credits or the deployment has no currency. */
   budget: Budget | null;
   limits: Map<string, Limit>;
-  /** Every level reached now (on credits only). */
+  /**
+   * Every level reached now (on credits only). A meter whose plan pauses none of its uses
+   * (messages with no kind paused) reaches none: its limit stops nothing, so nothing is said.
+   */
   levels: Level[];
   quantities: Map<string, Counter>;
 }
@@ -60,10 +63,22 @@ const percent = (used: number, of: number) => (of > 0 ? Math.round((used / of) *
 const reached = (used: number, of: number, threshold: number) =>
   of <= 0 ? true : used * 100 >= threshold * of;
 
+/** A meter by name: a registered one, else one of the framework's (a test boots none). */
+const meterNamed = (name: string): MeterDef | undefined =>
+  meters.get(name) ?? Object.values(FrameworkMeters).find((m) => m.name === name);
+
+/**
+ * Does a limit on this meter stop anything under this plan? Not when the meter pauses only some
+ * uses and the plan pauses none of them (messages: `pauseMessages` empty).
+ */
+const limitStops = (meter: MeterDef | undefined, plan: CreditsPlanResolved) =>
+  !(meter?.pausable && meter.pausesSome && !meter.pausesSome(plan));
+
 export function assess(
   plan: CreditsPlanResolved,
   counters: readonly Counter[],
   balance: number | null,
+  meterOf: (name: string) => MeterDef | undefined = meterNamed,
 ): Assessment {
   const quantities = new Map(counters.map((c) => [c.meter, c]));
   const spent = counters.reduce((sum, c) => sum + c.cost, 0);
@@ -103,7 +118,7 @@ export function assess(
       levels.push({ cap, level: 'pause', usedPercent: x.usedPercent, threshold: plan.pauseAt });
   };
   if (budget) add('credits', budget);
-  for (const [meter, limit] of limits) add(meter, limit);
+  for (const [meter, limit] of limits) if (limitStops(meterOf(meter), plan)) add(meter, limit);
   return { plan, spent, budget, limits, levels, quantities };
 }
 
@@ -138,10 +153,13 @@ export function refusalFor(
 
 /**
  * Whether this meter's own limit refuses its use now, whatever the budget: what the credits
- * screen shows beside the meter. The operator's `run` lets everything through.
+ * screen shows beside the meter. The operator's `run` lets everything through. A meter that
+ * pauses only some uses (messages: the plan's `pauseMessages`) reports a refusal only when the
+ * plan pauses some of them; then only those stop.
  */
 export function limitRefusal(a: Assessment, meter: MeterDef): UsageRefusal | null {
   if (a.plan.override?.mode === 'run') return null;
+  if (!limitStops(meter, a.plan)) return null;
   const limit = a.limits.get(meter.name);
   if (!limit?.pause) return null;
   return {

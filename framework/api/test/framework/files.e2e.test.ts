@@ -503,6 +503,30 @@ describe('uploading and reaching a file', () => {
     expect((await owner.call('DELETE', `/api/files/${id}`)).status).toBe(404);
   });
 
+  it('a presign and a discard asked for twice at the same moment with one key run once', async () => {
+    const name = `twice-${randomUUID()}.png`;
+    const body = {
+      name,
+      mime: 'image/png',
+      size: png().length,
+      for: { entity: 'card', field: 'photos' },
+    };
+    const key = { 'idempotency-key': randomUUID() };
+    const both = await Promise.all([0, 1].map(() => owner.call('POST', '/api/files', body, key)));
+    for (const res of both) expect(res.status).toBe(201);
+    expect(both[1].body.file.id).toBe(both[0].body.file.id);
+    const { rows } = await pool.query('select count(*) n from app.files where name = $1', [name]);
+    expect(Number(rows[0].n)).toBe(1);
+
+    const id = both[0].body.file.id as string;
+    const discard = { 'idempotency-key': randomUUID() };
+    const gone = await Promise.all(
+      [0, 1].map(() => owner.call('DELETE', `/api/files/${id}`, undefined, discard)),
+    );
+    for (const res of gone) expect(res.status).toBe(204);
+    expect((await audit(id)).filter((r) => r.action === 'file.discard')).toHaveLength(1);
+  });
+
   it('a presign repeated after its upload expired says so, with no upload URL', async () => {
     const body = {
       name: `late-${randomUUID()}.png`,

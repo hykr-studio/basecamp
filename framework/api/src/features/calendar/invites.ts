@@ -145,7 +145,7 @@ export const SendInvite = defineCommand(SendInviteSpec, {
     if (!can(p, FrameworkCapabilities.messageCustomers))
       return deny('cannot_invite_others', 'Only the business sends invites to others');
     if (p.actor.kind === 'agent')
-      return needsApproval('agent_sends_invite', 'Sending an invite for you needs your approval');
+      return needsApproval('agent_sends_invite', 'Invites the assistant sends need approval');
     return allow('person_invites', 'The business invites people to its records');
   },
   summarize: (input, { content, recipients }) =>

@@ -1,11 +1,13 @@
 import type { ToolCallMessagePartProps } from '@assistant-ui/react-native';
 import type { Present } from '@hykr/contracts';
+import type { MessageKey } from '@hykr/i18n';
 import { useEffect } from 'react';
 import { ActivityIndicator, Pressable, View } from 'react-native';
 import { applyCanvasIntent, useCanvas } from '../canvas/store';
 import { Text } from '../components/ui/text';
 import { useApprovalStatus } from '../framework/ApprovalCard';
 import { Icon, type IconName } from '../framework/Icon';
+import { useT } from '../framework/lang';
 import { getRegistry } from '../runtime';
 import { colors } from '../theme';
 import { InlineView } from '../views/InlineView';
@@ -69,29 +71,30 @@ function ParkedLine({
   withCard: boolean;
 }) {
   const { approval, status } = useApprovalStatus(approvalId);
+  const { t } = useT();
   const asked = toolWords(tool).asked;
   if (withCard) return <Line icon="clock" tone={colors.approvalText} tool={tool} label={asked} />;
   // Someone else decides it (a capability's holders, a named person): never "by you".
   const theirs = approval?.canDecide === false;
-  const [icon, tone, state]: [IconName, string, string] =
+  const [icon, tone, state]: [IconName, string, MessageKey] =
     status === 'approved'
-      ? ['check-circle', colors.success, theirs ? 'approved' : 'approved by you']
+      ? [
+          'check-circle',
+          colors.success,
+          theirs ? 'approval.line.approved' : 'approval.line.approvedByYou',
+        ]
       : status === 'rejected'
-        ? [
-            'slash',
-            colors.muted,
-            theirs ? 'rejected; nothing changed' : 'rejected by you; nothing changed',
-          ]
+        ? ['slash', colors.muted, theirs ? 'approval.line.rejected' : 'approval.line.rejectedByYou']
         : status === 'failed'
-          ? ['x-circle', colors.danger, "approved, but it couldn't be done"]
+          ? ['x-circle', colors.danger, 'approval.line.failed']
           : status === 'expired'
-            ? ['clock', colors.muted, 'expired; nothing changed']
+            ? ['clock', colors.muted, 'approval.line.expired']
             : [
                 'clock',
                 colors.approvalText,
-                theirs ? 'waiting for the team' : 'waiting for your approval',
+                theirs ? 'approval.line.waitingTeam' : 'approval.line.waitingYou',
               ];
-  return <Line icon={icon} tone={tone} tool={tool} label={`${asked}: ${state}`} />;
+  return <Line icon={icon} tone={tone} tool={tool} label={`${asked}: ${t(state)}`} />;
 }
 
 /** What a canvas intent did, in the thread; tapping it brings the canvas back. */

@@ -153,7 +153,7 @@ export const PolishGadget = defineCommand(PolishGadgetSpec, {
   load: (tx, p, input) => GadgetDef.repo.get(tx, p, input.gadgetId),
   authorize: (p) =>
     p.actor.kind === 'agent'
-      ? needsApproval('agent_polish', 'Polishing needs your approval')
+      ? needsApproval('agent_polish', 'Polishing needs approval')
       : allow('owner_polishes'),
   summarize: (_input, gadget) => `Polish ${gadget.title}`,
   run: async ({ tx, principal, loaded: gadget, via }) => {

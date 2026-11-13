@@ -13,6 +13,7 @@ import type { Request, Response } from 'express';
 import { config } from '../../config.js';
 import { sharedDb } from '../../infra/db.js';
 import { runtime } from '../../runtime.js';
+import { mcpConfig } from './config.js';
 import { businessOf, CONSENT_PATH, OFFLINE_SCOPE, SIGN_IN_PATH } from './oauth.js';
 import { type ConsentChoice, consentPage, messagePage, PAGE_HEADERS, signInPage } from './pages.js';
 
@@ -72,9 +73,10 @@ export class McpPagesController {
         400,
         messagePage(lang, app, t(lang, 'mcp.consent.expired', { client: app })),
       );
-    // A `lang` the page was given goes on to the consent screen.
+    // A `lang` the page was given goes on to the consent screen, and only to it.
     const carry = languages().of(new URLSearchParams(raw).get('lang'));
-    return send(res, 200, signInPage(lang, app, query, carry));
+    const consent = `${mcpConfig().base}${CONSENT_PATH}`;
+    return send(res, 200, signInPage(lang, app, query, carry, consent));
   }
 
   @Get(CONSENT_PATH.slice(1))

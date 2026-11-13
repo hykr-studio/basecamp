@@ -17,6 +17,9 @@ export async function startApi(app: Basecamp) {
   const { AppModule } = await import('./app.module.js');
   // Better Auth reads the raw body; the auth module adds parsing back for other routes.
   const nest = await NestFactory.create(AppModule, { bodyParser: false });
+  // TRUST_PROXY, and the caller's address on every request, before any route.
+  const { configureHttp } = await import('./infra/http.js');
+  configureHttp(nest);
   // WEB_ORIGINS, the origins the application's auth plugins trust, and the ones they allow at
   // run time (a business's verified domain).
   const { corsOrigin } = await import('./infra/cors.js');

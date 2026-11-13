@@ -175,7 +175,7 @@ export const Arrive = defineCommand(ArriveSpec, {
         `You are ${Math.round(fence.distanceM)} m from ${spot.title}; check in within ${spot.radiusM} m`,
       );
     return p.actor.kind === 'agent'
-      ? needsApproval('agent_arrives', 'Checking in for you needs your approval')
+      ? needsApproval('agent_arrives', 'Check-ins by the assistant need approval')
       : allow('within_geofence');
   },
   summarize: (_input, { spot }) => `Check in at ${spot.title}`,

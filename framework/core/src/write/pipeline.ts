@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   type Approval,
   type ApprovalRule,
@@ -13,6 +13,7 @@ import {
 } from '@hykr/contracts';
 import {
   type WriteCtx as AuditCtx,
+  type AuditInput,
   type Database,
   idempotencyKeys,
   writeAudit,
@@ -49,8 +50,14 @@ export interface WriteCtx {
    * updates and deletes check it against the row they load; nothing else takes one.
    */
   ifMatch?: string;
-  /** Run inside this transaction instead of opening one (an approval replay). */
-  tx?: Tx;
+  /**
+   * Run inside the caller's transaction instead of opening one (an approval replay, an SLA
+   * escalation, a routed delivery, an import row). Nothing then asks the pool for a second
+   * connection while the caller holds this one: a refusal's audit row goes to `refused`, and the
+   * caller writes it where it survives, since its transaction or savepoint rolls back with the
+   * refusal.
+   */
+  outer?: { tx: Tx; refused: (audit: AuditInput) => void };
   /**
    * An approval replay: what the decider approved (the level and amount it parked with). A
    * replay that now needs more (a higher level, a larger amount) fails instead of running.
@@ -228,6 +235,94 @@ export async function saveReply(
 }
 
 /**
+ * How long a claim on a key (`oneAtATime`) stands before another request with the key may take
+ * it over: its holder stopped (a crash, a lost connection) without letting it go. Longer than any
+ * such route's slowest step (Google's code exchange gives up at 15 s, a pooled connection at 30 s).
+ */
+export const CLAIM_STALE_MS = 120_000;
+/** How long a request waits for another with its key to finish: then 409 `idempotency_in_progress`. */
+export const CLAIM_WAIT_MS = 30_000;
+/** A claim's key: U+0001 is in no HTTP header, so no caller's own key is ever one. */
+const CLAIM_PREFIX = '\u0001claim\u0001';
+
+/**
+ * Claim (caller, key) in `app.idempotency`, in a row of its own that no lookup of a reply reads,
+ * committed at once: true when this request holds it now. A claim older than `staleMs` is taken
+ * over in the same statement.
+ */
+async function claim(
+  db: Database,
+  c: { key: string; principalId: string; token: string },
+  staleMs: number,
+): Promise<boolean> {
+  const [won] = await db
+    .insert(idempotencyKeys)
+    .values({ key: c.key, principalId: c.principalId, requestHash: c.token, response: {} })
+    .onConflictDoUpdate({
+      target: [idempotencyKeys.key, idempotencyKeys.principalId],
+      set: { requestHash: c.token, createdAt: sql`now()` },
+      setWhere: sql`${idempotencyKeys.createdAt} < now() - make_interval(secs => ${staleMs / 1000})`,
+    })
+    .returning({ token: idempotencyKeys.requestHash });
+  return won?.token === c.token;
+}
+
+/**
+ * For a route that honours idempotency-key without `runWrite` (a back-office reply, a file's
+ * upload or discard, a job's cancel, a calendar sign-in's completion): one request at a time per
+ * (caller, key). A second request with the key, sent while the first still runs (a client that
+ * timed out and tried again), waits for it to finish, then finds its reply: `work` looks for the
+ * repeat (`findRepeat`) first, and saves its reply (`saveReply`) before it returns.
+ *
+ * The claim is a row in `app.idempotency` (under a key no caller can send), committed before
+ * `work` starts and deleted when it ends, whether it succeeded or threw. Nothing holds a pooled
+ * connection or a transaction meanwhile: a waiting request tries again every few milliseconds,
+ * so many at once never use up the pool. It waits up to `waitMs` (CLAIM_WAIT_MS), then answers
+ * 409 `idempotency_in_progress`; a claim older than `staleMs` (CLAIM_STALE_MS), whose holder
+ * stopped, is taken over. `work` may call `runWrite` with the same key: it keeps its replies
+ * under the key itself, never the claim's. Without a key, `work` runs at once.
+ */
+export async function oneAtATime<T>(
+  db: Database,
+  ctx: Pick<WriteCtx, 'principal' | 'idempotencyKey'>,
+  work: () => Promise<T>,
+  limits: { waitMs?: number; staleMs?: number } = {},
+): Promise<T> {
+  const key = ctx.idempotencyKey;
+  if (!key) return work();
+  const c = {
+    key: `${CLAIM_PREFIX}${key}`,
+    principalId: principalKey(ctx.principal),
+    token: `claim:${randomUUID()}`,
+  };
+  const until = Date.now() + (limits.waitMs ?? CLAIM_WAIT_MS);
+  for (let pause = 10; !(await claim(db, c, limits.staleMs ?? CLAIM_STALE_MS)); ) {
+    if (Date.now() + pause > until)
+      throw new ConflictException({
+        error: 'idempotency_in_progress',
+        reason: 'A request with this idempotency-key is still running: try again shortly',
+      });
+    await new Promise((r) => setTimeout(r, pause));
+    pause = Math.min(pause * 2, 200);
+  }
+  try {
+    return await work();
+  } finally {
+    // Its own claim only: one taken over meanwhile is the other request's to let go.
+    await db
+      .delete(idempotencyKeys)
+      .where(
+        and(
+          eq(idempotencyKeys.key, c.key),
+          eq(idempotencyKeys.principalId, c.principalId),
+          eq(idempotencyKeys.requestHash, c.token),
+        ),
+      )
+      .catch(() => undefined);
+  }
+}
+
+/**
  * The write path every command takes:
  * validate → idempotency → load → authorize (the op, then write hooks) → (park | run) → audit
  * → stored events → write hooks' afterRun, all in one transaction; in-process events are
@@ -250,7 +345,7 @@ export async function runWrite<I, L, V>(
   const storedReply = async (conn: Database | Tx): Promise<WriteOutcome | undefined> =>
     key ? stored(conn, p, key, requestHash) : undefined;
   // A repeat answers at once, without a transaction.
-  const repeat = await storedReply(ctx.tx ?? db);
+  const repeat = await storedReply(ctx.outer?.tx ?? db);
   if (repeat) return repeat;
 
   let refusal: { result: AuthorizeResult; resourceId: string | null } | undefined;
@@ -407,18 +502,21 @@ export async function runWrite<I, L, V>(
   };
 
   try {
-    return ctx.tx ? await work(ctx.tx) : await db.transaction(work);
+    return ctx.outer ? await work(ctx.outer.tx) : await db.transaction(work);
   } catch (e) {
     if (e instanceof RuleDenied) {
-      // The transaction rolled back; the refusal is evidence, so record it on its own.
+      // The refusal is evidence. Its own transaction rolled back: record it on its own. In the
+      // caller's, still open: hand it over, never waiting on the pool for a second connection.
       const result = e.result;
-      await writeAudit(db, {
+      const audit: AuditInput = {
         ...auditCtx(p, result, ctx),
         action: op.name,
         resourceType: op.resourceType,
         resourceId: refusal?.resourceId ?? null,
         outcome: 'denied',
-      });
+      };
+      if (ctx.outer) ctx.outer.refused(audit);
+      else await writeAudit(db, audit);
       throw new ForbiddenException({
         error: 'forbidden',
         rule: result.rule,

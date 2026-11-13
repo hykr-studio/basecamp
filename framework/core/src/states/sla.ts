@@ -15,7 +15,7 @@ import {
   slasIn,
   statesOf,
 } from '@hykr/contracts';
-import { type Database, schema, slaTimers } from '@hykr/db';
+import { type AuditInput, type Database, schema, slaTimers, writeAuditMany } from '@hykr/db';
 import { and, type Column, eq, getTableColumns, isNull, lte, sql, type Table } from 'drizzle-orm';
 import type { NamedEvent } from '../entity/cqrs-classes.js';
 import type { AnyEntityDef } from '../entity/define-entity.js';
@@ -289,11 +289,18 @@ export async function sweepSla(
       await recordEvents(tx, { principal: system, requestId, events: [breach] });
       const published: object[] = [breach];
       if (escalate?.transition) {
+        // A refused escalation's audit row: written on this transaction, which outlives the
+        // savepoint the refusal rolls back.
+        const refusals: AuditInput[] = [];
         try {
           const done = await tx.transaction((sp) =>
             runWrite(
               db,
-              { principal: system, requestId, tx: sp as Tx },
+              {
+                principal: system,
+                requestId,
+                outer: { tx: sp as Tx, refused: (audit) => refusals.push(audit) },
+              },
               transitionOp(def, { id: timer.resourceId, transition: escalate.transition }),
               {},
             ),
@@ -304,6 +311,7 @@ export async function sweepSla(
           const body = (e as { getResponse?: () => unknown }).getResponse?.() as
             | { reason?: string; message?: string }
             | undefined;
+          if (refusals.length) await writeAuditMany(tx, refusals);
           await tx
             .update(slaTimers)
             .set({ escalationError: body?.reason ?? body?.message ?? (e as Error).message })

@@ -245,8 +245,23 @@ describe('handoff', () => {
       expect(res.body).toEqual({ sent: 'text' });
     }
     await heard(address, /fitter calls ahead/);
+    // Both at the same moment (a client that timed out and tried again): still sent once.
+    const twice = { 'idempotency-key': `reply-twice-${handoff.id}` };
+    const both = await Promise.all(
+      [0, 1].map(() =>
+        ana.call(
+          'POST',
+          `/api/backoffice/handoffs/${handoff.id}/reply`,
+          { text: 'The van is on its way.' },
+          twice,
+        ),
+      ),
+    );
+    for (const res of both) expect(res.body).toEqual({ sent: 'text' });
+    await heard(address, /van is on its way/);
     await new Promise((r) => setTimeout(r, 1000));
     expect(textsTo(address).filter((t) => t.includes('fitter calls ahead'))).toHaveLength(1);
+    expect(textsTo(address).filter((t) => t.includes('van is on its way'))).toHaveLength(1);
 
     // Outside the 24 hours, the same reply goes as the approved template.
     await pool.query(
@@ -273,7 +288,8 @@ describe('handoff', () => {
       'handoff.opened',
       'handoff.taken',
       'handoff.replied',
-      // The repeated reply is audited once.
+      // The repeated reply is audited once, and so is the one sent twice at the same moment.
+      'handoff.replied',
       'handoff.replied',
       'handoff.replied',
       'handoff.returned',

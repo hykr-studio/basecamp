@@ -21,7 +21,15 @@ import {
   runWrite,
   type Tx,
 } from '@hykr/core';
-import { type Database, files, importBatches, importKeys, writeAudit } from '@hykr/db';
+import {
+  type AuditInput,
+  type Database,
+  files,
+  importBatches,
+  importKeys,
+  writeAudit,
+  writeAuditMany,
+} from '@hykr/db';
 import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
 import { EventBus } from '@nestjs/cqrs';
 import { and, asc, eq } from 'drizzle-orm';
@@ -329,10 +337,14 @@ export class Importer {
   ): Promise<BatchOutcome> {
     let out: BatchOutcome = { counts: zero(), problems: [] };
     let events: object[] = [];
+    // A refused row's audit row: with the batch when it commits, else on its own once the batch
+    // has rolled back (a dry run too). Never on a second connection while the batch holds one.
+    const refusals: AuditInput[] = [];
     try {
       await this.db.transaction(async (tx) => {
         out = { counts: zero(), problems: [] };
         events = [];
+        refusals.length = 0;
         for (const row of rows) {
           const report = (x: RowProblem) =>
             out.problems.push({
@@ -348,7 +360,7 @@ export class Importer {
           }
           try {
             const done = await tx.transaction((sp) =>
-              this.row(sp, p, def, fields, row, o, jobId, tenantId),
+              this.row(sp, p, def, fields, row, o, jobId, tenantId, (a) => refusals.push(a)),
             );
             out.counts[done.outcome] += 1;
             events.push(...done.events);
@@ -357,6 +369,7 @@ export class Importer {
           }
         }
         if (o.dryRun) throw new DryRun();
+        if (refusals.length) await writeAuditMany(tx, refusals);
         await tx.insert(importBatches).values({
           jobId,
           batch,
@@ -366,6 +379,7 @@ export class Importer {
         });
       });
     } catch (e) {
+      if (refusals.length) await writeAuditMany(this.db, refusals);
       if (!(e instanceof DryRun)) throw e;
       return out;
     }
@@ -383,6 +397,7 @@ export class Importer {
     o: ImportOptions,
     jobId: string,
     tenantId: string,
+    refused: (audit: AuditInput) => void,
   ): Promise<{ outcome: Outcome; events: object[] }> {
     const values = await this.resolveRefs(tx, p, row.values, o, tenantId);
     const keyOf = and(
@@ -397,7 +412,7 @@ export class Importer {
     const write = async (action: 'create' | 'update', id: string | null, input: Values) => {
       const outcome = await runWrite(
         this.db,
-        { principal: p, requestId: randomUUID(), tx },
+        { principal: p, requestId: randomUUID(), outer: { tx, refused } },
         entityOp(def, action, id ? { id } : null),
         input,
       );

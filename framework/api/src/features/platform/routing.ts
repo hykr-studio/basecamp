@@ -20,7 +20,15 @@ import {
   tenantZoneOf,
   type WriteOp,
 } from '@hykr/core';
-import { contacts, customers, type Database, routedRequests, tenants } from '@hykr/db';
+import {
+  type AuditInput,
+  contacts,
+  customers,
+  type Database,
+  routedRequests,
+  tenants,
+  writeAuditMany,
+} from '@hykr/db';
 import {
   BadRequestException,
   ConflictException,
@@ -250,6 +258,9 @@ export class PlatformRoutingService {
       );
 
     const published: object[] = [];
+    // A refused write's audit row: with the delivery when the router got past it, else once the
+    // refusal has rolled the transaction back. Never on a second connection while it holds one.
+    const refusals: AuditInput[] = [];
     try {
       const saved = await this.db.transaction(async (tx) => {
         // One delivery of a request at a time: a second caller waits, then finds it routed.
@@ -276,11 +287,19 @@ export class PlatformRoutingService {
             opts?: { customerId?: string },
           ) => {
             if (opts?.customerId) await this.customerOf(tx as Tx, tenantId, opts.customerId);
-            const { result, events } = await runWrite(
-              this.db,
-              { principal: principal(opts?.customerId), requestId, tx: tx as Tx },
-              op,
-              input,
+            // In a savepoint of the delivery: a write refused after it ran (a hook) leaves no
+            // row behind when the router catches the refusal and goes on.
+            const { result, events } = await (tx as Tx).transaction((sp) =>
+              runWrite(
+                this.db,
+                {
+                  principal: principal(opts?.customerId),
+                  requestId,
+                  outer: { tx: sp as Tx, refused: (audit) => refusals.push(audit) },
+                },
+                op,
+                input,
+              ),
             );
             if (result.status !== 'done')
               throw new Parked('A delivery write cannot wait for approval');
@@ -297,6 +316,7 @@ export class PlatformRoutingService {
           },
         };
         const made = (await router.deliver(req, target)) ?? {};
+        if (refusals.length) await writeAuditMany(tx as Tx, refusals);
         return this.save(
           req,
           {
@@ -313,6 +333,7 @@ export class PlatformRoutingService {
       for (const event of published) this.events.publish(event);
       return toRouted(saved);
     } catch (e) {
+      if (refusals.length) await writeAuditMany(this.db, refusals);
       const error = e instanceof Error ? e.message : String(e);
       log.warn(
         `routing ${req.source}:${req.ref} to ${tenantId} by ${router.name} failed: ${error}`,

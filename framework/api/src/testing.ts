@@ -26,6 +26,9 @@ export async function boot(application: Basecamp) {
   setRuntime(application);
   const { AppModule } = await import('./app.module.js');
   const app = await NestFactory.create(AppModule, { bodyParser: false, logger: false });
+  // As startApi does: TRUST_PROXY and the caller's address on every request.
+  const { configureHttp } = await import('./infra/http.js');
+  configureHttp(app);
   // As startApi does (verified custom domains included), plus the tests' own origin.
   const { corsOrigin } = await import('./infra/cors.js');
   const check = corsOrigin();

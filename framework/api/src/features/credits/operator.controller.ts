@@ -37,6 +37,7 @@ import {
   OPERATOR_JOB,
   OverrideInput,
   PlanInput,
+  planAfter,
   planProblems,
   setCreditsOverride,
   setCreditsPlan,
@@ -113,7 +114,16 @@ export class CreditsOperatorController {
     @Body() body: unknown,
   ) {
     const plan = parseOr400(PlanInput, body, 'invalid_plan');
-    const problems = planProblems(plan);
+    // Checked as it will be stored: with the business's own alert threshold, when the plan
+    // keeps it, so one that no longer fits is a 400 naming it.
+    const [row] = await this.core.db
+      .select({ settings: schema.tenants.settings })
+      .from(schema.tenants)
+      .where(eq(schema.tenants.id, tenantId));
+    const stored = (row?.settings as { credits?: unknown } | null)?.credits;
+    const before =
+      stored && typeof stored === 'object' ? (stored as Parameters<typeof planAfter>[1]) : {};
+    const problems = planProblems(planAfter(plan, before));
     if (problems.length) throw new BadRequestException({ error: 'invalid_plan', problems });
     return this.write(operator, meta, tenantId, setCreditsPlan(), plan);
   }

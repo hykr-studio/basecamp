@@ -30,7 +30,7 @@ export const CloseMeeting = defineCommand(CloseMeetingSpec, {
     if (meeting.status === 'closed')
       return deny('already_closed', 'This meeting is already closed');
     if (p.actor.kind === 'agent')
-      return needsApproval('agent_close', 'Closing a meeting needs your approval');
+      return needsApproval('agent_close', 'Closing a meeting needs approval');
     return allow('owner_closes');
   },
   summarize: (input, meeting) =>

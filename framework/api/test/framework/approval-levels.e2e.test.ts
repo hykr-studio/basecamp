@@ -9,9 +9,16 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { gunzipSync } from 'node:zlib';
 import { capabilitiesOf, type Principal } from '@hykr/contracts';
-import { ApprovalService } from '@hykr/core';
+import {
+  ApprovalService,
+  CORE_OPTIONS,
+  type CoreOptions,
+  needsApproval,
+  runWrite,
+} from '@hykr/core';
 import { contentHash } from '@hykr/notifications';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import * as api from '../../dist/index.js';
 import {
   addMember,
@@ -283,6 +290,98 @@ describe('levels on the payload', () => {
     expect((await look(outsider, away.body.approval.id)).status).toBe(404);
   });
 
+  it("a rule that leaves it to the requester: theirs on the team, the business's when they are outside it", async () => {
+    const options = server.app?.get(CORE_OPTIONS, { strict: false }) as CoreOptions;
+    // A write whose own rule says the requester decides: the assistant asks for this person.
+    const op = {
+      name: 'fixture.own_say',
+      kind: 'command',
+      resourceType: 'payment',
+      resourceId: () => null,
+      input: z.object({}),
+      authorize: () =>
+        needsApproval('fixture_own_say', 'Asked for this person', {
+          approver: { by: 'requester' },
+        }),
+      summarize: () => 'Something of their own',
+      run: async () => ({ value: null, touched: [] }),
+      present: (v: unknown) => v,
+    } as unknown as Parameters<typeof runWrite>[2];
+    const asking = (roles: string[]): Principal => ({
+      actor: { kind: 'agent', id: 'assistant' },
+      subject: { kind: 'user', userId: staff.id },
+      tenantId,
+      roles,
+      capabilities: capabilitiesOf(roles),
+      standing: 'member',
+      assurance: 'session',
+      channel: 'app',
+      scopes: [],
+    });
+    const park = async (roles: string[]) => {
+      const out = await runWrite(
+        options.db,
+        { principal: asking(roles), requestId: `r-own-${roles.join()}` },
+        op,
+        {},
+      );
+      return (out.result as { approval: { decider: unknown; canDecide: boolean } }).approval;
+    };
+    expect(await park(['staff'])).toMatchObject({
+      decider: { by: 'requester', userId: staff.id },
+      canDecide: true,
+    });
+    // Holding only a contact's roles now: outside the team, so the business decides, as it
+    // will when the request is looked at or decided.
+    expect(await park(['customer'])).toMatchObject({
+      decider: { by: 'capability', capability: 'approvals.decide' },
+      canDecide: false,
+    });
+  });
+
+  it('a named approver who leaves after a request parked gives way to the business', async () => {
+    const leaver = new Person('Leaver Levels');
+    await leaver.signUp();
+    await addMember(leaver, tenantId, ['staff']);
+    await approvalsSettings({
+      thresholds: LIMIT,
+      bands: { payments: [{ approver: { userId: leaver.id } }] },
+    });
+    const res = await pay(owner, 500_00);
+    const id = res.body.approval.id;
+    expect(res.body.approval.decider).toEqual({ by: 'person', userId: leaver.id });
+    expect((await look(ops, id)).status).toBe(404);
+
+    // They leave the business: the holders of approvals.decide decide it now, never the requester.
+    await pool.query('delete from app.memberships where tenant_id = $1 and user_id = $2', [
+      tenantId,
+      leaver.id,
+    ]);
+    const business = { by: 'capability', capability: 'approvals.decide' };
+    expect((await look(ops, id)).body).toMatchObject({ canDecide: true, decider: business });
+    const waiting = await ops.call('GET', '/api/approvals', undefined, as(ops));
+    expect(waiting.body.map((a: { id: string }) => a.id)).toContain(id);
+    expect((await look(owner, id)).body).toMatchObject({ canDecide: false, decider: business });
+    expect((await approve(owner, id)).status).toBe(403);
+    expect((await approve(ops, id)).body).toMatchObject({ status: 'approved' });
+
+    // Still a member, but holding only an outsider's roles now: off the team too. Back on it,
+    // the request is theirs alone again.
+    await addMember(leaver, tenantId, ['staff']);
+    const again = (await pay(owner, 500_00)).body.approval.id;
+    await addMember(leaver, tenantId, ['customer']);
+    expect((await look(ops, again)).body).toMatchObject({ canDecide: true, decider: business });
+    await addMember(leaver, tenantId, ['staff']);
+    expect((await look(ops, again)).status).toBe(404);
+    const theirs = await leaver.call(
+      'POST',
+      `/api/approvals/${again}/approve`,
+      undefined,
+      inTenant(),
+    );
+    expect(theirs.body).toMatchObject({ status: 'approved' });
+  });
+
   it('a business tightens any level, and loosens only one that allows it', async () => {
     await approvalsSettings({ thresholds: LIMIT });
     const made = await pay(owner, 20_00);
@@ -450,6 +549,53 @@ describe('an approved replay is bounded by what was approved', () => {
     );
     expect(rows[0].n).toBe(0);
   });
+
+  it('fails, and is decided, when what was asked no longer validates', async () => {
+    await approvalsSettings({ thresholds: LIMIT, levels: { fixture_internal: { parks: true } } });
+    const res = await pay(owner, 50_00, { title: 'Scrubbed since' });
+    const id = res.body.approval.id;
+    // An erasure's scrubbing took a required field out of the stored input.
+    await pool.query(
+      `update app.approvals set payload = payload #- '{input,title}' where id = $1`,
+      [id],
+    );
+    expect((await approve(owner, id)).body).toMatchObject({
+      status: 'failed',
+      failureReason: expect.stringContaining('title'),
+    });
+    expect((await approve(owner, id)).status).toBe(409);
+  });
+
+  it('approved twice at the same moment when it no longer validates: failed once, audited once', async () => {
+    await approvalsSettings({ thresholds: LIMIT, levels: { fixture_internal: { parks: true } } });
+    const res = await pay(owner, 50_00, { title: 'Scrubbed twice' });
+    const id = res.body.approval.id;
+    await pool.query(
+      `update app.approvals set payload = payload #- '{input,title}' where id = $1`,
+      [id],
+    );
+    const both = await Promise.all([approve(owner, id), approve(owner, id)]);
+    expect(both.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect((await audit(id)).filter((a) => a.action === 'approval.failed')).toHaveLength(1);
+    const decided = await pool.query(
+      `select 1 from app.domain_events where name = 'approval.decided' and resource_id = $1`,
+      [id],
+    );
+    expect(decided.rowCount).toBe(1);
+  });
+
+  it('more approvals at once than the pool holds all replay, and nothing else waits', async () => {
+    const { sharedDb } = await import('../../dist/infra/db.js');
+    const n = 2 * ((sharedDb.pool.options.max as number | undefined) ?? 10) + 2;
+    await approvalsSettings({ thresholds: LIMIT, levels: { fixture_internal: { parks: true } } });
+    const ids: string[] = [];
+    for (let i = 0; i < n; i++) ids.push((await pay(owner, 10_00 + i)).body.approval.id);
+    const started = Date.now();
+    const all = await Promise.all(ids.map((id) => approve(owner, id)));
+    expect(all.map((r) => r.body.status)).toEqual(Array(n).fill('approved'));
+    // Well under the pool's 30 s connection timeout, which a stall would take.
+    expect(Date.now() - started).toBeLessThan(20_000);
+  }, 60_000);
 
   it('fails when its amount grew', async () => {
     await approvalsSettings({ thresholds: LIMIT });

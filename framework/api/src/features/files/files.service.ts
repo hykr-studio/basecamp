@@ -15,10 +15,12 @@ import {
   type AnyEntityDef,
   auditCtx,
   CORE_OPTIONS,
+  type Conn,
   type CoreOptions,
   entityDef,
   entityDefs,
   findRepeat,
+  oneAtATime,
   projectRead,
   saveReply,
 } from '@hykr/core';
@@ -264,73 +266,78 @@ export class FilesService implements OnApplicationBootstrap {
       if (decision.decision === 'deny') throw refused(403, decision.rule, decision.reason);
     }
     // A retry with the same key is the same upload: a new URL for the file the first one made.
+    // One sent while the first still runs waits for it, then finds it.
     const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
-    const repeat = await findRepeat(this.db, ctx, UPLOAD, input);
-    if (repeat) {
-      const fileId = (repeat.result as { value?: { id?: string } }).value?.id ?? '';
-      const again = await this.ownUpload(p, fileId);
-      if (again.status !== 'pending')
-        throw new ConflictException({
-          error: 'already_uploaded',
-          message: 'This upload was finished already',
-        });
-      // Its time to upload ran out: start again with a new key, as `confirm` says.
-      const left = again.uploadExpiresAt
-        ? Math.floor((again.uploadExpiresAt.getTime() - Date.now()) / 1000)
-        : 0;
-      if (left < 1)
-        throw new ConflictException({
-          error: 'upload_expired',
-          message: 'The upload expired. Start again.',
-        });
-      return this.presigned(again, p, left);
-    }
-    const [{ n }] = await this.db
-      .select({ n: count() })
-      .from(files)
-      .where(
-        and(
-          eq(files.ownerId, s.userId),
-          eq(files.status, 'pending'),
-          gt(files.createdAt, sql`now() - interval '1 day'`),
-        ),
-      );
-    if (Number(n) >= this.config.maxPending)
-      throw new HttpException(
-        { error: 'too_many_uploads', message: 'Too many unfinished uploads. Try again later.' },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+    const made = await oneAtATime(this.db, ctx, async () => {
+      const repeat = await findRepeat(this.db, ctx, UPLOAD, input);
+      if (repeat) {
+        const fileId = (repeat.result as { value?: { id?: string } }).value?.id ?? '';
+        return { row: await this.ownUpload(p, fileId), fresh: false };
+      }
+      const [{ n }] = await this.db
+        .select({ n: count() })
+        .from(files)
+        .where(
+          and(
+            eq(files.ownerId, s.userId),
+            eq(files.status, 'pending'),
+            gt(files.createdAt, sql`now() - interval '1 day'`),
+          ),
+        );
+      if (Number(n) >= this.config.maxPending)
+        throw new HttpException(
+          { error: 'too_many_uploads', message: 'Too many unfinished uploads. Try again later.' },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
 
-    await this.ready().catch(() => {
-      throw unavailable();
+      await this.ready().catch(() => {
+        throw unavailable();
+      });
+      const id = randomUUID();
+      const tenantId = p.tenantId as string;
+      const row = await this.db.transaction(async (tx) => {
+        const [created] = await tx
+          .insert(files)
+          .values({
+            id,
+            tenantId,
+            ownerId: s.userId,
+            source: 'upload',
+            // The key is the server's own, never from the request.
+            key: keyOf(tenantId, id),
+            name: input.name,
+            mime,
+            size: input.size,
+            status: 'pending',
+            intendedType: def?.name ?? other?.type ?? input.for.entity,
+            intendedField: input.for.field,
+            uploadExpiresAt: new Date(Date.now() + this.config.uploadTtlS * 1000),
+          })
+          .returning();
+        await this.audit(tx, p, requestId, 'file.upload', created, { for: input.for });
+        // The file's id, never its signed URL: a repeat signs a new one.
+        await saveReply(tx, ctx, UPLOAD, input, { status: 'done', value: { id: created.id } });
+        return created;
+      });
+      return { row, fresh: true };
     });
-    const id = randomUUID();
-    const tenantId = p.tenantId;
-    const row = await this.db.transaction(async (tx) => {
-      const [created] = await tx
-        .insert(files)
-        .values({
-          id,
-          tenantId,
-          ownerId: s.userId,
-          source: 'upload',
-          // The key is the server's own, never from the request.
-          key: keyOf(tenantId, id),
-          name: input.name,
-          mime,
-          size: input.size,
-          status: 'pending',
-          intendedType: def?.name ?? other?.type ?? input.for.entity,
-          intendedField: input.for.field,
-          uploadExpiresAt: new Date(Date.now() + this.config.uploadTtlS * 1000),
-        })
-        .returning();
-      await this.audit(tx, p, requestId, 'file.upload', created, { for: input.for });
-      // The file's id, never its signed URL: a repeat signs a new one.
-      await saveReply(tx, ctx, UPLOAD, input, { status: 'done', value: { id: created.id } });
-      return created;
-    });
-    return this.presigned(row, p, this.config.uploadTtlS);
+    if (made.fresh) return this.presigned(made.row, p, this.config.uploadTtlS);
+    const again = made.row;
+    if (again.status !== 'pending')
+      throw new ConflictException({
+        error: 'already_uploaded',
+        message: 'This upload was finished already',
+      });
+    // Its time to upload ran out: start again with a new key, as `confirm` says.
+    const left = again.uploadExpiresAt
+      ? Math.floor((again.uploadExpiresAt.getTime() - Date.now()) / 1000)
+      : 0;
+    if (left < 1)
+      throw new ConflictException({
+        error: 'upload_expired',
+        message: 'The upload expired. Start again.',
+      });
+    return this.presigned(again, p, left);
   }
 
   /** Where to PUT a pending file's bytes, until its upload expires. */
@@ -413,13 +420,16 @@ export class FilesService implements OnApplicationBootstrap {
   async discard(p: Principal, id: string, meta: FileWriteMeta): Promise<void> {
     const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
     const op = { name: 'file.discard', args: { id } };
-    if (await findRepeat(this.db, ctx, op, {})) return;
-    const row = await this.ownUpload(p, id);
-    await this.store(() => this.storage.delete(row.key));
-    await this.db.transaction(async (tx) => {
-      await tx.delete(files).where(and(eq(files.id, row.id), isNull(files.resourceId)));
-      await this.audit(tx, p, meta.requestId, 'file.discard', row);
-      await saveReply(tx, ctx, op, {}, { status: 'done', value: null });
+    // One sent while the first still runs waits for it, then finds its reply.
+    await oneAtATime(this.db, ctx, async () => {
+      if (await findRepeat(this.db, ctx, op, {})) return;
+      const row = await this.ownUpload(p, id);
+      await this.store(() => this.storage.delete(row.key));
+      await this.db.transaction(async (tx) => {
+        await tx.delete(files).where(and(eq(files.id, row.id), isNull(files.resourceId)));
+        await this.audit(tx, p, meta.requestId, 'file.discard', row);
+        await saveReply(tx, ctx, op, {}, { status: 'done', value: null });
+      });
     });
   }
 
@@ -430,12 +440,16 @@ export class FilesService implements OnApplicationBootstrap {
    * access, grants and plugins' scopes), an agent may read that entity, and the record as p
    * sees it still lists the file in that field (a hidden field hides its files). Not on a
    * record yet: only whoever uploaded it. Detached or erased: nobody.
+   *
+   * Reads on `conn`: a caller inside a transaction (a job's start, in its write) passes it, so
+   * nothing here waits for a second pooled connection while that one is held.
    */
   async reaches(
     p: Principal,
     row: FileRow,
     /** Records already read for p in this request, by "type:id" (null: not reached). */
     seen = new Map<string, Record<string, unknown> | null>(),
+    conn: Conn = this.db,
   ): Promise<boolean> {
     if (!p.tenantId || row.tenantId !== p.tenantId) return false;
     if (row.status !== 'ready' && row.status !== 'pending') return false;
@@ -450,13 +464,13 @@ export class FilesService implements OnApplicationBootstrap {
           resourceId: row.resourceId,
           field: row.field,
           fileId: row.id,
-          db: this.db,
+          db: conn,
         })) ?? false
       );
     if (p.actor.kind === 'agent' && def.spec.expose.get !== 'all') return false;
     const key = `${def.name}:${row.resourceId}`;
     if (!seen.has(key)) {
-      const record = await def.repo.find(this.db, p, row.resourceId);
+      const record = await def.repo.find(conn, p, row.resourceId);
       seen.set(key, record ? (def.toRead(record, p) as Record<string, unknown>) : null);
     }
     const record = seen.get(key);
@@ -512,21 +526,42 @@ export class FilesService implements OnApplicationBootstrap {
     return this.withUrl(await this.reachable(p, id), p);
   }
 
-  /** The files of these ids that p reaches; the others are left out, saying nothing of them. */
-  async getMany(p: Principal, ids: readonly string[]): Promise<FileInfo[]> {
+  /** The rows of these ids (the first 100) that p reaches, in the order asked, on `conn`. */
+  private async reachableRows(
+    conn: Conn,
+    p: Principal,
+    ids: readonly string[],
+  ): Promise<FileRow[]> {
     const unique = [...new Set(ids)].slice(0, 100);
     if (!unique.length || !p.tenantId) return [];
-    const rows = await this.db
+    const rows = await conn
       .select()
       .from(files)
       .where(and(inArray(files.id, unique), eq(files.tenantId, p.tenantId)));
     const seen = new Map<string, Record<string, unknown> | null>();
-    const out: FileInfo[] = [];
+    const out: FileRow[] = [];
     for (const id of unique) {
       const row = rows.find((r) => r.id === id);
-      if (row && (await this.reaches(p, row, seen))) out.push(await this.withUrl(row, p));
+      if (row && (await this.reaches(p, row, seen, conn))) out.push(row);
     }
     return out;
+  }
+
+  /** The files of these ids that p reaches; the others are left out, saying nothing of them. */
+  async getMany(p: Principal, ids: readonly string[]): Promise<FileInfo[]> {
+    const out: FileInfo[] = [];
+    for (const row of await this.reachableRows(this.db, p, ids))
+      out.push(await this.withUrl(row, p));
+    return out;
+  }
+
+  /**
+   * Of these ids, the ones p reaches: on the caller's connection and with no download URL, so a
+   * write's transaction (a job's start checking its input files) asks the pool for nothing and
+   * the storage for nothing while it is open.
+   */
+  async reachableIds(conn: Conn, p: Principal, ids: readonly string[]): Promise<string[]> {
+    return (await this.reachableRows(conn, p, ids)).map((r) => r.id);
   }
 
   /* ── Voice ───────────────────────────────────────────────────────────────── */

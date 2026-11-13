@@ -63,17 +63,45 @@ export function messagePage(lang: Lang, title: string, message: string) {
 }
 
 /**
- * The signed query the page posts back (`oauth_query`), and a language to carry on: what the
- * server checked, not the address bar, which may hold more (an added `lang`).
+ * The signed query the page posts back (`oauth_query`), a language to carry on, and the consent
+ * page it may carry it to: what the server checked, not the address bar, which may hold more (an
+ * added `lang`).
  */
-const queryField = (oauthQuery: string, carry?: Lang) =>
-  `<input type="hidden" id="q" value="${escapeHtml(oauthQuery)}"${carry ? ` data-lang="${escapeHtml(carry)}"` : ''}>`;
+const queryField = (oauthQuery: string, carry?: Lang, consent?: string) =>
+  `<input type="hidden" id="q" value="${escapeHtml(oauthQuery)}"${carry ? ` data-lang="${escapeHtml(carry)}"` : ''}${consent ? ` data-consent="${escapeHtml(consent)}"` : ''}>`;
 
-/** Sign in, then Better Auth continues the authorization the signed query describes. */
-export function signInPage(lang: Lang, app: string, oauthQuery: string, carry?: Lang) {
+/**
+ * Where the sign-in page goes once signed in: Better Auth's answer (`target`), with the language
+ * carried on only when it is this API's own consent page (`consent`, as the server renders it:
+ * same origin and path). Anything else (a remembered consent or an error, which is the client's
+ * own redirect_uri with its code or error) is left exactly as it came: a client's callback never
+ * gets a parameter it did not ask for. It runs in the page (its source is the page's script), so
+ * it uses nothing but its arguments and the browser's URL.
+ */
+export function afterSignIn(target: string, consent: string | undefined, lang: string | undefined) {
+  if (!lang || !consent) return target;
+  const page = new URL(consent);
+  const to = new URL(target, page);
+  if (to.origin !== page.origin || to.pathname !== page.pathname) return target;
+  if (to.searchParams.has('lang')) return target;
+  to.searchParams.set('lang', lang);
+  return to.toString();
+}
+
+/**
+ * Sign in, then Better Auth continues the authorization the signed query describes. `carry` goes
+ * on as `?lang` to the consent screen (`consent`, its address), and to nowhere else.
+ */
+export function signInPage(
+  lang: Lang,
+  app: string,
+  oauthQuery: string,
+  carry?: Lang,
+  consent?: string,
+) {
   const v = { app };
   const body = `
-${queryField(oauthQuery, carry)}
+${queryField(oauthQuery, carry, consent)}
 <h1>${escapeHtml(t(lang, 'mcp.signIn.title', v))}</h1>
 <p class="muted">${escapeHtml(t(lang, 'mcp.signIn.lead', v))}</p>
 <form id="f" novalidate>
@@ -86,6 +114,7 @@ ${queryField(oauthQuery, carry)}
 </form>
 <p class="muted">${escapeHtml(t(lang, 'mcp.signIn.noAccount', v))}</p>`;
   const script = `
+${afterSignIn.toString()}
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const err = document.getElementById('err');
@@ -103,10 +132,8 @@ document.getElementById('f').addEventListener('submit', async (e) => {
     });
     const out = await res.json().catch(() => ({}));
     if (res.ok && out && out.url) {
-      const to = new URL(out.url, location.href);
-      const lang = document.getElementById('q').dataset.lang;
-      if (lang && !to.searchParams.has('lang')) to.searchParams.set('lang', lang);
-      location.href = to.toString();
+      const q = document.getElementById('q').dataset;
+      location.href = afterSignIn(out.url, q.consent, q.lang);
       return;
     }
   } catch {}

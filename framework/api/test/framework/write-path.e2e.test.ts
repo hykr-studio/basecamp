@@ -383,6 +383,78 @@ describe('write hooks', () => {
     }
   });
 
+  it('a refused replay approved twice at once fails once, beside one audit of its refusal', async () => {
+    const made = await chore(owner, { title: 'Gate twice' });
+    const res = await owner.call('PATCH', `/api/chores/${made.body.value.id}`, {
+      title: 'Gate twice [ask]',
+    });
+    const id = res.body.approval.id;
+    gate.closed = true;
+    let both: { status: number }[];
+    try {
+      both = await Promise.all([
+        owner.call('POST', `/api/approvals/${id}/approve`),
+        owner.call('POST', `/api/approvals/${id}/approve`),
+      ]);
+    } finally {
+      gate.closed = false;
+    }
+    expect(both.map((r) => r.status).sort()).toEqual([200, 409]);
+    const refused = (await audit(made.body.value.id)).filter((a) => a.outcome === 'denied');
+    expect(refused).toMatchObject([{ action: 'chore.update', rule: 'fixture_closed' }]);
+    expect((await audit(id)).filter((a) => a.action === 'approval.failed')).toHaveLength(1);
+  });
+
+  it('more refused replays at once than the pool holds all fail, each audited once; nothing else waits', async () => {
+    // A replay runs in the approval's transaction: its refusal's audit row must take no second
+    // pooled connection while that one is held, or enough of them at once stall the API.
+    const { sharedDb } = await import('../../dist/infra/db.js');
+    const n = 2 * ((sharedDb.pool.options.max as number | undefined) ?? 10) + 2;
+    const park = async (tag: string) => {
+      const out: { approval: string; chore: string }[] = [];
+      for (let i = 0; i < n; i++) {
+        const made = await chore(owner, { title: `${tag} ${i}` });
+        const res = await owner.call('PATCH', `/api/chores/${made.body.value.id}`, {
+          title: `${tag} ${i} [ask]`,
+        });
+        out.push({ approval: res.body.approval.id, chore: made.body.value.id });
+      }
+      return out;
+    };
+    const warm = await park('Warm');
+    const asked = await park('Burst');
+    // As many that run first: warm, every approval reaches its transaction at the same moment.
+    const ran = await Promise.all(
+      warm.map((a) => owner.call('POST', `/api/approvals/${a.approval}/approve`)),
+    );
+    expect(ran.map((r) => r.body.status)).toEqual(Array(n).fill('approved'));
+    gate.closed = true;
+    try {
+      const started = Date.now();
+      const all = Promise.all(
+        asked.map((a) => owner.call('POST', `/api/approvals/${a.approval}/approve`)),
+      );
+      await new Promise((r) => setTimeout(r, 200));
+      const asking = Date.now();
+      expect((await owner.call('GET', '/api/me')).status).toBe(200);
+      expect(Date.now() - asking).toBeLessThan(5_000);
+      const decided = await all;
+      expect(decided.map((r) => r.body.status)).toEqual(Array(n).fill('failed'));
+      // Well under the pool's 30 s connection timeout, which a stall would take.
+      expect(Date.now() - started).toBeLessThan(20_000);
+    } finally {
+      gate.closed = false;
+    }
+    const { rows } = await pool.query(
+      `select resource_id, count(*)::int as n from audit.events
+       where action = 'chore.update' and outcome = 'denied' and rule = 'fixture_closed'
+         and resource_id = any($1) group by resource_id`,
+      [asked.map((a) => a.chore)],
+    );
+    expect(rows).toHaveLength(n);
+    expect(rows.every((r) => r.n === 1)).toBe(true);
+  }, 90_000);
+
   it('afterRun sees each write, done or parked', async () => {
     gate.seen.length = 0;
     const made = await chore(owner, { title: 'Seen' });
@@ -520,6 +592,47 @@ describe('the durable event outbox', () => {
     }
     expect(seen.map((e) => e.eventName)).toEqual(['chore.created', 'chore.updated']);
     expect(seen[1].before).toMatchObject({ title: 'Published' });
+  });
+});
+
+describe('an update with nothing to change', () => {
+  it('is refused as a 400, never a bare 500', async () => {
+    const made = await chore(owner, { title: 'Unchanged' });
+    const res = await owner.call('PATCH', `/api/chores/${made.body.value.id}`, {});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('nothing_to_change');
+    expect((await owner.call('GET', `/api/chores/${made.body.value.id}`)).body.title).toBe(
+      'Unchanged',
+    );
+  });
+
+  it('a parked update the erasure scrub emptied ends failed on approve, once; a second approve is 409', async () => {
+    // A record blanked rather than deleted (erase: 'anonymise') keeps its pending update, with
+    // every personal field taken out of the stored input. {} still validates, so the replay
+    // reaches the row with nothing to set: it must end as failed, not as a 500 left pending.
+    const { redactCopies } = await import('../../dist/index.js');
+    const made = await chore(owner, { title: 'Call Ravi' });
+    const id = made.body.value.id as string;
+    const parked = await owner.call('PATCH', `/api/chores/${id}`, {
+      title: 'Call Ravi again [ask]',
+    });
+    const approvalId = parked.body.approval.id as string;
+    await db().transaction((tx) =>
+      redactCopies(tx, tenantId, [{ type: 'chore', ids: [id], fields: ['title'] }]),
+    );
+    const { rows } = await pool.query(
+      `select payload->'input' as input from app.approvals where id = $1`,
+      [approvalId],
+    );
+    expect(rows[0].input).toEqual({});
+    const first = await owner.call('POST', `/api/approvals/${approvalId}/approve`);
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({
+      status: 'failed',
+      failureReason: expect.stringContaining('othing'),
+    });
+    expect((await owner.call('POST', `/api/approvals/${approvalId}/approve`)).status).toBe(409);
+    expect((await audit(approvalId)).filter((a) => a.action === 'approval.failed')).toHaveLength(1);
   });
 });
 

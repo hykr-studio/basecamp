@@ -453,7 +453,13 @@ export class IntegrationsService implements OnModuleInit {
   async updateConnection(p: Principal, meta: WriteMeta, id: string, body: unknown) {
     const input = parse(ConnectionUpdate, body);
     const { credentials, ...rest } = input;
-    if (!credentials) return this.write(p, meta, updateConnectionOp({ id }), rest);
+    const op = updateConnectionOp({ id });
+    if (!credentials) return this.write(p, meta, op, rest);
+    // A retry with the same key answers the first answer, even once the connection is gone:
+    // look before reading the row, as a create does.
+    const request = recognised(input);
+    const repeat = await findRepeat(this.db, this.ctx(p, meta), op, request);
+    if (repeat) return repeat.result;
     // New credentials are checked against the connection's own connector, then sealed for it.
     // Whether this person may change it at all is the op's to decide (and audit).
     const row = await this.connectionRow(p.tenantId ?? '', id);
@@ -463,13 +469,7 @@ export class IntegrationsService implements OnModuleInit {
       JSON.stringify(creds.value),
       connectionAad(row.tenantId, row.id),
     );
-    const out = await this.run(
-      p,
-      meta,
-      updateConnectionOp({ id }),
-      { ...rest, sealed, public: creds.public },
-      recognised(input),
-    );
+    const out = await this.run(p, meta, op, { ...rest, sealed, public: creds.public }, request);
     return out.result;
   }
 

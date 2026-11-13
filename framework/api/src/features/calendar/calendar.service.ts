@@ -29,6 +29,7 @@ import {
 } from '@hykr/contracts';
 import {
   findRepeat,
+  oneAtATime,
   runWrite,
   tenantZone,
   toJson,
@@ -241,10 +242,25 @@ export class CalendarService implements OnModuleInit {
     const input = parse(CompleteCalendarInput, body);
     const userId = userOf(p);
     // A retry with the same key answers the first answer: the sign-in and Google's code were
-    // used up by it, so look before taking them.
+    // used up by it, so look before taking them. One sent while the first still runs waits for
+    // it (`oneAtATime`'s claim is not the key's own row, which the connection's write keeps).
     const op = connectOp();
-    const repeat = await findRepeat(this.db, writeCtx(p, meta), op, input);
-    if (repeat) return repeat.result;
+    const ctx = writeCtx(p, meta);
+    return oneAtATime(this.db, ctx, async () => {
+      const repeat = await findRepeat(this.db, ctx, op, input);
+      if (repeat) return repeat.result;
+      return this.connect(p, meta, input, userId, op);
+    });
+  }
+
+  /** The sign-in taken, Google's code exchanged, and the connection written as this person. */
+  private async connect(
+    p: Principal,
+    meta: CalendarWriteMeta,
+    input: z.infer<typeof CompleteCalendarInput>,
+    userId: string,
+    op: ReturnType<typeof connectOp>,
+  ) {
     const google = requireGoogle();
     const box = requireSecretBox();
     const signIn = await takeSignIn(this.db, input.state);

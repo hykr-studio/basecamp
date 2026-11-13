@@ -352,6 +352,25 @@ describe('the operator', () => {
     expect((await setPlan(ravi, { enforce: true, extra: 1 })).status).toBe(400);
     expect((await ravi.call('GET', '/api/credits')).body.enforced).toBe(false);
   });
+
+  it("a plan that keeps the business's own alert, which no longer fits, is a 400 naming it", async () => {
+    const kept = (
+      await pool.query(`select settings->'credits' as c from app.tenants where id = $1`, [
+        tenant[ravi.name],
+      ])
+    ).rows[0].c;
+    // Stored before V5 checked the order: the business's own alert at its pause.
+    await setTenantSettings(tenant[ravi.name], { credits: { alertAt: 100, pauseAt: 100 } });
+    const res = await setPlan(ravi, { pauseAt: 100 });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      error: 'invalid_plan',
+      problems: ['alertAt (100) must be below pauseAt (100)'],
+    });
+    // Setting the alert below the pause in the plan fixes it.
+    expect((await setPlan(ravi, { pauseAt: 100, alertAt: 90 })).status).toBe(200);
+    await setTenantSettings(tenant[ravi.name], { credits: kept });
+  });
 });
 
 describe('the 80% alert and the 100% pause', () => {
@@ -1497,4 +1516,35 @@ describe('a purchase its gateway confirms by webhook (H3)', () => {
     );
     expect((await purchaseOf(purchase.id)).status).toBe('open');
   });
+});
+
+describe('metering inside a write', () => {
+  it('more metered writes at once than the pool holds all run, and nothing else waits', async () => {
+    // A command that meters in its run records on the write's transaction (`record(…, { tx })`):
+    // a second pooled connection taken while that one is held would, with enough writes at
+    // once, hold the whole pool for 30 s.
+    const { sharedDb } = await import('../../dist/infra/db.js');
+    const n = 2 * ((sharedDb.pool.options.max as number | undefined) ?? 10) + 2;
+    const burst = () =>
+      Promise.all(
+        Array.from({ length: n }, () =>
+          ana.call('POST', '/api/credit-checks/render', { pages: 1 }),
+        ),
+      );
+    // Warm first: with the pool at its size, every write reaches its transaction together.
+    await burst();
+    const started = Date.now();
+    const all = burst();
+    await new Promise((r) => setTimeout(r, 200));
+    const asking = Date.now();
+    expect((await ana.call('GET', '/api/me')).status).toBe(200);
+    expect(Date.now() - asking).toBeLessThan(5_000);
+    const answered = await all;
+    expect(answered.map((r) => r.status)).toEqual(Array(n).fill(200));
+    // Well under the pool's 30 s connection timeout, which a stall would take.
+    expect(Date.now() - started).toBeLessThan(20_000);
+    expect(
+      (await uses(ana)).filter((u) => u.source === 'credit_checks.render').length,
+    ).toBeGreaterThanOrEqual(2 * n);
+  }, 120_000);
 });

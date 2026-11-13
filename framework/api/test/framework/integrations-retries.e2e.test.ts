@@ -196,6 +196,25 @@ describe('a connection asked for twice with one key', () => {
   });
 });
 
+describe("a connection's new credentials asked for twice with one key", () => {
+  it('after the connection was deleted, answers the first answer, not a 404', async () => {
+    const made = await ana.call('POST', '/api/integrations/connections', {
+      connector: 'standard-webhooks',
+      label: `deleted since ${randomUUID()}`,
+    });
+    const id = made.body.value.id as string;
+    const key = randomUUID();
+    const body = { credentials: { secret: `whsec_${randomUUID()}` } };
+    const path = `/api/integrations/connections/${id}`;
+    const first = await ana.call('PATCH', path, body, { 'idempotency-key': key });
+    expect(first.status).toBe(200);
+    expect((await ana.call('DELETE', path)).status).toBeLessThan(300);
+    const again = await ana.call('PATCH', path, body, { 'idempotency-key': key });
+    expect(again.status).toBe(200);
+    expect(again.body).toEqual(first.body);
+  });
+});
+
 describe('a repeat after someone else changed the record', () => {
   let bea: Person;
   const asBea = (method: string, path: string, body: unknown) =>

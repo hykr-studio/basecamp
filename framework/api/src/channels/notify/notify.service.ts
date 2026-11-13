@@ -3,7 +3,7 @@ import { type Database, type DbOrTx, schema } from '@hykr/db';
 import type { Labels } from '@hykr/i18n';
 import { channelsOf, type NotificationDef, type Row } from '@hykr/notifications';
 import { InjectQueue } from '@nestjs/bullmq';
-import { Inject, Injectable, type OnApplicationBootstrap } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import { and, desc, eq } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
@@ -15,8 +15,49 @@ import { QUEUES } from '../queues.js';
 import { REDIS } from '../whatsapp/adapter.provider.js';
 import { queueNotification } from './queue.js';
 
+const log = new Logger('Notify');
+
 /** Read when used: this module may load before the application registers. */
 const notifications = () => runtime().notifications.notifications;
+
+/**
+ * What one stored event asks of one notification, from the notification's own functions only:
+ * send now (its dedupe key), and schedule or cancel one (its dedupe key and when). Each part is
+ * asked on its own: one whose function throws goes to `skip` and is left out, and the other
+ * still goes. `when` decides both, so when it throws, neither goes.
+ */
+function planOf(
+  def: NotificationDef<Row>,
+  event: string,
+  row: Row,
+  skip: (part: 'when' | 'send' | 'schedule', e: unknown) => void,
+): { now?: string; later?: { dedupe: string; at: Date | null | 'cancel' } } {
+  const tried = <T>(part: 'when' | 'send' | 'schedule', ask: () => T): T | undefined => {
+    try {
+      return ask();
+    } catch (e) {
+      skip(part, e);
+      return undefined;
+    }
+  };
+  const plan: ReturnType<typeof planOf> = {};
+  if (def.send?.on.includes(event)) {
+    // Sent on this event, but not for this row: nothing else of it either.
+    const when = def.when;
+    if (when && !tried('when', () => when(row))) return plan;
+    plan.now = tried('send', () => def.dedupe(row));
+  }
+  const schedule = def.schedule;
+  if (!schedule) return plan;
+  plan.later = tried('schedule', () =>
+    schedule.cancelOn?.includes(event)
+      ? { dedupe: def.dedupe(row), at: 'cancel' as const }
+      : schedule.on.includes(event)
+        ? { dedupe: def.dedupe(row), at: schedule.at(row) }
+        : undefined,
+  );
+  return plan;
+}
 
 /** One notify-dispatch job: a notification about one record, now or at a time. */
 export type DispatchJob = {
@@ -149,6 +190,10 @@ export class NotifyService implements OnApplicationBootstrap {
    * One stored event (the `notify.events` subscriber): every notification that names it is sent
    * now, scheduled or cancelled. A schedule moves only forward in time: an event older than the
    * last one applied to the same notification (relayed late, or by another worker) is skipped.
+   * A notification whose own function throws on this row misses that part alone, logged (a
+   * throwing `schedule.at` its schedule, not its send now; a throwing `when` both); the other
+   * notifications still go. A queue or Redis that fails fails the whole event, so
+   * the subscriber's retry tries again.
    */
   async onStored(event: DomainEventEnvelope) {
     const stored = event.row;
@@ -157,23 +202,21 @@ export class NotifyService implements OnApplicationBootstrap {
     if (typeof row.id !== 'string') return;
     const resourceType = event.resourceType;
     for (const def of notifications()) {
-      if (def.send?.on.includes(event.name)) {
-        if (def.when && !def.when(row)) continue;
-        const dedupe = def.dedupe(row);
+      const plan = planOf(def, event.name, row, (part, e) =>
+        log.error(
+          `notification ${def.key} skipped its ${part} of ${event.name} ${row.id}: ${e instanceof Error ? e.message : e}`,
+        ),
+      );
+      if (plan.now)
         await this.dispatch.add(
           'now',
-          { key: def.key, tenantId: row.tenantId, row, resourceType, dedupe },
-          { jobId: jobIdOf(dedupe), attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
+          { key: def.key, tenantId: row.tenantId, row, resourceType, dedupe: plan.now },
+          { jobId: jobIdOf(plan.now), attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
         );
-      }
-      const schedule = def.schedule;
-      if (!schedule) continue;
-      const cancels = schedule.cancelOn?.includes(event.name);
-      if (!cancels && !schedule.on.includes(event.name)) continue;
-      const dedupe = def.dedupe(row);
-      if (!(await this.newest(dedupe, event.occurredAt))) continue;
-      if (cancels) await this.cancel(dedupe);
-      else await this.schedule(def, row, schedule.at(row), resourceType);
+      const later = plan.later;
+      if (!later || !(await this.newest(later.dedupe, event.occurredAt))) continue;
+      if (later.at === 'cancel') await this.cancel(later.dedupe);
+      else await this.schedule(def, row, later.at, resourceType);
     }
   }
 

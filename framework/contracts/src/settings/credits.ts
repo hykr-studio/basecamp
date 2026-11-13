@@ -135,7 +135,11 @@ export interface MeterStatus {
   limit?: number;
   /** Of the limit, when there is one. */
   usedPercent?: number;
-  /** Its limit is reached: what it meters is refused (not under the operator's `run`). */
+  /**
+   * Its limit is reached and refuses what it meters (not under the operator's `run`). For a meter
+   * that pauses only some kinds (messages: the plan's `pauseMessages`), only those kinds stop,
+   * and with none named nothing is refused, so it is not paused.
+   */
   paused: boolean;
   /** Why, when it is paused: its limit's rule and reason. */
   refusal?: UsageRefusal;
@@ -224,7 +228,8 @@ export const CreditGrantInput = z
 
 /**
  * The row of a `credits.threshold` event: a cap (the budget or a meter) passed a level this
- * period. It names nobody: a notification tells the people who manage the credits with the
+ * period. A meter's limit that stops nothing under the plan (messages, when the plan pauses no
+ * kind of message) is no cap: it raises no level. It names nobody: a notification tells the people who manage the credits with the
  * recipient `{ capability: CreditsManageCapability.name }`, which notify dispatch expands with
  * the business's roles (its own, and its edits of declared ones) when it sends.
  */

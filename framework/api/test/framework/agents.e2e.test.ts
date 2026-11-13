@@ -4,7 +4,8 @@
 import { randomUUID } from 'node:crypto';
 import { type LiveMessage, liveMessages, textOf } from '@hykr/api-client';
 import { signWebhook } from '@hykr/connectors';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 // Connections keep their credentials sealed with it; set before the app reads its configuration.
 process.env.SECRETS_KEY ||= 'test-secrets-key-0123456789abcdef0123456789';
@@ -148,7 +149,13 @@ async function live(who: Person) {
   return { events, close: () => controller.abort() };
 }
 
+/** What the API warned of, in this process (Nest's loggers, whatever their context). */
+const warned: string[] = [];
+
 beforeAll(async () => {
+  vi.spyOn(Logger.prototype, 'warn').mockImplementation((message: unknown) => {
+    warned.push(String(message));
+  });
   await boot(agentsApp);
   // Loaded after boot: it reads the server's configuration.
   const { AgentsService } = await import('../../dist/testing-internals.js');
@@ -952,6 +959,45 @@ describe('triggers', () => {
     expect(detail.reply).toContain(t.id);
   });
 
+  it('more comments naming an agent at once than the pool holds all answer, and nothing else waits', async () => {
+    // A comment's mentions are resolved in its write's transaction: the agent's owner and what
+    // they read are looked up on that transaction, never on the pool, or enough comments at
+    // once hold the whole pool for 30 s.
+    const { sharedDb } = await import('../../dist/infra/db.js');
+    const n = 2 * ((sharedDb.pool.options.max as number | undefined) ?? 10) + 2;
+    const rexs = await agent(rex, {
+      name: 'Rex burst',
+      instructions: 'Report what started this run.',
+      triggers: [{ kind: 'mention' }],
+    });
+    const t = await task(ana, 'Burst me');
+    // Rex's agent cannot be named on Ana's task (its owner does not read it): every comment is
+    // refused in its transaction, after the lookup, and no run starts meanwhile.
+    const burst = () =>
+      Promise.all(
+        Array.from({ length: n }, (_, i) =>
+          ana.call(
+            'POST',
+            '/api/comments',
+            { entity: 'task', recordId: t.id, body: `@[Rex burst](agent:${rexs.id}) ${i}` },
+            inA(),
+          ),
+        ),
+      );
+    // Warm first: with the pool at its size, every comment reaches its transaction together.
+    await burst();
+    const started = Date.now();
+    const all = burst();
+    await new Promise((r) => setTimeout(r, 200));
+    const asking = Date.now();
+    expect((await ana.call('GET', '/api/me')).status).toBe(200);
+    expect(Date.now() - asking).toBeLessThan(5_000);
+    const answered = await all;
+    expect(answered.map((r) => r.status)).toEqual(Array(n).fill(403));
+    // Well under the pool's 30 s connection timeout, which a stall would take.
+    expect(Date.now() - started).toBeLessThan(20_000);
+  }, 120_000);
+
   it('an @-mention of an agent with no saved mention trigger starts no run', async () => {
     const unsaved = await agent(ana, {
       name: 'Unsaved helper',
@@ -981,6 +1027,44 @@ describe('triggers', () => {
     );
     await new Promise((r) => setTimeout(r, 1500));
     expect(await runsOf(unsaved.id)).toHaveLength(0);
+    // Out of step is said, with the agent.
+    await eventually(() =>
+      warned.find((w) => w.includes(unsaved.id) && w.includes('no saved trigger row')),
+    );
+  });
+
+  it('an @-mention made before its trigger was saved starts no run', async () => {
+    const later = await agent(ana, {
+      name: 'Later helper',
+      instructions: 'Report what started this run.',
+      triggers: [{ kind: 'mention' }],
+    });
+    // As if the trigger were saved after the mention happened.
+    await pool.query(
+      `update app.agent_triggers set created_at = now() + interval '1 hour' where agent_id = $1`,
+      [later.id],
+    );
+    const t = await task(ana, 'Mention before the trigger');
+    const said = await ana.call(
+      'POST',
+      '/api/comments',
+      { entity: 'task', recordId: t.id, body: `@[Later helper](agent:${later.id}) look` },
+      inA(),
+    );
+    expect(said.status).toBe(200);
+    await eventually(
+      async () =>
+        (
+          await pool.query(
+            `select relayed_at from app.domain_events
+              where name = 'comment.mentioned' and row->'target'->>'id' = $1`,
+            [later.id],
+          )
+        ).rows[0]?.relayed_at ?? undefined,
+      20_000,
+    );
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(await runsOf(later.id)).toHaveLength(0);
   });
 
   it('a WhatsApp message: the inbound hook starts the agent, and leaves the message to the assistant', async () => {

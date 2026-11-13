@@ -591,8 +591,12 @@ describe('the consent screen: narrowing, and the person’s language', () => {
     // A language the application does not speak: Accept-Language decides.
     const fallback = await page(new URL(`${plain.href}&lang=xx`), { 'accept-language': 'te-IN' });
     expect(fallback.html).toContain('<html lang="te">');
-    // Anything else added is still a changed request.
+    // A parameter that repeats a signed one is a changed request; one of a new name is ignored:
+    // only the signed part is checked and posted back.
     expect((await page(new URL(`${plain.href}&scope=visits%3Awrite`))).status).toBe(400);
+    const extra = await page(new URL(`${plain.href}&foo=1`));
+    expect(extra.status).toBe(200);
+    expect(postedQuery(extra.html)).toBe(plain.search.slice(1));
   });
 });
 

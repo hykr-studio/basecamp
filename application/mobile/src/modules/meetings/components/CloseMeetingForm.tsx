@@ -134,7 +134,7 @@ export function CloseMeetingForm({
               />
             </View>
             <Text style={styles.muted}>
-              The draft waits for your approval here before anything is written.
+              The draft waits for approval here before anything is written.
             </Text>
           </View>
         ) : (

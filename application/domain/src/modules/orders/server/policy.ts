@@ -54,7 +54,7 @@ export function saveDecision(
       },
     });
   if (agent)
-    return needsApproval('agent_saves_order', 'Saving an order for you needs your approval', {
+    return needsApproval('agent_saves_order', 'Orders the assistant saves need approval', {
       amount: total,
     });
   return allow('person_saves_order');

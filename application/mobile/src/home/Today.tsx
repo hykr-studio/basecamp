@@ -107,7 +107,7 @@ export function Today() {
   const closePrompt = closeable && (
     <TryPrompt
       text={`close ${closeable.title}`}
-      what="The assistant drafts the close; nothing changes until you approve it."
+      what="The assistant drafts the close; nothing changes until it is approved."
     />
   );
 

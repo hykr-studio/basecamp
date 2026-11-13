@@ -1,6 +1,7 @@
 // The MCP tools from a catalog (A1), without a server: which tools a token's scopes give, what
 // each one says (its annotations too, H3), what a business's flags take away, and how a parked
 // write reads. The e2e test runs them for real.
+import vm from 'node:vm';
 import {
   commandSpec,
   createCatalog,
@@ -16,6 +17,7 @@ import type { createTool } from '@mastra/core/tools';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { fieldsOf, mcpTools, parkedText } from '../../dist/features/mcp/index.js';
+import { signInPage } from '../../dist/features/mcp/pages.js';
 import { tasksSpec, visitsSpec } from '../fixture/dist/contracts.js';
 
 const catalog = createCatalog(tasksSpec, visitsSpec);
@@ -330,5 +332,64 @@ describe('words', () => {
     expect(text).toContain('The person you act for decides it.');
     expect(text).toContain('Level: Big.');
     expect(text).toContain('https://app.example/approvals/00000000-0000-4000-8000-000000000001');
+  });
+});
+
+describe("the sign-in page's script", () => {
+  const CONSENT = 'https://api.example/oauth/consent';
+
+  /** Run the page's own script with a stand-in browser; where it sends the person after sign-in. */
+  async function afterSignInTo(answer: string, lang?: 'hi' | 'te'): Promise<string> {
+    const html = signInPage('en', 'App', 'client_id=c&sig=s', lang, CONSENT);
+    const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1] ?? '';
+    const attr = (name: string) => new RegExp(`${name}="([^"]*)"`).exec(html)?.[1];
+    const dataset: Record<string, string | undefined> = {
+      lang: attr('data-lang'),
+      consent: attr('data-consent')?.replace(/&amp;/g, '&'),
+    };
+    let submit: ((e: { preventDefault(): void }) => Promise<void>) | undefined;
+    const el = (id: string) => ({
+      id,
+      value: id === 'email' ? 'a@example.com' : 'password123',
+      hidden: true,
+      dataset: id === 'q' ? dataset : {},
+      addEventListener: (_: string, f: typeof submit) => {
+        if (id === 'f') submit = f;
+      },
+    });
+    const location = { href: `https://api.example/oauth/sign-in?client_id=c&sig=s` };
+    const context = vm.createContext({
+      URL,
+      JSON,
+      location,
+      document: { getElementById: el },
+      fetch: async () => ({ ok: true, json: async () => ({ url: answer }) }),
+    });
+    vm.runInContext(script, context);
+    await submit?.({ preventDefault: () => {} });
+    return location.href;
+  }
+
+  it("carries the language to the API's own consent page", async () => {
+    const to = new URL(await afterSignInTo(`${CONSENT}?client_id=c&sig=s`, 'hi'));
+    expect(to.origin + to.pathname).toBe(CONSENT);
+    expect(to.searchParams.get('lang')).toBe('hi');
+  });
+
+  it("leaves a client's own redirect_uri exactly as Better Auth gave it", async () => {
+    // A remembered consent, or an error: Better Auth answers with the client's callback.
+    for (const back of [
+      'https://client.example/callback?code=abc&state=xyz',
+      'https://client.example/callback?error=access_denied&state=xyz',
+      'https://api.example/elsewhere?code=abc',
+    ])
+      expect(await afterSignInTo(back, 'te')).toBe(back);
+  });
+
+  it('adds nothing without a language, or when the consent page has one', async () => {
+    const plain = `${CONSENT}?client_id=c&sig=s`;
+    expect(await afterSignInTo(plain)).toBe(plain);
+    const chosen = `${CONSENT}?client_id=c&lang=te`;
+    expect(await afterSignInTo(chosen, 'hi')).toBe(chosen);
   });
 });

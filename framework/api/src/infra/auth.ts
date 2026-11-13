@@ -12,15 +12,9 @@ import { config } from '../config.js';
 import { authPlugins } from '../hooks.js';
 import { createsBusinessOnSignUp, runtime } from '../runtime.js';
 import { sharedDb } from './db.js';
+import { CLIENT_ADDRESS_HEADER, stampClientAddress } from './http.js';
 import { nativeAppOrigin } from './native-origin.js';
 import { authRateLimit } from './throttle.js';
-
-/**
- * The caller's address as Express sees it (`req.ip`, which honours `trust proxy`), handed to
- * Better Auth by `authMiddleware`: its rate limits then count per caller as the API's throttle
- * does. A client's own value is always replaced.
- */
-const CLIENT_ADDRESS_HEADER = 'x-hykr-client-address';
 
 /** The native app's scheme (and the Expo dev client's, outside production). */
 const appSchemes = () => [
@@ -126,8 +120,8 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     res.status(refusal.status).json(refusal.body);
     return;
   }
-  if (req.ip) req.headers[CLIENT_ADDRESS_HEADER] = req.ip;
-  else delete req.headers[CLIENT_ADDRESS_HEADER];
+  // `configureHttp` stamps every request; again here, for an app that mounts this without it.
+  stampClientAddress(req);
   next();
 }
 

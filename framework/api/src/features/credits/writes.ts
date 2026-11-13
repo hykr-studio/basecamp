@@ -245,8 +245,23 @@ export const PlanInput = CreditsPlan;
 type SettingsLoaded = { tenantId: string; before: Stored };
 
 /**
+ * The plan an operator's replacement stores: theirs, with the business's own alert threshold kept
+ * unless the plan sets one, and the override kept. The route's check and the write both read it,
+ * so a kept threshold that no longer fits the new plan is the route's 400, naming it.
+ */
+export function planAfter(input: CreditsPlan, before: Stored): Stored {
+  return {
+    ...input,
+    ...(input.alertAt === undefined && before.alertAt !== undefined
+      ? { alertAt: before.alertAt }
+      : {}),
+    ...(before.override ? { override: before.override } : {}),
+  };
+}
+
+/**
  * The operator replaces the business's plan. The override stays, and so does the business's own
- * alert threshold unless the plan sets one.
+ * alert threshold unless the plan sets one (`planAfter`).
  */
 export const setCreditsPlan = (): WriteOp<CreditsPlan, SettingsLoaded, Stored> => ({
   name: SET_CREDITS_PLAN,
@@ -258,13 +273,7 @@ export const setCreditsPlan = (): WriteOp<CreditsPlan, SettingsLoaded, Stored> =
   authorize: operatorOnly,
   summarize: (plan) => `Credits plan: ${JSON.stringify(plan)}`,
   run: async ({ tx, input, loaded }) => {
-    const credits: Stored = {
-      ...input,
-      ...(input.alertAt === undefined && loaded.before.alertAt !== undefined
-        ? { alertAt: loaded.before.alertAt }
-        : {}),
-      ...(loaded.before.override ? { override: loaded.before.override } : {}),
-    };
+    const credits = planAfter(input, loaded.before);
     const problems = planProblems(credits);
     if (problems.length) throw new ConflictException({ error: 'invalid_plan', problems });
     await saveCredits(tx, loaded.tenantId, credits);

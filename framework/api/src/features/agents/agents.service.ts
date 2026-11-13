@@ -204,10 +204,14 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
 
   /* ── Who a run is ────────────────────────────────────────────────────── */
 
-  /** The agent's owner as a principal of its runs: their standing now, narrowed by its scope. */
-  async ownerPrincipal(agent: AgentRow, runId?: string): Promise<Principal | null> {
+  /**
+   * The agent's owner as a principal of its runs: their standing now, narrowed by its scope.
+   * Asked in a write's transaction (a comment naming the agent), it reads on `conn`.
+   */
+  async ownerPrincipal(agent: AgentRow, runId?: string, conn?: Conn): Promise<Principal | null> {
     try {
       const standing = await this.resolver.forUser(agent.ownerId, {
+        conn,
         tenantId: agent.tenantId,
         channel: 'background',
       });
@@ -366,11 +370,16 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** May the owner read this record now? An entity's scoped read, or a contributed check. */
-  private async ownerReads(owner: Principal, type: string, id: string | null): Promise<boolean> {
+  private async ownerReads(
+    owner: Principal,
+    type: string,
+    id: string | null,
+    conn: Conn = this.db,
+  ): Promise<boolean> {
     if (!id) return false;
     const def = entityDef(type);
     try {
-      if (def) return !!(await def.repo.find(this.db, owner, id));
+      if (def) return !!(await def.repo.find(conn, owner, id));
       const check = liveResources.get(type);
       return check ? await check.visible(owner, id, this.ctx) : false;
     } catch {
@@ -450,7 +459,14 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
       .where(and(eq(agentTriggers.agentId, agent.id), eq(agentTriggers.kind, 'mention')))
       .limit(1);
     // No saved trigger row is no time to compare with: nothing starts (as for an event trigger).
-    if (!trigger || savedAfter(trigger.createdAt, event)) return null;
+    // The definition says it listens, so the two are out of step: say so, or nobody would know.
+    if (!trigger) {
+      log.warn(
+        `agent ${agent.id} has a mention trigger but no saved trigger row: mention ${event.id} starts nothing`,
+      );
+      return null;
+    }
+    if (savedAfter(trigger.createdAt, event)) return null;
     return this.start({
       agent,
       triggerId: trigger.id,
@@ -471,9 +487,14 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** May the owner be named on this record (as the mention kind checks it)? */
-  async mayBeMentioned(owner: Principal, on: { entity: string; id: string }, internal: boolean) {
+  async mayBeMentioned(
+    owner: Principal,
+    on: { entity: string; id: string },
+    internal: boolean,
+    conn: Conn = this.db,
+  ) {
     if (internal && !can(owner, CommentCapabilities.internal)) return false;
-    return this.ownerReads(owner, on.entity, on.id);
+    return this.ownerReads(owner, on.entity, on.id, conn);
   }
 
   /**
@@ -590,7 +611,8 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
         const conditions: { agent: AgentRow; trigger: TriggerRow; zone: string }[] = [];
         for (const { trigger, agent } of rows) {
           const spec = AgentTrigger.safeParse(trigger.spec);
-          const zone = await this.zone(trigger.tenantId);
+          // On the sweep's transaction: nothing in it waits for a second pooled connection.
+          const zone = await tenantZoneOf(tx, trigger.tenantId);
           const dueAt = trigger.nextAt as Date;
           await tx
             .update(agentTriggers)

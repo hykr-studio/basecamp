@@ -213,7 +213,7 @@ export const DialCall = defineCommand(DialCallSpec, {
     if (!can(p, FrameworkCapabilities.messageCustomers))
       return deny('cannot_call', 'Only the business calls people');
     if (p.actor.kind === 'agent')
-      return needsApproval('agent_dials', 'Calling someone for you needs your approval');
+      return needsApproval('agent_dials', 'Calls the assistant makes need approval');
     return allow('person_calls', 'The business calls through its provider');
   },
   summarize: (input) => `Call ${input.to}`,

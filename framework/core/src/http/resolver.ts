@@ -26,7 +26,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { TenantConfigService } from '../tenants/tenant-config.service.js';
-import { CORE_OPTIONS, type CoreOptions } from '../tokens.js';
+import { CORE_OPTIONS, type Conn, type CoreOptions } from '../tokens.js';
 import { standingProviders } from './standing.js';
 
 /**
@@ -96,9 +96,9 @@ export class PrincipalResolver {
    * parse is null: the declared roles still reach their rows, but nobody holds a capability
    * there until it is fixed (fail closed: a business's edit may have taken some away).
    */
-  private async rolesOf(tenantId: string): Promise<RolesSettings | null> {
+  private async rolesOf(tenantId: string, conn?: Conn): Promise<RolesSettings | null> {
     try {
-      return await this.tenants.section(tenantId, 'roles');
+      return await this.tenants.section(tenantId, 'roles', conn);
     } catch (e) {
       logger.error(`Roles of business ${tenantId} do not parse; no capabilities there: ${e}`);
       return null;
@@ -110,18 +110,21 @@ export class PrincipalResolver {
    * or, when they are no member there, as a participant (a member of one of its parties). A
    * WhatsApp turn is only as sure as the number: 'whatsapp_number', even for a person with an
    * account. Asked for a business they are not in: 403.
+   *
+   * Asked inside a transaction (a comment's mentions, resolved in its write), the caller passes
+   * it as `conn`: every read is on it, and nothing waits for a second pooled connection.
    */
   async forUser(
     userId: string,
-    opts: { tenantId?: string; channel?: Channel; name?: string } = {},
+    opts: { tenantId?: string; channel?: Channel; name?: string; conn?: Conn } = {},
   ): Promise<Standing> {
-    const db = this.options.db;
+    const db = opts.conn ?? this.options.db;
     let membership = await membershipOf(db, userId, opts.tenantId);
     if (!membership && opts.tenantId) {
       if (await participatesIn(db, userId, opts.tenantId))
-        return this.participant(userId, opts.tenantId, opts.channel);
+        return this.participant(userId, opts.tenantId, opts.channel, db);
       // Neither: a platform standing there (an operator's consented support access), if any.
-      const other = await this.otherStanding(userId, opts.tenantId, opts.channel);
+      const other = await this.otherStanding(userId, opts.tenantId, opts.channel, db);
       if (other) return other;
       throw new ForbiddenException({ error: 'forbidden', rule: 'not_a_member' });
     }
@@ -144,7 +147,7 @@ export class PrincipalResolver {
     return {
       subject: { kind: 'user', userId },
       tenantId: membership.tenantId,
-      ...standingOf(membership.roles, await this.rolesOf(membership.tenantId)),
+      ...standingOf(membership.roles, await this.rolesOf(membership.tenantId, opts.conn)),
       ...(membership.customerId ? { customerId: membership.customerId } : {}),
       assurance: this.assurance(opts.channel),
       standing: 'member',
@@ -160,12 +163,13 @@ export class PrincipalResolver {
     userId: string,
     tenantId: string,
     channel: Channel | undefined,
+    db: Conn = this.options.db,
   ): Promise<Standing> {
-    const customerId = await customerOfUser(this.options.db, userId, tenantId);
+    const customerId = await customerOfUser(db, userId, tenantId);
     return {
       subject: { kind: 'user', userId },
       tenantId,
-      ...standingOf(givenRoles('participant'), await this.rolesOf(tenantId)),
+      ...standingOf(givenRoles('participant'), await this.rolesOf(tenantId, db)),
       ...(customerId ? { customerId } : {}),
       assurance: this.assurance(channel),
       standing: 'participant',
@@ -181,11 +185,12 @@ export class PrincipalResolver {
     userId: string,
     tenantId: string,
     channel: Channel | undefined,
+    db: Conn = this.options.db,
   ): Promise<Standing | undefined> {
     for (const provider of standingProviders.all()) {
-      const other = await provider.forUser({ db: this.options.db, userId, tenantId, channel });
+      const other = await provider.forUser({ db, userId, tenantId, channel });
       if (!other) continue;
-      const { roles } = standingOf(other.roles, await this.rolesOf(tenantId));
+      const { roles } = standingOf(other.roles, await this.rolesOf(tenantId, db));
       return {
         subject: { kind: 'user', userId },
         tenantId,

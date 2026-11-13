@@ -3,10 +3,11 @@
 // approval), submitted by the worker, moved on by signed callbacks or by polling, finished with
 // result files kept on the job and written back by `complete`; another business gets 404, staff
 // never see a render's cost, deadlines, cancelling, live updates and personal data.
+import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { type LiveMessage, liveMessages, textOf } from '@hykr/api-client';
 import type { Principal } from '@hykr/contracts';
-import { eventFor, toEnvelope } from '@hykr/core';
+import { eventFor, oneAtATime, systemPrincipal, toEnvelope } from '@hykr/core';
 import { domainEvents } from '@hykr/db';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -700,6 +701,69 @@ describe('a polled job about no record', () => {
     expect(rows[0].outcome).toBe('denied');
   });
 
+  it('more starts with a file at once than the pool holds all answer, and nothing else waits', async () => {
+    // A job's input files are checked inside the starting write's transaction: that check must
+    // take no second pooled connection, or enough starts at once hold the whole pool for 30 s.
+    const { sharedDb } = await import('../../dist/infra/db.js');
+    const n = 2 * ((sharedDb.pool.options.max as number | undefined) ?? 10) + 2;
+    // The owner's convert result, kept on their job: staff names it, so the check reads the
+    // job through its file holder, on the write's connection, and refuses. No job runs.
+    const theirs = (await job(owner, id)).body.files[0] as string;
+    const burst = () =>
+      Promise.all(
+        Array.from({ length: n }, (_, i) =>
+          staff.call(
+            'POST',
+            '/api/drawings/convert',
+            { text: `burst ${i}`, source: theirs },
+            inTenant(),
+          ),
+        ),
+      );
+    // Warm first: with the pool at its size, every start reaches its transaction at the same moment.
+    await burst();
+    const started = Date.now();
+    const all = burst();
+    await new Promise((r) => setTimeout(r, 200));
+    const asking = Date.now();
+    expect((await owner.call('GET', '/api/me')).status).toBe(200);
+    expect(Date.now() - asking).toBeLessThan(5_000);
+    const answered = await all;
+    expect(answered.map((r) => r.status)).toEqual(Array(n).fill(403));
+    expect(answered.every((r) => r.body.rule === 'file_unavailable')).toBe(true);
+    // Well under the pool's 30 s connection timeout, which a stall would take.
+    expect(Date.now() - started).toBeLessThan(20_000);
+  }, 120_000);
+
+  it('a file on a record the starter reads is one the job may take', async () => {
+    // The check reads the record on the write's connection, as the starter sees it.
+    const d = await drawing('Plan Source');
+    const bytes = png(10, 10);
+    const pre = await owner.call('POST', '/api/files', {
+      name: 'source.png',
+      mime: 'image/png',
+      size: bytes.length,
+      for: { entity: 'drawing', field: 'preview', id: d.id },
+    });
+    await fetch(`${server.base}${pre.body.upload.url}`, {
+      method: 'PUT',
+      headers: pre.body.upload.headers,
+      body: new Uint8Array(bytes),
+    });
+    await owner.call('POST', `/api/files/${pre.body.file.id}/confirm`);
+    expect(
+      (await owner.call('PATCH', `/api/drawings/${d.id}`, { preview: pre.body.file.id })).status,
+    ).toBe(200);
+    const started = await owner.call('POST', '/api/drawings/convert', {
+      text: 'from a record',
+      source: pre.body.file.id,
+    });
+    expect(started.status).toBe(200);
+    expect(started.body.value.input).toEqual({ text: 'from a record', source: pre.body.file.id });
+    const s = await submitted(started.body.value.id);
+    expect(Buffer.from(s.source ?? '', 'base64')).toEqual(bytes);
+  });
+
   it('a result URL to a private address fails it (the default download)', async () => {
     const started = await owner.call('POST', '/api/drawings/convert', { text: 'private' });
     const jid = started.body.value.id;
@@ -844,6 +908,183 @@ describe('deadlines and cancelling', () => {
     expect(again.status).toBe(200);
     expect(again.body).toMatchObject({ id, status: 'cancelled' });
     expect(await audit(id, 'job.cancel')).toHaveLength(1);
+  });
+
+  it('a cancel asked for twice at the same moment with one key answers both, cancelled once', async () => {
+    const id = await running((await drawing('Plan Stop At Once')).id);
+    await submitted(id);
+    const key = { 'idempotency-key': `cancel-twice-${id}` };
+    const both = await Promise.all(
+      [0, 1].map(() => owner.call('POST', `/api/jobs/${id}/cancel`, undefined, key)),
+    );
+    for (const res of both) {
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body).toMatchObject({ id, status: 'cancelled' });
+    }
+    expect(await audit(id, 'job.cancel')).toHaveLength(1);
+  });
+});
+
+// A route that keeps its own reply (`oneAtATime`, here a job's cancel) holds no pooled
+// connection while it waits for, or does, the work: more of them at once than the pool holds
+// neither stall each other nor anything else in the process.
+describe('one request at a time per key, with no connection held', () => {
+  const poolMax = async () => {
+    const { sharedDb } = await import('../../dist/infra/db.js');
+    return (sharedDb.pool.options.max as number | undefined) ?? 10;
+  };
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  /** The promise's outcome, or a rejection when it takes longer than `ms`. */
+  const within = <T>(work: Promise<T>, ms: number) =>
+    Promise.race([
+      work,
+      sleep(ms).then(() => {
+        throw new Error(`still waiting after ${ms} ms`);
+      }),
+    ]);
+
+  it('more cancels at once than the pool holds, each with its own key, answer at once; nothing else waits', async () => {
+    const n = 2 * (await poolMax()) + 2;
+    const started = Date.now();
+    const burst = Promise.all(
+      Array.from({ length: n }, (_, i) =>
+        owner.call('POST', `/api/jobs/${randomUUID()}/cancel`, undefined, {
+          'idempotency-key': `burst-${i}-${randomUUID()}`,
+        }),
+      ),
+    );
+    await sleep(50);
+    const meAt = Date.now();
+    const meRes = await owner.call('GET', '/api/me');
+    const meMs = Date.now() - meAt;
+    const all = await burst;
+    const ms = Date.now() - started;
+    expect(all.map((r) => r.status)).toEqual(Array(n).fill(404));
+    expect(meRes.status).toBe(200);
+    // Well under the pool's 30 s connection timeout, which a stall would take.
+    expect(meMs).toBeLessThan(10_000);
+    expect(ms).toBeLessThan(15_000);
+  }, 60_000);
+
+  it('as many with one key cancel the job once and answer every one of them', async () => {
+    const n = (await poolMax()) + 2;
+    const id = await running((await drawing('Plan Stop Crowd')).id);
+    await submitted(id);
+    const key = { 'idempotency-key': `cancel-crowd-${id}` };
+    const started = Date.now();
+    const all = await Promise.all(
+      Array.from({ length: n }, () => owner.call('POST', `/api/jobs/${id}/cancel`, undefined, key)),
+    );
+    expect(all.map((r) => r.status)).toEqual(Array(n).fill(200));
+    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(await audit(id, 'job.cancel')).toHaveLength(1);
+  }, 60_000);
+
+  describe('the claim on a key', () => {
+    const coreDb = async () => (await import('../../dist/infra/db.js')).sharedDb.db;
+    const ctxOf = () => ({
+      principal: systemPrincipal({ tenantId, job: 'jobs.test' }),
+      idempotencyKey: `claim-${randomUUID()}`,
+    });
+    /** What a refusal answered: its status and body. */
+    const refusalOf = (e: unknown) => ({
+      status: (e as { getStatus?: () => number }).getStatus?.(),
+      body: (e as { getResponse?: () => unknown }).getResponse?.(),
+    });
+    /** Until the key's claim row is there: the first request holds it. */
+    const claimed = (key: string) =>
+      eventually(async () => {
+        const rows = await pool.query(
+          'select 1 from app.idempotency where right(key, length($1)) = $1 and key <> $1',
+          [key],
+        );
+        return rows.rowCount ? true : undefined;
+      });
+    /** A piece of work that ends when the test says so. */
+    const held = () => {
+      let open = () => {};
+      const gate = new Promise<void>((r) => {
+        open = r;
+      });
+      return { gate, open };
+    };
+
+    it('one sent while another holds the key waits, then answers 409 idempotency_in_progress', async () => {
+      const db = await coreDb();
+      const ctx = ctxOf();
+      const { gate, open } = held();
+      const first = oneAtATime(db, ctx, () => gate.then(() => 'first'));
+      await claimed(ctx.idempotencyKey);
+      let refused: unknown;
+      try {
+        await within(
+          oneAtATime(db, ctx, async () => 'second', { waitMs: 300 }),
+          10_000,
+        ).catch((e) => {
+          refused = e;
+        });
+      } finally {
+        open();
+      }
+      expect(refusalOf(refused)).toMatchObject({
+        status: 409,
+        body: { error: 'idempotency_in_progress' },
+      });
+      expect(await first).toBe('first');
+      // Released when it ended: the next runs at once.
+      expect(
+        await within(
+          oneAtATime(db, ctx, async () => 'third'),
+          10_000,
+        ),
+      ).toBe('third');
+    });
+
+    it('a claim whose holder stopped long ago is taken over', async () => {
+      const db = await coreDb();
+      const ctx = ctxOf();
+      const { gate, open } = held();
+      const first = oneAtATime(db, ctx, () => gate);
+      await claimed(ctx.idempotencyKey);
+      try {
+        // As if its process had stopped an hour ago.
+        await pool.query(
+          `update app.idempotency set created_at = now() - interval '1 hour'
+           where right(key, length($1)) = $1 and key <> $1`,
+          [ctx.idempotencyKey],
+        );
+        expect(
+          await within(
+            oneAtATime(db, ctx, async () => 'taken over'),
+            10_000,
+          ),
+        ).toBe('taken over');
+      } finally {
+        open();
+      }
+      await first;
+    });
+
+    it('a request that fails frees its key at once, and leaves nothing of its claim', async () => {
+      const db = await coreDb();
+      const ctx = ctxOf();
+      await expect(
+        oneAtATime(db, ctx, async () => {
+          throw new Error('refused');
+        }),
+      ).rejects.toThrow('refused');
+      expect(
+        await within(
+          oneAtATime(db, ctx, async () => 'again', { waitMs: 300 }),
+          10_000,
+        ),
+      ).toBe('again');
+      const left = await pool.query(
+        'select 1 from app.idempotency where right(key, length($1)) = $1',
+        [ctx.idempotencyKey],
+      );
+      expect(left.rowCount).toBe(0);
+    });
   });
 });
 

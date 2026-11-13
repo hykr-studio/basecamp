@@ -284,7 +284,7 @@ export const SaveBasket = defineCommand(SaveBasketSpec, {
   authorize: (p, { basket }) => {
     if (basket?.status === 'void') return deny('basket_void', 'This basket is void');
     return p.actor.kind === 'agent'
-      ? needsApproval('agent_saves', 'Saving a basket for you needs your approval')
+      ? needsApproval('agent_saves', 'Baskets the assistant saves need approval')
       : allow('person_saves');
   },
   summarize: (input) => `Save ${input.title} with ${input.items.length} items`,

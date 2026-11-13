@@ -101,6 +101,22 @@ describe('delivery channels', () => {
     expect(page.tenantId).not.toBe(tenantId);
   });
 
+  it('a notification whose filter throws misses that event alone; the ones after it still go', async () => {
+    // The fixture's task.filter-throws comes before the pager's and throws on this title.
+    const t = await task(ana, 'Page: the filter throws');
+    const [page] = await eventually(() => (pagesOf(t.id).length ? pagesOf(t.id) : undefined));
+    expect(page).toMatchObject({ to: { userId: ana.id }, dedupe: `task.paged:${t.id}` });
+  });
+
+  it('a notification whose schedule throws still sends now', async () => {
+    const t = await task(ana, 'Page: the schedule throws');
+    const sent = await eventually(() => {
+      const mine = pagesOf(t.id).filter((p) => p.dedupe === `task.schedule-throws:${t.id}`);
+      return mine.length ? mine : undefined;
+    });
+    expect(sent).toHaveLength(1);
+  });
+
   it('unavailable, or failed for good: the next channel (email), at once', async () => {
     const away = await task(ana, 'Page away');
     const broken = await task(ana, 'Page broken');

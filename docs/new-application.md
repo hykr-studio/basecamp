@@ -919,7 +919,7 @@ export const repairs = defineAppModule({
   suggestions: [
     { text: 'repairs', what: 'your open repairs' },
     { text: 'book Fix the kitchen tap at 12 MG Road tomorrow', what: 'books a repair' },
-    { text: 'finish Fix the kitchen tap: replaced the washer', what: 'waits for your approval' },
+    { text: 'finish Fix the kitchen tap: replaced the washer', what: 'waits for approval' },
   ],
   bind: () => {
     bindView(RepairListView, RepairListComponent);

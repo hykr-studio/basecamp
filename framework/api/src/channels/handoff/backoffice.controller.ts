@@ -4,6 +4,7 @@ import {
   CurrentPrincipal,
   findRepeat,
   HumanOnlyGuard,
+  oneAtATime,
   PrincipalGuard,
   RequestMeta,
   type RequestMetaValue,
@@ -142,11 +143,26 @@ export class BackOfficeController {
   ) {
     staffOnly(p);
     const { text } = ReplyInput.parse(body);
-    // A retry with the same idempotency-key sends nothing again: it answers as the first did.
+    // A retry with the same idempotency-key sends nothing again: it answers as the first did,
+    // and one sent while the first still runs waits for it.
     const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
     const op = { name: 'handoff.reply', args: { id } };
-    const repeat = await findRepeat(this.db, ctx, op, { text });
-    if (repeat) return (repeat.result as { value?: unknown }).value;
+    return oneAtATime(this.db, ctx, async () => {
+      const repeat = await findRepeat(this.db, ctx, op, { text });
+      if (repeat) return (repeat.result as { value?: unknown }).value;
+      return this.send(p, id, text, async (sent) => {
+        await saveReply(this.db, ctx, op, { text }, { status: 'done', value: sent });
+      });
+    });
+  }
+
+  /** The reply itself: in the window as text, outside it as the approved template. */
+  private async send(
+    p: Principal,
+    id: string,
+    text: string,
+    done: (sent: { sent: OutboundMessage['kind'] }) => Promise<void>,
+  ) {
     const { handoff, contact } = await this.load(p, id);
     if (handoff.state === 'closed') throw new ConflictException({ error: 'closed' });
     const from = await this.contacts.numberOfTenant(contact.tenantId);
@@ -189,7 +205,7 @@ export class BackOfficeController {
         .set({ state: 'taken', takenBy: p.actor.id, takenAt: new Date(), flaggedAt: null })
         .where(eq(handoffs.id, handoff.id));
     await this.audit(p, 'handoff.replied', handoff, { as: message.kind });
-    await saveReply(this.db, ctx, op, { text }, { status: 'done', value: { sent: message.kind } });
+    await done({ sent: message.kind });
     return { sent: message.kind };
   }
 

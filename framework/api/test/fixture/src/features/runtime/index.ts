@@ -283,6 +283,38 @@ export const PagedNotification = defineNotification<TaskRow>({
   dedupe: (t) => `task.paged:${t.id}`,
 });
 
+/** Ahead of the pager's: its filter throws on a task titled "…filter throws", and the rest go. */
+export const ThrowingNotification = defineNotification<TaskRow>({
+  key: 'task.filter-throws',
+  topic: 'service',
+  send: { on: ['task.created'] },
+  when: (t) => {
+    if (t.title.includes('filter throws')) throw new Error('This filter throws');
+    return false;
+  },
+  to: (t) => [{ userId: t.ownerId }],
+  channels: ['email'],
+  email: { subject: (t) => t.title, body: (t) => t.title },
+  dedupe: (t) => `task.filter-throws:${t.id}`,
+});
+
+/** Paged at once and scheduled again; its schedule's time throws on "…schedule throws". */
+export const ScheduleThrowsNotification = defineNotification<TaskRow>({
+  key: 'task.schedule-throws',
+  topic: 'service',
+  send: { on: ['task.created'] },
+  when: (t) => t.title.includes('schedule throws'),
+  schedule: {
+    on: ['task.created'],
+    at: () => {
+      throw new Error('This schedule throws');
+    },
+  },
+  to: (t) => [{ userId: t.ownerId }],
+  channels: ['fixture-pager'],
+  dedupe: (t) => `task.schedule-throws:${t.id}`,
+});
+
 /* ── An inbound hook that needs a service: a Nest provider that registers itself ── */
 
 @Injectable()
@@ -341,7 +373,7 @@ export const runtimeContributions: Partial<Contributions> = {
 export const runtimeModule = defineModule({
   ...moduleSpec({ name: 'runtime', dependsOn: ['tasks'], entities: {}, commands: [] }),
   server: RuntimeFixtureModule,
-  notifications: [PagedNotification],
+  notifications: [ThrowingNotification, PagedNotification, ScheduleThrowsNotification],
   agent: { scripts: runtimeScripts },
 });
 
