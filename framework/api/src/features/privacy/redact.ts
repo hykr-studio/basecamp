@@ -217,6 +217,17 @@ async function redactApprovals(
   };
 }
 
+const SLICE = 1000;
+
+/** A set in slices of at most `SLICE` ids. */
+function slices(set: ErasedRecords): ErasedRecords[] {
+  if (set.ids.length <= SLICE) return [set];
+  const out: ErasedRecords[] = [];
+  for (let i = 0; i < set.ids.length; i += SLICE)
+    out.push({ ...set, ids: set.ids.slice(i, i + SLICE) });
+  return out;
+}
+
 /**
  * Take the personal fields of these records out of every copy the server keeps of them, in this
  * business, and erase what is derived from them. `deleted`: the records are gone, so all their
@@ -241,7 +252,8 @@ export async function redactCopies(
     memory: 0,
     replies: 0,
   };
-  const queue = [...sets];
+  // In slices: each statement names the ids, and a retention rule may hand over thousands.
+  const queue = sets.flatMap(slices);
   for (let i = 0; i < queue.length; i++) {
     const set = queue[i];
     if (!set.ids.length) continue;
@@ -372,7 +384,7 @@ export async function redactCopies(
     });
     out.files += files.length;
     // The files' own copies (their names in `file.*` audit rows) go the same way.
-    if (files.length) queue.push(fileCopies(files));
+    if (files.length) queue.push(...slices(fileCopies(files)));
     out.memory += await forgetRecords(tx, { tenantId, resourceType: set.type, ids: set.ids });
     // Each feature's own copies (webhook bodies, payloads).
     for (const copies of recordCopies.all())
