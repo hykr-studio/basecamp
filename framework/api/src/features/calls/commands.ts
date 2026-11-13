@@ -10,6 +10,7 @@ import {
   LogCallSpec,
   PhoneNumber,
   type Principal,
+  storableDateTime,
   UpdateCallSpec,
 } from '@hykr/contracts';
 import {
@@ -297,7 +298,8 @@ const Status = z.enum([
   'failed',
   'cancelled',
 ]);
-const at = z.iso.datetime({ offset: true });
+// A provider's time Postgres can store, as the calls' own inputs take (V10).
+const at = storableDateTime({ offset: true });
 
 export const ProviderUpdateInput = z.strictObject({
   provider: z.string().min(1).max(40),

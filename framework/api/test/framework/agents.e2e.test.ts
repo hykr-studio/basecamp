@@ -195,6 +195,31 @@ describe('definitions', () => {
     expect(renamed.body.value.name).toBe('Rex 2');
   });
 
+  it('a once trigger at a time Postgres cannot store is 400, and nothing is kept', async () => {
+    // `z.iso.datetime({ offset: true })` took a time past 9999 in UTC, and the past-time check
+    // let it through: a bare 500 (V10's second review).
+    const define = (name: string, at: string) =>
+      ana.call(
+        'POST',
+        '/api/agents',
+        {
+          name,
+          instructions: 'Count my open tasks.',
+          triggers: [{ kind: 'once', at }],
+          scope: { tools: ['list-tasks'] },
+        },
+        inA(),
+      );
+    const far = await define('Too far', '9999-12-31T23:59:59-01:00');
+    expect(far.status, JSON.stringify(far.body)).toBe(400);
+    const edge = await define('Edge of time', '9999-12-31T23:59:59Z');
+    expect(edge.status, JSON.stringify(edge.body)).toBe(201);
+    const list = await ana.call('GET', '/api/agents', undefined, inA());
+    const names = ((list.body.items ?? list.body) as { name: string }[]).map((a) => a.name);
+    expect(names).toContain('Edge of time');
+    expect(names).not.toContain('Too far');
+  });
+
   it('a definition is checked against the server: every problem is listed', async () => {
     const res = await ana.call(
       'POST',
