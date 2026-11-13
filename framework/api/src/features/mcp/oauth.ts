@@ -3,10 +3,17 @@
 // consents on the API's own pages, and the client gets an opaque token for the MCP endpoint
 // (MCP_URL), limited to the modules the person allowed, in the business they consented in.
 import { oauthProvider } from '@better-auth/oauth-provider';
-import { moduleScopes } from '@hykr/contracts';
-import { ensureDefaultTenant, latestParticipation, membershipOf, oauthTables } from '@hykr/db';
+import { moduleScopes, parseScope, scopeOf } from '@hykr/contracts';
+import {
+  ensureDefaultTenant,
+  latestParticipation,
+  membershipOf,
+  oauthClient,
+  oauthTables,
+} from '@hykr/db';
 import type { BetterAuthPlugin } from 'better-auth';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
+import { eq } from 'drizzle-orm';
 import type { AuthPlugin } from '../../hooks.js';
 import { sharedDb } from '../../infra/db.js';
 import { createsBusinessOnSignUp, runtime } from '../../runtime.js';
@@ -123,7 +130,71 @@ export const mcpNativeClients: AuthPlugin = {
             const uris = body?.redirect_uris;
             if (!body || body.application_type !== undefined || !Array.isArray(uris)) return;
             if (!uris.length || !uris.every(nativeRedirect)) return;
-            return { context: { body: { ...body, application_type: 'native' } } };
+            // Only what changes: another plugin's hook may change the body too.
+            return { context: { body: { application_type: 'native' } } };
+          }),
+        },
+      ],
+    },
+  } satisfies BetterAuthPlugin,
+};
+
+/**
+ * A scope list with each module's read next to its write (`tasks:write` → `tasks:read
+ * tasks:write`). Write covers read, so this asks for nothing more; it lets the person allow only
+ * reading, since the provider accepts a consent only to scopes literally asked for. `allowed`
+ * keeps a read out (a client registered without it).
+ */
+export function withReads(scope: string, allowed: (s: string) => boolean = () => true): string {
+  const asked = scope.split(' ').filter(Boolean);
+  const out: string[] = [];
+  for (const s of asked) {
+    const parsed = parseScope(s);
+    const read = parsed?.access === 'write' ? scopeOf(parsed.module, 'read') : undefined;
+    if (read && !out.includes(read) && (asked.includes(read) || allowed(read))) out.push(read);
+    if (!out.includes(s)) out.push(s);
+  }
+  return out.join(' ');
+}
+
+/** The scopes a client registered (null: every scope the server has). */
+async function registeredScopes(clientId: unknown): Promise<string[] | null> {
+  if (typeof clientId !== 'string' || !clientId) return null;
+  const [row] = await sharedDb.db
+    .select({ scopes: oauthClient.scopes })
+    .from(oauthClient)
+    .where(eq(oauthClient.clientId, clientId))
+    .limit(1);
+  return row?.scopes?.length ? row.scopes : null;
+}
+
+/**
+ * A client that asks a person to let it change a module asks to read it too, so the consent
+ * screen can offer reading alone (A1 decision 15). A read is added only where the client's
+ * registration allows it, or the provider would refuse the whole request: a dynamic registration
+ * holds every scope (the provider stores them all, whatever the client asked), but a client the
+ * server registered itself may hold fewer.
+ */
+export const mcpScopeReads: AuthPlugin = {
+  name: 'mcp.scope-reads',
+  plugin: {
+    id: 'mcp-scope-reads',
+    hooks: {
+      before: [
+        {
+          matcher: (ctx) => ctx.path === '/oauth2/authorize',
+          handler: createAuthMiddleware(async (ctx) => {
+            // A browser's GET carries the request in the query; a POST to authorize, in the body.
+            const post = ctx.method === 'POST';
+            const source = (post ? ctx.body : ctx.query) as Record<string, unknown> | undefined;
+            const scope = source?.scope;
+            if (typeof scope !== 'string') return;
+            const registered = await registeredScopes(source?.client_id);
+            const expanded = withReads(scope, (s) => !registered || registered.includes(s));
+            if (expanded === scope) return;
+            return {
+              context: post ? { body: { scope: expanded } } : { query: { scope: expanded } },
+            };
           }),
         },
       ],

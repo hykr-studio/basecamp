@@ -30,7 +30,13 @@ function challenge(res: Response, error?: 'invalid_token') {
   res
     .status(401)
     .set('WWW-Authenticate', `Bearer ${params.join(', ')}`)
-    .json({ error: error ?? 'unauthorized', error_description: 'A bearer token is needed' });
+    .json({
+      error: error ?? 'unauthorized',
+      // One it was sent but does not accept (unknown, revoked or expired), or none at all.
+      error_description: error
+        ? 'The access token is invalid, expired or revoked'
+        : 'A bearer token is needed',
+    });
 }
 
 @Controller()
