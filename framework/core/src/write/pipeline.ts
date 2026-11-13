@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   type Approval,
   type ApprovalRule,
@@ -228,28 +228,91 @@ export async function saveReply(
 }
 
 /**
+ * How long a claim on a key (`oneAtATime`) stands before another request with the key may take
+ * it over: its holder stopped (a crash, a lost connection) without letting it go. Longer than any
+ * such route's slowest step (Google's code exchange gives up at 15 s, a pooled connection at 30 s).
+ */
+export const CLAIM_STALE_MS = 120_000;
+/** How long a request waits for another with its key to finish: then 409 `idempotency_in_progress`. */
+export const CLAIM_WAIT_MS = 30_000;
+/** A claim's key: U+0001 is in no HTTP header, so no caller's own key is ever one. */
+const CLAIM_PREFIX = '\u0001claim\u0001';
+
+/**
+ * Claim (caller, key) in `app.idempotency`, in a row of its own that no lookup of a reply reads,
+ * committed at once: true when this request holds it now. A claim older than `staleMs` is taken
+ * over in the same statement.
+ */
+async function claim(
+  db: Database,
+  c: { key: string; principalId: string; token: string },
+  staleMs: number,
+): Promise<boolean> {
+  const [won] = await db
+    .insert(idempotencyKeys)
+    .values({ key: c.key, principalId: c.principalId, requestHash: c.token, response: {} })
+    .onConflictDoUpdate({
+      target: [idempotencyKeys.key, idempotencyKeys.principalId],
+      set: { requestHash: c.token, createdAt: sql`now()` },
+      setWhere: sql`${idempotencyKeys.createdAt} < now() - make_interval(secs => ${staleMs / 1000})`,
+    })
+    .returning({ token: idempotencyKeys.requestHash });
+  return won?.token === c.token;
+}
+
+/**
  * For a route that honours idempotency-key without `runWrite` (a back-office reply, a file's
  * upload or discard, a job's cancel, a calendar sign-in's completion): one request at a time per
  * (caller, key). A second request with the key, sent while the first still runs (a client that
  * timed out and tried again), waits for it to finish, then finds its reply: `work` looks for the
- * repeat (`findRepeat`) on the connection it is given, first. `work` runs in a transaction that
- * holds the lock until it ends, so save the reply on that connection (`saveReply`). The lock is
- * not `runWrite`'s own, so `work` may call `runWrite` with the same key. Without a key, `work`
- * runs at once, on `db`, with no transaction.
+ * repeat (`findRepeat`) first, and saves its reply (`saveReply`) before it returns.
+ *
+ * The claim is a row in `app.idempotency` (under a key no caller can send), committed before
+ * `work` starts and deleted when it ends, whether it succeeded or threw. Nothing holds a pooled
+ * connection or a transaction meanwhile: a waiting request tries again every few milliseconds,
+ * so many at once never use up the pool. It waits up to `waitMs` (CLAIM_WAIT_MS), then answers
+ * 409 `idempotency_in_progress`; a claim older than `staleMs` (CLAIM_STALE_MS), whose holder
+ * stopped, is taken over. `work` may call `runWrite` with the same key: it keeps its replies
+ * under the key itself, never the claim's. Without a key, `work` runs at once.
  */
 export async function oneAtATime<T>(
   db: Database,
   ctx: Pick<WriteCtx, 'principal' | 'idempotencyKey'>,
-  work: (conn: Database | Tx) => Promise<T>,
+  work: () => Promise<T>,
+  limits: { waitMs?: number; staleMs?: number } = {},
 ): Promise<T> {
   const key = ctx.idempotencyKey;
-  if (!key) return work(db);
-  return db.transaction(async (tx) => {
-    await tx.execute(
-      sql`select pg_advisory_xact_lock(hashtextextended(${`idempotency.route:${principalKey(ctx.principal)}:${key}`}, 0))`,
-    );
-    return work(tx);
-  });
+  if (!key) return work();
+  const c = {
+    key: `${CLAIM_PREFIX}${key}`,
+    principalId: principalKey(ctx.principal),
+    token: `claim:${randomUUID()}`,
+  };
+  const until = Date.now() + (limits.waitMs ?? CLAIM_WAIT_MS);
+  for (let pause = 10; !(await claim(db, c, limits.staleMs ?? CLAIM_STALE_MS)); ) {
+    if (Date.now() + pause > until)
+      throw new ConflictException({
+        error: 'idempotency_in_progress',
+        reason: 'A request with this idempotency-key is still running: try again shortly',
+      });
+    await new Promise((r) => setTimeout(r, pause));
+    pause = Math.min(pause * 2, 200);
+  }
+  try {
+    return await work();
+  } finally {
+    // Its own claim only: one taken over meanwhile is the other request's to let go.
+    await db
+      .delete(idempotencyKeys)
+      .where(
+        and(
+          eq(idempotencyKeys.key, c.key),
+          eq(idempotencyKeys.principalId, c.principalId),
+          eq(idempotencyKeys.requestHash, c.token),
+        ),
+      )
+      .catch(() => undefined);
+  }
 }
 
 /**

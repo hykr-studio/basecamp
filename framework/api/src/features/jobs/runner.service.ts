@@ -329,11 +329,11 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
     const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
     const op = { name: 'job.cancel', args: { id } };
     // One sent while the first still runs waits for it, then answers the job as it is now.
-    return oneAtATime(this.db, ctx, async (conn) => {
-      if (await findRepeat(conn, ctx, op, {}))
+    return oneAtATime(this.db, ctx, async () => {
+      if (await findRepeat(this.db, ctx, op, {}))
         return presentJob(infoOf(await this.reachable(p, id)), p);
       const done = await this.cancelOnce(p, id, requestId);
-      await saveReply(conn, ctx, op, {}, { status: 'done', value: { id: done.id } });
+      await saveReply(this.db, ctx, op, {}, { status: 'done', value: { id: done.id } });
       await this.askToStop(done);
       return presentJob(infoOf(done), p);
     });

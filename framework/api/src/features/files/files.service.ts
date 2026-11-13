@@ -15,7 +15,6 @@ import {
   type AnyEntityDef,
   auditCtx,
   CORE_OPTIONS,
-  type Conn,
   type CoreOptions,
   entityDef,
   entityDefs,
@@ -268,13 +267,13 @@ export class FilesService implements OnApplicationBootstrap {
     // A retry with the same key is the same upload: a new URL for the file the first one made.
     // One sent while the first still runs waits for it, then finds it.
     const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
-    const made = await oneAtATime(this.db, ctx, async (conn) => {
-      const repeat = await findRepeat(conn, ctx, UPLOAD, input);
+    const made = await oneAtATime(this.db, ctx, async () => {
+      const repeat = await findRepeat(this.db, ctx, UPLOAD, input);
       if (repeat) {
         const fileId = (repeat.result as { value?: { id?: string } }).value?.id ?? '';
         return { row: await this.ownUpload(p, fileId), fresh: false };
       }
-      const [{ n }] = await conn
+      const [{ n }] = await this.db
         .select({ n: count() })
         .from(files)
         .where(
@@ -295,8 +294,7 @@ export class FilesService implements OnApplicationBootstrap {
       });
       const id = randomUUID();
       const tenantId = p.tenantId as string;
-      // In the lock's transaction when there is a key, so the file and its reply commit together.
-      const insert = async (tx: Conn): Promise<FileRow> => {
+      const row = await this.db.transaction(async (tx) => {
         const [created] = await tx
           .insert(files)
           .values({
@@ -319,8 +317,7 @@ export class FilesService implements OnApplicationBootstrap {
         // The file's id, never its signed URL: a repeat signs a new one.
         await saveReply(tx, ctx, UPLOAD, input, { status: 'done', value: { id: created.id } });
         return created;
-      };
-      const row = conn === this.db ? await this.db.transaction(insert) : await insert(conn);
+      });
       return { row, fresh: true };
     });
     if (made.fresh) return this.presigned(made.row, p, this.config.uploadTtlS);
@@ -423,17 +420,15 @@ export class FilesService implements OnApplicationBootstrap {
     const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
     const op = { name: 'file.discard', args: { id } };
     // One sent while the first still runs waits for it, then finds its reply.
-    await oneAtATime(this.db, ctx, async (conn) => {
-      if (await findRepeat(conn, ctx, op, {})) return;
+    await oneAtATime(this.db, ctx, async () => {
+      if (await findRepeat(this.db, ctx, op, {})) return;
       const row = await this.ownUpload(p, id);
       await this.store(() => this.storage.delete(row.key));
-      const remove = async (tx: Conn) => {
+      await this.db.transaction(async (tx) => {
         await tx.delete(files).where(and(eq(files.id, row.id), isNull(files.resourceId)));
         await this.audit(tx, p, meta.requestId, 'file.discard', row);
         await saveReply(tx, ctx, op, {}, { status: 'done', value: null });
-      };
-      if (conn === this.db) await this.db.transaction(remove);
-      else await remove(conn);
+      });
     });
   }
 

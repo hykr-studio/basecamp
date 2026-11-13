@@ -147,11 +147,11 @@ export class BackOfficeController {
     // and one sent while the first still runs waits for it.
     const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
     const op = { name: 'handoff.reply', args: { id } };
-    return oneAtATime(this.db, ctx, async (conn) => {
-      const repeat = await findRepeat(conn, ctx, op, { text });
+    return oneAtATime(this.db, ctx, async () => {
+      const repeat = await findRepeat(this.db, ctx, op, { text });
       if (repeat) return (repeat.result as { value?: unknown }).value;
       return this.send(p, id, text, async (sent) => {
-        await saveReply(conn, ctx, op, { text }, { status: 'done', value: sent });
+        await saveReply(this.db, ctx, op, { text }, { status: 'done', value: sent });
       });
     });
   }

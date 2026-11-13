@@ -243,11 +243,11 @@ export class CalendarService implements OnModuleInit {
     const userId = userOf(p);
     // A retry with the same key answers the first answer: the sign-in and Google's code were
     // used up by it, so look before taking them. One sent while the first still runs waits for
-    // it (the connection's own write takes the key's other lock, in `runWrite`).
+    // it (`oneAtATime`'s claim is not the key's own row, which the connection's write keeps).
     const op = connectOp();
     const ctx = writeCtx(p, meta);
-    return oneAtATime(this.db, ctx, async (conn) => {
-      const repeat = await findRepeat(conn, ctx, op, input);
+    return oneAtATime(this.db, ctx, async () => {
+      const repeat = await findRepeat(this.db, ctx, op, input);
       if (repeat) return repeat.result;
       return this.connect(p, meta, input, userId, op);
     });
