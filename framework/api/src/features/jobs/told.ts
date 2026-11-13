@@ -4,11 +4,18 @@
 // V10.md), and the text is one Postgres keeps, else the job's own row could not record it.
 import { storableText } from '@hykr/contracts';
 
-/** A database's error: drizzle's (`Failed query: … params: …`) or the driver's (a SQLSTATE). */
+/**
+ * A database's error: drizzle's (`Failed query: … params: …`), node-postgres's (`DatabaseError`,
+ * named 'error', with the server's `severity` and SQLSTATE `code`; Node's own errors have a
+ * `code` but no severity) or postgres-js's (`PostgresError`).
+ */
 export function fromDatabase(e: unknown): boolean {
-  let x = e as { name?: unknown; message?: unknown; cause?: unknown } | undefined;
+  let x = e as
+    | { name?: unknown; message?: unknown; cause?: unknown; severity?: unknown; code?: unknown }
+    | undefined;
   for (let depth = 0; x && typeof x === 'object' && depth < 5; depth++) {
     if (x.name === 'DrizzleQueryError' || x.name === 'PostgresError') return true;
+    if (typeof x.severity === 'string' && typeof x.code === 'string') return true;
     if (typeof x.message === 'string' && x.message.startsWith('Failed query:')) return true;
     x = x.cause as typeof x;
   }
