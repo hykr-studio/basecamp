@@ -228,6 +228,31 @@ export async function saveReply(
 }
 
 /**
+ * For a route that honours idempotency-key without `runWrite` (a back-office reply, a file's
+ * upload or discard, a job's cancel, a calendar sign-in's completion): one request at a time per
+ * (caller, key). A second request with the key, sent while the first still runs (a client that
+ * timed out and tried again), waits for it to finish, then finds its reply: `work` looks for the
+ * repeat (`findRepeat`) on the connection it is given, first. `work` runs in a transaction that
+ * holds the lock until it ends, so save the reply on that connection (`saveReply`). The lock is
+ * not `runWrite`'s own, so `work` may call `runWrite` with the same key. Without a key, `work`
+ * runs at once, on `db`, with no transaction.
+ */
+export async function oneAtATime<T>(
+  db: Database,
+  ctx: Pick<WriteCtx, 'principal' | 'idempotencyKey'>,
+  work: (conn: Database | Tx) => Promise<T>,
+): Promise<T> {
+  const key = ctx.idempotencyKey;
+  if (!key) return work(db);
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`idempotency.route:${principalKey(ctx.principal)}:${key}`}, 0))`,
+    );
+    return work(tx);
+  });
+}
+
+/**
  * The write path every command takes:
  * validate → idempotency → load → authorize (the op, then write hooks) → (park | run) → audit
  * → stored events → write hooks' afterRun, all in one transaction; in-process events are

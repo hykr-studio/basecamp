@@ -299,6 +299,20 @@ describe('connecting a calendar', () => {
     expect(tokenRequests()).toBe(before + 1);
   });
 
+  it('finished twice at the same moment with one key, answers both the same: one exchange', async () => {
+    // Someone of their own, so the calendars the later tests read are as they were.
+    const twice = new Person('Twice Calendar');
+    await twice.signUp();
+    const started = await signIn(twice);
+    const before = tokenRequests();
+    const key = { 'idempotency-key': `complete-twice-${started.state}` };
+    const body = { code: started.code, state: started.state };
+    const both = await Promise.all([0, 1].map(() => complete(twice, body, key)));
+    for (const res of both) expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(both[1].body.value.id).toBe(both[0].body.value.id);
+    expect(tokenRequests()).toBe(before + 1);
+  });
+
   it('connects the other people of the test, each in their own calendar', async () => {
     await connect(staff);
     await connect(admin);

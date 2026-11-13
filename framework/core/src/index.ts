@@ -177,6 +177,7 @@ export {
 export {
   auditCtx,
   findRepeat,
+  oneAtATime,
   type RunResult,
   runWrite,
   saveReply,

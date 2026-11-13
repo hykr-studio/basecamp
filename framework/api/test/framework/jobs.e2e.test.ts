@@ -845,6 +845,20 @@ describe('deadlines and cancelling', () => {
     expect(again.body).toMatchObject({ id, status: 'cancelled' });
     expect(await audit(id, 'job.cancel')).toHaveLength(1);
   });
+
+  it('a cancel asked for twice at the same moment with one key answers both, cancelled once', async () => {
+    const id = await running((await drawing('Plan Stop At Once')).id);
+    await submitted(id);
+    const key = { 'idempotency-key': `cancel-twice-${id}` };
+    const both = await Promise.all(
+      [0, 1].map(() => owner.call('POST', `/api/jobs/${id}/cancel`, undefined, key)),
+    );
+    for (const res of both) {
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body).toMatchObject({ id, status: 'cancelled' });
+    }
+    expect(await audit(id, 'job.cancel')).toHaveLength(1);
+  });
 });
 
 describe('live updates', () => {

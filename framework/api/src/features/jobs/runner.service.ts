@@ -14,6 +14,7 @@ import {
   type CoreOptions,
   entityDef,
   findRepeat,
+  oneAtATime,
   PrincipalResolver,
   recordEvents,
   runWrite,
@@ -327,8 +328,19 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
     const requestId = meta.requestId;
     const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
     const op = { name: 'job.cancel', args: { id } };
-    if (await findRepeat(this.db, ctx, op, {}))
-      return presentJob(infoOf(await this.reachable(p, id)), p);
+    // One sent while the first still runs waits for it, then answers the job as it is now.
+    return oneAtATime(this.db, ctx, async (conn) => {
+      if (await findRepeat(conn, ctx, op, {}))
+        return presentJob(infoOf(await this.reachable(p, id)), p);
+      const done = await this.cancelOnce(p, id, requestId);
+      await saveReply(conn, ctx, op, {}, { status: 'done', value: { id: done.id } });
+      await this.askToStop(done);
+      return presentJob(infoOf(done), p);
+    });
+  }
+
+  /** The cancel itself, if this person may: the job finished as cancelled, or 409. */
+  private async cancelOnce(p: Principal, id: string, requestId: string): Promise<JobRow> {
     const row = await this.reachable(p, id);
     let may = row.startedFor !== null && row.startedFor === subjectKeyOf(p);
     if (!may && row.aboutType && row.aboutId) {
@@ -353,9 +365,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
     );
     if (!done)
       throw new ConflictException({ error: 'already_finished', message: 'The job has finished' });
-    await saveReply(this.db, ctx, op, {}, { status: 'done', value: { id: done.id } });
-    await this.askToStop(done);
-    return presentJob(infoOf(done), p);
+    return done;
   }
 
   /* ── The kind's functions ────────────────────────────────────────────────── */

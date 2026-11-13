@@ -2391,7 +2391,11 @@ traits: { offline: {}, versioned: {} },        // offline: { writes: ['create', 
   read back from where it is sealed, never kept in the reply. `findRepeat(db, ctx, op, request)`
   looks before work that must not run twice (exchanging a one-time code); `saveReply` keeps the
   answer of a write that does not go through `runWrite` (a file's upload, a job's cancel, a
-  back-office reply). A
+  back-office reply). Wrap such a route in `oneAtATime(db, ctx, async (conn) => …)`: it takes an
+  advisory lock on (principal, key) for as long as the work runs, so a second request sent while
+  the first still runs waits, then finds its reply. Look (`findRepeat`) and save (`saveReply`)
+  on `conn`. Its lock is not `runWrite`'s, so the work may call `runWrite` with the same key; it
+  holds one database connection while it runs. A
   repeated calendar feed create answers the feed without its URL (only the token's hash is kept).
 - **Replies are kept** for `IDEMPOTENCY_KEEP_DAYS` (default 30); the `idempotency.purge` schedule
   forgets older ones every hour (`IdempotencyService.purge`). A key reused later runs again.
@@ -3741,7 +3745,7 @@ These are not built. Each has a workaround for now.
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Seeing failed stored events | A stored event the relay cannot read is kept with `failed_at` and `error` and logged; one a subscriber's `when` throws on is relayed to the others, with that subscriber's error in `error`. No screen or notification shows either, and a subscriber that missed an event never gets it later. Query `app.domain_events where error is not null`, fix the cause, and clear `failed_at` to relay a failed one again. |
-| Two uploads, cancels, replies or calendar sign-ins at the same moment | A file's presign and discard, a job's cancel, a back-office reply and a calendar sign-in's `complete` honour `idempotency-key` one after another, but take no lock: two at the same moment with one key can both run (a second pending upload expires unused; a second `complete` finds the sign-in used up and answers 400 `calendar_sign_in_invalid`, with one connection and one code exchange). A presign repeated after its upload expired is 409 `upload_expired`. A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
+| A transcription at the same moment | A file's presign and discard, a job's cancel, a back-office reply and a calendar sign-in's `complete` run one at a time per caller and `idempotency-key` (`oneAtATime`), so two at the same moment run once. A presign repeated after its upload expired is 409 `upload_expired`. A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
 | Retrying a chat turn, a new thread, a voice session or a WhatsApp link | `POST /api/chat`, `POST /api/threads`, `POST /api/voice/session` and `/end`, the WhatsApp link's code, `verify`, `number` and `DELETE` ignore `idempotency-key`: a retry is a second turn, thread, room token (and `voice.session.start` audit row) or code. Retry them only when the first answer never came. |
 | Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |
 | A summary's view of hiding | The field check reads one record of the reader's scope through `toRead` and assumes a projector hides a field on every record alike. A projector that hides a field on some records only lets a summary over it through. |

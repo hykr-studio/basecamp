@@ -15,10 +15,12 @@ import {
   type AnyEntityDef,
   auditCtx,
   CORE_OPTIONS,
+  type Conn,
   type CoreOptions,
   entityDef,
   entityDefs,
   findRepeat,
+  oneAtATime,
   projectRead,
   saveReply,
 } from '@hykr/core';
@@ -264,73 +266,80 @@ export class FilesService implements OnApplicationBootstrap {
       if (decision.decision === 'deny') throw refused(403, decision.rule, decision.reason);
     }
     // A retry with the same key is the same upload: a new URL for the file the first one made.
+    // One sent while the first still runs waits for it, then finds it.
     const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
-    const repeat = await findRepeat(this.db, ctx, UPLOAD, input);
-    if (repeat) {
-      const fileId = (repeat.result as { value?: { id?: string } }).value?.id ?? '';
-      const again = await this.ownUpload(p, fileId);
-      if (again.status !== 'pending')
-        throw new ConflictException({
-          error: 'already_uploaded',
-          message: 'This upload was finished already',
-        });
-      // Its time to upload ran out: start again with a new key, as `confirm` says.
-      const left = again.uploadExpiresAt
-        ? Math.floor((again.uploadExpiresAt.getTime() - Date.now()) / 1000)
-        : 0;
-      if (left < 1)
-        throw new ConflictException({
-          error: 'upload_expired',
-          message: 'The upload expired. Start again.',
-        });
-      return this.presigned(again, p, left);
-    }
-    const [{ n }] = await this.db
-      .select({ n: count() })
-      .from(files)
-      .where(
-        and(
-          eq(files.ownerId, s.userId),
-          eq(files.status, 'pending'),
-          gt(files.createdAt, sql`now() - interval '1 day'`),
-        ),
-      );
-    if (Number(n) >= this.config.maxPending)
-      throw new HttpException(
-        { error: 'too_many_uploads', message: 'Too many unfinished uploads. Try again later.' },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+    const made = await oneAtATime(this.db, ctx, async (conn) => {
+      const repeat = await findRepeat(conn, ctx, UPLOAD, input);
+      if (repeat) {
+        const fileId = (repeat.result as { value?: { id?: string } }).value?.id ?? '';
+        return { row: await this.ownUpload(p, fileId), fresh: false };
+      }
+      const [{ n }] = await conn
+        .select({ n: count() })
+        .from(files)
+        .where(
+          and(
+            eq(files.ownerId, s.userId),
+            eq(files.status, 'pending'),
+            gt(files.createdAt, sql`now() - interval '1 day'`),
+          ),
+        );
+      if (Number(n) >= this.config.maxPending)
+        throw new HttpException(
+          { error: 'too_many_uploads', message: 'Too many unfinished uploads. Try again later.' },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
 
-    await this.ready().catch(() => {
-      throw unavailable();
+      await this.ready().catch(() => {
+        throw unavailable();
+      });
+      const id = randomUUID();
+      const tenantId = p.tenantId as string;
+      // In the lock's transaction when there is a key, so the file and its reply commit together.
+      const insert = async (tx: Conn): Promise<FileRow> => {
+        const [created] = await tx
+          .insert(files)
+          .values({
+            id,
+            tenantId,
+            ownerId: s.userId,
+            source: 'upload',
+            // The key is the server's own, never from the request.
+            key: keyOf(tenantId, id),
+            name: input.name,
+            mime,
+            size: input.size,
+            status: 'pending',
+            intendedType: def?.name ?? other?.type ?? input.for.entity,
+            intendedField: input.for.field,
+            uploadExpiresAt: new Date(Date.now() + this.config.uploadTtlS * 1000),
+          })
+          .returning();
+        await this.audit(tx, p, requestId, 'file.upload', created, { for: input.for });
+        // The file's id, never its signed URL: a repeat signs a new one.
+        await saveReply(tx, ctx, UPLOAD, input, { status: 'done', value: { id: created.id } });
+        return created;
+      };
+      const row = conn === this.db ? await this.db.transaction(insert) : await insert(conn);
+      return { row, fresh: true };
     });
-    const id = randomUUID();
-    const tenantId = p.tenantId;
-    const row = await this.db.transaction(async (tx) => {
-      const [created] = await tx
-        .insert(files)
-        .values({
-          id,
-          tenantId,
-          ownerId: s.userId,
-          source: 'upload',
-          // The key is the server's own, never from the request.
-          key: keyOf(tenantId, id),
-          name: input.name,
-          mime,
-          size: input.size,
-          status: 'pending',
-          intendedType: def?.name ?? other?.type ?? input.for.entity,
-          intendedField: input.for.field,
-          uploadExpiresAt: new Date(Date.now() + this.config.uploadTtlS * 1000),
-        })
-        .returning();
-      await this.audit(tx, p, requestId, 'file.upload', created, { for: input.for });
-      // The file's id, never its signed URL: a repeat signs a new one.
-      await saveReply(tx, ctx, UPLOAD, input, { status: 'done', value: { id: created.id } });
-      return created;
-    });
-    return this.presigned(row, p, this.config.uploadTtlS);
+    if (made.fresh) return this.presigned(made.row, p, this.config.uploadTtlS);
+    const again = made.row;
+    if (again.status !== 'pending')
+      throw new ConflictException({
+        error: 'already_uploaded',
+        message: 'This upload was finished already',
+      });
+    // Its time to upload ran out: start again with a new key, as `confirm` says.
+    const left = again.uploadExpiresAt
+      ? Math.floor((again.uploadExpiresAt.getTime() - Date.now()) / 1000)
+      : 0;
+    if (left < 1)
+      throw new ConflictException({
+        error: 'upload_expired',
+        message: 'The upload expired. Start again.',
+      });
+    return this.presigned(again, p, left);
   }
 
   /** Where to PUT a pending file's bytes, until its upload expires. */
@@ -413,13 +422,18 @@ export class FilesService implements OnApplicationBootstrap {
   async discard(p: Principal, id: string, meta: FileWriteMeta): Promise<void> {
     const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
     const op = { name: 'file.discard', args: { id } };
-    if (await findRepeat(this.db, ctx, op, {})) return;
-    const row = await this.ownUpload(p, id);
-    await this.store(() => this.storage.delete(row.key));
-    await this.db.transaction(async (tx) => {
-      await tx.delete(files).where(and(eq(files.id, row.id), isNull(files.resourceId)));
-      await this.audit(tx, p, meta.requestId, 'file.discard', row);
-      await saveReply(tx, ctx, op, {}, { status: 'done', value: null });
+    // One sent while the first still runs waits for it, then finds its reply.
+    await oneAtATime(this.db, ctx, async (conn) => {
+      if (await findRepeat(conn, ctx, op, {})) return;
+      const row = await this.ownUpload(p, id);
+      await this.store(() => this.storage.delete(row.key));
+      const remove = async (tx: Conn) => {
+        await tx.delete(files).where(and(eq(files.id, row.id), isNull(files.resourceId)));
+        await this.audit(tx, p, meta.requestId, 'file.discard', row);
+        await saveReply(tx, ctx, op, {}, { status: 'done', value: null });
+      };
+      if (conn === this.db) await this.db.transaction(remove);
+      else await remove(conn);
     });
   }
 
