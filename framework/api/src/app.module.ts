@@ -1,4 +1,3 @@
-import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { Module } from '@nestjs/common';
 import { APP_GUARD, APP_PIPE } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
@@ -9,9 +8,9 @@ import { config } from './config.js';
 import { FeaturesModule } from './features/features.module.js';
 import { installFeatures } from './features/install.js';
 import { HealthController } from './health/health.controller.js';
-import { getAuth } from './infra/auth.js';
+import { authMiddleware, getAuth } from './infra/auth.js';
 import { coreImports } from './infra/core-imports.js';
-import { CallerThrottlerGuard } from './infra/throttle.js';
+import { CallerThrottlerGuard, throttleStorage } from './infra/throttle.js';
 import { ChatModule } from './modules/chat/chat.module.js';
 import { HistoryController } from './modules/history/history.controller.js';
 import { MeModule } from './modules/me/me.controller.js';
@@ -36,6 +35,8 @@ function authWithFeatures() {
     AuthModule.forRoot({
       auth: authWithFeatures(),
       disableTrustedOriginsCors: true,
+      // The API's channel rules on Better Auth's routes, which no Nest guard sees.
+      middleware: authMiddleware,
       // Webhooks are verified by an HMAC over the exact bytes received. JSON bodies up to
       // JSON_BODY_LIMIT (1mb): a whole order of a few hundred lines in one request.
       bodyParser: { rawBody: true, json: { limit: config.jsonBodyLimit } },
@@ -44,7 +45,7 @@ function authWithFeatures() {
       throttlers: [{ name: 'default', ttl: 60_000, limit: 120 }],
       // The e2e suite turns it off (THROTTLE=off) so back-to-back runs don't trip it.
       skipIf: () => process.env.THROTTLE === 'off',
-      storage: new ThrottlerStorageRedisService(config.redisUrl), // shared across processes
+      storage: throttleStorage(), // shared across processes, and with Better Auth's limits
     }),
     // The framework (CQRS, principals, approvals), the domain, and saved pages: shared with
     // the queue worker.

@@ -36,6 +36,7 @@ input[type=email], input[type=password] { width:100%; padding:.6rem; border:1px 
 fieldset { border:1px solid var(--line); border-radius:8px; margin:1rem 0; padding:.5rem 1rem; }
 legend { font-weight:600; padding:0 .25rem; }
 .scope { display:flex; gap:.5rem; align-items:center; margin:.4rem 0; font-weight:400; }
+.module { margin:.5rem 0 .75rem; } .module .name { font-weight:600; margin:.25rem 0; }
 .row { display:flex; gap:.75rem; margin-top:1.25rem; }
 button { flex:1; min-height:44px; padding:.6rem 1rem; border-radius:8px; border:1px solid var(--line); background:transparent; color:inherit; font:inherit; cursor:pointer; }
 button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -61,10 +62,18 @@ export function messagePage(lang: Lang, title: string, message: string) {
   return page(lang, title, `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p>`);
 }
 
+/**
+ * The signed query the page posts back (`oauth_query`), and a language to carry on: what the
+ * server checked, not the address bar, which may hold more (an added `lang`).
+ */
+const queryField = (oauthQuery: string, carry?: Lang) =>
+  `<input type="hidden" id="q" value="${escapeHtml(oauthQuery)}"${carry ? ` data-lang="${escapeHtml(carry)}"` : ''}>`;
+
 /** Sign in, then Better Auth continues the authorization the signed query describes. */
-export function signInPage(lang: Lang, app: string) {
+export function signInPage(lang: Lang, app: string, oauthQuery: string, carry?: Lang) {
   const v = { app };
   const body = `
+${queryField(oauthQuery, carry)}
 <h1>${escapeHtml(t(lang, 'mcp.signIn.title', v))}</h1>
 <p class="muted">${escapeHtml(t(lang, 'mcp.signIn.lead', v))}</p>
 <form id="f" novalidate>
@@ -89,36 +98,64 @@ document.getElementById('f').addEventListener('submit', async (e) => {
       body: JSON.stringify({
         email: document.getElementById('email').value,
         password: document.getElementById('password').value,
-        oauth_query: location.search.slice(1),
+        oauth_query: document.getElementById('q').value,
       }),
     });
     const out = await res.json().catch(() => ({}));
-    if (res.ok && out && out.url) { location.href = out.url; return; }
+    if (res.ok && out && out.url) {
+      const to = new URL(out.url, location.href);
+      const lang = document.getElementById('q').dataset.lang;
+      if (lang && !to.searchParams.has('lang')) to.searchParams.set('lang', lang);
+      location.href = to.toString();
+      return;
+    }
   } catch {}
   err.hidden = false;
 });`;
   return page(lang, t(lang, 'mcp.signIn.title', v), body, script);
 }
 
-/** One scope the client asked for, as the consent screen shows it. */
-export interface ConsentScope {
-  scope: string;
-  label: string;
+/**
+ * What the consent screen offers: per module asked for, reading it (`read`, when it was asked)
+ * and changing it (`change`, the scopes that allow it); and staying connected.
+ */
+export type ConsentChoice =
+  | { kind: 'module'; module: string; label: string; read?: string; change?: string }
+  | { kind: 'offline'; label: string };
+
+/** One module's row: not allowed, read, or change; the most the client asked is chosen. */
+function moduleRow(lang: Lang, c: Extract<ConsentChoice, { kind: 'module' }>, i: number) {
+  const options = [
+    { value: '', label: t(lang, 'mcp.consent.none') },
+    ...(c.read ? [{ value: c.read, label: t(lang, 'mcp.consent.read') }] : []),
+    ...(c.change ? [{ value: c.change, label: t(lang, 'mcp.consent.write') }] : []),
+  ];
+  const chosen = c.change ?? c.read ?? '';
+  const radios = options
+    .map(
+      (o) =>
+        `<label class="scope"><input type="radio" name="m${i}" value="${escapeHtml(o.value)}"${o.value === chosen ? ' checked' : ''}> ${escapeHtml(o.label)}</label>`,
+    )
+    .join('\n');
+  return `<div class="module" role="radiogroup" aria-labelledby="m${i}l"><p id="m${i}l" class="name">${escapeHtml(c.label)}</p>\n${radios}\n</div>`;
 }
 
-/** Allow or deny the client, choosing among the scopes it asked for. */
+/** Allow or deny the client, choosing per module what it may do. */
 export function consentPage(
   lang: Lang,
   v: { app: string; client: string; person: string; business: string },
-  scopes: readonly ConsentScope[],
+  choices: readonly ConsentChoice[],
+  oauthQuery: string,
 ) {
-  const boxes = scopes
-    .map(
-      (s, i) =>
-        `<label class="scope"><input type="checkbox" name="scope" value="${escapeHtml(s.scope)}" id="s${i}" checked> ${escapeHtml(s.label)}</label>`,
+  const boxes = choices
+    .map((c, i) =>
+      c.kind === 'module'
+        ? moduleRow(lang, c, i)
+        : `<label class="scope"><input type="checkbox" name="offline" value="offline_access" checked> ${escapeHtml(c.label)}</label>`,
     )
     .join('\n');
   const body = `
+${queryField(oauthQuery)}
 <h1>${escapeHtml(t(lang, 'mcp.consent.title', v))}</h1>
 <p>${escapeHtml(t(lang, 'mcp.consent.lead', v))}</p>
 <p class="muted">${escapeHtml(t(lang, 'mcp.consent.unverified', v))}</p>
@@ -135,8 +172,11 @@ ${boxes}
 async function decide(accept) {
   const err = document.getElementById('err');
   err.hidden = true;
-  const chosen = [...document.querySelectorAll('input[name=scope]:checked')].map((b) => b.value);
-  if (accept && chosen.length === 0) accept = false;
+  const chosen = [...document.querySelectorAll('input[type=radio]:checked, input[name=offline]:checked')]
+    .flatMap((b) => b.value.split(' '))
+    .filter(Boolean);
+  // Nothing of any module allowed is a denial.
+  if (accept && !chosen.some((s) => s !== 'offline_access')) accept = false;
   try {
     const res = await fetch('/api/auth/oauth2/consent', {
       method: 'POST',
@@ -145,7 +185,7 @@ async function decide(accept) {
       body: JSON.stringify({
         accept,
         ...(accept ? { scope: chosen.join(' ') } : {}),
-        oauth_query: location.search.slice(1),
+        oauth_query: document.getElementById('q').value,
       }),
     });
     const out = await res.json().catch(() => ({}));

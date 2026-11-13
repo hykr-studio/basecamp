@@ -1,11 +1,26 @@
+import {
+  CHANNEL_HEADER,
+  isSessionChannel,
+  readOnlyChannelRefusal,
+  sessionChannelRefusal,
+} from '@hykr/contracts';
 import { ensureDefaultTenant, schema } from '@hykr/db';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import type { NextFunction, Request, Response } from 'express';
 import { config } from '../config.js';
 import { authPlugins } from '../hooks.js';
 import { createsBusinessOnSignUp, runtime } from '../runtime.js';
 import { sharedDb } from './db.js';
 import { nativeAppOrigin } from './native-origin.js';
+import { authRateLimit } from './throttle.js';
+
+/**
+ * The caller's address as Express sees it (`req.ip`, which honours `trust proxy`), handed to
+ * Better Auth by `authMiddleware`: its rate limits then count per caller as the API's throttle
+ * does. A client's own value is always replaced.
+ */
+const CLIENT_ADDRESS_HEADER = 'x-hykr-client-address';
 
 /** The native app's scheme (and the Expo dev client's, outside production). */
 const appSchemes = () => [
@@ -69,6 +84,11 @@ function createAuth() {
       },
     }),
     emailAndPassword: { enabled: true, minPasswordLength: 8 },
+    // Better Auth's own limits on its routes, which the API's throttle never sees: in Redis,
+    // per address as Express sees it (authMiddleware), like the API's throttle; Better Auth's
+    // default (one x-forwarded-for entry, else one bucket for everyone) only for its own calls.
+    rateLimit: authRateLimit(),
+    advanced: { ipAddress: { ipAddressHeaders: [CLIENT_ADDRESS_HEADER, 'x-forwarded-for'] } },
     // A new person gets their own business, as its creator: the template works for one person
     // as before, and their records are theirs alone. (The guard does the same if this ever
     // fails.) Unless the application gives none on sign-up (`signUp.createBusiness: false`): then
@@ -84,6 +104,31 @@ function createAuth() {
       },
     },
   });
+}
+
+/**
+ * In front of Better Auth's handler (`AuthModule.forRoot({ middleware })`): the channel rules
+ * `PrincipalGuard` applies to every other route, since Better Auth answers before any Nest guard.
+ * Every caller here is a browser or an app with a session, or none yet: it may name only its own
+ * channels (400 `bad_channel`), and a read-only channel (a page's WebMCP tools) reaches nothing,
+ * not even a GET, since some of them sign in or hand out a code (403 `read_only_channel`). Only
+ * HTTP requests come through here; the server's own `auth.api` calls do not.
+ */
+export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const value = req.headers[CHANNEL_HEADER];
+  const named = typeof value === 'string' && value.length > 0 ? value : undefined;
+  const refusal =
+    sessionChannelRefusal(named) ??
+    readOnlyChannelRefusal(isSessionChannel(named) ? named : undefined, req.method, {
+      readsToo: true,
+    });
+  if (refusal) {
+    res.status(refusal.status).json(refusal.body);
+    return;
+  }
+  if (req.ip) req.headers[CLIENT_ADDRESS_HEADER] = req.ip;
+  else delete req.headers[CLIENT_ADDRESS_HEADER];
+  next();
 }
 
 let built: ReturnType<typeof createAuth> | undefined;

@@ -3,7 +3,7 @@ import { mcpEnabled } from './config.js';
 import { McpConnectionsController } from './connections.controller.js';
 import { mcpIdentityProvider } from './identity.js';
 import { McpController, McpMetadataController } from './mcp.controller.js';
-import { mcpAuthPlugin, mcpNativeClients } from './oauth.js';
+import { mcpAuthPlugin, mcpNativeClients, mcpScopeReads } from './oauth.js';
 import { McpPagesController } from './pages.controller.js';
 import { McpServers } from './server.js';
 
@@ -19,7 +19,7 @@ export const mcpFeature = defineFeature({
   controllers: [McpController, McpMetadataController, McpPagesController, McpConnectionsController],
   providers: [McpServers],
   contributes: {
-    authPlugins: [mcpAuthPlugin, mcpNativeClients],
+    authPlugins: [mcpAuthPlugin, mcpNativeClients, mcpScopeReads],
     identityProviders: [mcpIdentityProvider],
   },
 });

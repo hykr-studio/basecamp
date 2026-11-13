@@ -1150,8 +1150,12 @@ A screen that reads an entity with neither stops the app at startup. A call runs
 client with the person's session (`runReadTool` in `@hykr/api-client`) and `x-channel: webmcp`, so
 the API applies their business, access and field hiding. The server treats that channel as
 read-only (anything but GET or HEAD is 403 `read_only_channel`) and agent-driven (people-only
-routes, approvals and chat turns are 403). The header is not a security boundary: any script on the
-page holds the same session. Decisions: `docs/decisions/A2.md`.
+routes, approvals and chat turns are 403). Better Auth's routes (`/api/auth/*`) answer before any
+Nest guard, so the same rules run in front of them (`authMiddleware`, `infra/auth.ts`): a channel
+a session may not name is 400 `bad_channel`, and the `webmcp` channel reaches none of them, not
+even a GET (403 `read_only_channel`), since some GETs sign in or hand out a code. The header is not
+a security boundary: any script on the page holds the same session. Decisions:
+`docs/decisions/A2.md`, `docs/decisions/V9.md`.
 
 ### 5.12 Files on records
 
@@ -3114,9 +3118,15 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   /api/auth/oauth2/register`; one whose redirects are all loopback or app schemes is registered
   as a native app), sends the person to `/api/auth/oauth2/authorize` with PKCE (`S256`), and trades
   the code at `/api/auth/oauth2/token`. The API serves the sign-in page (`/oauth/sign-in`) and the
-  consent screen (`/oauth/consent`) in the person's language: the client as it named itself, the
-  business, and each module asked for, read or change, which the person may narrow. Consent is
-  remembered per client, person and business. Tokens are opaque (`mcp_at_…`, refresh `mcp_rt_…`),
+  consent screen (`/oauth/consent`) in the person's language (`?lang`, in the authorization
+  request or added to the page's address, when the application speaks it; else
+  `Accept-Language`): the client as it named itself, the business, and one choice per module asked
+  for (not allowed, read, or change when change was asked), so the person may narrow it. A request
+  to change a module asks to read it too (a `before` hook on authorize adds `<m>:read`, where the
+  client's registration allows it), since the provider takes a consent only to scopes literally
+  asked for. Consent is remembered per client, person and business. A call to `/mcp` without a
+  token is told one is needed; one with a token it does not accept, that the token is invalid,
+  expired or revoked. Tokens are opaque (`mcp_at_…`, refresh `mcp_rt_…`),
   stored hashed: one hour, thirty days.
 - **Who it is.** The `mcp` identity provider makes a token an agent (`mcp:<client id>`) acting for
   its person, in the business they consented in (their default one, else the one they last became
@@ -3127,7 +3137,12 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   Everything else is the API's: access, field hiding, approvals, audit. A person who left the
   business gets 403. The throttle counts each client for its person and business (any
   contributed identity provider's credential gets its own bucket, as the agent key does), not
-  the address: every tool call reaches the API from the API's own process.
+  the address: every tool call reaches the API from the API's own process. Better Auth's routes
+  (`/api/auth/*`, sign-in and the OAuth endpoints) are outside that throttle: Better Auth's own
+  limits apply there (3 sign-ins, sign-ups, password or email changes per 10 s per address, 100
+  calls elsewhere), counted in the same Redis and per address as Express sees it (`req.ip`), in
+  production and with `THROTTLE=on`, never with `THROTTLE=off` (`authRateLimit`,
+  `infra/throttle.ts`).
 - **Scopes** are `<module>:read` and `<module>:write` for each application module (`write` covers
   `read`), plus `offline_access`. `PrincipalGuard` enforces them for any scoped credential (any
   identity provider that returns `scopes`): it reaches only routes that declare a scope
@@ -3677,7 +3692,7 @@ These are not built. Each has a workaround for now.
 | Share pages on a business's domain | The URL a link answers is `APP_URL`'s; a verified domain (section 5.18) is not used for it, though the page shows the business's branding. |
 | An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
 | Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders can be cancelled when approved or accepted). |
-| The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set Express's `trust proxy` (not done by the framework). |
+| The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set Express's `trust proxy` (not done by the framework). Better Auth's own rate limits (sign-in, sign-up, password and email changes) key on `req.ip` too, so without `trust proxy` every caller behind the balancer shares one bucket. |
 | Acceptance tools for the assistant | The assistant can neither ask for a code nor accept (on purpose), and has no tool to read acceptances yet. |
 | Retiring `channel.link_codes` | Linking codes now live in `channel.otp_challenges`; the old table stays, unused, until a migration may drop it. |
 | Agent tools for parties | `/api/parties` and `/api/participants` are people-only routes; the assistant cannot add someone to a record. |
@@ -3710,7 +3725,7 @@ These are not built. Each has a workaround for now.
 | Settings across processes | A settings change drops the cached copy of the process that made it; other processes keep theirs up to 10 s. Approvals and SLA clocks read settings in the write's transaction, so they are never late. |
 | Memory timings | The indexer gives the embedding provider 30 s per batch and takes over a claim after 120 s; recall gives it 4 s per turn (1.5 s on voice). All are constants in `features/memory/` (`indexer.ts`, `recall.service.ts`), not deployment settings. |
 | Durable runs | A run waits only for approvals (no questions, timers or webhooks). An agent's run (section 5.26) is resumed in its agent's thread. A decision after WhatsApp's 24-hour window sends nothing there (the app shows it), and a request a continuation parks again is approved in the app, not with buttons. A resume a turn hook refuses (credits) runs no model and is not tried again. If the person keeps chatting meanwhile, the resumed run does not see those messages. A run parked before a deploy goes on under the new instructions and tools. A run whose resume never comes keeps the parked step's tokens unmetered. |
-| Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. A request decided in the app only never goes to WhatsApp (no template without buttons): push or email instead. Its inbox item stays when it is decided. A team member whose request someone else decided is not notified of the outcome (the app shows it). |
+| Approval levels | One decider per request: no level needs two approvers. A named approver who is away, or who left the business after the request parked naming them, is not replaced (no delegation or escalation) until the request expires; one who left before it parked gives way to the business. A request decided in the app only never goes to WhatsApp (no template without buttons): push or email instead. Its inbox item stays when it is decided. A team member whose request someone else decided is not notified of the outcome (the app shows it). |
 | Undo | Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates, notifications and sends of an undoable write wait with its events until the window closes. Outbox rows of a second write in the same transaction are held with the first undoable one. |
 | Notifications to people who cannot open the record | A notification's words leave out what its recipient may not read, but `to` alone decides who gets it: nothing checks that they may read the record. |
 | A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
@@ -3766,7 +3781,7 @@ These are not built. Each has a workaround for now.
 | The business's tagline in the app shell | The rail and the phone's top bar draw the first plugin's `Brand` (the settings plugin's `BrandMark`: the business's logo and name, else `app.title`), but the rail's tagline is still the product's `app.tagline`. |
 | A logo upload | `branding.logoUrl` is an https URL; there is no upload for it yet. |
 | Shared records that follow their source | An override is a full copy: later changes to the platform's row do not reach it. Only the platform business (`PLATFORM_TENANT_ID`) publishes shared rows. |
-| WebMCP actions | WebMCP tools only read; the API refuses any write on the `webmcp` channel. There are no declarative forms or write tools for a browser agent, and no read tool for a command. Public and share-link screens offer no tools. |
+| WebMCP actions | WebMCP tools only read; the API refuses any write on the `webmcp` channel, and every Better Auth route. There are no declarative forms or write tools for a browser agent, and no read tool for a command. Public and share-link screens offer no tools. |
 | One wording for read tools | The assistant's list and get tools (`tool-factory.ts`) still build their own text; WebMCP takes the same wording from `entityReadTools`. Keep the two in step until the assistant uses it. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |
 | Per-module tools for the assistant | The assistant sees every module's tools on every turn. |

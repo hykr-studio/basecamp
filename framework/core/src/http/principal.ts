@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import {
   CHANNEL_HEADER,
+  CHANNEL_READS,
   drivenByAgent,
-  isReadOnlyChannel,
   isSessionChannel,
   type Principal,
+  readOnlyChannelRefusal,
   type ScopeAccess,
   scopeCovers,
+  sessionChannelRefusal,
 } from '@hykr/contracts';
 import {
   BadRequestException,
@@ -75,7 +77,7 @@ export interface RouteScope {
 export const RequireScope = (scope: RouteScope) => SetMetadata(ROUTE_SCOPE, scope);
 
 /** The methods a read-only channel may use. */
-const READS = new Set(['GET', 'HEAD']);
+const READS = new Set(CHANNEL_READS);
 
 /**
  * Turns every request into exactly one principal before the handler runs: an agent that an
@@ -124,13 +126,9 @@ export class PrincipalGuard implements CanActivate {
     }
     // A read-only channel (a page's WebMCP tools) reads, whoever it is: no write, command,
     // decision or turn reaches a handler.
-    const channel = req.principal.channel;
-    if (isReadOnlyChannel(channel) && !READS.has(req.method))
-      throw new ForbiddenException({
-        error: 'forbidden',
-        rule: 'read_only_channel',
-        reason: `Calls on the ${channel} channel can only read`,
-      });
+    // The same rule guards Better Auth's routes (infra/auth.ts in @hykr/api).
+    const readOnly = readOnlyChannelRefusal(req.principal.channel, req.method);
+    if (readOnly) throw new ForbiddenException(readOnly.body);
     // Support access the business consented to read only: it reads, whoever drives it.
     const behalf = req.principal.onBehalfOf;
     if (behalf?.kind === 'support' && behalf.access === 'read' && !READS.has(req.method))
@@ -205,12 +203,10 @@ export class PrincipalGuard implements CanActivate {
     if (!id) throw new UnauthorizedException();
     // A signed-in browser may say which of its own channels calls (the app, the page's WebMCP
     // tools); it can never claim another (WhatsApp, background work, a share link).
-    const named = header(req, CHANNEL_HEADER);
-    if (named !== undefined && !isSessionChannel(named))
-      throw new BadRequestException({
-        error: 'bad_channel',
-        reason: `A signed-in caller cannot name the channel "${named.slice(0, 40)}"`,
-      });
+    const asked = header(req, CHANNEL_HEADER);
+    const bad = sessionChannelRefusal(asked);
+    if (bad) throw new BadRequestException(bad.body);
+    const named = isSessionChannel(asked) ? asked : undefined;
     const standing = await this.resolver.forUser(id, {
       tenantId: header(req, 'x-tenant-id'),
       name: req.session?.user?.name,
