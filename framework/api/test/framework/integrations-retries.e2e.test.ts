@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { boot, eventually, me, Person, pool, shutdown } from '../../dist/testing.js';
+import { addMember, boot, eventually, me, Person, pool, shutdown } from '../../dist/testing.js';
 import { integrationsApp } from '../fixture/dist/features/integrations/index.js';
 
 process.env.SECRETS_KEY ||= 'test-secrets-key-0123456789abcdef0123456789';
@@ -157,6 +157,24 @@ describe('an endpoint asked for twice with one key', () => {
         [id],
       ),
     ).toBe(1);
+  });
+});
+
+describe('a repeat and who asks it', () => {
+  it('shows the secret again only to whom the write would still allow', async () => {
+    const ada = new Person('Ada Retries');
+    await ada.signUp();
+    await addMember(ada, tenantId, ['admin']);
+    const headers = { 'x-tenant-id': tenantId, 'idempotency-key': randomUUID() };
+    const body = { url: `${base}/idem/demoted`, events: ['nothing.here'] };
+    const first = await ada.call('POST', '/api/integrations/endpoints', body, headers);
+    expect(first.status).toBe(201);
+    // No longer one who manages integrations: the stored answer gives away no secret.
+    await addMember(ada, tenantId, ['staff']);
+    const again = await ada.call('POST', '/api/integrations/endpoints', body, headers);
+    expect(again.status).toBe(403);
+    expect(again.body).toMatchObject({ rule: 'integrations_manage_needed' });
+    expect(JSON.stringify(again.body)).not.toContain(first.body.secret);
   });
 });
 

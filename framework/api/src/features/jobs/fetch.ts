@@ -163,6 +163,10 @@ export async function fetchResult(
         });
         res.on('end', () => resolve(Buffer.concat(chunks)));
         res.on('error', reject);
+        // Closed before the end, without an error of its own: the answer was cut off.
+        res.on('close', () => {
+          if (!res.complete) reject(new Error('The result URL closed before the file ended'));
+        });
       },
     );
     // The guard's refusal comes back as the request's error: keep it a refusal.

@@ -1258,8 +1258,9 @@ with it.
   parked when a write hook asks, replayed after approval).
 - **Outbound.** `POST /api/integrations/endpoints { url, events: ['task.*'], capabilities? }`
   returns the signing secret. A retry with the same `idempotency-key` is the same endpoint and
-  answers the same secret, read back from its sealed row (none is kept with the stored reply); a
-  rotate, a connection with generated credentials and a delivery retry repeat the same way. Each
+  answers the same secret, read back from its sealed row (none is kept with the stored reply), to
+  someone who may still manage it; a rotate, a connection with generated credentials and a
+  delivery retry repeat the same way. A parked create repeated answers without the secret. Each
   committed entity event that happened after the endpoint was made becomes one delivery per
   matching endpoint (an event held by an undo window, or relayed late, does not reach an endpoint
   made since): the record projected as the endpoint may read it (it reads as the business's system

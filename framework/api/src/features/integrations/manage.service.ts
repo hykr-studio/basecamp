@@ -19,6 +19,7 @@ import {
 } from '@hykr/db';
 import {
   BadRequestException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
@@ -42,6 +43,7 @@ import {
   EndpointCreate,
   EndpointUpdate,
   endpointView,
+  mayShowSecret,
   registerIntegrationOps,
   retryDeliveryOp,
   rotateEndpointOp,
@@ -153,8 +155,16 @@ export class IntegrationsService implements OnModuleInit {
           )
       : [];
     if (!row) return result;
+    this.mayStillSee(p, row.capabilities);
     const secret = requireSecretBox().open(row.secretSealed, endpointAad(row.tenantId, row.id));
     return { ...result, secret };
+  }
+
+  /** A secret is shown again only to whom the write would still allow (403 otherwise). */
+  private mayStillSee(p: Principal, capabilities?: readonly string[]) {
+    const d = mayShowSecret(p, capabilities);
+    if (d.decision === 'deny')
+      throw new ForbiddenException({ error: 'forbidden', rule: d.rule, reason: d.reason });
   }
 
   /* ── Connectors ─────────────────────────────────────────────────────────── */
@@ -411,6 +421,7 @@ export class IntegrationsService implements OnModuleInit {
           )
       : [];
     if (!row) return result;
+    this.mayStillSee(p);
     const plain = requireSecretBox().open(
       row.credentialsSealed,
       connectionAad(row.tenantId, row.id),

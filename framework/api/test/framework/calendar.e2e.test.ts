@@ -286,6 +286,19 @@ describe('connecting a calendar', () => {
     expect((await complete(owner, no)).body.rule).toBe('calendar_sign_in_invalid');
   });
 
+  it('finished again with the same idempotency-key, answers the first answer: one exchange', async () => {
+    const started = await signIn(owner);
+    const before = tokenRequests();
+    const key = { 'x-tenant-id': tenantId, 'idempotency-key': `complete-${started.state}` };
+    const body = { code: started.code, state: started.state };
+    const first = await complete(owner, body, key);
+    const again = await complete(owner, body, key);
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    expect(again.status, JSON.stringify(again.body)).toBe(201);
+    expect(again.body.value.id).toBe(first.body.value.id);
+    expect(tokenRequests()).toBe(before + 1);
+  });
+
   it('connects the other people of the test, each in their own calendar', async () => {
     await connect(staff);
     await connect(admin);
