@@ -228,7 +228,9 @@ describe('approvals on WhatsApp', () => {
 
   it('in the conversation: her own request gets buttons; a customer is told the team was asked', async () => {
     await ana.call('POST', '/api/tasks', { title: 'Order tiles' });
+    await ana.call('POST', '/api/tasks', { title: 'Order grout' });
     const before = textsTo(anaPhone).length;
+    const sentBefore = toNumber(anaPhone).length;
     await say(anaPhone, 'delete Order tiles');
     const buttons = await eventually(() =>
       toNumber(anaPhone).find((s) =>
@@ -236,6 +238,14 @@ describe('approvals on WhatsApp', () => {
       ),
     );
     const approve = buttons.interactive?.action.buttons?.[0].reply.id ?? '';
+    // Hers to decide: her approval, asked once (V7).
+    await heard(anaPhone, /I've asked for your approval: Delete "Order tiles"/);
+    // The tasks it looked through, to tap: headed by the view's title, not its first row (V7).
+    const picks = toNumber(anaPhone)
+      .slice(sentBefore)
+      .filter((m) => JSON.stringify(m.interactive?.action ?? '').includes('pick:'));
+    expect(picks.length).toBeGreaterThan(0);
+    for (const m of picks) expect(m.interactive?.body?.text).toBe('Tasks');
     await tap(anaPhone, approve);
     await heard(anaPhone, /Done: Delete "Order tiles"/);
     // The buttons are the approval: no "approve it in the app" beside them.
@@ -251,7 +261,12 @@ describe('approvals on WhatsApp', () => {
       title: 'Order tiles',
     });
     await say(address, 'delete Order tiles');
-    await heard(address, /asked the team/);
+    // The business decides: the customer is told the team was asked, once, and never asked to
+    // approve it themselves (V7).
+    const told = await heard(address, /asked the team/);
+    expect(told).toContain(`I've asked the team for approval: Delete "Order tiles"`);
+    expect(told).not.toMatch(/your approval|until you approve/);
+    expect(told.match(/asked the team/g)).toHaveLength(1);
     expect(
       toNumber(address).some((s) => JSON.stringify(s.interactive ?? '').includes('apr:')),
     ).toBe(false);

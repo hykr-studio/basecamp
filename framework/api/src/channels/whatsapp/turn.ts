@@ -8,7 +8,7 @@ export function toRenderTurn(turn: ChatResponse): RenderTurn {
     // A parked call's card is the approval below (buttons, or a link), not words.
     views: turn.toolCalls.flatMap((c) =>
       c.present?.kind === 'text' && c.outcome !== 'parked'
-        ? [{ text: c.present.text, choices: c.present.choices }]
+        ? [{ text: c.present.text, heading: c.present.heading, choices: c.present.choices }]
         : [],
     ),
     approvals: turn.toolCalls.flatMap((c) =>

@@ -113,6 +113,7 @@ export async function safely<T>(
         kind: 'approval',
         approvalId: approval.id,
         summary: approval.summary,
+        ...(typeof approval.canDecide === 'boolean' ? { canDecide: approval.canDecide } : {}),
         output: out,
         context: runContextOf(ctx.requestContext),
       };

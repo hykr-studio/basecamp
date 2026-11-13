@@ -228,6 +228,28 @@ describe('the push channel', () => {
   });
 });
 
+describe('a masked token (V7)', () => {
+  it("tells one person's devices apart, in the list and the export alike", async () => {
+    const fay = new Person('Fay Push');
+    await fay.signUp();
+    for (const name of ['fay1', 'fay2'])
+      expect((await register(fay, token(name))).status).toBe(201);
+    const listed = (await fay.call('GET', '/api/push/tokens')).body as { token: string }[];
+    const masks = listed.map((d) => d.token).sort();
+    expect(masks).toEqual(
+      [
+        `ExponentPushToken[fay1-${stamp}`.slice(0, 24),
+        `ExponentPushToken[fay2-${stamp}`.slice(0, 24),
+      ].map((m) => `${m}…`),
+    );
+    const { DB } = await import('../../dist/infra/db.module.js');
+    const { PushExport } = await import('../../dist/features/push/index.js');
+    const db = server.app?.get(DB, { strict: false });
+    const exported = await PushExport.export({ subject: { kind: 'user', userId: fay.id }, db });
+    expect((exported.pushDevices as { token: string }[]).map((d) => d.token).sort()).toEqual(masks);
+  });
+});
+
 describe('personal data', () => {
   it('erasing a person deletes their devices and push log; export lists devices, shortened', async () => {
     const { DB } = await import('../../dist/infra/db.module.js');

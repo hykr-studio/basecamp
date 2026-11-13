@@ -931,8 +931,8 @@ export const visitScripts = [
 
 The `list-visits` script is what eval case 2 (`my site visits`) and the app's `my site visits` suggestion rely on.
 
-- **Don't use `written()` for a customer's parked request.** The helper (`@hykr/agents/script`; its line is `parkedLine` in `framework/agents/src/parked-line.ts`) answers a parked English write with "I've asked for **your** approval…". That is right for an owner's own assistant, but wrong for a customer whose request goes to the team.
-- **WhatsApp adds the team line.** `InboundProcessor.converse` appends `approval.askedTeam` ("I've asked the team to confirm. I'll tell you here when they do.") to any reply whose approval someone other than the person writing decides. Your own reply should explain *why* the cancel waits, not repeat that.
+- **`written()` names who decides a parked request.** The helper (`@hykr/agents/script`; its line is `parkedLine` in `framework/agents/src/parked-line.ts`) reads the approval's `canDecide`: "I've asked for your approval: …" when the person decides it themselves (an owner's own assistant), "I've asked the team for approval: …" when someone else does (a customer's request goes to the team). The turn adapter says the same line when the run suspends, in the turn's language. Your own words can say *why* the cancel waits; they need not repeat who decides.
+- **WhatsApp sends buttons only for the person's own request.** `InboundProcessor.converse` gives Approve and Reject (or a link to `/approvals/<id>` for an app-only request) to the person who decides it; a request someone else decides gets neither, and the waiting line already says the team was asked.
 - **The scripted model reads the system prompt.** It finds the language and surfaces with regexes. `Reply in <Language>.` comes from `framework/agents/src/assistant.ts` and `Surfaces: …` from `buildInstructions` in `framework/agents/src/version.ts`. Your rules can add lines, but if you edit either wording, scripted tests can break silently.
 
 Try it through the chat endpoint (a real response from the scripted model):

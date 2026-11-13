@@ -421,7 +421,9 @@ export class InboundProcessor extends WorkerHost {
     const rendered = toRenderTurn(turn);
     // What this turn parked, and who decides each: this person here, with buttons; or someone
     // else (the business, for a customer's request, or whoever the approval level names), who
-    // is asked on their own: the person here is told so, and gets no buttons.
+    // is asked on their own. The reply's waiting line already says which (the approval's own
+    // `canDecide`, the same fact: see parkedLine); a request someone else decides gets no
+    // buttons and no "approve it in the app".
     const parked = rendered.approvals.length
       ? await this.db
           .select()
@@ -439,10 +441,7 @@ export class InboundProcessor extends WorkerHost {
       const row = byId.get(a.id);
       return !row || !self || row.approverUserId !== self;
     });
-    if (forTeam.length) {
-      rendered.approvals = rendered.approvals.filter((a) => !forTeam.includes(a));
-      rendered.reply = [rendered.reply, t(lang, 'approval.askedTeam')].filter(Boolean).join('\n\n');
-    }
+    rendered.approvals = rendered.approvals.filter((a) => !forTeam.includes(a));
     const outbound = render(rendered, {
       to: contact.address,
       lang,
@@ -479,7 +478,7 @@ export class InboundProcessor extends WorkerHost {
         : t(lang, 'approval.expired', { url: `${config.appUrl}/approvals` });
     const { approvalId, approve } = verified.decision;
     // The request itself, in the app: the deep link every answer below points to.
-    const url = `${config.appUrl}/approvals/${approvalId}`;
+    const url = `${config.appUrl}/approvals/${encodeURIComponent(approvalId)}`;
     try {
       const p = await this.principalOf(contact);
       const a = await this.approvals.decide(p, approvalId, approve, `wa:${messageId}`);

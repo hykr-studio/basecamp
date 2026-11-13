@@ -5,7 +5,7 @@ import {
   type Present,
   type Surface,
 } from '@hykr/contracts';
-import { isLang, type Lang, t } from '@hykr/i18n';
+import { isLang, type Lang, pick, t } from '@hykr/i18n';
 import type { ViewDef } from '@hykr/ui-registry';
 import type { ToolContext, ToolKit } from './tool-factory.js';
 
@@ -36,7 +36,7 @@ async function inWords(
   surfaces: Surface[],
   ctx: ToolContext | undefined,
   kit: ToolKit,
-): Promise<{ text: string; choices?: Choice[] } | undefined> {
+): Promise<{ text: string; heading?: string; choices?: Choice[] } | undefined> {
   const client = kit.clientFor(ctx);
   let props: Record<string, unknown> = { ...present.props };
   let rows: Record<string, unknown>[] | undefined;
@@ -72,7 +72,13 @@ async function inWords(
     const title = r.title ?? r.name;
     return typeof r.id === 'string' && typeof title === 'string' ? [{ id: r.id, title }] : [];
   });
-  return { text, ...(choices?.length ? { choices } : {}) };
+  // What heads the rows: the title it was shown with, else the view's own, in the language.
+  const title = typeof props.title === 'string' && props.title.trim() ? props.title : undefined;
+  const heading = title ?? (view.labels.title ? pick(view.labels.title, lang) : undefined);
+  return {
+    text,
+    ...(choices?.length ? { choices, ...(heading ? { heading } : {}) } : {}),
+  };
 }
 
 /**

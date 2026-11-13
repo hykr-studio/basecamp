@@ -2839,6 +2839,8 @@ export const TodoListView = defineView({
 
 Add it to the module's `<name>Views.views`. `createUiRegistry` refuses a spoken list view without `labels.noun` and `labels.empty`, and a view or screen name another module (or the framework) already has.
 
+On WhatsApp a list's rows (two or more) go as buttons or a list to tap, headed by the view's heading: the `title` it was shown with, else its `labels.title` in the turn's language (the text intent's `heading`). A view with neither is headed by its whole text, so give a list view a `labels.title`; its `text` need not start with one.
+
 Bind it to a component in the app, in its app module's `bind` (`application/mobile/src/modules/todos/index.tsx`):
 
 ```ts
@@ -3553,6 +3555,7 @@ These are not built. Each has a workaround for now.
 | Emailing an invitation | `POST /api/members/invites` returns the code; the inviter shares it. Notifications have no recipient by address yet. |
 | Agent tools for members and grants | `/api/members` and `/api/grants` are people-only routes. |
 | Seed data | Create data through the API or the app. Maestro's demo assumes data exists. |
+| A link for a WhatsApp request someone else decides | The waiting line says the team was asked, with no link: a contact cannot open the business's app. A member finds the request in the app's Approvals. |
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
 | Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
 | Images in documents (a logo, a signature, photos) | The layout has no image block. Put the business's name in the header. |
