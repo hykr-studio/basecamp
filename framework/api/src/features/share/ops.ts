@@ -622,9 +622,13 @@ export function submitOp(
     resourceId: () => null,
     input: base.input,
     approval: base.approval,
-    load: async (tx, _p, input) => {
+    load: async (tx, p, input) => {
       await spendUse(tx, link);
-      return { customer: await customerFor(tx, link, form, input) };
+      const customer = await customerFor(tx, link, form, input);
+      // The create's own load, as the guest `run` writes as: a reference they may not name is
+      // refused here, before the answer could park, and the use and the customer roll back (V10).
+      await base.load?.(tx, as(p, customer.id), input);
+      return { customer };
     },
     authorize: (p, l, input) => base.authorize(as(p, l.customer.id), null, input),
     summarize: (input) => base.summarize(input, null),
