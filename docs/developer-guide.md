@@ -3758,6 +3758,7 @@ An earlier outline described an API that was never built. Map it like this:
 | **Share link** | An expiring, revocable link to a record, a saved page or a public form (`app.share_links`); its holder is a `guest` |
 | **Public form** | A form whose link creates one record of an entity (`definePublicForm`) |
 | **Field policy** | Fields only the holders of a capability read: `traits.fieldPolicy` |
+| **Reference** | A field holding another record's id, declared with `traits.references`: its writer must be able to read that record in their business (section 5.2) |
 | **Capability** | Something a role may do besides reaching rows (`backoffice.use`), checked with `can(p, …)` |
 | **Assurance** | How sure we are of who it is: `whatsapp_number` < `otp` < `session` |
 | **Expose** | Who can reach an action: `all`, `human` or `internal` |
