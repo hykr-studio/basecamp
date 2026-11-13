@@ -49,6 +49,8 @@ const AP = `v8asked${stamp}`; // what Sam's assistant asked and nobody decided y
 const AQ = `v8about${stamp}`; // Ana's request about the contact's caller, in Carol's inbox
 const PD = `v8pdel${stamp}`; // a person party of the contact's, deleted before
 const RV = `v8ravi${stamp}`; // Ravi's person party, Sam on it by mistake: it stays
+const AC = `v8cask${stamp}`; // what the contact asked, decided already
+const FR = `v8recv${stamp}`; // a photo the contact sent, swept since
 const NUMBER = `9198${String(Date.now()).slice(-8)}`;
 
 const ana = new Person(`Ana ${KEEP}`); // owner
@@ -62,7 +64,7 @@ const call = (p: Person, method: string, path: string, body?: unknown) =>
 
 const MARKERS = [MK, M1, M2, M3, M4, WK, M5, M6, EV, RM, PP, CM, CE, NUMBER];
 /** What was about them and was gone or changed before they asked (decisions V8, round 3). */
-const BEFORE = [DC, MC, PG, FD, AP, AQ, PD];
+const BEFORE = [DC, MC, PG, FD, AP, AQ, PD, AC, FR];
 
 /** Every row of every table, in every schema, that holds one of these texts. */
 async function rowsHolding(texts: readonly string[]) {
@@ -555,6 +557,52 @@ describe('erasing a member and a contact (decisions V8)', () => {
           approval: { id: parked, summary: `Rename "${AP}"`, input: { title: `${AP} renamed` } },
         },
       ],
+    );
+    // What the contact asked on WhatsApp, refused already: the approval, its stored event, the
+    // park's row on Ana's task and Ana's inbox item. And a photo the contact sent, swept since:
+    // only its audit rows are left.
+    const contactAsked = (
+      await pool.query(
+        `insert into app.approvals (tenant_id, requester_contact_id, action, rule, reason,
+           resource_type, resource_id, summary, payload, requested_by, status, expires_at)
+         values ($1, $2, 'task.update', 'r', 'r', 'task', $3, $4, $5, 'guest', 'rejected',
+           now() + interval '1 day') returning id`,
+        [
+          tenantId,
+          contactId,
+          anaTask.body.value.id,
+          `Rename "${AC}"`,
+          { op: 'task.update', input: { title: AC } },
+        ],
+      )
+    ).rows[0].id as string;
+    const photo = randomUUID();
+    await pool.query(
+      `insert into audit.events (action, resource_type, resource_id, actor_kind, actor_id,
+         tenant_id, outcome, after)
+       values ('task.update', 'task', $1, 'contact', $2, $3, 'needs_approval', $4),
+              ('file.received', 'file', $5, 'contact', $2, $3, 'committed', $6),
+              ('file.swept', 'file', $5, 'system', 'files.sweep', $3, 'committed', null)`,
+      [
+        anaTask.body.value.id,
+        contactId,
+        tenantId,
+        { approvalId: contactAsked, summary: `Rename "${AC}"` },
+        photo,
+        { name: `${FR} photo.jpg`, mime: 'image/jpeg', size: 10, source: 'whatsapp' },
+      ],
+    );
+    await pool.query(
+      `insert into app.domain_events (id, tenant_id, name, resource_type, resource_id, "row",
+         actor_kind, actor_id, occurred_at, available_at, relayed_at)
+       values (gen_random_uuid()::text, $1, 'approval.requested', 'approval', $2, $3, 'contact',
+         $4, now(), now(), now())`,
+      [tenantId, contactAsked, { id: contactAsked, summary: `Rename "${AC}"` }, contactId],
+    );
+    await pool.query(
+      `insert into channel.inbox_items (tenant_id, user_id, notification, dedupe, title, body, url)
+       values ($1, $2, 'approval.request', $3, 'Waiting', $4, '/approvals')`,
+      [tenantId, ana.id, `approval.request:${contactAsked}`, `Rename "${AC}"`],
     );
     await pool.query(
       `insert into channel.inbox_items (tenant_id, user_id, notification, dedupe, title, body, url)

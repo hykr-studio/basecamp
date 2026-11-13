@@ -130,7 +130,7 @@ export const partiesErasure: ErasureContributor = {
     const mine = await onlyTheirs(tx, touched, new Set([...now, ...earlier]));
     const deletedBefore = await personPartiesGone(tx, mine);
     const empty = and(
-      inArray(parties.id, mine.length ? mine : ['']),
+      inArray(parties.id, mine),
       eq(parties.kind, 'person'),
       notExists(
         tx
@@ -141,17 +141,21 @@ export const partiesErasure: ErasureContributor = {
     ) as SQL;
     // Read before the cascade takes them: the participations copy the party's name. A party
     // deleted before took its participations; their audit rows name it.
-    const on = await tx
-      .select({ id: participations.id })
-      .from(participations)
-      .innerJoin(parties, eq(parties.id, participations.partyId))
-      .where(empty);
+    const on = mine.length
+      ? await tx
+          .select({ id: participations.id })
+          .from(participations)
+          .innerJoin(parties, eq(parties.id, participations.partyId))
+          .where(empty)
+      : [];
     const onGone = await auditedWith(tx, {
       type: 'participation',
       contains: deletedBefore.map((partyId) => ({ partyId })),
       tenantId: a.tenantId,
     });
-    const emptied = await tx.delete(parties).where(empty).returning({ id: parties.id });
+    const emptied = mine.length
+      ? await tx.delete(parties).where(empty).returning({ id: parties.id })
+      : [];
     return {
       count: gone.length + emptied.length,
       erased: [
