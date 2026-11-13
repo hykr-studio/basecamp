@@ -39,6 +39,7 @@ const RM = `v8removed${stamp}`; // the contact's name on a party he was taken of
 const PP = `v8person${stamp}`; // a person party whose only member, the contact, was taken off
 const CM = `v8deleted${stamp}`; // Ana's comment naming Sam, which she deleted
 const CE = `v8edited${stamp}`; // Ana's comment naming Sam, which she edited him out of
+const MX = `v8excerpt${stamp}`; // Ana's words naming Sam and Carol's agent: hers, they stay
 const KEEP = `v8keep${stamp}`; // Ana's own words: they stay
 const NUMBER = `9198${String(Date.now()).slice(-8)}`;
 
@@ -240,6 +241,25 @@ describe('erasing a member and a contact (decisions V8)', () => {
       );
       return rows.length ? true : undefined;
     }, 20_000);
+
+    // Ana names Sam and Carol's agent in one comment: the run's excerpt names Sam by his name
+    // alone, not his id, so only the comment's id finds the run.
+    const both = await call(ana, 'POST', '/api/comments', {
+      entity: 'task',
+      recordId: anaTask.body.value.id,
+      body: `@[${sam.name}](user:${sam.id}) @[Mentioned](agent:${mentioned.body.value.id}) ${MX}`,
+    });
+    expect(both.status, JSON.stringify(both.body)).toBeLessThan(300);
+    const excerpt = await eventually(async () => {
+      const { rows } = await pool.query(
+        `select input::text as input from app.agent_runs
+         where agent_id = $1 and status in ('done', 'failed') and input::text like $2`,
+        [mentioned.body.value.id, `%${MX}%`],
+      );
+      return rows[0]?.input as string | undefined;
+    }, 20_000);
+    expect(excerpt).toContain(MK);
+    expect(excerpt).not.toContain(sam.id);
 
     // 2. Ana puts Sam on a party by his email, and the contact on another by number.
     const party = await call(ana, 'POST', '/api/parties', { kind: 'organisation', name: KEEP });
