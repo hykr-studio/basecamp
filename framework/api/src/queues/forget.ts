@@ -4,6 +4,7 @@
 // that names them or one of the records erased with them is removed, and so are the entries of
 // the queues' event streams that do. Jobs still waiting or running are left to finish: they are
 // the work in flight, and once finished they go within the keep bound. Nothing here loads Nest.
+import { randomUUID } from 'node:crypto';
 import type { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { type Jobs, queues } from '../hooks.js';
@@ -18,17 +19,25 @@ export interface Forget {
 const FINISHED = ['completed', 'failed'] as const;
 const PAGE = 500;
 
+/** How many ids or texts one command adds to the script's sets. */
+const CHUNK = 1000;
+
 /**
  * The jobs among one page of a finished set whose data, return value or failure holds one of
  * the ids (a whole word of letters, digits, `-` and `_`) or one of the texts (lower case). Run in
- * Redis, so only the matching ids come back. KEYS[1]: the set. ARGV: the job key's prefix, the
- * page's first and last rank, how many ids follow, the ids, then the texts.
+ * Redis, so only the matching ids come back. KEYS: the finished set, the set of ids, the set of
+ * texts (in sets, not arguments: an erasure may name very many records). ARGV: the job key's
+ * prefix, the page's first and last rank.
  */
 const MATCHING = `
 local jobs = redis.call('ZRANGE', KEYS[1], ARGV[2], ARGV[3])
-local n = tonumber(ARGV[4])
 local exact = {}
-for i = 5, 4 + n do exact[ARGV[i]] = true end
+local n = 0
+for _, id in ipairs(redis.call('SMEMBERS', KEYS[2])) do
+  exact[id] = true
+  n = n + 1
+end
+local texts = redis.call('SMEMBERS', KEYS[3])
 local out = {}
 for _, job in ipairs(jobs) do
   local fields = redis.call('HMGET', ARGV[1] .. job, 'data', 'returnvalue', 'failedReason', 'stacktrace')
@@ -45,10 +54,10 @@ for _, job in ipairs(jobs) do
       end
     end
   end
-  if not hit and #ARGV > 4 + n then
+  if not hit and #texts > 0 then
     local low = string.lower(text)
-    for i = 5 + n, #ARGV do
-      if string.find(low, ARGV[i], 1, true) then
+    for _, t in ipairs(texts) do
+      if string.find(low, t, 1, true) then
         hit = true
         break
       end
@@ -66,28 +75,44 @@ function holds(text: string, ids: ReadonlySet<string>, texts: readonly string[])
   return texts.some((t) => low.includes(t));
 }
 
+/** These values in a set at this key, added in chunks, gone after ten minutes. */
+async function fill(redis: Redis, key: string, values: readonly string[]) {
+  for (let i = 0; i < values.length; i += CHUNK)
+    await redis.sadd(key, ...values.slice(i, i + CHUNK));
+  await redis.expire(key, 600);
+}
+
 /** One queue's finished jobs and stream entries that hold the person, removed. */
 async function forgetIn(redis: Redis, queue: Queue, who: Forget): Promise<number> {
   let removed = 0;
-  for (const state of FINISHED) {
-    const key = queue.toKey(state);
-    // From the end: removing a job shifts the ranks of those after it.
-    const total = await redis.zcard(key);
-    for (let stop = total - 1; stop >= 0; stop -= PAGE) {
-      const start = Math.max(0, stop - PAGE + 1);
-      const found = (await redis.eval(
-        MATCHING,
-        1,
-        key,
-        queue.toKey(''),
-        start,
-        stop,
-        who.ids.length,
-        ...who.ids,
-        ...who.texts,
-      )) as string[];
-      for (const id of found) removed += await queue.remove(id);
+  // Under the queue's own prefix, so they sit with its keys.
+  const once = randomUUID();
+  const idsKey = queue.toKey(`forget:${once}:ids`);
+  const textsKey = queue.toKey(`forget:${once}:texts`);
+  try {
+    await fill(redis, idsKey, who.ids);
+    await fill(redis, textsKey, who.texts);
+    for (const state of FINISHED) {
+      const key = queue.toKey(state);
+      // From the end: removing a job shifts the ranks of those after it.
+      const total = await redis.zcard(key);
+      for (let stop = total - 1; stop >= 0; stop -= PAGE) {
+        const start = Math.max(0, stop - PAGE + 1);
+        const found = (await redis.eval(
+          MATCHING,
+          3,
+          key,
+          idsKey,
+          textsKey,
+          queue.toKey(''),
+          start,
+          stop,
+        )) as string[];
+        for (const id of found) removed += await queue.remove(id);
+      }
     }
+  } finally {
+    await redis.del(idsKey, textsKey);
   }
   // The queue's event stream: a job's id names its event, a failure's reason may name them.
   const stream = queue.toKey('events');
