@@ -20,8 +20,9 @@ export function stampClientAddress(req: Request): void {
 /**
  * Express's `trust proxy` from TRUST_PROXY. Unset, empty, `false`, `off` or `0`: no proxy is
  * trusted, and the caller is the socket's address (the default, as before). `true` or `on`:
- * every proxy (only when nothing reaches the API but through them). A whole number: that many
- * hops in front of the API. Anything else is Express's list: addresses, subnets, or `loopback`,
+ * every proxy, so the leftmost `X-Forwarded-For` entry: safe only behind a balancer that
+ * overwrites the header (one that appends lets the client choose). A whole number: that many
+ * hops in front of the API, the safer choice. Anything else is Express's list: addresses, subnets, or `loopback`,
  * `linklocal`, `uniquelocal`, comma separated.
  */
 export function trustProxyOf(value: string | undefined): boolean | number | string {

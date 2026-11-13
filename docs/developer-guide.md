@@ -250,7 +250,11 @@ Things that will trip you up:
   which proxies to believe about the caller's address (Express's `trust proxy`: a hop count such
   as `1`, addresses or subnets, `loopback`, or `true` for every proxy; unset, `false` or `0`: none,
   the default). Without it, every caller behind the balancer is the balancer, and they share one
-  bucket of the rate limits. `THROTTLE`: `on` or `off` for the API's throttle and Better Auth's own
+  bucket of the rate limits. Prefer the hop count (`1` for one balancer) or the balancer's
+  addresses or subnets. `true` is safe only when the balancer overwrites `X-Forwarded-For`: most
+  balancers append to it (nginx's `$proxy_add_x_forwarded_for`, most cloud balancers), and then
+  `true` takes the leftmost entry, which the client wrote, so a client picks its own bucket (and
+  can fill someone else's). `THROTTLE`: `on` or `off` for the API's throttle and Better Auth's own
   rate limits; unset, they are on only with `NODE_ENV=production`. Every route sees the caller's
   address as Express does: a client's own `x-hykr-client-address` is always replaced
   (`configureHttp`, `framework/api/src/infra/http.ts`).
@@ -736,7 +740,9 @@ type ApprovalRule =
 - The object form also says who decides and where. For example, `{ when: (p) => p.actor.kind === 'agent', by: { capability: 'orders.approve' }, channels: ['app'] }`. `channels: ['app']` keeps an irreversible decision off WhatsApp buttons. An operation's `approval` decides every park of it, including one an approval level makes. When only one reason should go to someone else, name the decider on that decision instead: `framework/api/src/channels/notify/send-template.command.ts` parks a marketing send with `needsApproval('marketing_send', reason, { approver: { by: { capability: 'marketing.approve' } } })`, so a service send that the application's level parks still goes to the person it is for.
 
 `by` chooses people by capability, never by role name:
-- `'requester'`: the person the request is for (their own assistant's request);
+- `'requester'`: the person the request is for (their own assistant's request), while they are on
+  the business's team; one outside it (a member holding only a contact's or a participant's
+  roles) asks the holders of `approvals.decide`, as when nobody says;
 - `{ capability }`: anyone in the business holding it, except the requester;
 - `{ userId }`: one named person, a member of the business's team who is not the requester: their
   membership's roles, as the business has them (its own roles and edits; a name it lacks counts for
@@ -1007,7 +1013,9 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   `relayed_at`, and which subscriber missed it, and why, is logged and kept in `error`. A queue that
   refuses a job (Redis down) stops the tick there and the rest waits for the next one. A feed of
   your own may implement `failed` to keep such rows (without it they come back each tick but hold
-  nothing up) and `skipped` to keep who missed one. `handle`
+  nothing up) and `skipped` to keep who missed one. Likewise a notification whose own functions
+  (`when`, `dedupe`, `schedule.at`) throw on a stored event misses it alone, logged, and the
+  notifications after it still go (`NotifyService.onStored`). `handle`
   runs on the shared `events` queue; `queue` adds the envelope to your own queue. The envelope has
   the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
   (F3) before it leaves the server. The in-process `EventBus` is not relayed. Notifications are one
@@ -2402,11 +2410,17 @@ traits: { offline: {}, versioned: {} },        // offline: { writes: ['create', 
   read back from where it is sealed, never kept in the reply. `findRepeat(db, ctx, op, request)`
   looks before work that must not run twice (exchanging a one-time code); `saveReply` keeps the
   answer of a write that does not go through `runWrite` (a file's upload, a job's cancel, a
-  back-office reply). Wrap such a route in `oneAtATime(db, ctx, async (conn) => …)`: it takes an
-  advisory lock on (principal, key) for as long as the work runs, so a second request sent while
-  the first still runs waits, then finds its reply. Look (`findRepeat`) and save (`saveReply`)
-  on `conn`. Its lock is not `runWrite`'s, so the work may call `runWrite` with the same key; it
-  holds one database connection while it runs. A
+  back-office reply). Wrap such a route in `oneAtATime(db, ctx, async () => …)`: it claims
+  (principal, key) for as long as the work runs, so a second request sent while the first still
+  runs waits, then finds its reply. The work looks (`findRepeat`) first and saves (`saveReply`)
+  before it returns. The claim is a row of its own in `app.idempotency`, committed before the
+  work and deleted after it (it succeeded or threw), so nothing holds a pooled connection or a
+  transaction meanwhile: a request waiting for it tries again every few milliseconds, and answers
+  409 `idempotency_in_progress` after `CLAIM_WAIT_MS` (30 s); a claim older than `CLAIM_STALE_MS`
+  (2 min), whose holder stopped, is taken over. Nothing in a transaction may wait for another
+  pooled connection (a service that reads on `this.db`): enough such requests at once would hold
+  the whole pool waiting. The claim is not the key's own row, so the work may call `runWrite`
+  with the same key. A
   repeated calendar feed create answers the feed without its URL (only the token's hash is kept).
 - **Replies are kept** for `IDEMPOTENCY_KEEP_DAYS` (default 30); the `idempotency.purge` schedule
   forgets older ones every hour (`IdempotencyService.purge`). A key reused later runs again.
@@ -3001,7 +3015,8 @@ Every business's use of what costs money is metered, priced and, when its plan s
   prepaid wallet (`app.credit_wallets`, every change a row in `app.credit_ledger`). Used per cent is
   spent over spent plus what is left. At `alertAt` of a cap (the budget or a meter's limit) the
   named event `credits.threshold` (`{ cap, level: 'alert' | 'pause', usedPercent, threshold }`) is
-  stored in the outbox and published, once per period and level; the application's notification
+  stored in the outbox and published, once per period and level (a meter's limit that stops
+  nothing under the plan, `messages` with no kind in `pauseMessages`, raises neither level); the application's notification
   words it and addresses `{ capability: 'credits.manage' }`, which dispatch expands with the
   business's roles (its own and its edits) when it sends. At `pauseAt` the business is paused.
 - **What a pause refuses** (402, rules `credits_exhausted`, `usage_limit_reached`,
@@ -3714,7 +3729,7 @@ These are not built. Each has a workaround for now.
 | Share pages on a business's domain | The URL a link answers is `APP_URL`'s; a verified domain (section 5.18) is not used for it, though the page shows the business's branding. |
 | An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
 | Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders can be cancelled when approved or accepted). |
-| The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set `TRUST_PROXY` (section 4): unset, no proxy is trusted, so the API's throttle and Better Auth's own rate limits (sign-in, sign-up, password and email changes), which both key on `req.ip`, put every caller behind the balancer in one bucket. Nothing checks at start that the setting matches the deployment. |
+| The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set `TRUST_PROXY` (section 4): unset, no proxy is trusted, so the API's throttle and Better Auth's own rate limits (sign-in, sign-up, password and email changes), which both key on `req.ip`, put every caller behind the balancer in one bucket. Nothing checks at start that the setting matches the deployment, nor that a balancer in front of `TRUST_PROXY=true` overwrites `X-Forwarded-For` rather than appending to it. |
 | Acceptance tools for the assistant | The assistant can neither ask for a code nor accept (on purpose), and has no tool to read acceptances yet. |
 | Retiring `channel.link_codes` | Linking codes now live in `channel.otp_challenges`; the old table stays, unused, until a migration may drop it. |
 | Agent tools for parties | `/api/parties` and `/api/participants` are people-only routes; the assistant cannot add someone to a record. |
@@ -3757,8 +3772,8 @@ These are not built. Each has a workaround for now.
 | Metering everything | WhatsApp voice-note transcription, voice sessions whose worker never reported an end and embedding calls that fail or time out are not metered. Call `CreditsService.record` from the feature. |
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
-| Seeing failed stored events | A stored event the relay cannot read is kept with `failed_at` and `error` and logged; one a subscriber's `when` throws on is relayed to the others, with that subscriber's error in `error`. No screen or notification shows either, and a subscriber that missed an event never gets it later. Query `app.domain_events where error is not null`, fix the cause, and clear `failed_at` to relay a failed one again. |
-| A transcription at the same moment | A file's presign and discard, a job's cancel, a back-office reply and a calendar sign-in's `complete` run one at a time per caller and `idempotency-key` (`oneAtATime`), so two at the same moment run once. A presign repeated after its upload expired is 409 `upload_expired`. A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
+| Seeing failed stored events | A stored event the relay cannot read is kept with `failed_at` and `error` and logged; one a subscriber's `when` throws on is relayed to the others, with that subscriber's error in `error`. No screen or notification shows either, and a subscriber that missed an event never gets it later. A notification whose own `when`, `dedupe` or `schedule.at` throws on a stored event misses it too, kept only in the worker's log. Query `app.domain_events where error is not null`, fix the cause, and clear `failed_at` to relay a failed one again. |
+| A transcription at the same moment | A file's presign and discard, a job's cancel, a back-office reply and a calendar sign-in's `complete` run one at a time per caller and `idempotency-key` (`oneAtATime`, a claim row that holds no connection), so two at the same moment run once. Work that runs longer than `CLAIM_STALE_MS` (2 min; a storage call has no timeout of its own) can be taken over by a retry and run twice; a request whose holder crashed waits for that long, answering 409 `idempotency_in_progress` meanwhile. A presign repeated after its upload expired is 409 `upload_expired`. A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
 | Retrying a chat turn, a new thread, a voice session or a WhatsApp link | `POST /api/chat`, `POST /api/threads`, `POST /api/voice/session` and `/end`, the WhatsApp link's code, `verify`, `number` and `DELETE` ignore `idempotency-key`: a retry is a second turn, thread, room token (and `voice.session.start` audit row) or code. Retry them only when the first answer never came. |
 | Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |
 | A summary's view of hiding | The field check reads one record of the reader's scope through `toRead` and assumes a projector hides a field on every record alike. A projector that hides a field on some records only lets a summary over it through. |

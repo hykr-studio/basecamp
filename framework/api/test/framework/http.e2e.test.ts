@@ -46,6 +46,14 @@ describe('TRUST_PROXY', () => {
     });
     expect(res.body).toEqual({ ip: '198.51.100.40', clientAddress: '198.51.100.40' });
   });
+
+  it('a balancer that appends to x-forwarded-for: the entry the client wrote is not believed', async () => {
+    // The client sent 203.0.113.9; the balancer (trusted) appended the address it saw.
+    const res = await ana.call('GET', '/api/fixture-echo', undefined, {
+      'x-forwarded-for': '203.0.113.9, 198.51.100.43',
+    });
+    expect(res.body).toEqual({ ip: '198.51.100.43', clientAddress: '198.51.100.43' });
+  });
 });
 
 describe('Better Auth’s limits behind a trusted proxy', () => {
