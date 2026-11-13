@@ -334,4 +334,48 @@ describe('approvals on WhatsApp', () => {
     for (const number of [anaPhone, numbers.get(bea) ?? '', numbers.get(cal) ?? ''])
       await requestButtons(number, approvalId);
   });
+
+  it('a contact given approvals.decide is told the team was asked, and never decides its own (V7)', async () => {
+    // The roles the test above left, plus approvals.decide for every contact.
+    const before = {
+      defined: [{ name: 'deputy', label: { en: 'Deputy' }, capabilities: ['approvals.decide'] }],
+      edits: { staff: { capabilities: ['approvals.decide', 'backoffice.use'] } },
+    };
+    const customer = { capabilities: ['approvals.decide'] };
+    await setTenantSettings(tenantId, {
+      roles: { ...before, edits: { ...before.edits, customer } },
+    });
+    try {
+      const address = phone();
+      const rani = await seedContact(tenantId, 'Rani', address);
+      await asAssistant(`contact:${rani.contactId}`)('POST', '/api/tasks', {
+        title: 'Sweep the porch',
+      });
+      await say(address, 'delete Sweep the porch');
+      const told = await heard(address, /asked the team/);
+      expect(told).not.toMatch(/your approval|until you approve/);
+      expect(
+        toNumber(address).some((s) => JSON.stringify(s.interactive ?? '').includes('apr:')),
+      ).toBe(false);
+      const { rows } = await pool.query(
+        `select id from app.approvals where requester_contact_id = $1 and status = 'pending'`,
+        [rani.contactId],
+      );
+      expect(rows).toHaveLength(1);
+      // Even a genuine button for it, sent to this number, does not decide it.
+      const approve = signApproval(
+        process.env.APPROVAL_SECRET ?? '',
+        { approvalId: rows[0].id, approve: true, expiresAt: Date.now() + 60_000 },
+        rani.contactId,
+      );
+      await tap(address, approve);
+      await heard(address, /isn't for this number/);
+      const after = await pool.query('select status from app.approvals where id = $1', [
+        rows[0].id,
+      ]);
+      expect(after.rows[0].status).toBe('pending');
+    } finally {
+      await setTenantSettings(tenantId, { roles: before });
+    }
+  });
 });

@@ -60,9 +60,12 @@ export function useAct(viewName: string) {
       else if (result.status === 'needs_approval')
         // Who decides it: them, or someone else (a capability's holders, a named person).
         toast.show({
-          message: t(result.approval.canDecide === false ? 'said.cardTeam' : 'said.cardWaiting', {
-            summary: result.approval.summary ?? t('said.aChange'),
-          }),
+          message: t(
+            result.approval.canDecide === false ? 'said.waitingTeam' : 'said.waitingApproval',
+            {
+              summary: result.approval.summary ?? t('said.aChange'),
+            },
+          ),
         });
     } catch (e) {
       toast.show({ tone: 'error', message: errorMessage(e) });
