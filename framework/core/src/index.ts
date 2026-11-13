@@ -132,6 +132,14 @@ export {
 } from './plugins/shared.js';
 export { listWhere, summarize } from './query/aggregate.js';
 export {
+  exactTime,
+  readTimeKey,
+  type TimeKey,
+  timeAfter,
+  timeFrom,
+  timeSame,
+} from './query/exact-time.js';
+export {
   type ListFieldFilter,
   type ListFieldOrder,
   type ListFieldSort,
@@ -139,7 +147,14 @@ export {
   listFieldSql,
 } from './query/field-sql.js';
 export { metersBetween, withinMeters } from './query/geo.js';
-export { buildListSql, decodeCursor, encodeCursor, listQuery } from './query/list-grammar.js';
+export {
+  buildListSql,
+  decodeCursor,
+  encodeCursor,
+  type ListFields,
+  type ListSelected,
+  listQuery,
+} from './query/list-grammar.js';
 export * from './states/index.js';
 export { type SystemPrincipalOptions, systemPrincipal } from './system.js';
 export { TenantConfigService, type TenantInfo } from './tenants/tenant-config.service.js';

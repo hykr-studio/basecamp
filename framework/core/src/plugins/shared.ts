@@ -23,7 +23,7 @@ import { deny } from '../authorize.js';
 import { defineEntity, type EntityConfig, type EntityDef } from '../entity/define-entity.js';
 import { entityDef } from '../entity/registry.js';
 import type { EntityPlugin, WriteHook } from '../hooks.js';
-import { buildListSql, decodeCursor, encodeCursor, listQuery } from '../query/list-grammar.js';
+import { buildListSql, decodeCursor, type ListSelected, listQuery } from '../query/list-grammar.js';
 import type { Conn } from '../tokens.js';
 
 type Values = Record<string, unknown>;
@@ -122,30 +122,33 @@ export function defineSharedEntity<S extends EntitySpec, T extends Table>(
     const after = q.cursor ? [built.after(decodeCursor(q.cursor, q.sort))] : [];
     const platform = (await listQuery(q.cursor, () =>
       conn
-        .select()
+        .select(built.fields)
         .from(table as Table)
         .where(and(...where, ...after))
         .orderBy(...built.orderBy)
         .limit(built.limit + 1),
-    )) as Row[];
+    )) as ListSelected[];
     // The first `limit` rows of both, in one order: Postgres orders the candidates, so text
     // sorts by the database's collation exactly as each half did.
-    const candidates = [...page.items, ...platform.slice(0, built.limit)] as Values[];
-    let items: Row[] = [];
+    const candidates = [
+      ...page.items,
+      ...platform.slice(0, built.limit).map((r) => r.row),
+    ] as Values[];
+    let found: ListSelected[] = [];
     if (candidates.length) {
       const ids = candidates.map((r) => String(r.id));
-      items = (await conn
-        .select()
+      found = (await conn
+        .select(built.fields)
         .from(table as Table)
         .where(inArray(idCol, ids))
         .orderBy(...built.orderBy)
-        .limit(built.limit)) as Row[];
+        .limit(built.limit)) as ListSelected[];
     }
+    const items = found.map((r) => r.row) as Row[];
     const more =
       page.nextCursor !== null || platform.length > built.limit || candidates.length > built.limit;
-    const last = items.at(-1) as Values | undefined;
-    const nextCursor =
-      more && last ? encodeCursor(q.sort, built.cursorValues(last), String(last.id)) : null;
+    const last = found.at(-1);
+    const nextCursor = more && last ? built.cursorAfter(last) : null;
     let total: number | undefined;
     if (q.count) {
       const [c] = await conn

@@ -168,24 +168,127 @@ function refusal(f: () => unknown): string {
   throw new Error('not refused');
 }
 
+/**
+ * A row as `fields` selects it: each time key beside it as Postgres writes it (`exactTime`), for
+ * a row with none the far-off time its sort's coalesce gives.
+ */
+const selectedAs = (
+  built: ReturnType<typeof builtFor>,
+  r: Record<string, unknown>,
+  time = '2026-11-12T16:55:48.123456',
+) => ({
+  row: r,
+  ...Object.fromEntries(
+    Object.keys(built.fields)
+      .filter((k) => k !== 'row')
+      .map((k) => [k, time]),
+  ),
+});
+const keptBy = (sort: ListQuery['sort'], r: Record<string, unknown>) =>
+  decodeCursor(builtFor(sort).cursorAfter(selectedAs(builtFor(sort), r)), sort).v;
+
+describe('a time a cursor keeps (V12)', () => {
+  // Postgres keeps microseconds, a Date milliseconds: a cursor cut on the Date took its own row
+  // again ascending and skipped the rest of its millisecond descending.
+  const at = [{ field: 'at', dir: 'asc' as const }];
+  const atDesc = [{ field: 'at', dir: 'desc' as const }];
+  const TO_CHAR = `at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US')`;
+
+  it('a list selects each time key beside its row, as text to the microsecond', () => {
+    const fieldsOf = (sort: ListQuery['sort']) => builtFor(sort).fields as Record<string, never>;
+    expect(Object.keys(fieldsOf(at))).toEqual(['row', 'key0']);
+    expect(render(fieldsOf(at).key0).sql).toBe(`to_char("app"."cursor_kinds"."at" ${TO_CHAR}`);
+    // A nullable one through its coalesce: a row with none keeps the far-off time, same form.
+    expect(render(fieldsOf([{ field: 'atNull', dir: 'asc' }]).key0).sql).toBe(
+      `to_char(coalesce("app"."cursor_kinds"."at_null", $1::timestamptz) ${TO_CHAR}`,
+    );
+    // Only times: other values, and a string-mode timestamp's text, are exact in the row.
+    expect(Object.keys(fieldsOf([{ field: 'title', dir: 'asc' }]))).toEqual(['row']);
+    expect(Object.keys(fieldsOf([{ field: 'atText', dir: 'asc' }]))).toEqual(['row']);
+    expect(
+      Object.keys(
+        fieldsOf([
+          { field: 'title', dir: 'asc' },
+          { field: 'at', dir: 'desc' },
+        ]),
+      ),
+    ).toEqual(['row', 'key1']);
+  });
+
+  it('the cursor keeps that text, not the millisecond the row’s Date holds', () => {
+    expect(keptBy(at, row)).toEqual(['2026-11-12T16:55:48.123456']);
+    expect(keptBy(atDesc, { ...row, at: null })).toEqual(['2026-11-12T16:55:48.123456']);
+  });
+
+  it('compares the sort expression with that text, cast in SQL, never through a Date', () => {
+    const v = ['2026-11-12T16:55:48.123456'];
+    const asc = render(builtFor(at).after({ s: 'at', v, id: ID }));
+    expect(asc.sql).toContain('"app"."cursor_kinds"."at" > $1::timestamptz');
+    expect(asc.sql).toContain('"app"."cursor_kinds"."at" = $2::timestamptz');
+    expect(asc.params.slice(0, 2)).toEqual([`${v[0]}Z`, `${v[0]}Z`]);
+    const desc = render(builtFor(atDesc).after({ s: '-at', v, id: ID }));
+    expect(desc.sql).toContain('"app"."cursor_kinds"."at" < $1::timestamptz');
+    // A time before another key: rows at the very time go on to the next key.
+    const two = [
+      { field: 'at', dir: 'asc' as const },
+      { field: 'title', dir: 'asc' as const },
+    ];
+    const both = render(builtFor(two).after({ s: 'at,title', v: [v[0], 'Lamp'], id: ID }));
+    expect(both.sql).toContain('("app"."cursor_kinds"."at" = $2::timestamptz and');
+    expect(both.sql).toContain('"app"."cursor_kinds"."title" > $3');
+  });
+
+  it('a cursor made before V12 still builds: descending, it takes its whole millisecond', () => {
+    const v = ['2026-11-12T16:55:48.123Z'];
+    const asc = render(builtFor(at).after({ s: 'at', v, id: ID }));
+    expect(asc.sql).toContain('"app"."cursor_kinds"."at" > $1::timestamptz');
+    const desc = render(builtFor(atDesc).after({ s: '-at', v, id: ID }));
+    expect(desc.sql).toContain(
+      `"app"."cursor_kinds"."at" < $1::timestamptz + interval '1 millisecond'`,
+    );
+    expect(desc.sql).toContain(
+      `("app"."cursor_kinds"."at" >= $2::timestamptz and "app"."cursor_kinds"."at" < $3::timestamptz + interval '1 millisecond')`,
+    );
+    expect(desc.params.slice(0, 3)).toEqual([v[0], v[0], v[0]]);
+  });
+
+  it('a time with no zone is written and compared as one', () => {
+    const plain = pgSchema('app').table('plain_times', {
+      id: text('id').primaryKey(),
+      at: timestamp('at').notNull(),
+    });
+    const built = buildListSql(plain, { ...config, sortable: ['at'] } as never, listOf(at));
+    expect(render((built.fields as Record<string, never>).key0).sql).toBe(
+      `to_char("app"."plain_times"."at", 'YYYY-MM-DD"T"HH24:MI:SS.US')`,
+    );
+    const clause = render(built.after({ s: 'at', v: ['2026-11-12T16:55:48.123456'], id: 'x' }));
+    expect(clause.sql).toContain('"app"."plain_times"."at" > $1::timestamp');
+  });
+});
+
 describe('cursor values', () => {
   it('a cursor the server made passes, for every column type, either way, nulls included', () => {
     for (const field of fields)
       for (const dir of ['asc', 'desc'] as const) {
         const sort = [{ field, dir }];
         const built = builtFor(sort);
-        for (const r of [row, { ...row, dayNull: null, atNull: null, nNull: null }]) {
-          const cursor = encodeCursor(sort, built.cursorValues(r), String(r.id));
-          expect(() => built.after(decodeCursor(cursor, sort)), `${field} ${dir}`).not.toThrow();
-        }
+        for (const r of [row, { ...row, dayNull: null, atNull: null, nNull: null }])
+          for (const time of [
+            '2026-11-12T16:55:48.123456',
+            '9999-12-31T00:00:00.000000',
+            '0001-01-01T00:00:00.000000',
+          ]) {
+            const cursor = built.cursorAfter(selectedAs(built, r, time));
+            expect(() => built.after(decodeCursor(cursor, sort)), `${field} ${dir}`).not.toThrow();
+          }
       }
   });
 
   it("a string-mode timestamp's nulls keep a far timestamp, not a number", () => {
     const sort = [{ field: 'atTextNull', dir: 'asc' as const }];
-    expect(builtFor(sort).cursorValues(row)).toEqual(['9999-12-31 00:00:00+00']);
+    expect(keptBy(sort, row)).toEqual(['9999-12-31 00:00:00+00']);
     const desc = [{ field: 'atTextNull', dir: 'desc' as const }];
-    expect(builtFor(desc).cursorValues(row)).toEqual(['0001-01-01 00:00:00+00']);
+    expect(keptBy(desc, row)).toEqual(['0001-01-01 00:00:00+00']);
   });
 
   it('a value that does not fit its column is 400 bad_cursor, before any SQL', () => {
@@ -193,7 +296,24 @@ describe('cursor values', () => {
       day: ['not-a-date', '2026-02-31', '2026-12-01T00:00:00Z', { a: 1 }, 123, null, true],
       dayNull: ['not-a-date', [], null],
       dayDate: ['x', '2026-02-31', 1],
-      at: ['not-a-date', '2026-02-31T00:00:00.000Z', '2026-11-12', { a: 1 }, 123, null],
+      at: [
+        'not-a-date',
+        '2026-02-31T00:00:00.000Z',
+        '2026-11-12',
+        { a: 1 },
+        123,
+        null,
+        // What `exactTime` writes, tampered: seven digits, no such day or hour, the year 0000
+        // (Postgres has no room for it), and forms no server wrote.
+        '2026-11-12T16:55:48.1234567',
+        '2026-02-31T00:00:00.000000',
+        '2026-11-12T24:00:00.000000',
+        '0000-01-01T00:00:00.000000',
+        '0000-01-01T00:00:00.000Z',
+        '2026-11-12T16:55:48.123456Z',
+        '2026-11-12 16:55:48.123456',
+        '2026-11-12T16:55:48.12345',
+      ],
       atNull: ['NaN', null],
       atText: ['x', '2026-02-31 00:00:00+00', '2026-11-12 25:00:00+00', 5],
       n: ['3', 1.5, 1e20, null, {}],

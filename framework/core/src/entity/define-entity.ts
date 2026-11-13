@@ -47,7 +47,7 @@ import {
   grantKinds,
   projectRead,
 } from '../hooks.js';
-import { buildListSql, decodeCursor, encodeCursor, listQuery } from '../query/list-grammar.js';
+import { buildListSql, decodeCursor, type ListSelected, listQuery } from '../query/list-grammar.js';
 import type { Conn, Tx } from '../tokens.js';
 import { strongerDecision } from '../write/decisions.js';
 import { defineEntityCqrs, type EntityCqrs } from './cqrs-classes.js';
@@ -440,20 +440,17 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       const built = buildListSql(table, spec.list, q);
       const where = [scoped(p, 'read'), ...built.where];
       const cursorWhere = q.cursor ? [built.after(decodeCursor(q.cursor, q.sort))] : [];
-      const rows = (await listQuery(q.cursor, () =>
+      const found = (await listQuery(q.cursor, () =>
         conn
-          .select()
+          .select(built.fields)
           .from(table as Table)
           .where(and(...where, ...cursorWhere))
           .orderBy(...built.orderBy)
           .limit(built.limit + 1),
-      )) as Row<T>[];
-      const items = rows.slice(0, built.limit);
-      const last = items.at(-1) as Record<string, unknown> | undefined;
+      )) as ListSelected[];
+      const items = found.slice(0, built.limit).map((r) => r.row) as Row<T>[];
       const nextCursor =
-        rows.length > built.limit && last
-          ? encodeCursor(q.sort, built.cursorValues(last), String(last.id))
-          : null;
+        found.length > built.limit ? built.cursorAfter(found[built.limit - 1]) : null;
       let total: number | undefined;
       if (q.count) {
         const [c] = await conn

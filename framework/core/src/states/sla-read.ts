@@ -21,7 +21,6 @@ import {
   eq,
   getTableColumns,
   gt,
-  gte,
   inArray,
   isNotNull,
   isNull,
@@ -33,6 +32,7 @@ import {
 import { type AnyEntityDef, tenantOf } from '../entity/define-entity.js';
 import { entityDefs } from '../entity/registry.js';
 import { listWhere } from '../query/aggregate.js';
+import { exactTime, timeAfter, timeFrom } from '../query/exact-time.js';
 import type { Conn } from '../tokens.js';
 import { timerOut } from './sla.js';
 
@@ -100,12 +100,16 @@ export function decodeSlaCursor(cursor: string): SlaCursor {
  * A due time as Postgres keeps it, to the microsecond: a JavaScript Date keeps milliseconds, and
  * a page cut on one would repeat or skip rows due within the same millisecond.
  */
-const dueKey = sql<string>`to_char(${slaTimers.dueAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US')`;
+const dueKey = exactTime(slaTimers.dueAt);
 
 /** The rows after the cursor, in (due_at, id) order; `due_at >= d` lets the due index serve it. */
 function afterCursor(c: SlaCursor): SQL {
-  const at = sql`${`${c.d}Z`}::timestamptz`;
-  return and(gte(slaTimers.dueAt, at), or(gt(slaTimers.dueAt, at), gt(slaTimers.id, c.i))) as SQL;
+  const at = { text: c.d, exact: true };
+  const due = slaTimers.dueAt;
+  return and(
+    timeFrom(due, due, at),
+    or(timeAfter(due, due, at, 'asc'), gt(slaTimers.id, c.i)),
+  ) as SQL;
 }
 
 /** Entities whose scope could not be read as one WHERE, logged once each. */
