@@ -344,6 +344,13 @@ describe('a currency that does not exist (V4)', () => {
     expect(failed.status).toBe(403);
     expect(failed.body).toMatchObject({ rule: 'money_invalid', reason: '"ABC" is not a currency' });
     expect(await titled('In ABC')).toEqual([]);
+    // The fixture prices in run, so a priced line in ABC fails there (deferred, V4): whatever it
+    // answers, it writes nothing and takes no number.
+    const priced = await save('Priced ABC', [{ ref: 'a', title: 'A', price: '2.00' }], {
+      currency: 'ABC',
+    });
+    expect(priced.status).toBeGreaterThanOrEqual(400);
+    expect(await titled('Priced ABC')).toEqual([]);
     const after = await save('After ABC');
     expect(seq(after)).toBe(seq(before) + 1);
   });
@@ -397,5 +404,30 @@ describe('a currency that does not exist (V4)', () => {
     };
     for (const code of ['ABC', 'eur']) expect(startWith(code), code).toContain('DEFAULT_CURRENCY');
     for (const code of ['JPY', 'XXX']) expect(startWith(code), code).toBe('started');
+  });
+
+  it('a Node that cannot list its currencies does not start: the check fails closed (V10)', () => {
+    const config = new URL('../../dist/config.js', import.meta.url).href;
+    const startWithout = (unset: string) => {
+      try {
+        execFileSync(
+          process.execPath,
+          [
+            '--input-type=module',
+            '-e',
+            `${unset}; const { assertConfig } = await import(${JSON.stringify(config)}); assertConfig();`,
+          ],
+          { env: { ...process.env, DEFAULT_CURRENCY: '' }, stdio: 'pipe' },
+        );
+        return 'started';
+      } catch (e) {
+        return String((e as { stderr?: Buffer }).stderr ?? e);
+      }
+    };
+    expect(startWithout('delete Intl.supportedValuesOf')).toContain('cannot list its currencies');
+    expect(startWithout('Intl.supportedValuesOf = () => []')).toContain(
+      'cannot list its currencies',
+    );
+    expect(startWithout('void 0')).toBe('started');
   });
 });
