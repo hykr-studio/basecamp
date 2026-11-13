@@ -452,10 +452,13 @@ export const todos = app.table('todos', {
 target entity: `traits: { references: { meetingId: 'meeting' } }`. The name is resolved at run
 time, so a reference to a module that depends on yours imports nothing. Every insert and update
 that sets or changes it (CRUD, commands, the assistant's tools, MCP, imports, offline creates,
-approved replays) loads the record through the target's own scoped repository, as the writer.
+approved replays, a public form's answer, the `values` of a revision, and undo putting a deleted
+record back) loads the record through the target's own scoped repository, as the writer.
 An unknown id, another business's record and one the writer cannot read all get the same 404
 `{ error: 'not_found', message: 'No such meeting', field: 'meetingId' }`; null always passes, and
-so does an update that keeps the stored id. A CRUD write checks before it can park.
+so does an update (or a revision) that keeps the stored id. A CRUD write and a public form's
+answer check before they can park. Undo checks the row it restores as it was: one whose target
+the person can no longer read stays deleted (docs/decisions/V10.md).
 `defineServer` refuses a reference to an entity that does not exist, from a field no write sets,
 or on a record with a parent (check a line's references in the parent's command).
 
@@ -693,10 +696,17 @@ JSON:  { done: false, dueOn: { lte: '2026-10-31' }, sort: '-dueOn', limit: 20 }
 - The query string's keys are the sender's. `nestBrackets` builds the nested objects with no
   prototype, and a key nested under a name every object has (`__proto__[x]`, `constructor[x]`)
   stays flat, so the strict schema refuses that request alone (docs/decisions/V1.md).
+- No text a request sends holds U+0000, which Postgres's text and jsonb cannot store. A global
+  guard (`infra/untrusted-text.ts`) refuses one anywhere in a route parameter, the query string
+  or the JSON or form body, keys and values at any depth, with 400
+  `{ error: 'invalid', rule: 'nul_character', where }`, before any pipe or handler reads it;
+  Better Auth's routes get the same check from a hook in front of its endpoints. A route whose
+  body is a file's bytes says `@TakesBytes()` (the blob upload), and only its body is skipped.
+  Text decoded later (a base64 cursor) is checked by its reader (docs/decisions/V10.md).
 
 Field types are a registry. A feature adds one in two halves, each in its own file: the grammar in contracts, declared on `ListFieldTypes` (and new operators on `ListFilterOps`) and defined with `defineListFieldType({ name, ops, value, opValue?, summary? })`, which every process (server, tools, apps) loads; and the SQL in the server, `listFieldSql` (contributed as `listFieldSql`), `{ name, where({ table, field, column, op, value }), order? }`. `order({ field, column, dir, filters })` is how a field of the type sorts when it is in `sortable` (a point: by distance to its `near` point); it returns `{ expr, at(value), check?(value) }`, where `expr` is never null so cursors neither skip nor repeat rows, and `check` says whether a cursor could hold that value (the row's field, or null). `summary` says what the type's fields do in a summary (section 5.16). A field of an undefined type fails when its schema is built, and one without SQL fails its request. Neither filters nothing. `toQueryString` sends an operator whose value is an object (`near`) as JSON, which the type reads back.
 
-The response is `{ items, nextCursor, total? }`. Pagination is keyset: pass `nextCursor` back as `cursor`. A cursor from a different sort is a 400 `cursor_sort_mismatch`. A cursor is the client's to send back, so each value it holds is checked against its sort column's type (exactly what the server emits for it) before any SQL is built; one that does not fit, or a cursor of the wrong shape, is a 400 `bad_cursor`. As a backstop, a Postgres data exception from a list query with a cursor is `bad_cursor` too (`listQuery`). Sorting on a nullable column works only for dates, timestamps and numbers. A nullable text or enum column in `sortable` passes load-time checks, then throws `Sorting on nullable ... is not supported` (`framework/core/src/query/list-grammar.ts`) on the first request that sorts by it, which the client sees as a 500. Keep such columns `notNull()` or out of `sortable`.
+The response is `{ items, nextCursor, total? }`. Pagination is keyset: pass `nextCursor` back as `cursor`. A cursor from a different sort is a 400 `cursor_sort_mismatch`. A cursor is the client's to send back, so each value it holds is checked against its sort column's type (exactly what the server emits for it) before any SQL is built; one that does not fit, or a cursor of the wrong shape, is a 400 `bad_cursor`. As a backstop, a Postgres data exception from a list query with a cursor is `bad_cursor` too (`listQuery`); since a NUL in a filter is refused before the query (above), what reaches it is the cursor's. The framework's own keyset cursors (the inbox, comments, agent runs) read their time through `storableInstant` (years 1 to 9999) and refuse an id with a NUL or over 128 characters (`keysetOf`), each a 400 `bad_cursor`. Sorting on a nullable column works only for dates, timestamps and numbers. A nullable text or enum column in `sortable` passes load-time checks, then throws `Sorting on nullable ... is not supported` (`framework/core/src/query/list-grammar.ts`) on the first request that sorts by it, which the client sees as a 500. Keep such columns `notNull()` or out of `sortable`.
 
 ### 5.7 Expose: who can reach an action
 
@@ -855,7 +865,8 @@ audited (`rule: 'undo_own_write'`), the held events and sends get `cancelled_at`
 stores no events, so subscribers and recipients never see the write. It refuses when the row changed
 since (409 `changed_since`), when an event or a send was already passed on (409 `too_late`), after the
 window (403 `undo_window_closed`) and the second time (409 `already_undone`); another person's or
-business's undo is a 404. A command can be undone only when its `touched` rows carry `before` and
+business's undo is a 404. A row it puts back, or the fields it gives back, may name only records
+the person can still read (section 5.2): else the reference's 404, and nothing changes. A command can be undone only when its `touched` rows carry `before` and
 `after`.
 
 #### 5.8.3 Durable runs: the assistant waits, then goes on
@@ -1227,7 +1238,8 @@ sample's `orders` module uses every part.
   with such a code still shows. For an input or a configuration value, use `KnownCurrencyCode`
   (`DEFAULT_CURRENCY`, `CREDITS_CONFIG` and a model's price are checked this way at start). Where
   the runtime cannot list currencies (Hermes on a device), the format is the check and the server
-  refuses the rest (`docs/decisions/V4.md`). Filter a money field with the `money`
+  refuses the rest: it does not start on a Node that cannot list them (`canListCurrencies`,
+  checked by `assertConfig`; `docs/decisions/V4.md`, `V10.md`). Filter a money field with the `money`
   list type, in minor units. Arithmetic is exact: `mulDiv`, `scaleMoney`, `allocateMinor`,
   `sumMoney`, with the rounding you name. `moneyText(m, lang)` and `spokenMoney` (`@hykr/i18n`) and
   `useMoneyText()` (`@hykr/app`) format through Intl.
@@ -2092,8 +2104,9 @@ the application's.
 - **Budgets and guards.** `budget: { period, runs?, tokens?, credits?, maxSteps }`: at 100% a run is
   refused (`agent_budget_exhausted`). An agent's own events never start it again, a chain of agents
   stops at depth 3, and an agent has at most 10 runs open.
-- **The run log**: `GET /api/agent-runs?agentId=&status=` and `GET /api/agent-runs/:id` (with its
-  messages), for the owner and managers; anyone else gets 404. `agent.run.finished` and
+- **The run log**: `GET /api/agent-runs?agentId=&status=&cursor=` and `GET /api/agent-runs/:id`
+  (with its messages), for the owner and managers; anyone else gets 404. A cursor that is not a
+  page's `nextCursor` is 400 `bad_cursor`. `agent.run.finished` and
   `agent.run.waiting` are stored events (live type `agent_run`). Run now: `POST
   /api/agents/:agentId/run` (`run-agent`), with an optional `note` the run gets as data: only the
   owner's (403 `agent_note_owner_only` for a manager), since the run acts with the owner's rights.
@@ -3646,7 +3659,8 @@ These are not built. Each has a workaround for now.
 | Importing with no worker | `basecamp import` starts the job and follows it; the worker runs it. With no worker running it waits (and says so). Large JSON files through the local storage drivers (memory, fs) also pass the API's JSON body limit (`JSON_BODY_LIMIT`) on upload; S3 has no such limit. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
-| Rows stored in a made-up currency | Writes refuse a currency that does not exist (section 5.13), but rows written before that check (any three capital letters passed) are neither found nor repaired: they read and change as before, and refuse a new amount. Cancel and re-create such a record (`docs/decisions/V4.md`). |
+| Rows stored in a made-up currency | Writes refuse a currency that does not exist (section 5.13), but rows written before that check (any three capital letters passed) are neither found nor repaired. They read, take their transitions and take a change that sets no amount; they refuse a new amount. A command that writes totals refuses them before it could park: the sample's orders take no save (submit, cancel and revise still work; a revision copies the code as it is). Cancel and re-create such a record (`docs/decisions/V4.md`, `V10.md`). |
+| A current currency Node does not list | The list of currencies is the runtime's Intl list. Node 24 (ICU 78) omits `VED` (Venezuela's digital bolívar, since 2021) and the ISO fund codes (`CLF`, `BOV`, `USN`, `CHE`, `MXV`, `UYW`), so a business in one of them is refused in its settings and on every money write. A deployment cannot add codes yet; use `XXX` and say the currency in the record's words (`docs/decisions/V4.md`). |
 | A currency for an assistant's create | A plain create of an entity with the `money` trait names its currency; the business's (`money` settings) is not taken (`currency_required`, decisions B3B5). The assistant cannot see the business's currency, so the person has to say it (the sample's briefs: "new brief Asha: a bookshelf, budget 20000 INR"). For records the assistant creates often, write a command that reads `tenantMoney` (the sample's `save-order`). |
 | The exact versions a new application installs | The `@hykr/*` packages give ranges, and a new application starts with no lockfile: it gets the newest releases those ranges allow, tested only by the latest `consumer` run. `better-auth` and its Expo plugin are pinned to the OAuth plugin's version (decisions HCONS); Mastra's CLI and OpenTelemetry may float to releases whose peer ranges warn. |
 | A package installed but not used yet | `@mastra/memory` (in `@hykr/agents`): memory recall is the API's own (section 7.7). A feature that uses it adds its code. Versions and reasons: `docs/decisions/F6.md`. |
@@ -3792,6 +3806,8 @@ These are not built. Each has a workaround for now.
 | Root `seed`, `start`, `studio` scripts | Create data through the API; in `application/`, use `pnpm exec basecamp start api` (and `start worker`, `start voice`) and `basecamp studio`. |
 | Web e2e (Playwright) | Use API e2e tests. Maestro covers native flows, outside CI. |
 | Voice tests without a key | `pnpm test` runs `framework/api/test/framework/voice.e2e.test.ts` and `application/api/test/voice/say.e2e.test.ts`. They need `VOICE_AGENT_KEY` (worker calls send `x-agent-key: process.env.VOICE_AGENT_KEY ?? ''`) and have no skip guard. CI sets the key in `ci.yml`; locally, set it in `.env` or these tests fail. |
+| Paging within one millisecond | A list sorted by a timestamp (`createdAt`, a common sort) keeps each row's time in its cursor as a JavaScript `Date`, to the millisecond, while `defaultNow()` stores microseconds. Rows written within the same millisecond can repeat or be skipped at a page boundary; so can the inbox, comments and agent runs, whose keyset cursors do the same. The SLA list avoids it by keeping Postgres's own text (`to_char(… 'US')`, docs/decisions/S3.md). Until list cursors do the same: sort by a column whose values differ by more than a millisecond, or truncate a table's stored times to milliseconds (`default date_trunc('milliseconds', now())`); the id the cursor also keeps does not help, since the cut itself is a millisecond early. |
+| A webhook that carries a NUL character | A signed inbound webhook (WhatsApp, an integration's `/webhooks/...`) whose JSON holds U+0000 is refused 400 at the request edge before its signature is read, as every request is; the sender retries it until it gives up. Postgres could not store it either. Nothing strips the character for a sender that cannot avoid it. |
 | Process-wide prototype hardening | Each place that nests or merges keys someone sends builds objects with no prototype or skips a name every object has (docs/decisions/V1.md). Node's `--disable-proto=delete` or a frozen `Object.prototype` is not set for the API and worker, because every dependency would run under it. Never write a key from a request into a plain `{}` by assignment. |
 
 ---
