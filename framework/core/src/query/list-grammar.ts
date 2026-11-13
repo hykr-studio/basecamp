@@ -27,7 +27,84 @@ type SortKey = {
   at: (value: unknown) => unknown;
   /** What a cursor keeps for a row. */
   keep: (row: Record<string, unknown>) => unknown;
+  /** Could `keep` have made this value? A cursor is the client's to send back, and to tamper with. */
+  check: (value: unknown) => boolean;
 };
+
+const badCursor = () =>
+  new BadRequestException({ error: 'bad_cursor', message: 'This cursor is not valid' });
+
+/** `YYYY-MM-DD`, a day the calendar has. */
+function isDay(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(0);
+  date.setUTCFullYear(y, mo - 1, d);
+  return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d;
+}
+
+/** An instant as `toISOString` writes it. */
+const isIsoInstant = (value: string) =>
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
+  !Number.isNaN(Date.parse(value)) &&
+  new Date(value).toISOString() === value;
+
+/** A timestamp as Postgres writes it as text ('2026-11-12 16:55:48.123456+00'). */
+function isPgTimestamp(value: string): boolean {
+  const m =
+    /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2}):(\d{2})(\.\d{1,6})?(Z|[+-]\d{2}(:?\d{2})?)?$/.exec(
+      value,
+    );
+  return !!m && isDay(m[1]) && Number(m[2]) < 24 && Number(m[3]) < 60 && Number(m[4]) < 60;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const NUMERIC = /^-?\d+(\.\d+)?$/;
+
+/** What a cursor may hold for a column of this type: exactly what `keep` and `encodeCursor` emit. */
+function columnCheck(column: Column): (value: unknown) => boolean {
+  const str = (ok: (s: string) => boolean) => (v: unknown) => typeof v === 'string' && ok(v);
+  switch (column.columnType) {
+    case 'PgDateString':
+      return str(isDay);
+    case 'PgDate':
+      return str((s) => isDay(s) || isIsoInstant(s));
+    case 'PgTimestamp':
+      return str(isIsoInstant);
+    case 'PgTimestampString':
+      return str(isPgTimestamp);
+    case 'PgInteger':
+    case 'PgSmallInt':
+    case 'PgSerial':
+    case 'PgSmallSerial':
+    case 'PgBigInt53':
+    case 'PgBigSerial53':
+      return (v) => Number.isSafeInteger(v);
+    case 'PgDoublePrecision':
+    case 'PgReal':
+    case 'PgNumericNumber':
+      return (v) => typeof v === 'number' && Number.isFinite(v);
+    case 'PgNumeric':
+    case 'PgNumericBigInt':
+      return (v) =>
+        (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && NUMERIC.test(v));
+    case 'PgBoolean':
+      return (v) => typeof v === 'boolean';
+    case 'PgUUID':
+      return str((s) => UUID.test(s));
+    case 'PgEnumColumn':
+    case 'PgEnumObjectColumn':
+      return str((s) => (column.enumValues ?? []).includes(s));
+    case 'PgText':
+    case 'PgVarchar':
+    case 'PgChar':
+      return str(() => true);
+    default:
+      // A type this list does not know: a scalar, and Postgres has the last word (listQuery).
+      return (v) => ['string', 'number', 'boolean'].includes(typeof v);
+  }
+}
 
 /** Nullable sort columns sort as if nulls were a far-off value: always last. */
 function sortExpr(column: Column, dir: 'asc' | 'desc'): SQL | Column {
@@ -67,20 +144,54 @@ export function encodeCursor(sort: ListQuery['sort'], values: unknown[], id: str
   );
 }
 
+/**
+ * The cursor a list handed out, back from the client: its shape is checked here, each value
+ * against its sort key when the clause is built (`after`). Anything else is 400 `bad_cursor`.
+ */
 export function decodeCursor(cursor: string, sort: ListQuery['sort']): Cursor {
   let parsed: Cursor;
   try {
     parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
   } catch {
-    throw new BadRequestException({ error: 'bad_cursor', message: 'This cursor is not valid' });
+    throw badCursor();
   }
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    typeof parsed.s !== 'string' ||
+    !Array.isArray(parsed.v) ||
+    typeof parsed.id !== 'string' ||
+    parsed.id.length > 200
+  )
+    throw badCursor();
   if (parsed.s !== signature(sort)) {
     throw new BadRequestException({
       error: 'cursor_sort_mismatch',
       message: `This cursor was made for sort "${parsed.s}". Drop the cursor to start over with sort "${signature(sort)}".`,
     });
   }
+  if (parsed.v.length !== sort.length) throw badCursor();
   return parsed;
+}
+
+/** Postgres's data exceptions (SQLSTATE class 22): a value out of range, an unknown enum value. */
+const isDataException = (err: unknown): boolean => {
+  for (let e = err as { code?: unknown; cause?: unknown } | undefined; e; e = e.cause as never)
+    if (typeof e.code === 'string' && e.code.startsWith('22')) return true;
+  return false;
+};
+
+/**
+ * Runs a list query. With a cursor, a value Postgres cannot take is the cursor's fault: 400
+ * `bad_cursor`, the backstop to the checks `after` makes. Without one it stays the bug it is.
+ */
+export async function listQuery<T>(cursor: string | undefined, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (cursor && isDataException(err)) throw badCursor();
+    throw err;
+  }
 }
 
 export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
@@ -114,6 +225,7 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
 
   // id is always the final key, so the order is total and cursors never skip or repeat.
   const id = col('id');
+  const idCheck = columnCheck(id);
   const keys: SortKey[] = q.sort.map((s) => {
     // A field type with its own order (a point: by distance to its near filter's point).
     const type = list.filterable[s.field];
@@ -133,6 +245,7 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
         expr: order.expr,
         at: order.at,
         keep: (row) => row[s.field] ?? null,
+        check: order.check ?? (() => true),
       };
     }
     const column = col(s.field);
@@ -142,6 +255,7 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
       column,
       expr: sortExpr(column, s.dir),
       at: (value) => toColumnValue(column, value),
+      check: columnCheck(column),
       keep: (row) => {
         const value = row[s.field];
         if (value !== null && value !== undefined) return value;
@@ -156,6 +270,9 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
 
   /** Keyset: rows strictly after the cursor row in this order. */
   function after(cursor: Cursor): SQL {
+    if (cursor.v.length !== keys.length || !keys.every((k, i) => k.check(cursor.v[i])))
+      throw badCursor();
+    if (!idCheck(cursor.id)) throw badCursor();
     const cmp = (k: SortKey, value: unknown) =>
       k.dir === 'asc' ? sql`${k.expr} > ${k.at(value)}` : sql`${k.expr} < ${k.at(value)}`;
     const same = (k: SortKey, value: unknown) => sql`${k.expr} = ${k.at(value)}`;
@@ -182,6 +299,8 @@ function farValue(column: Column, far: 'max' | 'min') {
       return far === 'max' ? '9999-12-31' : '0001-01-01';
     case 'PgTimestamp':
       return new Date(far === 'max' ? '9999-12-31T00:00:00Z' : '0001-01-01T00:00:00Z');
+    case 'PgTimestampString':
+      return far === 'max' ? '9999-12-31 00:00:00+00' : '0001-01-01 00:00:00+00';
     case 'PgBigInt53':
       return far === 'max' ? Number.MAX_SAFE_INTEGER : -Number.MAX_SAFE_INTEGER;
     default:

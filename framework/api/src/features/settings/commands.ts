@@ -8,6 +8,7 @@ import {
   domainRecordName,
   type FeatureFlagDef,
   featureFlags,
+  isPrototypeKey,
   type Principal,
   phraseProblems,
   RemoveDomainSpec,
@@ -173,6 +174,7 @@ export const UpdateWording = defineCommand(UpdateWordingSpec, {
     const merge = <T>(base: Record<string, T>, patch: Record<string, T | null> | undefined) => {
       const out = { ...base };
       for (const [k, v] of Object.entries(patch ?? {})) {
+        if (isPrototypeKey(k)) continue; // never a phrase or a notification; reaches a prototype
         if (v === null) delete out[k];
         else out[k] = v;
       }

@@ -7,10 +7,17 @@ type Values = Record<string, unknown>;
 /** Starts a formula in Excel, LibreOffice or Google Sheets. */
 const FORMULA = /^[=+\-@\t\r]/;
 
+/** Text as a cell a spreadsheet will not run: a `'` before what would start a formula. */
+export const formulaSafe = (text: string): string => (FORMULA.test(text) ? `'${text}` : text);
+
+/** The text a `formulaSafe` cell was made from, as an import reads a CSV cell back. */
+export const formulaSafeRead = (text: string): string =>
+  text.startsWith("'") && FORMULA.test(text.slice(1)) ? text.slice(1) : text;
+
 /** One value as a cell's text. */
 export function cellText(value: unknown): string {
   if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return FORMULA.test(value) ? `'${value}` : value;
+  if (typeof value === 'string') return formulaSafe(value);
   if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint')
     return String(value);
   if (value instanceof Date) return value.toISOString();

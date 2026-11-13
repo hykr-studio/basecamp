@@ -8,6 +8,7 @@ export * from './files.js';
 export * from './geo.js';
 export * from './imports.js';
 export * from './integrations.js';
+export * from './keys.js';
 export * from './list.js';
 export * from './memory.js';
 export * from './module.js';

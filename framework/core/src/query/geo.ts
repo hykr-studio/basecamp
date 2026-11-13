@@ -1,4 +1,4 @@
-import type { Bounds, GeoPoint, Near } from '@hykr/contracts';
+import { type Bounds, GeoPoint, type Near } from '@hykr/contracts';
 import { pointSql } from '@hykr/db';
 import { BadRequestException } from '@nestjs/common';
 import { type Column, type SQL, sql } from 'drizzle-orm';
@@ -49,6 +49,8 @@ function geoOrder({ column, field, filters }: ListFieldSort) {
       value && typeof value === 'object'
         ? sql`ST_Distance(${pointSql(value as GeoPoint)}, ${from})`
         : sql`${FAR_M}::float8`,
+    // What the cursor kept: the row's point, or null for a row with none.
+    check: (value: unknown) => value === null || GeoPoint.safeParse(value).success,
   };
 }
 

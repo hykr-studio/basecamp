@@ -1,6 +1,7 @@
 // An import's error report: each row that was not written, why, and the row as the file gave
 // it, so the file can be fixed and imported again (columns starting with `_` are not read).
 import type { ImportErrorCode, ImportFormat } from '@hykr/contracts';
+import { formulaSafe } from '../export/csv.js';
 
 /** One row that was not written. */
 export interface Problem {
@@ -16,13 +17,16 @@ export interface Problem {
 
 export const REPORT_COLUMNS = ['_row', '_code', '_field', '_message'] as const;
 
-/** One CSV cell, quoted when it must be. */
+/**
+ * One CSV cell, quoted when it must be. Text that would start a formula gets the export's `'`
+ * (formulaSafe), which an import reads back off (parse.ts), so a fixed report imports as given.
+ */
 export function csvCell(value: unknown): string {
   const text =
     value === undefined || value === null
       ? ''
       : typeof value === 'string'
-        ? value
+        ? formulaSafe(value)
         : JSON.stringify(value);
   return /[",\r\n]/.test(text) || /^\s|\s$/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }

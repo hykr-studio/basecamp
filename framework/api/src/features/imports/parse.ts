@@ -1,6 +1,7 @@
 // Reading an import's file: CSV (RFC 4180, with a header row), JSON (an array of objects) or
 // NDJSON (one object per line). Nothing here touches the database or Nest.
 import type { ImportFormat } from '@hykr/contracts';
+import { formulaSafeRead } from '../export/csv.js';
 
 /** One data row as the file gave it. */
 export interface RawRow {
@@ -133,7 +134,8 @@ function parseCsv(text: string, maxRows: number): ParsedFile {
   const records = csvRecords(text, separatorOf(text));
   const [header, ...data] = records;
   if (!header) throw new Unreadable('The file is empty: a CSV file starts with a header row');
-  const columns = header.cells.map((c) => c.trim());
+  // A header an error report wrote (csvCell) reads back as its column's name.
+  const columns = header.cells.map((c) => formulaSafeRead(c.trim()));
   const empty = columns.findIndex((c) => !c);
   if (empty >= 0) throw new Unreadable(`Column ${empty + 1} of the header has no name`);
   const twice = columns.find((c, i) => columns.indexOf(c) !== i);
@@ -145,7 +147,8 @@ function parseCsv(text: string, maxRows: number): ParsedFile {
     if (rows.length >= maxRows) throw new TooManyRows(`The file has more than ${maxRows} rows`);
     const values: Record<string, unknown> = {};
     columns.forEach((c, i) => {
-      values[c] = record.cells[i] ?? '';
+      // A cell an export or an error report kept from running as a formula reads as it was.
+      values[c] = formulaSafeRead(record.cells[i] ?? '');
     });
     const extra = record.cells.length - columns.length;
     const row: RawRow = { n: rows.length + 1, values };

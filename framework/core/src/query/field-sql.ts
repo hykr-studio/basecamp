@@ -50,6 +50,11 @@ export interface ListFieldSort {
 export interface ListFieldOrder {
   expr: SQL;
   at(value: unknown): SQL;
+  /**
+   * Could a cursor of this order hold this value (the row's field, or null)? A cursor comes back
+   * from the client, so a value that fails is 400 `bad_cursor`. Absent: any value passes.
+   */
+  check?(value: unknown): boolean;
 }
 
 /**

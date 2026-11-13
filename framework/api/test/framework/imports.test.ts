@@ -220,11 +220,34 @@ describe('the error report', () => {
     const text = csvReport(['id', 'title', 'qty', '_code'], problems);
     expect(text).toBe(
       '_row,_code,_field,_message,id,title,qty\r\n' +
-        '2,invalid,qty,qty: Too small,2,"Say ""hi"", twice",-1\r\n' +
+        '2,invalid,qty,qty: Too small,2,"Say ""hi"", twice",\'-1\r\n' +
         '5,missing_key,id,No id,,X,\r\n',
     );
     const back = parseFile(Buffer.from(text), 'csv', 10);
     expect(back.rows[0].values.title).toBe('Say "hi", twice');
+    expect(back.rows[0].values.qty).toBe('-1');
+  });
+
+  it('runs no formula in a spreadsheet, and imports again as the file gave it', () => {
+    const risky = {
+      link: '=HYPERLINK("http://x","y")',
+      phone: '+91 98765 43210',
+      qty: '-5',
+      handle: '@someone',
+      tab: '\tx',
+      plain: "it's fine",
+      '@column': 'a header that would start a formula',
+    };
+    const text = csvReport(Object.keys(risky), [
+      { n: 1, code: 'invalid', field: 'qty', message: 'qty: Too small', values: risky },
+    ]);
+    const cells = text.split('\r\n')[1];
+    expect(cells).toContain(`"'=HYPERLINK(""http://x"",""y"")"`);
+    for (const cell of ["'+91 98765 43210", "'-5", "'@someone", "it's fine"])
+      expect(cells).toContain(cell);
+    // Fixed in a spreadsheet and imported again: each value as it was.
+    const back = parseFile(Buffer.from(text), 'csv', 10);
+    expect(back.rows[0].values).toMatchObject(risky);
   });
 
   it('as NDJSON, and quoting', () => {

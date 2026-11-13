@@ -47,7 +47,7 @@ import {
   grantKinds,
   projectRead,
 } from '../hooks.js';
-import { buildListSql, decodeCursor, encodeCursor } from '../query/list-grammar.js';
+import { buildListSql, decodeCursor, encodeCursor, listQuery } from '../query/list-grammar.js';
 import type { Conn, Tx } from '../tokens.js';
 import { strongerDecision } from '../write/decisions.js';
 import { defineEntityCqrs, type EntityCqrs } from './cqrs-classes.js';
@@ -440,12 +440,14 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       const built = buildListSql(table, spec.list, q);
       const where = [scoped(p, 'read'), ...built.where];
       const cursorWhere = q.cursor ? [built.after(decodeCursor(q.cursor, q.sort))] : [];
-      const rows = (await conn
-        .select()
-        .from(table as Table)
-        .where(and(...where, ...cursorWhere))
-        .orderBy(...built.orderBy)
-        .limit(built.limit + 1)) as Row<T>[];
+      const rows = (await listQuery(q.cursor, () =>
+        conn
+          .select()
+          .from(table as Table)
+          .where(and(...where, ...cursorWhere))
+          .orderBy(...built.orderBy)
+          .limit(built.limit + 1),
+      )) as Row<T>[];
       const items = rows.slice(0, built.limit);
       const last = items.at(-1) as Record<string, unknown> | undefined;
       const nextCursor =

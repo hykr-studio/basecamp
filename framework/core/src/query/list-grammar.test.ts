@@ -1,10 +1,23 @@
-import { entitySpec, listInputSchema } from '@hykr/contracts';
+import { entitySpec, type ListQuery, listInputSchema } from '@hykr/contracts';
 import { BadRequestException } from '@nestjs/common';
 import { and } from 'drizzle-orm';
-import { boolean, date, PgDialect, pgSchema, text } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  boolean,
+  date,
+  doublePrecision,
+  integer,
+  numeric,
+  PgDialect,
+  pgEnum,
+  pgSchema,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { buildListSql, decodeCursor, encodeCursor } from './list-grammar.js';
+import { buildListSql, decodeCursor, encodeCursor, listQuery } from './list-grammar.js';
 
 // A fixture entity, so the grammar is tested with no domain: any domain's tables work alike.
 const items = pgSchema('app').table('items', {
@@ -82,5 +95,165 @@ describe('cursors', () => {
   });
   it('refuses garbage', () => {
     expect(() => decodeCursor('not-a-cursor', sort)).toThrow(BadRequestException);
+  });
+});
+
+// A cursor comes back from the client: every value it holds is checked against the column it
+// sorts by (docs/decisions/V1.md). A cursor the server made always passes; anything else is 400.
+const kinds = pgEnum('cursor_kind', ['a', 'b']);
+const every = pgSchema('app').table('cursor_kinds', {
+  id: uuid('id').primaryKey(),
+  day: date('day').notNull(),
+  dayNull: date('day_null'),
+  dayDate: date('day_date', { mode: 'date' }).notNull(),
+  at: timestamp('at', { withTimezone: true }).notNull(),
+  atNull: timestamp('at_null', { withTimezone: true }),
+  atText: timestamp('at_text', { withTimezone: true, mode: 'string' }).notNull(),
+  atTextNull: timestamp('at_text_null', { withTimezone: true, mode: 'string' }),
+  n: integer('n').notNull(),
+  nNull: integer('n_null'),
+  big: bigint('big', { mode: 'number' }).notNull(),
+  amount: numeric('amount').notNull(),
+  ratio: doublePrecision('ratio').notNull(),
+  title: text('title').notNull(),
+  ref: uuid('ref').notNull(),
+  kind: kinds('kind').notNull(),
+  flag: boolean('flag').notNull(),
+});
+const ID = '6f1c2a4e-9b3d-4c5e-8f7a-1b2c3d4e5f60';
+/** A row as drizzle reads it. */
+const row: Record<string, unknown> = {
+  id: ID,
+  day: '2026-12-01',
+  dayNull: null,
+  dayDate: new Date('2026-12-01T00:00:00Z'),
+  at: new Date('2026-11-12T16:55:48.123Z'),
+  atNull: null,
+  atText: '2026-11-12 16:55:48.123456+00',
+  atTextNull: null,
+  n: 3,
+  nNull: null,
+  big: 9_007_199_254_740_991,
+  amount: '12.50',
+  ratio: 0.25,
+  title: 'Lamp',
+  ref: '0b7e9c1a-2d3f-4a5b-9c6d-7e8f9a0b1c2d',
+  kind: 'b',
+  flag: true,
+};
+const fields = Object.keys(row).filter((f) => f !== 'id');
+const listOf = (sort: ListQuery['sort']): ListQuery => ({
+  filters: [],
+  sort,
+  limit: 10,
+  count: false,
+});
+const config = {
+  filterable: {},
+  sortable: fields,
+  defaultSort: [],
+  pageSize: { default: 10, max: 10 },
+};
+const builtFor = (sort: ListQuery['sort']) => buildListSql(every, config as never, listOf(sort));
+/** A cursor carrying exactly these values, as a client could send it. */
+const forged = (body: unknown) => Buffer.from(JSON.stringify(body)).toString('base64url');
+
+function refusal(f: () => unknown): string {
+  try {
+    f();
+  } catch (e) {
+    expect(e).toBeInstanceOf(BadRequestException);
+    return ((e as BadRequestException).getResponse() as { error: string }).error;
+  }
+  throw new Error('not refused');
+}
+
+describe('cursor values', () => {
+  it('a cursor the server made passes, for every column type, either way, nulls included', () => {
+    for (const field of fields)
+      for (const dir of ['asc', 'desc'] as const) {
+        const sort = [{ field, dir }];
+        const built = builtFor(sort);
+        for (const r of [row, { ...row, dayNull: null, atNull: null, nNull: null }]) {
+          const cursor = encodeCursor(sort, built.cursorValues(r), String(r.id));
+          expect(() => built.after(decodeCursor(cursor, sort)), `${field} ${dir}`).not.toThrow();
+        }
+      }
+  });
+
+  it("a string-mode timestamp's nulls keep a far timestamp, not a number", () => {
+    const sort = [{ field: 'atTextNull', dir: 'asc' as const }];
+    expect(builtFor(sort).cursorValues(row)).toEqual(['9999-12-31 00:00:00+00']);
+    const desc = [{ field: 'atTextNull', dir: 'desc' as const }];
+    expect(builtFor(desc).cursorValues(row)).toEqual(['0001-01-01 00:00:00+00']);
+  });
+
+  it('a value that does not fit its column is 400 bad_cursor, before any SQL', () => {
+    const bad: Record<string, unknown[]> = {
+      day: ['not-a-date', '2026-02-31', '2026-12-01T00:00:00Z', { a: 1 }, 123, null, true],
+      dayNull: ['not-a-date', [], null],
+      dayDate: ['x', '2026-02-31', 1],
+      at: ['not-a-date', '2026-02-31T00:00:00.000Z', '2026-11-12', { a: 1 }, 123, null],
+      atNull: ['NaN', null],
+      atText: ['x', '2026-02-31 00:00:00+00', '2026-11-12 25:00:00+00', 5],
+      n: ['3', 1.5, 1e20, null, {}],
+      nNull: ['x', Number.NaN],
+      big: ['1', 2 ** 60],
+      amount: ['abc', '1e5', {}, null],
+      ratio: ['x', null, true],
+      title: [1, {}, null, ['a']],
+      ref: ['not-a-uuid', 7],
+      kind: ['c', 1, null],
+      flag: ['true', 1, null],
+    };
+    for (const [field, values] of Object.entries(bad))
+      for (const value of values) {
+        const sort = [{ field, dir: 'asc' as const }];
+        const built = builtFor(sort);
+        const cursor = forged({ s: field, v: [value], id: ID });
+        expect(
+          refusal(() => built.after(decodeCursor(cursor, sort))),
+          `${field} ${JSON.stringify(value)}`,
+        ).toBe('bad_cursor');
+      }
+  });
+
+  it('a cursor of the wrong shape is 400 bad_cursor, never a TypeError', () => {
+    const sort = [{ field: 'title', dir: 'asc' as const }];
+    const built = builtFor(sort);
+    for (const body of [
+      null,
+      5,
+      'x',
+      [],
+      { s: 'title' },
+      { s: 'title', v: 'x', id: ID },
+      { s: 'title', v: [], id: ID },
+      { s: 'title', v: ['a', 'b'], id: ID },
+      { s: 'title', v: ['a'] },
+      { s: 'title', v: ['a'], id: 5 },
+      { s: 'title', v: ['a'], id: 'x'.repeat(201) },
+      { s: 'title', v: ['a'], id: 'not-a-uuid' },
+      { s: 7, v: ['a'], id: ID },
+    ])
+      expect(
+        refusal(() => built.after(decodeCursor(forged(body), sort))),
+        JSON.stringify(body),
+      ).toBe('bad_cursor');
+  });
+
+  it("Postgres refusing a cursor's value is 400 bad_cursor; without a cursor it stays an error", async () => {
+    const pgError = (code: string) =>
+      Object.assign(new Error('Failed query'), { cause: Object.assign(new Error('pg'), { code }) });
+    await expect(listQuery('c', () => Promise.reject(pgError('22007')))).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(listQuery(undefined, () => Promise.reject(pgError('22007')))).rejects.toThrow(
+      'Failed query',
+    );
+    await expect(listQuery('c', () => Promise.reject(pgError('23505')))).rejects.toThrow(
+      'Failed query',
+    );
+    await expect(listQuery('c', () => Promise.resolve(1))).resolves.toBe(1);
   });
 });
