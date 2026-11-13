@@ -55,6 +55,7 @@ import {
   exportPersonalData,
 } from '../../privacy/contributors.js';
 import { JOBS } from '../../queues/define.js';
+import { forgetJobs } from '../../queues/forget.js';
 import { runtime } from '../../runtime.js';
 import { jsonOf } from '../export/csv.js';
 import { ZipWriter } from '../export/zip.js';
@@ -515,6 +516,7 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
             for (const [name, n] of Object.entries(done.counts))
               features[name] = (features[name] ?? 0) + n;
             erased.push(...done.erased);
+            runs.push(...done.runs.filter((r) => !runs.includes(r)));
             for (const k of done.kept)
               kept[k.name] = {
                 kept: (kept[k.name]?.kept ?? 0) + k.count,
@@ -579,6 +581,22 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
           redacted.approvals += filings.approvals;
           redacted.audit += filings.audit;
           redacted.replies += filings.replies;
+          // Redis keeps finished jobs whole (events with their rows, notifications): once this
+          // commits, those naming the person or what went with them go too (decisions V8).
+          const forget = {
+            ids: [
+              ...(ids.userId ? [ids.userId] : []),
+              ...ids.contactIds,
+              ...ids.customerIds,
+              ...erased.flatMap((set) => set.ids),
+            ],
+            texts: [...about.emails, ...about.contacts.map((c) => c.address)],
+          };
+          afterCommit.push(async (ctx) => {
+            // Read as used: the configuration is not read at import here.
+            const { config } = await import('../../config.js');
+            await forgetJobs(ctx.jobs, config.redisUrl, forget);
+          });
           const account = ids.userId ? await forgetAccount(tx, ids.userId) : false;
           outcome = {
             records: records.outcome,

@@ -2,11 +2,13 @@
 // that moves a notification to its next channel when every device's message failed.
 // docs/decisions/A9B15.md.
 import { pushTickets, pushTokens } from '@hykr/db';
-import { and, eq, type SQL } from 'drizzle-orm';
+import { and, eq, type SQL, sql } from 'drizzle-orm';
 import { config } from '../../config.js';
 import type { DataSubject, ErasureContributor, ExportContributor } from '../../hooks.js';
 import { defineQueue, defineSchedule } from '../../queues/define.js';
 import { defineFeature } from '../feature.js';
+import { copyTarget, scrubCopy } from '../privacy/redact.js';
+import type { RecordCopies } from '../privacy/registry.js';
 import { PushChannel } from './push.channel.js';
 import { PushController } from './push.controller.js';
 import { maskToken, PushService } from './push.service.js';
@@ -46,6 +48,39 @@ export const PushErasure: ErasureContributor = {
   },
 };
 
+/**
+ * A push ticket keeps the notification's record (`meta.row`) for the next channel to read: when
+ * the record is erased, everyone's tickets lose its personal fields, as messages' do (B18).
+ */
+export const pushCopies: RecordCopies = {
+  name: 'push',
+  async redact({ tx, tenantId, set }): Promise<Record<string, number>> {
+    if (!set.ids.length) return {};
+    const t = copyTarget(set);
+    const found = await tx
+      .select({ id: pushTickets.id, meta: pushTickets.meta })
+      .from(pushTickets)
+      .where(
+        and(
+          eq(pushTickets.tenantId, tenantId),
+          sql`exists (select 1 from jsonb_path_query(${pushTickets.meta}, 'lax $.**.id') as found(v)
+            where found.v #>> '{}' in (${sql.join(
+              set.ids.map((id) => sql`${id}`),
+              sql`, `,
+            )}))`,
+        ) as SQL,
+      );
+    let n = 0;
+    for (const row of found) {
+      const meta = scrubCopy(row.meta, t);
+      if (meta === row.meta) continue;
+      await tx.update(pushTickets).set({ meta }).where(eq(pushTickets.id, row.id));
+      n++;
+    }
+    return { push: n };
+  },
+};
+
 /** A person's export: their devices, the token shortened. */
 export const PushExport: ExportContributor = {
   name: 'push',
@@ -73,6 +108,7 @@ export const pushFeature = defineFeature({
     queues: [PushReceiptsQueue],
     schedules: [PushReceiptsSchedule],
     erasureContributors: [PushErasure],
+    recordCopies: [pushCopies],
     exportContributors: [PushExport],
   },
 });

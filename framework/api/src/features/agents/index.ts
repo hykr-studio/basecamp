@@ -23,6 +23,7 @@ import {
   AgentsExport,
   AgentsInbound,
   AgentsTurnHook,
+  agentRunCopies,
 } from './hooks.js';
 import { RunAgent } from './run-command.js';
 import { AgentRunner } from './runner.js';
@@ -125,6 +126,7 @@ export const agentsFeature = defineFeature({
     schedules: [AgentTick],
     subscribers: [AgentEvents, AgentMentioned, AgentRequested, AgentContinued],
     erasureContributors: [AgentsErasure],
+    recordCopies: [agentRunCopies],
     exportContributors: [AgentsExport],
   },
 });

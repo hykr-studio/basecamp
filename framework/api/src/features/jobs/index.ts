@@ -5,7 +5,7 @@ import { jobDefs } from './define.js';
 import { jobFiles } from './holder.js';
 import { JobCallbackController, JobsController } from './jobs.controller.js';
 import { jobLive } from './live.js';
-import { jobsErasure, jobsExport } from './privacy.js';
+import { jobsErasure, jobsExport, jobsFilesRetention, jobsParts } from './privacy.js';
 import './routes.js';
 import {
   APPLY_QUEUE,
@@ -103,5 +103,7 @@ export const jobsFeature = defineFeature({
     toolContributions: [jobsTools],
     erasureContributors: [jobsErasure],
     exportContributors: [jobsExport],
+    retentionTargets: [jobsFilesRetention],
+    personalDataParts: jobsParts,
   },
 });

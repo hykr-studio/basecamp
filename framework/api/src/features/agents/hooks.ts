@@ -8,12 +8,15 @@ import { Logger } from '@nestjs/common';
 import { and, eq, exists, ilike, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ErasureContributor, ExportContributor, InboundHook, TurnHook } from '../../hooks.js';
+import { both, createdBy } from '../../privacy/contributors.js';
 import type { MentionContext, MentionKind } from '../comments/mention-kinds.js';
 import type { LiveResource } from '../live/resources.js';
+import { eraseRunTraces } from '../privacy/mastra.js';
+import type { RecordCopies } from '../privacy/registry.js';
 import { agentsService } from './agents.service.js';
 import { toolsOutside } from './scope.js';
 
-const { agents, agentRuns, approvals } = schema;
+const { agents, agentRuns, approvals, threadMessages } = schema;
 const log = new Logger('Agents');
 
 /** A run's token, at the door (`x-agent-run` with `x-run-id`). */
@@ -151,20 +154,139 @@ const ownedBy = (tx: Tx, userId: string, tenantId?: string) =>
     .from(agents)
     .where(and(eq(agents.ownerId, userId), tenantId ? eq(agents.tenantId, tenantId) : undefined));
 
-/** Erasing a person deletes the agents they own: their triggers, runs and thread go with them. */
+/** What an agent's copies hold that its owner wrote (audit rows, `agent.*` events, replies). */
+const AGENT_WORDS = ['name', 'description', 'instructions', 'triggers'];
+/** What a run's copies hold of what started it and what it said. */
+const RUN_WORDS = ['input', 'reply', 'reason', 'triggerLabel', 'trigger', 'toolCalls', 'messages'];
+
+/** Runs of this business's agents that a contact's message started (`input.message.from`). */
+const startedBy = (tx: Tx, contactId: string, tenantId?: string) =>
+  tx
+    .select({ id: agentRuns.id, runId: agentRuns.runId, threadId: agentRuns.threadId })
+    .from(agentRuns)
+    .where(
+      and(
+        sql`${agentRuns.input} -> 'message' -> 'from' ->> 'contactId' = ${contactId}`,
+        tenantId ? eq(agentRuns.tenantId, tenantId) : undefined,
+      ),
+    );
+
+/**
+ * Runs of this business's agents whose input names the person anywhere: a mention's author (with
+ * their name and words), an event they caused (its actor), a record of theirs.
+ */
+const naming = (tx: Tx, userId: string, tenantId?: string) =>
+  tx
+    .select({ id: agentRuns.id, runId: agentRuns.runId })
+    .from(agentRuns)
+    .where(
+      and(
+        sql`jsonb_path_exists(${agentRuns.input}, '$.** ? (@ == $id)', jsonb_build_object('id', ${userId}::text))`,
+        tenantId ? eq(agentRuns.tenantId, tenantId) : undefined,
+      ),
+    );
+
+/**
+ * Another person's agent's runs that carried the subject: they stay (that person's agent did the
+ * work), without their input, reply, label, tool calls and reason, and without their turns in the
+ * agent's thread.
+ */
+async function forgetRuns(tx: Tx, runs: readonly { id: string; runId: string }[]) {
+  if (!runs.length) return [];
+  const ids = runs.map((r) => r.id);
+  await tx
+    .update(agentRuns)
+    .set({ input: null, reply: null, triggerLabel: '', toolCalls: [], reason: null })
+    .where(inArray(agentRuns.id, ids));
+  await tx.delete(threadMessages).where(
+    inArray(
+      threadMessages.runId,
+      runs.map((r) => r.runId),
+    ),
+  );
+  return runs;
+}
+
+/**
+ * Erasing a person deletes the agents they own: their triggers, runs and thread go with them,
+ * and the copies of the agents and runs lose what the person wrote and the runs said. The runs
+ * of other people's agents that carried the subject (a contact's message, a person's mention, an
+ * event of theirs) stay, as `forgetRuns` leaves them. Every such run's Mastra rows go with the
+ * subject's own.
+ */
 export const AgentsErasure: ErasureContributor = {
   name: 'agents',
   erase: async ({ tx, subject, tenantId }) => {
-    if (subject.kind !== 'user') return { count: 0 };
+    if (subject.kind === 'contact') {
+      const runs = await forgetRuns(tx, await startedBy(tx, subject.contactId, tenantId));
+      if (!runs.length) return { count: 0 };
+      return {
+        count: runs.length,
+        erased: [{ type: 'agent_run', ids: runs.map((r) => r.id), fields: RUN_WORDS }],
+        runs: runs.map((r) => r.runId),
+      };
+    }
     const mine = await ownedBy(tx, subject.userId, tenantId);
-    if (!mine.length) return { count: 0 };
-    await tx.delete(agents).where(
-      inArray(
-        agents.id,
-        mine.map((m) => m.id),
-      ),
+    const agentIds = mine.map((m) => m.id);
+    // Read before the cascade takes them.
+    const runs = agentIds.length
+      ? await tx
+          .select({ id: agentRuns.id, runId: agentRuns.runId })
+          .from(agentRuns)
+          .where(inArray(agentRuns.agentId, agentIds))
+      : [];
+    const theirs = new Set(runs.map((r) => r.id));
+    const carried = await forgetRuns(
+      tx,
+      (await naming(tx, subject.userId, tenantId)).filter((r) => !theirs.has(r.id)),
     );
-    return { count: mine.length };
+    // With those they deleted before: their copies stay otherwise.
+    const made = await createdBy(tx, { type: 'agent', userId: subject.userId, tenantId });
+    if (!mine.length && !made.length && !carried.length) return { count: 0 };
+    if (agentIds.length) await tx.delete(agents).where(inArray(agents.id, agentIds));
+    return {
+      count: mine.length + carried.length,
+      erased: [
+        { type: 'agent', ids: both(agentIds, made), fields: AGENT_WORDS, deleted: true },
+        { type: 'agent_run', ids: runs.map((r) => r.id), fields: RUN_WORDS, deleted: true },
+        { type: 'agent_run', ids: carried.map((r) => r.id), fields: RUN_WORDS },
+      ],
+      runs: [...runs, ...carried].map((r) => r.runId),
+    };
+  },
+};
+
+/**
+ * A run keeps the record that started it (an event or condition trigger's `record` and `before`,
+ * a mention's `comment`): when records are erased or blanked, by an erasure or a retention rule,
+ * the business's runs whose input holds one of them (by id, at any depth) are forgotten as
+ * `forgetRuns` does, and their Mastra rows go (decisions V8). Their replies were made from it.
+ */
+export const agentRunCopies: RecordCopies = {
+  name: 'agents',
+  async redact({ tx, tenantId, set }): Promise<Record<string, number>> {
+    if (!set.ids.length) return {};
+    const held = sql.join(
+      set.ids.map((id) => sql`${id}`),
+      sql`, `,
+    );
+    const runs = await tx
+      .select({ id: agentRuns.id, runId: agentRuns.runId })
+      .from(agentRuns)
+      .where(
+        and(
+          eq(agentRuns.tenantId, tenantId),
+          sql`exists (select 1 from jsonb_path_query(${agentRuns.input}, 'lax $.**.id') as found(v)
+            where found.v #>> '{}' in (${held}))`,
+        ),
+      );
+    if (!runs.length) return {};
+    await forgetRuns(tx, runs);
+    const traces = await eraseRunTraces(
+      tx,
+      runs.map((r) => r.runId),
+    );
+    return { agentRuns: runs.length, ...(traces ? { assistant: traces } : {}) };
   },
 };
 
