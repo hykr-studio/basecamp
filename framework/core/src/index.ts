@@ -44,6 +44,7 @@ export {
   checkReferences,
   isForeignKeyViolation,
   referenceRefusal,
+  refusedReference,
 } from './entity/references.js';
 export {
   entityDef,

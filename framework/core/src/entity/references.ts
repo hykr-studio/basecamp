@@ -64,8 +64,19 @@ export function referenceRefusal(
       error: 'in_use',
       message: `Other records still name this ${label}`,
     });
-  return new NotFoundException({
-    error: 'not_found',
-    message: 'It names a record that does not exist',
-  });
+  return new NotFoundException({ error: 'not_found', message: MISSING });
+}
+
+const MISSING = 'It names a record that does not exist';
+
+/**
+ * A write refused for a record it names (a declared reference's 404, with its field, or the
+ * database's key's, without one), so a caller that reports it (an import) says both alike.
+ */
+export function refusedReference(e: unknown): { field: string | null; message: string } | null {
+  if (!(e instanceof NotFoundException)) return null;
+  const body = e.getResponse() as { error?: unknown; message?: unknown; field?: unknown };
+  if (typeof body?.field === 'string' && typeof body.message === 'string')
+    return { field: body.field, message: body.message };
+  return body?.message === MISSING ? { field: null, message: MISSING } : null;
 }

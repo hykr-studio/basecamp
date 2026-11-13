@@ -17,6 +17,7 @@ import {
   type CoreOptions,
   entityDef,
   entityOp,
+  refusedReference,
   runWrite,
   type Tx,
 } from '@hykr/core';
@@ -107,9 +108,7 @@ export function problemOf(e: unknown): RowProblem {
   }
   if (e instanceof HttpException) {
     const status = e.getStatus();
-    const body = e.getResponse() as
-      | { rule?: string; reason?: string; message?: unknown; field?: unknown }
-      | string;
+    const body = e.getResponse() as { rule?: string; reason?: string; message?: unknown } | string;
     const said =
       typeof body === 'string'
         ? body
@@ -119,9 +118,10 @@ export function problemOf(e: unknown): RowProblem {
         'forbidden',
         typeof body === 'object' && body.rule ? `${said} (${body.rule})` : said,
       );
-    // A reference field naming a record the importer cannot reach (V2), with its field.
-    if (status === 404 && typeof body === 'object' && typeof body.field === 'string')
-      return new RowProblem('unknown_reference', said, body.field);
+    // A record the row names that the importer cannot reach (V2): unknown, another business's,
+    // unreadable, or gone meanwhile (the database's key), all one code.
+    const ref = refusedReference(e);
+    if (ref) return new RowProblem('unknown_reference', ref.message, ref.field);
     if (status === 404) return new RowProblem('not_found', said);
     if (status === 409) return new RowProblem('conflict', said);
     if (status === 400 || status === 422) return new RowProblem('invalid', said);

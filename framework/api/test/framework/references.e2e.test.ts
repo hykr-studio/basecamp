@@ -214,10 +214,12 @@ describe('every other way in', () => {
     const dir = await mkdtemp(join(tmpdir(), 'v2-'));
     const path = join(dir, 'bookings.csv');
     // Owners import (`imports.run`), and read every room of the business: unknown and theirs.
-    const rows = [unknown, otherRoom].map((r, i) => `K${i},Imported ${i},${r}`);
+    const rows = [unknown, otherRoom].map((r, i) => `K${i},Imported ${i},${r},`);
+    // A key no spec declares is the database's: the same code, without the field.
+    const spare = `K8,Imported 8,,${unknown}`;
     await writeFile(
       path,
-      ['id,title,roomId', ...rows, `K9,Imported 9,${staffRoom}`, ''].join('\n'),
+      ['id,title,roomId,spareRoomId', ...rows, spare, `K9,Imported 9,${staffRoom},`, ''].join('\n'),
     );
     const out = await api.importFile(server.app as never, {
       entity: 'booking',
@@ -226,10 +228,12 @@ describe('every other way in', () => {
       everyMs: 100,
       log: () => {},
     });
-    expect(out.result).toMatchObject({ created: 1, failed: 2 });
+    expect(out.result).toMatchObject({ created: 1, failed: 3 });
     const report = (await readFile(out.reportPath as string, 'utf8')).trim().split('\n').slice(1);
-    expect(report).toHaveLength(2);
-    for (const line of report) expect(line).toMatch(/^\d+,unknown_reference,roomId,No such room,/);
+    expect(report).toHaveLength(3);
+    for (const line of report.slice(0, 2))
+      expect(line).toMatch(/^\d+,unknown_reference,roomId,No such room,/);
+    expect(report[2]).toMatch(/^\d+,unknown_reference,,It names a record that does not exist,/);
   });
 });
 
