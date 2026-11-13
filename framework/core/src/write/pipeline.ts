@@ -38,6 +38,13 @@ export interface WriteCtx {
   requestId: string;
   idempotencyKey?: string;
   /**
+   * What the caller sent, when the op's input also carries values the server made for this
+   * request (a fresh id, a sealed secret, a token's hash). A repeat is then recognised by this
+   * instead of the input, so the same body under the same key answers the first answer, and a
+   * different body is a 409. Omitted: the input.
+   */
+  requestBody?: unknown;
+  /**
    * The request's `If-Match`: the record version the caller based its write on (B12). Entity
    * updates and deletes check it against the row they load; nothing else takes one.
    */
@@ -94,6 +101,11 @@ export interface WriteOp<I, L, V> {
 export interface WriteOutcome {
   result: WriteResult;
   events: object[];
+  /**
+   * The stored answer to an earlier request with this key: nothing ran. Whatever a caller adds
+   * to the answer after the write (a secret shown once, a retry now) it must not do again.
+   */
+  repeat?: true;
 }
 
 export function auditCtx(
@@ -152,6 +164,69 @@ const principalKey = (p: Principal) =>
 
 const verbs = { created: 'create', updated: 'update', deleted: 'delete' } as const;
 
+/** What a repeat is recognised by: the op, its arguments and what was asked. */
+const hashOf = (op: { name: string; args?: unknown }, request: unknown) =>
+  createHash('sha256')
+    .update(JSON.stringify([op.name, op.args ?? null, request]))
+    .digest('hex');
+
+/** The stored answer for (key, principal), if any; another request under the key is a 409. */
+async function stored(
+  conn: Database | Tx,
+  p: Principal,
+  key: string,
+  requestHash: string,
+): Promise<WriteOutcome | undefined> {
+  const [hit] = await conn
+    .select()
+    .from(idempotencyKeys)
+    .where(and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.principalId, principalKey(p))));
+  if (!hit) return undefined;
+  if (hit.requestHash !== requestHash)
+    throw new ConflictException('idempotency-key was already used for a different request');
+  return { result: hit.response as WriteResult, events: [], repeat: true };
+}
+
+/**
+ * Before any work a route does ahead of its write (exchanging a one-time code, minting a
+ * secret): the stored outcome when this request repeats an earlier one with the same key, or
+ * undefined. A key used for a different request is a 409. `request` is what `runWrite` will be
+ * given as `requestBody` (or as its input).
+ */
+export async function findRepeat(
+  db: Database | Tx,
+  ctx: Pick<WriteCtx, 'principal' | 'idempotencyKey'>,
+  op: { name: string; args?: unknown },
+  request: unknown,
+): Promise<WriteOutcome | undefined> {
+  if (!ctx.idempotencyKey) return undefined;
+  return stored(db, ctx.principal, ctx.idempotencyKey, hashOf(op, request));
+}
+
+/**
+ * For a write that does not go through `runWrite` (a file's upload, a job's cancel): keep its
+ * answer under the caller's key, so `findRepeat` answers it again. Nothing secret belongs in
+ * `response`: it is kept for IDEMPOTENCY_KEEP_DAYS.
+ */
+export async function saveReply(
+  db: Database | Tx,
+  ctx: Pick<WriteCtx, 'principal' | 'idempotencyKey'>,
+  op: { name: string; args?: unknown },
+  request: unknown,
+  response: unknown,
+): Promise<void> {
+  if (!ctx.idempotencyKey) return;
+  await db
+    .insert(idempotencyKeys)
+    .values({
+      key: ctx.idempotencyKey,
+      principalId: principalKey(ctx.principal),
+      requestHash: hashOf(op, request),
+      response,
+    })
+    .onConflictDoNothing({ target: [idempotencyKeys.key, idempotencyKeys.principalId] });
+}
+
 /**
  * The write path every command takes:
  * validate → idempotency → load → authorize (the op, then write hooks) → (park | run) → audit
@@ -168,22 +243,12 @@ export async function runWrite<I, L, V>(
   // 1. Validate again: commands also arrive from the agent and from approval replays.
   const input = op.input.parse(rawInput);
 
-  // 2. Idempotency: a repeat of (key, principal) returns the stored result.
-  const requestHash = createHash('sha256')
-    .update(JSON.stringify([op.name, op.args ?? null, input]))
-    .digest('hex');
+  // 2. Idempotency: a repeat of (key, principal) returns the stored result. It is recognised
+  // by what the caller sent when the input also holds what the server made for this request.
+  const requestHash = hashOf(op, ctx.requestBody !== undefined ? ctx.requestBody : input);
   const key = ctx.idempotencyKey;
-  const storedReply = async (conn: Database | Tx): Promise<WriteOutcome | undefined> => {
-    if (!key) return undefined;
-    const [hit] = await conn
-      .select()
-      .from(idempotencyKeys)
-      .where(and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.principalId, principalKey(p))));
-    if (!hit) return undefined;
-    if (hit.requestHash !== requestHash)
-      throw new ConflictException('idempotency-key was already used for a different request');
-    return { result: hit.response as WriteResult, events: [] };
-  };
+  const storedReply = async (conn: Database | Tx): Promise<WriteOutcome | undefined> =>
+    key ? stored(conn, p, key, requestHash) : undefined;
   // A repeat answers at once, without a transaction.
   const repeat = await storedReply(ctx.tx ?? db);
   if (repeat) return repeat;

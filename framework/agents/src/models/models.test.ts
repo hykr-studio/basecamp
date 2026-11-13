@@ -86,6 +86,15 @@ describe('MODEL_PROVIDERS', () => {
       },
     ];
     expect(() => parseProviders(JSON.stringify(priced))).toThrow(ModelConfigError);
+    // A price in a code that names no currency is refused at start, not priced with a guess.
+    const madeUp = [
+      {
+        id: 'gw',
+        baseUrl: 'https://x.test',
+        models: [{ id: 'm', price: { currency: 'ABC', inputPerMillion: 1 } }],
+      },
+    ];
+    expect(() => parseProviders(JSON.stringify(madeUp))).toThrow(/"ABC" is not a currency/);
   });
 
   it('adds OpenRouter in development, with the models AGENT_MODEL and OPENROUTER_MODELS name', () => {

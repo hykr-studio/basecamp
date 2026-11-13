@@ -1,9 +1,55 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { type AgentIdentity, identityProviders } from '@hykr/core';
+import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { Injectable } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { config } from '../config.js';
+
+let storage: ThrottlerStorageRedisService | undefined;
+
+/**
+ * The throttle's counters, in Redis, shared by every API process: the API's routes and Better
+ * Auth's (infra/auth.ts). One connection, closed with the app.
+ */
+export const throttleStorage = () => {
+  storage ??= new ThrottlerStorageRedisService(config.redisUrl);
+  return storage;
+};
+
+/**
+ * Better Auth's own limits (3 sign-ins, sign-ups, password or email changes per 10 seconds per
+ * address; 100 calls elsewhere), counted with the throttle's: in production and whenever
+ * THROTTLE=on, never with THROTTLE=off. Read on every request, as the API's throttle is (the e2e
+ * suite switches it). Development leaves them off, as Better Auth does: an eval signs up a person
+ * per module in a few seconds.
+ */
+export const authRateLimit = () => ({
+  enabled: true,
+  customRules: {
+    '/**': (_request: unknown, rule: { window: number; max: number }) =>
+      process.env.THROTTLE === 'off' ||
+      (process.env.THROTTLE !== 'on' && process.env.NODE_ENV !== 'production')
+        ? (false as const)
+        : rule,
+  },
+  customStorage: {
+    async consume(key: string, rule: { window: number; max: number }) {
+      const redis = throttleStorage().redis;
+      const at = `${config.queuePrefix}:auth-rate:${key}`;
+      const [[, hits], [, ttl]] = (await redis.multi().incr(at).pttl(at).exec()) as [
+        [unknown, number],
+        [unknown, number],
+      ];
+      if (ttl < 0) await redis.pexpire(at, rule.window * 1000);
+      const allowed = hits <= rule.max;
+      return {
+        allowed,
+        retryAfter: allowed ? null : Math.ceil((ttl < 0 ? rule.window * 1000 : ttl) / 1000),
+      };
+    },
+  },
+});
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest();
 const keys = () => [config.agentApiKey, config.voiceAgentKey].filter(Boolean).map(sha256);

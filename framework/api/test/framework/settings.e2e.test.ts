@@ -199,6 +199,21 @@ describe('feature flags', () => {
     expect((await agent('GET', '/api/extras')).status).toBe(404);
   });
 
+  it("the scripted model says it can't do a switched-off command, never an API answer (V7)", async () => {
+    const teapot = (await other.call('POST', '/api/gadgets', { title: 'Teapot' })).body.value.id;
+    const off = await other.call('POST', '/api/chat/once', { message: `polish gadget ${teapot}` });
+    expect(off.status).toBe(200);
+    expect(off.body.reply).toBe("I can't do that here.");
+    expect(off.body.toolCalls).toEqual([]);
+    // Offered (the flag on): the same words call the tool, and it waits for the person.
+    const lamp = (await owner.call('POST', '/api/gadgets', { title: 'Desk lamp' })).body.value.id;
+    const on = await owner.call('POST', '/api/chat/once', { message: `polish gadget ${lamp}` });
+    expect(on.body.toolCalls).toEqual([
+      expect.objectContaining({ tool: 'polish-gadget', outcome: 'parked' }),
+    ]);
+    expect(on.body.reply).toMatch(/^I've asked for your approval: /);
+  });
+
   it('GET /api/settings says what is off, for the apps', async () => {
     const res = await other.call('GET', '/api/settings');
     expect(res.status).toBe(200);

@@ -38,6 +38,12 @@ export type ParkedCall = {
   kind: 'approval';
   approvalId: string;
   summary: string | null;
+  /**
+   * Whether the person the run acts for decides it themselves (the approval's own `canDecide`).
+   * False: someone else does (a capability's holders, a named person, the business for a
+   * contact). Absent (a run stored before it was kept) reads as theirs.
+   */
+  canDecide?: boolean;
   output: ToolOutcome;
   context: RunContext;
 };

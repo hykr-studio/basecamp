@@ -134,6 +134,18 @@ const audit = async (action: string, resourceId: string) =>
     )
   ).rows;
 
+/** The consent screen's radio choices, in order. */
+const radios = (html: string) =>
+  [...html.matchAll(/<input type="radio" name="(m\d+)" value="([^"]*)"( checked)?>/g)].map((m) => ({
+    name: m[1],
+    value: m[2],
+    checked: m[3] !== undefined,
+  }));
+
+/** The signed query a page posts back (its hidden field), unescaped. */
+const postedQuery = (html: string) =>
+  (/<input type="hidden" id="q" value="([^"]*)"/.exec(html)?.[1] ?? '').replaceAll('&amp;', '&');
+
 describe('discovery', () => {
   it('names the resource, its authorization server and the modules’ scopes', async () => {
     const prm = await get('/.well-known/oauth-protected-resource/mcp');
@@ -174,6 +186,12 @@ describe('discovery', () => {
     });
     expect(bogus.status).toBe(401);
     expect(bogus.headers.get('www-authenticate')).toContain('error="invalid_token"');
+    expect(await none.json()).toMatchObject({ error_description: 'A bearer token is needed' });
+    // A token was sent: it is the token that is wrong, not that one is missing.
+    expect(await bogus.json()).toEqual({
+      error: 'invalid_token',
+      error_description: 'The access token is invalid, expired or revoked',
+    });
     // The same token on the REST API: 401 too.
     expect((await withToken('mcp_at_nothing-like-it')('GET', '/api/tasks')).status).toBe(401);
   });
@@ -230,9 +248,18 @@ describe('connecting a client (OAuth 2.1, PKCE)', () => {
     expect(res.status).toBe(200);
     expect(html).toContain('Connect Test Client &lt;b&gt; to Fixture?');
     expect(html).not.toContain('Test Client <b>');
-    expect(html).toContain('tasks (task): Read');
-    expect(html).toContain('tasks (task): Change');
-    expect(html).toContain('visits (visit): Read');
+    // One row per module: not allowed, read, or change when change was asked; the most asked
+    // is chosen first.
+    expect(html).toContain('tasks (task)');
+    expect(html).toContain('visits (visit)');
+    expect(radios(html)).toEqual([
+      { name: 'm0', value: '', checked: false },
+      { name: 'm0', value: 'tasks:read', checked: false },
+      { name: 'm0', value: 'tasks:read tasks:write', checked: true },
+      { name: 'm1', value: '', checked: false },
+      { name: 'm1', value: 'visits:read', checked: true },
+    ]);
+    expect(html).toContain('Not allowed');
     expect(html).toContain('Stay connected');
     expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
     // Signed out: nothing to show.
@@ -308,6 +335,264 @@ describe('connecting a client (OAuth 2.1, PKCE)', () => {
     expect(refreshed.body.access_token).toMatch(/^mcp_at_/);
     expect(refreshed.body.access_token).not.toBe(first.accessToken);
     expect((await withToken(refreshed.body.access_token)('GET', '/api/tasks')).status).toBe(200);
+  });
+});
+
+describe('client registration', () => {
+  const registerWith = async (redirect: string) => {
+    const res = await fetch(`${server.base}/api/auth/oauth2/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        client_name: 'Redirects',
+        redirect_uris: [redirect],
+        token_endpoint_auth_method: 'none',
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+      }),
+    });
+    return { status: res.status, body: (await res.json()) as Json };
+  };
+  /** Where authorize sends a person who is not signed in, for this redirect. */
+  const sentTo = async (clientId: string, redirect: string) => {
+    const query = new URLSearchParams(authorizeQuery(clientId, pkce().challenge, 'tasks:read'));
+    query.set('redirect_uri', redirect);
+    const res = await get(`/api/auth/oauth2/authorize?${query}`);
+    return new URL(res.status === 302 ? (res.headers.get('location') ?? '') : res.body.url);
+  };
+
+  it('takes only https or loopback redirects, and sends only to the one registered', async () => {
+    for (const uri of [
+      'javascript:alert(1)',
+      'data:text/html,x',
+      'http://evil.example/cb',
+      'https://user:pw@evil.example/cb',
+      'https://evil.example/cb#x',
+    ]) {
+      const res = await registerWith(uri);
+      expect(res.status, uri).toBe(400);
+      expect(res.body.error, uri).toBe('invalid_redirect_uri');
+    }
+    // `*` is no wildcard: a literal path, registered as any https redirect is.
+    expect((await registerWith('https://evil.example/*')).status).toBeLessThan(300);
+    const web = (await registerWith('https://client.example/cb')).body.client_id;
+    expect((await sentTo(web, 'https://client.example/cb')).pathname).toBe('/oauth/sign-in');
+    for (const other of [
+      'https://client.example/cb/x',
+      'https://client.example/cb?x=1',
+      'https://client.example:8443/cb',
+      'http://client.example/cb',
+      'https://evil.example/*',
+    ]) {
+      const to = await sentTo(web, other);
+      // http on a host that is not a loopback fails the request's own check first.
+      expect(to.searchParams.get('error'), other).toMatch(/^invalid_(redirect|request)$/);
+      // The provider's own error page, never the redirect asked for.
+      expect(['client.example', 'evil.example'], other).not.toContain(to.hostname);
+    }
+    // A loopback redirect's port is the client's to choose (RFC 8252 7.3); its path is not.
+    const native = (await registerWith(REDIRECT)).body.client_id;
+    expect((await sentTo(native, 'http://127.0.0.1:5555/callback')).pathname).toBe(
+      '/oauth/sign-in',
+    );
+    expect((await sentTo(native, 'http://127.0.0.1:43123/other')).searchParams.get('error')).toBe(
+      'invalid_redirect',
+    );
+  });
+});
+
+describe('the consent screen: narrowing, and the person’s language', () => {
+  const browser = new Person('Ana Mcp', ana.email);
+
+  beforeAll(async () => {
+    const signedIn = await browser.call('POST', '/api/auth/sign-in/email', {
+      email: ana.email,
+      password: 'password123',
+    });
+    expect(signedIn.status).toBe(200);
+  });
+
+  /** Where authorize sends a signed-in browser (the consent screen, or the client with a code). */
+  const authorizeAs = async (clientId: string, scope: string, extra = '') => {
+    const query = new URLSearchParams(authorizeQuery(clientId, pkce().challenge, scope));
+    if (!scope) query.delete('scope');
+    const res = await browser.call(
+      'GET',
+      `/api/auth/oauth2/authorize?${query}${extra}`,
+      undefined,
+      { accept: 'application/json' },
+    );
+    return new URL(res.body.url);
+  };
+
+  const page = async (url: URL, headers: Record<string, string> = {}) => {
+    const res = await fetch(`${server.base}${url.pathname}${url.search}`, {
+      headers: { cookie: browser.cookie, 'accept-language': 'en', ...headers },
+    });
+    return { status: res.status, html: await res.text() };
+  };
+
+  it('lets the person allow only reading a module the client asked to change', async () => {
+    const reg = await register('Writer');
+    const clientId = reg.body.client_id;
+    const consent = await authorizeAs(clientId, 'tasks:write offline_access');
+    expect(consent.pathname).toBe('/oauth/consent');
+    // The request asks to read what it asks to change, so reading alone can be allowed.
+    expect(consent.searchParams.get('scope')?.split(' ')).toEqual([
+      'tasks:read',
+      'tasks:write',
+      'offline_access',
+    ]);
+    const shown = await page(consent);
+    expect(radios(shown.html)).toEqual([
+      { name: 'm0', value: '', checked: false },
+      { name: 'm0', value: 'tasks:read', checked: false },
+      { name: 'm0', value: 'tasks:read tasks:write', checked: true },
+    ]);
+    const { verifier, challenge } = pkce();
+    const fresh = await browser.call(
+      'GET',
+      `/api/auth/oauth2/authorize?${authorizeQuery(clientId, challenge, 'tasks:write')}`,
+      undefined,
+      { accept: 'application/json' },
+    );
+    const consented = await browser.call('POST', '/api/auth/oauth2/consent', {
+      accept: true,
+      scope: 'tasks:read',
+      oauth_query: new URL(fresh.body.url).search.slice(1),
+    });
+    expect(consented.status).toBe(200);
+    const code = new URL(consented.body.url).searchParams.get('code') ?? '';
+    const token = await form('/api/auth/oauth2/token', {
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: REDIRECT,
+      client_id: clientId,
+      code_verifier: verifier,
+      resource,
+    });
+    expect(token.status).toBe(200);
+    expect(token.body.scope).toBe('tasks:read');
+    const api = withToken(token.body.access_token);
+    expect((await api('GET', '/api/tasks')).status).toBe(200);
+    expect(await api('POST', '/api/tasks', { title: 'Only reading' })).toMatchObject({
+      status: 403,
+      body: { rule: 'out_of_scope' },
+    });
+    // Asking to change it again asks the person again.
+    expect((await authorizeAs(clientId, 'tasks:write')).pathname).toBe('/oauth/consent');
+    // Reading is remembered: no screen.
+    expect((await authorizeAs(clientId, 'tasks:read')).searchParams.get('code')).toBeTruthy();
+  });
+
+  it('keeps reading among the choices through sign-in', async () => {
+    const clientId = (await register('Signs in first')).body.client_id;
+    const anon = await get(
+      `/api/auth/oauth2/authorize?${authorizeQuery(clientId, pkce().challenge, 'tasks:write')}`,
+    );
+    const signIn = new URL(
+      anon.status === 302 ? (anon.headers.get('location') ?? '') : anon.body.url,
+    );
+    expect(signIn.pathname).toBe('/oauth/sign-in');
+    expect(signIn.searchParams.get('scope')).toBe('tasks:read tasks:write');
+    const fresh = new Person('Ana Mcp', ana.email);
+    const signedIn = await fresh.call(
+      'POST',
+      '/api/auth/sign-in/email',
+      { email: ana.email, password: 'password123', oauth_query: signIn.search.slice(1) },
+      { accept: 'application/json' },
+    );
+    expect(signedIn.status).toBe(200);
+    const consent = new URL(signedIn.body.url);
+    expect(consent.pathname).toBe('/oauth/consent');
+    expect(consent.searchParams.get('scope')).toBe('tasks:read tasks:write');
+  });
+
+  it('offers reading alone for every module when the request names no scope', async () => {
+    // A dynamic registration holds every scope, whatever it asks (the provider stores them all).
+    const res = await fetch(`${server.base}/api/auth/oauth2/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        client_name: 'Write only',
+        redirect_uris: [REDIRECT],
+        token_endpoint_auth_method: 'none',
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        scope: 'visits:write',
+      }),
+    });
+    const body = (await res.json()) as Json;
+    expect(res.status).toBeLessThan(300);
+    expect(String(body.scope).split(' ')).toEqual(expect.arrayContaining(['visits:read']));
+    const consent = await authorizeAs(body.client_id, '');
+    expect(radios((await page(consent)).html).map((r) => r.value)).toEqual([
+      '',
+      'tasks:read',
+      'tasks:read tasks:write',
+      '',
+      'visits:read',
+      'visits:read visits:write',
+    ]);
+  });
+
+  it('still authorizes a client the server registered with writes only', async () => {
+    const reg = await register('Older client');
+    const clientId = reg.body.client_id;
+    await pool.query(`update oauth_client set scopes = array['tasks:write'] where client_id = $1`, [
+      clientId,
+    ]);
+    const consent = await authorizeAs(clientId, 'tasks:write');
+    expect(consent.pathname).toBe('/oauth/consent');
+    expect(consent.searchParams.get('scope')).toBe('tasks:write');
+    expect(radios((await page(consent)).html).map((r) => r.value)).toEqual(['', 'tasks:write']);
+  });
+
+  it('speaks the language the request names, then Accept-Language', async () => {
+    const clientId = (await register('Polyglot')).body.client_id;
+    // In the authorization request: signed, and carried from sign-in to consent.
+    const anon = await get(
+      `/api/auth/oauth2/authorize?${authorizeQuery(clientId, pkce().challenge, 'tasks:read')}&lang=hi`,
+    );
+    const signIn = new URL(
+      anon.status === 302 ? (anon.headers.get('location') ?? '') : anon.body.url,
+    );
+    expect(signIn.pathname).toBe('/oauth/sign-in');
+    const signInPage = await get(`${signIn.pathname}${signIn.search}`, { 'accept-language': 'en' });
+    expect(signInPage.status).toBe(200);
+    expect(signInPage.text).toContain('साइन इन करें');
+    const consent = await authorizeAs(clientId, 'tasks:read', '&lang=hi');
+    expect(consent.searchParams.get('lang')).toBe('hi');
+    const hindi = await page(consent);
+    expect(hindi.status).toBe(200);
+    expect(hindi.html).toContain('<html lang="hi">');
+    expect(hindi.html).toContain('पढ़ना');
+    // Added to the page's address after the signature: still the page, in that language, and
+    // the page posts back only what was signed.
+    const plain = await authorizeAs(clientId, 'tasks:read');
+    const telugu = await page(new URL(`${plain.href}&lang=te`));
+    expect(telugu.status).toBe(200);
+    expect(telugu.html).toContain('<html lang="te">');
+    expect(postedQuery(telugu.html)).toBe(plain.search.slice(1));
+    const unsigned = await get(
+      `/api/auth/oauth2/authorize?${authorizeQuery(clientId, pkce().challenge, 'tasks:read')}`,
+    );
+    const bare = new URL(
+      unsigned.status === 302 ? (unsigned.headers.get('location') ?? '') : unsigned.body.url,
+    );
+    const added = await get(`${bare.pathname}${bare.search}&lang=te`);
+    expect(added.status).toBe(200);
+    expect(added.text).toContain('<html lang="te">');
+    // Sign-in posts back the signed query, and carries the language to the consent screen.
+    expect(added.text).toContain('data-lang="te"');
+    expect(postedQuery(added.text)).toBe(bare.search.slice(1));
+    // A signed `lang` cannot be changed by adding another.
+    expect((await get(`${signIn.pathname}${signIn.search}&lang=te`)).status).toBe(400);
+    // A language the application does not speak: Accept-Language decides.
+    const fallback = await page(new URL(`${plain.href}&lang=xx`), { 'accept-language': 'te-IN' });
+    expect(fallback.html).toContain('<html lang="te">');
+    // Anything else added is still a changed request.
+    expect((await page(new URL(`${plain.href}&scope=visits%3Awrite`))).status).toBe(400);
   });
 });
 
@@ -636,6 +921,9 @@ describe('connections', () => {
       headers: { authorization: `Bearer ${c.accessToken}` },
     });
     expect(mcp.status).toBe(401);
+    expect((await mcp.json()).error_description).toBe(
+      'The access token is invalid, expired or revoked',
+    );
     const refreshed = await form('/api/auth/oauth2/token', {
       grant_type: 'refresh_token',
       refresh_token: c.refreshToken ?? '',
@@ -726,9 +1014,42 @@ describe('connections', () => {
   });
 });
 
+describe('a person whose roles change after connecting', () => {
+  it('reaches through the token only what their roles reach now', async () => {
+    const cy = new Person('Cy Mcp');
+    await cy.signUp();
+    await addMember(cy, tenant, ['ops']);
+    expect((await cy.call('PUT', '/api/me/default', { tenantId: tenant })).status).toBe(200);
+    const anas = (await ana.call('POST', '/api/tasks', { title: 'For ops', dueOn: '2031-03-04' }))
+      .body.value.id;
+    const own = (
+      await cy.call(
+        'POST',
+        '/api/tasks',
+        { title: 'Cy’s own', dueOn: '2031-03-05' },
+        { 'x-tenant-id': tenant },
+      )
+    ).body.value.id;
+    const c = await connectMcp(cy, 'tasks:read');
+    const before = await c.call('tasks_read', { entity: 'tasks', id: anas });
+    expect(jsonOf(before.text)).toMatchObject({ id: anas, dueOn: '2031-03-04' });
+    // The owner makes Cy staff: own tasks only, and no due dates.
+    const demoted = await ana.call('PATCH', `/api/members/${cy.id}`, { roles: ['staff'] });
+    expect(demoted.status).toBe(200);
+    const theirs = await c.call('tasks_read', { entity: 'tasks', id: anas });
+    expect(theirs.isError).toBe(true);
+    expect(theirs.text).toContain('404');
+    const mine = jsonOf((await c.call('tasks_read', { entity: 'tasks', id: own })).text);
+    expect(mine).toMatchObject({ id: own });
+    expect(mine).not.toHaveProperty('dueOn');
+    expect((await withToken(c.accessToken)('GET', `/api/tasks/${anas}`)).status).toBe(404);
+    await c.close();
+  });
+});
+
 describe('credits', () => {
   it('refuses tool calls while the business is paused', async () => {
-    const c = await connectMcp(ana, 'tasks:read');
+    const c = await connectMcp(ana, 'tasks:write');
     const paused = await opal.call('PUT', `/api/credits/operator/${tenant}/override`, {
       override: { mode: 'pause', reason: 'test' },
     });
@@ -736,7 +1057,16 @@ describe('credits', () => {
     const refused = await c.call('tasks_read', { entity: 'tasks' });
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain('402');
+    // A write too, and nothing is written.
+    const title = `While paused ${stamp}`;
+    const write = await c.call('tasks_write', { action: 'create-task', input: { title } });
+    expect(write.isError).toBe(true);
+    expect(write.text).toContain('402');
+    const written = await pool.query('select id from app.fixture_tasks where title = $1', [title]);
+    expect(written.rows).toEqual([]);
     await opal.call('PUT', `/api/credits/operator/${tenant}/override`, { override: null });
+    expect((await c.call('tasks_read', { entity: 'tasks' })).isError).toBe(false);
+    await c.close();
   });
 });
 

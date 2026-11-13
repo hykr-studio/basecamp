@@ -1,4 +1,5 @@
 import { isTimeZone } from '@hykr/contracts';
+import { knownCurrency } from '@hykr/i18n';
 
 const env = process.env;
 
@@ -113,9 +114,9 @@ export function assertConfig() {
   if (config.voiceAgentKey && config.voiceAgentKey === config.agentApiKey) {
     throw new Error('VOICE_AGENT_KEY must differ from AGENT_API_KEY: audit tells them apart');
   }
-  if (config.defaultCurrency !== undefined && !/^[A-Z]{3}$/.test(config.defaultCurrency))
+  if (config.defaultCurrency !== undefined && !knownCurrency(config.defaultCurrency))
     throw new Error(
-      `DEFAULT_CURRENCY must be an ISO 4217 code such as EUR, not "${config.defaultCurrency}"`,
+      `DEFAULT_CURRENCY must be an ISO 4217 currency such as EUR, not "${config.defaultCurrency}"`,
     );
   if (config.defaultTimeZone !== undefined && !isTimeZone(config.defaultTimeZone))
     throw new Error(

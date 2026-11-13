@@ -15,7 +15,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { HttpException, Inject, Logger } from '@nestjs/common';
 import { EventsHandler, type IEventHandler } from '@nestjs/cqrs';
 import type { Job } from 'bullmq';
-import { and, arrayOverlaps, desc, eq, gt, sql } from 'drizzle-orm';
+import { and, arrayOverlaps, desc, eq, gt, inArray, sql } from 'drizzle-orm';
 import { config } from '../../config.js';
 import { deliveryChannels, type NotificationMeta } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
@@ -43,6 +43,12 @@ const log = new Logger('Dispatch');
 export const APPROVAL_BUTTON_MS = 30 * 60_000;
 
 type Resolved = { contact?: Contact; userId?: string; email?: string; reader: Reader };
+
+/**
+ * The statuses of a marketing message that count against the contact's weekly cap: sent, or
+ * on its way (queued, so two quick sends cannot both pass). Not `failed`.
+ */
+const MARKETING_SENT = ['queued', 'sent', 'delivered', 'read'] as const;
 
 /** Tries of one registered channel for one recipient before the next channel is tried. */
 const CHANNEL_TRIES = 3;
@@ -300,6 +306,8 @@ export class DispatchProcessor extends WorkerHost {
     if (!def.whatsapp || !contact || contact.unreachableAt) return false;
     if (!(await this.contacts.consent(contact.id, def.topic))) return false;
     if (def.topic === 'marketing') {
+      // What went out or is on its way. A message a credits pause refused, or one the provider
+      // failed, never reached the contact, so it uses none of the week's cap.
       const [sent] = await this.db
         .select({ n: sql<number>`count(*)::int` })
         .from(schema.messages)
@@ -307,10 +315,16 @@ export class DispatchProcessor extends WorkerHost {
           and(
             eq(schema.messages.contactId, contact.id),
             eq(schema.messages.category, 'marketing'),
+            inArray(schema.messages.status, MARKETING_SENT),
             gt(schema.messages.at, sql`now() - interval '7 days'`),
           ),
         );
-      if (!underMarketingCap(sent?.n ?? 0, settings.marketingPerWeek)) return false;
+      if (!underMarketingCap(sent?.n ?? 0, settings.marketingPerWeek)) {
+        log.log(
+          `${def.key}: marketing cap reached for contact ${contact.id}: ${sent?.n ?? 0} of ${settings.marketingPerWeek} this week`,
+        );
+        return false;
+      }
     }
     // Approve and Reject need the secret to sign them; without it, the app decides.
     if (def.approval && !config.approvalSecret) return false;

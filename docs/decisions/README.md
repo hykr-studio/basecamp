@@ -648,7 +648,7 @@ re-run": HCONS's full CI covers them). An item a later unit fixed says so. Devel
 - **F4**
   - No known gaps were reported; its doc's Deferred section lists what it left: checking at boot that every role an access map names is registered, and labelling system and support rows in history (section 14 "Support in history and events"). `actor.role` has since been removed.
 - **F5**
-  - No known gaps were reported; its doc's Deferred section lists what it left: deleting relayed rows of `app.domain_events` after a period (the table grows), a poison stored row failing its batch on every tick, and removing schedulers the code no longer declares (section 14 "Removing stale schedules").
+  - No known gaps were reported; its doc's Deferred section lists what it left: deleting relayed rows of `app.domain_events` after a period (the table grows) and removing schedulers the code no longer declares (section 14 "Removing stale schedules"). A poison stored row no longer fails its batch: V6 marks it failed with its reason and relays the rest (section 14 "Seeing failed stored events").
 - **F6**
   - No known gaps were reported; its doc's Deferred section lists what it left: recording SQL hook files by checksum, a Chromium document engine, and `notifications.e2e.test.ts` still reading Mailpit at `localhost:8025`.
 - **A1**

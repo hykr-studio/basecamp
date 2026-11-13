@@ -1,4 +1,4 @@
-import { CurrencyCode, type Money, MoneySettings } from '@hykr/contracts';
+import { KnownCurrencyCode, type Money, MoneySettings } from '@hykr/contracts';
 import { schema } from '@hykr/db';
 import { currencyExponent } from '@hykr/i18n';
 import { eq } from 'drizzle-orm';
@@ -12,7 +12,7 @@ let deployment: string | undefined;
 
 /** The deployment's default currency (DEFAULT_CURRENCY), set once when the server starts. */
 export function setDefaultCurrency(code: string | undefined): void {
-  deployment = code === undefined || code === '' ? undefined : CurrencyCode.parse(code);
+  deployment = code === undefined || code === '' ? undefined : KnownCurrencyCode.parse(code);
 }
 
 /** The currency of a business that set none: the deployment's, else XXX. */

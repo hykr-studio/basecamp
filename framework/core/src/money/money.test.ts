@@ -11,6 +11,7 @@ import {
   flattenTree,
   formatNumber,
   fromMinor,
+  KnownCurrencyCode,
   type Money,
   MoneySettings,
   moneyBand,
@@ -92,6 +93,28 @@ describe('decimals and minor units', () => {
       CurrencyMismatch,
     );
     expect(() => resolveMoneyInput(12.5 as never, 'EUR')).toThrow();
+  });
+
+  it('refuses a currency that does not exist, in either shape, and still reads one', () => {
+    expect(() => toMinor('1.00', 'ABC')).toThrow(RangeError);
+    expect(() => toMinor('1.00', 'ABC')).toThrow('"ABC" is not a currency');
+    expect(() => resolveMoneyInput('1', 'ABC')).toThrow(RangeError);
+    // Minor units never looked up an exponent: the code is checked all the same.
+    expect(() => resolveMoneyInput({ minor: 1 }, 'ABC')).toThrow('"ABC" is not a currency');
+    expect(() => resolveMoneyInput({ minor: 1, currency: 'ABC' }, 'ABC')).toThrow(RangeError);
+    expect(resolveMoneyInput({ minor: 1 }, 'XXX')).toEqual({ minor: 1, currency: 'XXX' });
+    // The read side: a row stored with a made-up code still turns into a decimal.
+    expect(fromMinor(100, 'ABC')).toBe('1.00');
+  });
+
+  it('KnownCurrencyCode: the format first, then a currency the runtime knows', () => {
+    expect(KnownCurrencyCode.parse('JPY')).toBe('JPY');
+    expect(KnownCurrencyCode.parse('XXX')).toBe('XXX');
+    const unknown = KnownCurrencyCode.safeParse('ABC');
+    expect(unknown.error?.issues.map((i) => i.message)).toEqual(['"ABC" is not a currency']);
+    const lower = KnownCurrencyCode.safeParse('eur');
+    expect(lower.error?.issues).toHaveLength(1);
+    expect(lower.error?.issues[0].message).toMatch(/upper case/);
   });
 });
 

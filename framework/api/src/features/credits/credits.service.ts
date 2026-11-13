@@ -40,7 +40,15 @@ import { and, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { Subscription } from 'rxjs';
 import { storableInstant } from '../../infra/instant.js';
 import { type Metering, setMetering, type UsageInput } from '../../metering.js';
-import { type Assessment, assess, type Counter, headroomOf, refusalFor } from './budget.js';
+import {
+  type Assessment,
+  assess,
+  type Counter,
+  headroomOf,
+  limitRefusal,
+  refusalFor,
+  turnRefusal,
+} from './budget.js';
 import {
   type CreditsPlanResolved,
   creditsConfig,
@@ -620,10 +628,6 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       });
     }
     const { period, a } = await this.assessIn(this.db, tenantId, plan, zone);
-    const paused =
-      plan.override?.mode === 'pause' || (plan.enforce && a.budget?.pause)
-        ? refusalFor(a, FrameworkMeters.tokens)
-        : null;
     const status: CreditsStatus = {
       enforced: plan.enforce,
       period: {
@@ -631,19 +635,23 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
         start: period.start.toISOString(),
         end: period.end.toISOString(),
       },
-      paused: paused?.cap === 'credits' ? paused : null,
+      // What the turn hook and the agent guard refuse on: the operator's pause, the budget, or
+      // a limit on what a turn spends.
+      paused: turnRefusal(a),
       usedPercent: a.budget?.usedPercent ?? null,
       alertAt: plan.alertAt,
       pauseAt: plan.pauseAt,
       meters: meters.all().map((def): MeterStatus => {
         const counter = a.quantities.get(def.name);
         const limit = a.limits.get(def.name);
+        const refusal = limitRefusal(a, def);
         return {
           meter: def.name,
           unit: def.unit,
           quantity: counter?.quantity ?? 0,
           ...(limit ? { limit: limit.limit, usedPercent: limit.usedPercent } : {}),
-          paused: !!limit?.pause,
+          paused: refusal !== null,
+          ...(refusal ? { refusal } : {}),
           ...(manage ? { cost: counter?.cost ?? 0 } : {}),
         };
       }),

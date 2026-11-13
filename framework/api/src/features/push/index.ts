@@ -11,7 +11,7 @@ import { copyTarget, scrubCopy } from '../privacy/redact.js';
 import type { RecordCopies } from '../privacy/registry.js';
 import { PushChannel } from './push.channel.js';
 import { PushController } from './push.controller.js';
-import { PushService } from './push.service.js';
+import { maskToken, PushService } from './push.service.js';
 
 /** Checks the receipts of sends old enough to have one (PushService.pollReceipts). */
 export const PushReceiptsQueue = defineQueue<unknown, { checked: number; fellBack: number }>({
@@ -91,7 +91,7 @@ export const PushExport: ExportContributor = {
     return {
       pushDevices: rows.map((r) => ({
         platform: r.platform,
-        token: `${r.token.slice(0, 18)}…`,
+        token: maskToken(r.token),
         createdAt: r.createdAt.toISOString(),
         lastSeenAt: r.lastSeenAt.toISOString(),
       })),

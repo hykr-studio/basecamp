@@ -286,6 +286,19 @@ describe('connecting a calendar', () => {
     expect((await complete(owner, no)).body.rule).toBe('calendar_sign_in_invalid');
   });
 
+  it('finished again with the same idempotency-key, answers the first answer: one exchange', async () => {
+    const started = await signIn(owner);
+    const before = tokenRequests();
+    const key = { 'x-tenant-id': tenantId, 'idempotency-key': `complete-${started.state}` };
+    const body = { code: started.code, state: started.state };
+    const first = await complete(owner, body, key);
+    const again = await complete(owner, body, key);
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    expect(again.status, JSON.stringify(again.body)).toBe(201);
+    expect(again.body.value.id).toBe(first.body.value.id);
+    expect(tokenRequests()).toBe(before + 1);
+  });
+
   it('connects the other people of the test, each in their own calendar', async () => {
     await connect(staff);
     await connect(admin);
@@ -818,6 +831,27 @@ describe('feeds', () => {
     const mine = await owner.call('POST', '/api/calendar/feeds', {});
     expect((await other.call('DELETE', `/api/calendar/feeds/${mine.body.value.id}`)).status).toBe(
       404,
+    );
+  });
+
+  it('asked for twice with one idempotency-key, is one feed; its URL only the first time', async () => {
+    const key = { 'idempotency-key': randomUUID(), 'x-tenant-id': tenantId };
+    const label = `Retry ${key['idempotency-key']}`;
+    const first = await staff.call('POST', '/api/calendar/feeds', { label }, key);
+    const again = await staff.call('POST', '/api/calendar/feeds', { label }, key);
+    expect(first.status).toBe(201);
+    expect(again.status).toBe(201);
+    expect(again.body.value.id).toBe(first.body.value.id);
+    expect(first.body.url).toMatch(/\.ics$/);
+    expect(again.body.url).toBeUndefined();
+    const { rows } = await pool.query(
+      'select count(*) n from app.calendar_feeds where label = $1',
+      [label],
+    );
+    expect(Number(rows[0].n)).toBe(1);
+    // Another label under the same key is another request.
+    expect((await staff.call('POST', '/api/calendar/feeds', { label: 'Other' }, key)).status).toBe(
+      409,
     );
   });
 });

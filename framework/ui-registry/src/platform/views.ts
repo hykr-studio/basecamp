@@ -8,11 +8,20 @@ export const ApprovalCardView = defineView({
   description:
     'Something waiting for the person to approve or reject, with exactly what it will do. Shown automatically when a tool is parked.',
   surfaces: ['inline', 'text', 'speech'],
-  props: z.object({ approvalId: z.string(), summary: z.string().nullable().optional() }),
-  text: (p) =>
-    `Waiting for your approval: ${p.summary ?? 'a change'}. Approve or reject it in the app.`,
+  // `canDecide` false: someone else decides it (a capability's holders, a named person).
+  props: z.object({
+    approvalId: z.string(),
+    summary: z.string().nullable().optional(),
+    canDecide: z.boolean().optional(),
+  }),
+  text: (p, ctx) =>
+    t(ctx.lang, p.canDecide === false ? 'said.cardTeam' : 'said.cardWaiting', {
+      summary: p.summary ?? t(ctx.lang, 'said.aChange'),
+    }),
   speak: (p, ctx) =>
-    t(ctx.lang, 'said.waitingApproval', { summary: p.summary ?? t(ctx.lang, 'said.aChange') }),
+    t(ctx.lang, p.canDecide === false ? 'said.waitingTeam' : 'said.waitingApproval', {
+      summary: p.summary ?? t(ctx.lang, 'said.aChange'),
+    }),
 });
 
 export const KpiRowView = defineView({

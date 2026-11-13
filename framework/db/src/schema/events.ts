@@ -46,11 +46,20 @@ export const domainEvents = app.table(
     relayedAt: timestamp('relayed_at', { withTimezone: true }),
     /** When it was withdrawn before being passed on (a write undone within its undo window). */
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    /**
+     * When a relay gave up on it: the row is not an event it can read, or a subscriber's filter
+     * threw on it. Never passed on; clear it to relay the row again.
+     */
+    failedAt: timestamp('failed_at', { withTimezone: true }),
+    /** Why it failed. */
+    error: text('error'),
   },
   (table) => [
     index('domain_events_pending_idx')
       .on(table.queues, table.availableAt, table.seq)
-      .where(sql`${table.relayedAt} is null and ${table.cancelledAt} is null`),
+      .where(
+        sql`${table.relayedAt} is null and ${table.cancelledAt} is null and ${table.failedAt} is null`,
+      ),
     index('domain_events_resource_idx').on(table.tenantId, table.resourceType, table.resourceId),
     index('domain_events_request_idx').on(table.requestId),
   ],

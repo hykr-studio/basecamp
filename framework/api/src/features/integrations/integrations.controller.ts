@@ -58,7 +58,7 @@ export class IntegrationsController {
     @RequestMeta() meta: RequestMetaValue,
     @Body() body: unknown,
   ) {
-    return this.integrations.createEndpoint(p, meta.requestId, body);
+    return this.integrations.createEndpoint(p, meta, body);
   }
 
   @Get('endpoints/:id')
@@ -73,7 +73,7 @@ export class IntegrationsController {
     @Param('id', uuid) id: string,
     @Body() body: unknown,
   ) {
-    return this.integrations.updateEndpoint(p, meta.requestId, id, body);
+    return this.integrations.updateEndpoint(p, meta, id, body);
   }
 
   @Delete('endpoints/:id')
@@ -82,7 +82,7 @@ export class IntegrationsController {
     @RequestMeta() meta: RequestMetaValue,
     @Param('id', uuid) id: string,
   ) {
-    return this.integrations.deleteEndpoint(p, meta.requestId, id);
+    return this.integrations.deleteEndpoint(p, meta, id);
   }
 
   @Post('endpoints/:id/rotate')
@@ -92,7 +92,7 @@ export class IntegrationsController {
     @RequestMeta() meta: RequestMetaValue,
     @Param('id', uuid) id: string,
   ) {
-    return this.integrations.rotateEndpoint(p, meta.requestId, id);
+    return this.integrations.rotateEndpoint(p, meta, id);
   }
 
   @Get('endpoints/:id/deliveries')
@@ -116,7 +116,7 @@ export class IntegrationsController {
     @RequestMeta() meta: RequestMetaValue,
     @Param('id', uuid) id: string,
   ) {
-    return this.integrations.retryDelivery(p, meta.requestId, id);
+    return this.integrations.retryDelivery(p, meta, id);
   }
 
   @Get('connections')
@@ -130,7 +130,7 @@ export class IntegrationsController {
     @RequestMeta() meta: RequestMetaValue,
     @Body() body: unknown,
   ) {
-    return this.integrations.createConnection(p, meta.requestId, body);
+    return this.integrations.createConnection(p, meta, body);
   }
 
   @Get('connections/:id')
@@ -145,7 +145,7 @@ export class IntegrationsController {
     @Param('id', uuid) id: string,
     @Body() body: unknown,
   ) {
-    return this.integrations.updateConnection(p, meta.requestId, id, body);
+    return this.integrations.updateConnection(p, meta, id, body);
   }
 
   @Delete('connections/:id')
@@ -154,7 +154,7 @@ export class IntegrationsController {
     @RequestMeta() meta: RequestMetaValue,
     @Param('id', uuid) id: string,
   ) {
-    return this.integrations.deleteConnection(p, meta.requestId, id);
+    return this.integrations.deleteConnection(p, meta, id);
   }
 
   @Get('connections/:id/inbound')

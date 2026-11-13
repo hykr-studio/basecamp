@@ -9,7 +9,36 @@ type Amount = { readonly minor: number; readonly currency: string };
 
 const exponents = new Map<string, number>();
 
-/** How many decimals the currency's minor unit has: 2 for EUR, 0 for JPY, 3 for BHD. */
+const FORMAT = /^[A-Z]{3}$/;
+
+/** The currencies Intl lists, plus XXX; null where the runtime cannot list them. */
+let known: ReadonlySet<string> | null | undefined;
+
+/**
+ * Is this a currency: one the runtime's Intl lists (ISO 4217), or XXX, ISO's code for "no
+ * currency" (what a business that set none counts in)? Writes and configuration refuse any other
+ * code; reads and formatting take one, so a row stored with it still shows. Where the runtime
+ * cannot list its currencies (Hermes on a device), any three capital letters pass: the server,
+ * which can, refuses the rest.
+ */
+export function knownCurrency(code: string): boolean {
+  if (!FORMAT.test(code)) return false;
+  if (known === undefined) {
+    const list = (Intl as { supportedValuesOf?: (key: 'currency') => string[] }).supportedValuesOf;
+    try {
+      known = typeof list === 'function' ? new Set([...list('currency'), 'XXX']) : null;
+    } catch {
+      known = null;
+    }
+  }
+  return known === null || known.has(code);
+}
+
+/**
+ * How many decimals the currency's minor unit has: 2 for EUR, 0 for JPY, 3 for BHD. Lenient: a
+ * code Intl does not know gets its default (2), so a stored row still reads; writes check the
+ * code first (`knownCurrency`).
+ */
 export function currencyExponent(currency: string): number {
   let exp = exponents.get(currency);
   if (exp === undefined) {

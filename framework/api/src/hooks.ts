@@ -340,6 +340,16 @@ export interface EventFeed {
   ): Promise<readonly DomainEventEnvelope[]>;
   /** These are on their subscribers' queues: don't return them again. Same prefix guard. */
   relayed(ids: readonly string[], a: { prefix: string }, ctx: ServerContext): Promise<void>;
+  /**
+   * These can never be relayed (not an event, or a subscriber's filter throws on them): keep
+   * them, with why, and don't return them again. Same prefix guard. A feed without it gets
+   * them back on the next tick, and the rest of its batch still goes on.
+   */
+  failed?(
+    items: readonly { id: string; error: string }[],
+    a: { prefix: string },
+    ctx: ServerContext,
+  ): Promise<void>;
 }
 
 /** Event feeds, polled in registration order. */

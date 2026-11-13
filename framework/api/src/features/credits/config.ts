@@ -6,7 +6,7 @@ import {
   type CreditsOverride,
   CreditsPlan,
   type CreditsSettings,
-  CurrencyCode,
+  KnownCurrencyCode,
   PriceKey,
 } from '@hykr/contracts';
 import { z } from 'zod';
@@ -15,7 +15,7 @@ import { z } from 'zod';
 export const CreditsConfig = z
   .object({
     /** ISO 4217: a credit is one minor unit of it. Unset: uses are metered at no cost. */
-    currency: CurrencyCode.optional(),
+    currency: KnownCurrencyCode.optional(),
     /** Credits per meter's pricing unit, by '<meter>' or '<meter>.<variant>'. */
     prices: z.record(PriceKey, z.number().finite().min(0)).default({}),
     /** Added to a model's own price (MODEL_PROVIDERS), per cent. */
@@ -48,6 +48,12 @@ export function parseCreditsConfig(raw: string | undefined): CreditsConfig {
     throw new CreditsConfigError(
       parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`),
     );
+  const { defaults } = parsed.data;
+  const order = thresholdProblem(
+    defaults.alertAt ?? NEUTRAL_PLAN.alertAt,
+    defaults.pauseAt ?? NEUTRAL_PLAN.pauseAt,
+  );
+  if (order) throw new CreditsConfigError([`defaults: ${order}`]);
   return parsed.data;
 }
 
@@ -92,6 +98,10 @@ export const NEUTRAL_PLAN = {
   prices: {} as Record<string, number>,
   pauseMessages: [] as string[],
 };
+
+/** An alert is an early warning: it must come before the pause, never at it. */
+export const thresholdProblem = (alertAt: number, pauseAt: number): string | undefined =>
+  alertAt >= pauseAt ? `alertAt (${alertAt}) must be below pauseAt (${pauseAt})` : undefined;
 
 /** The override, if it still holds at `now`. */
 export function activeOverride(

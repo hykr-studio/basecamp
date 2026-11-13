@@ -10,7 +10,7 @@ import {
   resolvePlan,
 } from '../../dist/features/credits/config.js';
 import { FrameworkMeters, modelInputPrice } from '../../dist/features/credits/meters.js';
-import { providerFor } from '../../dist/features/credits/writes.js';
+import { buyCredits, providerFor } from '../../dist/features/credits/writes.js';
 
 const config = parseCreditsConfig(
   JSON.stringify({
@@ -53,6 +53,21 @@ describe('CREDITS_CONFIG', () => {
     expect(() => parseCreditsConfig(JSON.stringify({ defaults: { pauseAt: 0 } }))).toThrow(
       /pauseAt/,
     );
+    // Well formed, but no currency: a credit would be a guessed fraction of it.
+    expect(() => parseCreditsConfig(JSON.stringify({ currency: 'ABC' }))).toThrow(
+      /"ABC" is not a currency/,
+    );
+    expect(parseCreditsConfig(JSON.stringify({ currency: 'JPY' })).currency).toBe('JPY');
+  });
+
+  it('refuses defaults whose alert is not below their pause (V5)', () => {
+    for (const defaults of [{ alertAt: 100 }, { pauseAt: 80 }, { alertAt: 95, pauseAt: 90 }])
+      expect(() => parseCreditsConfig(JSON.stringify({ defaults }))).toThrow(
+        /defaults: alertAt \(\d+\) must be below pauseAt \(\d+\)/,
+      );
+    expect(
+      parseCreditsConfig(JSON.stringify({ defaults: { alertAt: 85, pauseAt: 90 } })).defaults,
+    ).toEqual({ alertAt: 85, pauseAt: 90 });
   });
 });
 
@@ -241,7 +256,7 @@ describe('embedding tokens', () => {
           apiKey: 'k',
           models: [
             { id: 'embed', kind: 'embedding', price: { currency: 'XXX', inputPerMillion: 50 } },
-            { id: 'other', kind: 'embedding', price: { currency: 'XTS', inputPerMillion: 50 } },
+            { id: 'other', kind: 'embedding', price: { currency: 'USD', inputPerMillion: 50 } },
             { id: 'free', kind: 'embedding' },
           ],
         },
@@ -287,5 +302,19 @@ describe('purchase providers', () => {
       expect(http.getStatus()).toBe(503);
       expect(http.getResponse().error).toBe('purchases_unavailable');
     }
+  });
+
+  it('who may buy is decided first: with no provider set up, the assistant is refused (V5)', async () => {
+    const op = buyCredits();
+    const assistant = {
+      actor: { kind: 'agent', id: 'assistant' },
+      tenantId: 't1',
+      capabilities: [],
+    } as unknown as Parameters<typeof op.authorize>[0];
+    const loaded = await op.load?.({} as never, assistant, { amount: 100 });
+    expect(op.authorize(assistant, loaded as never, { amount: 100 })).toMatchObject({
+      decision: 'deny',
+      rule: 'people_only',
+    });
   });
 });

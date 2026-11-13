@@ -157,7 +157,21 @@ export function mayDecide(row: ApprovalRow, p: Principal): boolean {
   if (row.approverUserId) return !!self && row.approverUserId === self;
   if (!row.approverCapability || !(p.capabilities ?? []).includes(row.approverCapability))
     return false;
-  return !self || row.ownerId !== self;
+  return !askedBy(row, p);
+}
+
+/** Did this principal ask for it? A member by their user id, a contact by its contact id. */
+function askedBy(row: ApprovalRow, p: Principal): boolean {
+  const s = subjectOf(p);
+  if (s?.kind === 'user') return row.ownerId === s.userId;
+  if (s?.kind === 'contact') return row.requesterContactId === s.contactId;
+  return false;
+}
+
+/** The contact this principal is, if it is one. */
+function contactIdOf(p: Principal): string | null {
+  const s = subjectOf(p);
+  return s?.kind === 'contact' ? s.contactId : null;
 }
 
 /**
@@ -339,6 +353,7 @@ export async function parkForApproval<I, L>(
  */
 function decidable(p: Principal): SQL {
   const self = userIdOf(p);
+  const contact = contactIdOf(p);
   const held = p.capabilities ?? [];
   const mine = [
     ...(self ? [eq(approvals.approverUserId, self)] : []),
@@ -348,6 +363,14 @@ function decidable(p: Principal): SQL {
             isNull(approvals.approverUserId),
             inArray(approvals.approverCapability, held),
             ...(self ? [or(isNull(approvals.ownerId), ne(approvals.ownerId, self))] : []),
+            ...(contact
+              ? [
+                  or(
+                    isNull(approvals.requesterContactId),
+                    ne(approvals.requesterContactId, contact),
+                  ),
+                ]
+              : []),
           ),
         ]
       : []),

@@ -135,8 +135,10 @@ export interface MeterStatus {
   limit?: number;
   /** Of the limit, when there is one. */
   usedPercent?: number;
-  /** Its limit is reached: what it meters is refused. */
+  /** Its limit is reached: what it meters is refused (not under the operator's `run`). */
   paused: boolean;
+  /** Why, when it is paused: its limit's rule and reason. */
+  refusal?: UsageRefusal;
   /** Credits spent on it this period (`credits.manage` only). */
   cost?: number;
 }
@@ -145,7 +147,11 @@ export interface MeterStatus {
 export interface CreditsStatus {
   enforced: boolean;
   period: { unit: CreditPeriod; start: string; end: string };
-  /** Why turns, voice and the paused message variants are refused now; null: they run. */
+  /**
+   * Why the assistant's turns are refused now: the operator's pause, the budget (then voice and
+   * the paused message variants are refused too), or a `tokens` or `tool_calls` limit. Null:
+   * turns run. A limit on another meter refuses only that meter's use: see `meters`.
+   */
   paused: UsageRefusal | null;
   /** Of the budget (allowance + wallet); null without a budget. */
   usedPercent: number | null;

@@ -1,6 +1,9 @@
 // Fetching a result file a service names by URL, without letting it point the server at its
 // own network. Nothing here loads Nest.
+import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import { lookup } from 'node:dns/promises';
+import http from 'node:http';
+import https from 'node:https';
 import { BlockList, isIP } from 'node:net';
 
 /** A result file that can never be fetched or kept: retrying will not help. */
@@ -52,9 +55,45 @@ export function isPrivateAddress(address: string): boolean {
 
 /**
  * Is this URL one the server may fetch a result from? https only, and a host that resolves
- * only to public addresses. With `allowPrivate` (development), http and private hosts too.
+ * only to public addresses now. With `allowPrivate` (development), http and private hosts too.
+ * A check ahead of time: `fetchResult` checks the addresses again as it connects.
  */
 export async function checkResultUrl(raw: string, o: { allowPrivate: boolean }): Promise<URL> {
+  const url = checkShape(raw, o);
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  if (o.allowPrivate || isIP(host)) return url;
+  const addresses = await lookup(host, { all: true, verbatim: true }).then(
+    (found) => found.map((a) => a.address),
+    () => {
+      throw new Error(`The result host ${host} did not resolve`);
+    },
+  );
+  if (!addresses.length || addresses.some(isPrivateAddress))
+    throw new ResultRefused('The result URL points at a private address');
+  return url;
+}
+
+/**
+ * At connect time: every address the name has must be public, and the socket goes to one of
+ * the addresses checked. Resolving once, here, leaves no gap between the check and the
+ * connection for the name to change (DNS rebinding).
+ */
+function publicOnly(
+  host: string,
+  options: { all?: boolean; family?: number; hints?: number },
+  callback: (err: Error | null, address: string | LookupAddress[], family?: number) => void,
+) {
+  dnsLookup(host, { all: true, family: options?.family, hints: options?.hints }, (err, list) => {
+    if (err) return callback(new Error(`The result host ${host} did not resolve`), []);
+    if (!list.length || list.some((a) => isPrivateAddress(a.address)))
+      return callback(new ResultRefused('The result URL points at a private address'), []);
+    if (options?.all) callback(null, list);
+    else callback(null, list[0].address, list[0].family);
+  });
+}
+
+/** The URL's own rules, before any look-up: http(s), no credentials, no private address. */
+function checkShape(raw: string, o: { allowPrivate: boolean }): URL {
   let url: URL;
   try {
     url = new URL(raw);
@@ -69,48 +108,75 @@ export async function checkResultUrl(raw: string, o: { allowPrivate: boolean }):
   }
   if (url.protocol !== 'https:') throw new ResultRefused('Result URLs must be https');
   const host = url.hostname.replace(/^\[|\]$/g, '');
-  const addresses = isIP(host)
-    ? [host]
-    : await lookup(host, { all: true, verbatim: true }).then(
-        (found) => found.map((a) => a.address),
-        () => {
-          throw new Error(`The result host ${host} did not resolve`);
-        },
-      );
-  if (!addresses.length || addresses.some(isPrivateAddress))
+  if (isIP(host) && isPrivateAddress(host))
     throw new ResultRefused('The result URL points at a private address');
   return url;
 }
 
 /**
  * A result file's bytes from a URL: checked first, no redirects, at most `maxBytes`, given up
- * after `timeoutMs` or when `signal` aborts. A refusal (the URL, a redirect, the size) is a
+ * after `timeoutMs` or when `signal` aborts. The name is resolved when the socket connects, and
+ * only public addresses are connected to. A refusal (the URL, a redirect, the size) is a
  * `ResultRefused`; a network failure or a 5xx is an ordinary error, worth a retry.
  */
 export async function fetchResult(
   raw: string,
   o: { allowPrivate: boolean; maxBytes: number; timeoutMs: number; signal?: AbortSignal },
 ): Promise<Buffer> {
-  const url = await checkResultUrl(raw, o);
-  const signals = [AbortSignal.timeout(o.timeoutMs), ...(o.signal ? [o.signal] : [])];
-  const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.any(signals) });
-  if (res.status >= 300 && res.status < 400)
-    throw new ResultRefused('The result URL redirects: give the final URL');
-  if (res.status >= 500) throw new Error(`The result URL answered ${res.status}`);
-  if (!res.ok) throw new ResultRefused(`The result URL answered ${res.status}`);
-  const declared = Number(res.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > o.maxBytes)
-    throw new ResultRefused(`The result file is larger than ${o.maxBytes} bytes`);
-  const chunks: Buffer[] = [];
-  let size = 0;
-  if (res.body)
-    // Leaving the loop early cancels the stream.
-    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-      size += chunk.length;
-      if (size > o.maxBytes) break;
-      chunks.push(Buffer.from(chunk));
-    }
-  if (size > o.maxBytes)
-    throw new ResultRefused(`The result file is larger than ${o.maxBytes} bytes`);
-  return Buffer.concat(chunks);
+  const url = checkShape(raw, o);
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(o.timeoutMs),
+    ...(o.signal ? [o.signal] : []),
+  ]);
+  const transport = url.protocol === 'https:' ? https : http;
+  return new Promise<Buffer>((resolve, reject) => {
+    const req = transport.request(
+      url,
+      {
+        method: 'GET',
+        signal,
+        // A fresh agent per request: no pooled socket skips the address check.
+        agent: false,
+        ...(o.allowPrivate ? {} : { lookup: publicOnly as never }),
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const refuse = (e: Error) => {
+          res.destroy();
+          reject(e);
+        };
+        if (status >= 300 && status < 400)
+          return refuse(new ResultRefused('The result URL redirects: give the final URL'));
+        if (status >= 500) return refuse(new Error(`The result URL answered ${status}`));
+        if (status < 200 || status >= 300)
+          return refuse(new ResultRefused(`The result URL answered ${status}`));
+        const declared = Number(res.headers['content-length']);
+        if (Number.isFinite(declared) && declared > o.maxBytes)
+          return refuse(new ResultRefused(`The result file is larger than ${o.maxBytes} bytes`));
+        const chunks: Buffer[] = [];
+        let size = 0;
+        res.on('data', (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > o.maxBytes)
+            return refuse(new ResultRefused(`The result file is larger than ${o.maxBytes} bytes`));
+          chunks.push(chunk);
+        });
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+        // Closed before the end, without an error of its own: the answer was cut off.
+        res.on('close', () => {
+          if (!res.complete) reject(new Error('The result URL closed before the file ended'));
+        });
+      },
+    );
+    // The guard's refusal comes back as the request's error: keep it a refusal.
+    req.on('error', (e) => reject(e instanceof ResultRefused ? e : unwrap(e)));
+    req.end();
+  });
 }
+
+/** A look-up's refusal arrives wrapped by the socket on some Node versions. */
+const unwrap = (e: Error): Error => {
+  const cause = (e as { cause?: unknown }).cause;
+  return cause instanceof ResultRefused ? cause : e;
+};

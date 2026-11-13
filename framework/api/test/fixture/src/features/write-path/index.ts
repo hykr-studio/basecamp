@@ -3,6 +3,7 @@
 // entity's read schema. The `chore` entity is served over the fixture's tasks table, by a
 // `chores` module that only the write-path test's server (`writePath`) adds; the other tests
 // never load this file.
+import { call, defineScript, say, written } from '@hykr/agents/script';
 import { defineModule, defineServer } from '@hykr/api';
 import {
   type Contributions,
@@ -271,6 +272,19 @@ export const writePathContributions: Partial<Contributions> = {
   ],
 };
 
+/** chore <title> → create-chore: a title marked [review] parks for the reviewers (V7). */
+const choreScripts = [
+  defineScript({
+    name: 'chore',
+    match: (text) => /^chore (.+)$/i.exec(text.trim())?.[1],
+    step: (title, turn) => {
+      const r = turn.result('create-chore');
+      if (!r) return [call('create-chore', { title })];
+      return [say(written(r, () => 'Added.', turn))];
+    },
+  }),
+];
+
 /** Chores, as a module over the tasks module's table: it declares no table of its own. */
 export const choresModule = defineModule({
   ...moduleSpec({
@@ -280,6 +294,7 @@ export const choresModule = defineModule({
     commands: [RenameChoreSpec],
   }),
   server: WritePathModule,
+  agent: { scripts: choreScripts },
 });
 
 /** The fixture plus chores, served with the plugin, the hook and the field type. */

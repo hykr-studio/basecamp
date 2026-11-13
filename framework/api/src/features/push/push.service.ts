@@ -39,8 +39,19 @@ const errorOf = (t: { details?: { error?: string }; message?: string }) =>
   t.details?.error ?? t.message ?? 'unknown';
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** The token's first characters: enough to tell devices apart, not to send to one. */
-const masked = (token: string) => `${token.slice(0, 18)}…`;
+/**
+ * The token's first characters: enough to tell devices apart, not to send to one. An Expo
+ * token's prefix (`ExponentPushToken[`, `ExpoPushToken[`) says nothing, so the mask keeps it and
+ * 6 characters of the id; a token without one, its first 8. Never more than half of what
+ * identifies the device, so a short token is never shown whole. Sliced, never pattern-replaced:
+ * a replace that misses would return the token whole. The device list and the export use it.
+ */
+export function maskToken(token: string): string {
+  const open = token.indexOf('[');
+  const id = open >= 0 ? token.length - open - 1 : token.length;
+  const keep = Math.min(open >= 0 ? 6 : 8, Math.floor(id / 2));
+  return `${token.slice(0, (open >= 0 ? open + 1 : 0) + keep)}…`;
+}
 
 /** Push (Expo): devices, sending, and the receipts that say how a send went. */
 @Injectable()
@@ -247,7 +258,7 @@ function deviceOf(row: typeof pushTokens.$inferSelect): PushDevice {
   return {
     id: row.id,
     platform: row.platform,
-    token: masked(row.token),
+    token: maskToken(row.token),
     createdAt: row.createdAt.toISOString(),
     lastSeenAt: row.lastSeenAt.toISOString(),
   };

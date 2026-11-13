@@ -984,8 +984,14 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   contributed as `subscribers`. Events come from the registered `eventFeeds`, which the worker polls
   each second with this process's prefix and `ctx`. The framework's `outbox` feed returns the rows of
   `app.domain_events` with this prefix that are due (`available_at` passed), not withdrawn
-  (`cancelled_at`) and not yet relayed, oldest first. The relay adds one job per event and subscriber
-  (id `<subscriber>--<stored event id>`, so a repeat runs once), then sets `relayed_at`. `handle`
+  (`cancelled_at`), not failed and not yet relayed, oldest first. The relay adds one job per event
+  and subscriber (id `<subscriber>--<stored event id>`, so a repeat runs once), then sets
+  `relayed_at`. Each event is relayed on its own: a row that is not an event (the envelope refuses
+  it) or that a subscriber's `when` throws on gets `failed_at` and `error` instead, is logged, and
+  is never returned again, while the rest of the batch, of every business, goes on; clear
+  `failed_at` to relay it again. A queue that refuses a job (Redis down) stops the tick there and
+  the rest waits for the next one. A feed of your own may implement `failed` to keep such rows;
+  without it they come back each tick but hold nothing up. `handle`
   runs on the shared `events` queue; `queue` adds the envelope to your own queue. The envelope has
   the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
   (F3) before it leaves the server. The in-process `EventBus` is not relayed. Notifications are one
@@ -1144,8 +1150,12 @@ A screen that reads an entity with neither stops the app at startup. A call runs
 client with the person's session (`runReadTool` in `@hykr/api-client`) and `x-channel: webmcp`, so
 the API applies their business, access and field hiding. The server treats that channel as
 read-only (anything but GET or HEAD is 403 `read_only_channel`) and agent-driven (people-only
-routes, approvals and chat turns are 403). The header is not a security boundary: any script on the
-page holds the same session. Decisions: `docs/decisions/A2.md`.
+routes, approvals and chat turns are 403). Better Auth's routes (`/api/auth/*`) answer before any
+Nest guard, so the same rules run in front of them (`authMiddleware`, `infra/auth.ts`): a channel
+a session may not name is 400 `bad_channel`, and the `webmcp` channel reaches none of them, not
+even a GET (403 `read_only_channel`), since some GETs sign in or hand out a code. The header is not
+a security boundary: any script on the page holds the same session. Decisions:
+`docs/decisions/A2.md`, `docs/decisions/V9.md`.
 
 ### 5.12 Files on records
 
@@ -1207,7 +1217,17 @@ sample's `orders` module uses every part.
   `currencyColumn()` (`@hykr/db`), and give the spec the trait `money: { fields: ['total'] }`: reads
   carry `Money`, writes take `MoneyInput` (`{ minor }`, or a decimal string such as `"1500.00"` read
   with the currency's exponent), and a record keeps one currency (`currency_mismatch`,
-  `currency_fixed`, `currency_required`, `money_invalid`). Filter a money field with the `money`
+  `currency_fixed`, `currency_required`, `money_invalid`). The currency must exist
+  (`knownCurrency` in `@hykr/i18n`: one Intl lists, or `XXX`): a create in a made-up code such as
+  `ABC` is `money_invalid` (`"ABC" is not a currency`), and `toMinor` and `resolveMoneyInput`
+  throw a `RangeError` for it, so a command that prices in `authorize` refuses before it takes a
+  number (a command that takes a currency checks it in `authorize` too: the plugin acts only
+  when the command writes, after a parked request was made). Reads, `fromMinor` and formatting
+  still take any three capital letters, so a row stored
+  with such a code still shows. For an input or a configuration value, use `KnownCurrencyCode`
+  (`DEFAULT_CURRENCY`, `CREDITS_CONFIG` and a model's price are checked this way at start). Where
+  the runtime cannot list currencies (Hermes on a device), the format is the check and the server
+  refuses the rest (`docs/decisions/V4.md`). Filter a money field with the `money`
   list type, in minor units. Arithmetic is exact: `mulDiv`, `scaleMoney`, `allocateMinor`,
   `sumMoney`, with the rounding you name. `moneyText(m, lang)` and `spokenMoney` (`@hykr/i18n`) and
   `useMoneyText()` (`@hykr/app`) format through Intl.
@@ -1254,8 +1274,16 @@ with it.
   `/api/integrations/*`. Agents never reach it. Every change goes through `runWrite` (audited,
   parked when a write hook asks, replayed after approval).
 - **Outbound.** `POST /api/integrations/endpoints { url, events: ['task.*'], capabilities? }`
-  returns the signing secret once. Each committed entity event becomes one delivery per matching
-  endpoint: the record projected as the endpoint may read it (it reads as the business's system
+  returns the signing secret. A retry with the same `idempotency-key` is the same endpoint and
+  answers the same secret, read back from its sealed row (none is kept with the stored reply), to
+  someone who may still manage it, and only while the endpoint is as that write left it (after a
+  later rotation or change, the stored reply without a secret); a rotate, a connection with
+  generated credentials and a delivery retry repeat the same way. A connection's credentials
+  sent in a body are recognised on a retry by a tag keyed from `SECRETS_KEY`, never a plain hash.
+  A parked create repeated answers without the secret. Each
+  committed entity event that happened after the endpoint was made becomes one delivery per
+  matching endpoint (an event held by an undo window, or relayed late, does not reach an endpoint
+  made since): the record projected as the endpoint may read it (it reads as the business's system
   principal with the `capabilities` it was given, so a field that needs a capability stays
   hidden), signed the Standard Webhooks way (`webhook-id`, `webhook-timestamp`,
   `webhook-signature`), sent only to public addresses (`INTEGRATIONS_ALLOWED_HOSTS` lets a
@@ -2047,6 +2075,8 @@ the application's.
   work in the back office; the assistant still answers), `mention {}` (`@[Name](agent:<id>)` in a
   comment) and `webhook { connectionId, on }` (an `agent-webhooks` connection, section 5.14). The
   `agents.tick` schedule fires time triggers and conditions; subscribers and an inbound hook the rest.
+  An `event` or `mention` trigger sees only what happened after it was saved: an event held by an
+  undo window, or relayed late, does not start an agent made (or a trigger changed) since.
 - **A run** (`agents.run` queue, in the worker) passes the turn hooks (credits, the model policy),
   then runs the assistant once on one message: the instructions, then what started it as data. Its
   model gets only the scope's tools. Its tools call the API with a run token (`x-agent-run`, an HMAC
@@ -2390,6 +2420,16 @@ traits: { offline: {}, versioned: {} },        // offline: { writes: ['create', 
 - **One write per key.** `runWrite` takes an advisory lock on (principal, `idempotency-key`) in
   the write's transaction and looks for the stored reply again: two requests with one key at the
   same moment run once, and both answer the first reply.
+- **What the server makes is not the request.** A route whose op input carries what it made for
+  the request (a fresh id, a sealed secret, a token's hash) passes what the caller sent as
+  `requestBody`: the repeat is recognised by that, so the same body answers the first reply and
+  another body is a 409. A stored reply comes back with `repeat: true`; whatever the route adds
+  to its answer after the write (a secret, a retry now) it must not do again, and a secret is
+  read back from where it is sealed, never kept in the reply. `findRepeat(db, ctx, op, request)`
+  looks before work that must not run twice (exchanging a one-time code); `saveReply` keeps the
+  answer of a write that does not go through `runWrite` (a file's upload, a job's cancel, a
+  back-office reply). A
+  repeated calendar feed create answers the feed without its URL (only the token's hash is kept).
 - **Replies are kept** for `IDEMPOTENCY_KEEP_DAYS` (default 30); the `idempotency.purge` schedule
   forgets older ones every hour (`IdempotencyService.purge`). A key reused later runs again.
 - **The outbox** (`@hykr/app`, `features/offline`). `useEntityMutation`, `useCommand` and a
@@ -2851,6 +2891,8 @@ Helpers you will use, all from `@hykr/agents/script`: `call`, `say`, `sayIn(turn
 
 A write that waits for approval suspends the run: the script's next step runs when the request is decided, with the tool's result saying `approved`, `rejected` or `expired` (section 5.8.3). The steps before the park are still in `turn.steps`.
 
+The scripted model knows which tools the turn offers (the call's tool list): `turn.offered('create-todo')` says whether a script may call it. A tool can be missing because its feature flag is off for the business, or the person may not use it. A step that calls a tool the turn does not offer is not sent: the engine answers "I can't do that here." (`said.notAvailable`, in every language) instead, so a script needs no check of its own. Check `turn.offered` only to say something else. A tool that fails reads as a refusal with its reason, and never as "the API answered undefined".
+
 The framework's own scripts (saved pages, handoff, the failing turn) run before the domain's. Each feature keeps them in `framework/agents/src/fake/scripts/<feature>.ts` as `defineScriptSet({ name, order, scripts })`, with one line in `scripts/index.ts`. The first script that matches runs, so `order` places the set: pages 100, handoff 200, testing 900. A set or script name used twice throws. A new framework tool gets its script there.
 
 The fake model reads the language, surfaces and canvas from the system prompt with regular expressions. If you change the wording of `buildInstructions` in `framework/agents/src/version.ts`, scripted tests can break silently.
@@ -2883,6 +2925,8 @@ export const TodoListView = defineView({
 ```
 
 Add it to the module's `<name>Views.views`. `createUiRegistry` refuses a spoken list view without `labels.noun` and `labels.empty`, and a view or screen name another module (or the framework) already has.
+
+On WhatsApp a list's rows (two or more) go as buttons or a list to tap, headed by the view's heading: the `title` it was shown with, else its `labels.title` in the turn's language (the text intent's `heading`). A view with neither is headed by its whole text, so give a list view a `labels.title`; its `text` need not start with one.
 
 Bind it to a component in the app, in its app module's `bind` (`application/mobile/src/modules/todos/index.tsx`):
 
@@ -2967,13 +3011,14 @@ Every business's use of what costs money is metered, priced and, when its plan s
   `<meter>.<variant>` in credits per pricing unit (tokens per million, voice per minute),
   `markupPercent` on a model's own `MODEL_PROVIDERS` price (used when no `tokens` or
   `embedding_tokens` price is set and the currencies match), and `defaults`, the plan every
-  business starts on. Malformed JSON stops
-  the start. Unset, uses are metered at no cost and nothing is capped.
+  business starts on. Malformed JSON, or defaults whose `alertAt` is not below their `pauseAt`,
+  stops the start. Unset, uses are metered at no cost and nothing is capped.
 - **The plan** is the settings section `credits`: `enforce`, `allowance` (credits per period),
   `period` (`day`, `week`, `month` in the business's time zone), `alertAt` (80) and `pauseAt`
   (100), per-meter `limits`, `prices` and `pauseMessages` (message categories a paused business
-  does not send), each over the deployment's defaults. Only the operator writes it; the business
-  sets only its `alertAt` (`PUT /api/credits/alerts`, `credits.manage`).
+  does not send), each over the deployment's defaults. `alertAt` must be below `pauseAt` (an
+  alert at the pause is never early). Only the operator writes it; the business sets only its
+  `alertAt` (`PUT /api/credits/alerts`, `credits.manage`).
 - **Budget and wallet.** On credits, a period's spending uses the allowance first, then the
   prepaid wallet (`app.credit_wallets`, every change a row in `app.credit_ledger`). Used per cent is
   spent over spent plus what is left. At `alertAt` of a cap (the budget or a meter's limit) the
@@ -2984,7 +3029,8 @@ Every business's use of what costs money is metered, priced and, when its plan s
 - **What a pause refuses** (402, rules `credits_exhausted`, `usage_limit_reached`,
   `credits_suspended`): assistant turns and back-office drafts (the `credits` turn hook), new voice
   sessions (and a session's `maxSeconds` is cut to what is left), outbound messages of a
-  category in `pauseMessages` (recorded as failed, never sent), and embeddings (recall answers 402,
+  category in `pauseMessages` (recorded as failed, never sent, and not counted against a
+  contact's weekly marketing cap), and embeddings (recall answers 402,
   a turn runs without recall, the indexer leaves rows pending). Replies, codes, approvals, handoffs
   and staff messages always go. A paused business's WhatsApp customer is handed to the team.
   Every call an agent makes to the API (the assistant's key, an agent run's token, an MCP token)
@@ -2997,16 +3043,21 @@ Every business's use of what costs money is metered, priced and, when its plan s
   plan), `PUT …/override` (`{ override: { mode: 'run' | 'pause', until?, reason } }` or `null`) and
   `POST …/grants` (`{ amount, note }`). Each write runs through `runWrite` as the system job
   `credits.operator` on behalf of the operator, audited in that business (`on_behalf_of`).
-- **People.** `GET /api/credits` (`credits.view`: owner, admin, ops, staff) says whether the
-  business is paused and how much of each cap is used; amounts, `GET /api/credits/ledger`,
-  `GET /api/credits/usage` and purchases need `credits.manage` (owner, admin). People only.
+- **People.** `GET /api/credits` (`credits.view`: owner, admin, ops, staff) says how much of
+  each cap is used and whether turns are refused: `paused` is the refusal the turn hook and the
+  agent guard apply (`turnRefusal`: the operator's pause, the budget, or a `tokens` or
+  `tool_calls` limit), null while turns run. Each meter whose own limit refuses its use is
+  `paused` with its `refusal` (rule and reason), so a voice or memory-search limit shows there
+  while turns still run. Amounts, `GET /api/credits/ledger`, `GET /api/credits/usage` and
+  purchases need `credits.manage` (owner, admin). People only.
 - **Buying credits.** `POST /api/credits/purchases { amount, provider? }` goes through `runWrite`
   (a write hook may park it) and records the purchase; its `CreditPurchaseProvider` (contributed
   as `creditPurchaseProviders`, a payment connector's) starts it and returns a checkout URL or the
   outcome. The connector's confirmation (a `connectorHandler` on its verified webhook) calls
   `CreditsService.settlePurchase({ tenantId: event.tenantId, provider, purchaseId }, { status, ref })`,
   which tops the wallet up once, and only for a purchase of that business made with that
-  provider (anything else is 404). No provider ships with the framework: without one, 503.
+  provider (anything else is 404). No provider ships with the framework: without one, 503 (to
+  someone who may buy; anyone else gets 403 first, audited).
 - **In the app.** List `creditsPlugin` in `<AppShell plugins>`: a `/credits` screen (usage, the
   pause, the balance, buying, the history) and its destination for people with `credits.view`.
 - **In tests.** The scripted model reports usage (a token per four characters of prompt and
@@ -3109,9 +3160,15 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   /api/auth/oauth2/register`; one whose redirects are all loopback or app schemes is registered
   as a native app), sends the person to `/api/auth/oauth2/authorize` with PKCE (`S256`), and trades
   the code at `/api/auth/oauth2/token`. The API serves the sign-in page (`/oauth/sign-in`) and the
-  consent screen (`/oauth/consent`) in the person's language: the client as it named itself, the
-  business, and each module asked for, read or change, which the person may narrow. Consent is
-  remembered per client, person and business. Tokens are opaque (`mcp_at_…`, refresh `mcp_rt_…`),
+  consent screen (`/oauth/consent`) in the person's language (`?lang`, in the authorization
+  request or added to the page's address, when the application speaks it; else
+  `Accept-Language`): the client as it named itself, the business, and one choice per module asked
+  for (not allowed, read, or change when change was asked), so the person may narrow it. A request
+  to change a module asks to read it too (a `before` hook on authorize adds `<m>:read`, where the
+  client's registration allows it), since the provider takes a consent only to scopes literally
+  asked for. Consent is remembered per client, person and business. A call to `/mcp` without a
+  token is told one is needed; one with a token it does not accept, that the token is invalid,
+  expired or revoked. Tokens are opaque (`mcp_at_…`, refresh `mcp_rt_…`),
   stored hashed: one hour, thirty days.
 - **Who it is.** The `mcp` identity provider makes a token an agent (`mcp:<client id>`) acting for
   its person, in the business they consented in (their default one, else the one they last became
@@ -3122,7 +3179,12 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   Everything else is the API's: access, field hiding, approvals, audit. A person who left the
   business gets 403. The throttle counts each client for its person and business (any
   contributed identity provider's credential gets its own bucket, as the agent key does), not
-  the address: every tool call reaches the API from the API's own process.
+  the address: every tool call reaches the API from the API's own process. Better Auth's routes
+  (`/api/auth/*`, sign-in and the OAuth endpoints) are outside that throttle: Better Auth's own
+  limits apply there (3 sign-ins, sign-ups, password or email changes per 10 s per address, 100
+  calls elsewhere), counted in the same Redis and per address as Express sees it (`req.ip`), in
+  production and with `THROTTLE=on`, never with `THROTTLE=off` (`authRateLimit`,
+  `infra/throttle.ts`).
 - **Scopes** are `<module>:read` and `<module>:write` for each application module (`write` covers
   `read`), plus `offline_access`. `PrincipalGuard` enforces them for any scoped credential (any
   identity provider that returns `scopes`): it reaches only routes that declare a scope
@@ -3598,6 +3660,7 @@ These are not built. Each has a workaround for now.
 | Emailing an invitation | `POST /api/members/invites` returns the code; the inviter shares it. Notifications have no recipient by address yet. |
 | Agent tools for members and grants | `/api/members` and `/api/grants` are people-only routes. |
 | Seed data | Create data through the API or the app. Maestro's demo assumes data exists. |
+| A link for a WhatsApp request someone else decides | The waiting line says the team was asked, with no link: a contact cannot open the business's app. A member finds the request in the app's Approvals. |
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
 | Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
 | Images in documents (a logo, a signature, photos) | The layout has no image block. Put the business's name in the header. |
@@ -3625,6 +3688,7 @@ These are not built. Each has a workaround for now.
 | Importing with no worker | `basecamp import` starts the job and follows it; the worker runs it. With no worker running it waits (and says so). Large JSON files through the local storage drivers (memory, fs) also pass the API's JSON body limit (`JSON_BODY_LIMIT`) on upload; S3 has no such limit. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
+| Rows stored in a made-up currency | Writes refuse a currency that does not exist (section 5.13), but rows written before that check (any three capital letters passed) are neither found nor repaired: they read and change as before, and refuse a new amount. Cancel and re-create such a record (`docs/decisions/V4.md`). |
 | A currency for an assistant's create | A plain create of an entity with the `money` trait names its currency; the business's (`money` settings) is not taken (`currency_required`, decisions B3B5). The assistant cannot see the business's currency, so the person has to say it (the sample's briefs: "new brief Asha: a bookshelf, budget 20000 INR"). For records the assistant creates often, write a command that reads `tenantMoney` (the sample's `save-order`). |
 | The exact versions a new application installs | The `@hykr/*` packages give ranges, and a new application starts with no lockfile: it gets the newest releases those ranges allow, tested only by the latest `consumer` run. `better-auth` and its Expo plugin are pinned to the OAuth plugin's version (decisions HCONS); Mastra's CLI and OpenTelemetry may float to releases whose peer ranges warn. |
 | A package installed but not used yet | `@mastra/memory` (in `@hykr/agents`): memory recall is the API's own (section 7.7). A feature that uses it adds its code. Versions and reasons: `docs/decisions/F6.md`. |
@@ -3634,6 +3698,8 @@ These are not built. Each has a workaround for now.
 | Operators inviting a business's owner | `POST /api/platform/tenants` makes a business for someone who has an account. An owner without one signs up first. A business made at sign-up announces no `tenant.provisioned`. |
 | Routing rules, keeping unrouted requests | The framework asks the application's `inboundRouters`; it keeps what happened to a request (`app.platform_routed`), not what it said. An operator cannot assign an unrouted request by hand. |
 | Suspending a business, plans and prices | Operators make, rename and switch flags of a business, and set its credits (section 7.6). Nothing suspends or deletes one; billing is the application's. |
+| The paused sentence for a usage limit | A turn refused by a `tokens` or `tool_calls` limit still says the business has used its credits and someone can add more (`credits.paused`, also said by `EndWhenPaused`). Its `rule` (`usage_limit_reached`) and `GET /api/credits` say it is a limit: raise it in the operator's plan, or wait for the next period. |
+| Telling the approver that the marketing cap dropped a send | A marketing message past the contact's weekly cap (`general.marketingPerWeek`) is dropped and only logged, also after someone approved it. Check the contact's sends this week before approving. |
 | Bull Board in production | It is mounted outside production only, for operators holding `platform.queues`. |
 | Support in history and events | `audit.events.on_behalf_of` marks support and operator writes, but the history screen does not label them, and stored events carry only the actor. Read a grant's activity (`GET /api/support-access/:id/activity`) or the audit. |
 | Support access and capabilities | Support access holds only capabilities declared `supportable: true` where they are defined (an application's own included); an application keeps a framework one from it with `supportWithheld`. Links made under support before this rule have no `on_behalf_of` and last until they expire. |
@@ -3668,7 +3734,7 @@ These are not built. Each has a workaround for now.
 | Share pages on a business's domain | The URL a link answers is `APP_URL`'s; a verified domain (section 5.18) is not used for it, though the page shows the business's branding. |
 | An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
 | Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders can be cancelled when approved or accepted). |
-| The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set Express's `trust proxy` (not done by the framework). |
+| The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set Express's `trust proxy` (not done by the framework). Better Auth's own rate limits (sign-in, sign-up, password and email changes) key on `req.ip` too, so without `trust proxy` every caller behind the balancer shares one bucket. |
 | Acceptance tools for the assistant | The assistant can neither ask for a code nor accept (on purpose), and has no tool to read acceptances yet. |
 | Retiring `channel.link_codes` | Linking codes now live in `channel.otp_challenges`; the old table stays, unused, until a migration may drop it. |
 | Agent tools for parties | `/api/parties` and `/api/participants` are people-only routes; the assistant cannot add someone to a record. |
@@ -3701,7 +3767,7 @@ These are not built. Each has a workaround for now.
 | Settings across processes | A settings change drops the cached copy of the process that made it; other processes keep theirs up to 10 s. Approvals and SLA clocks read settings in the write's transaction, so they are never late. |
 | Memory timings | The indexer gives the embedding provider 30 s per batch and takes over a claim after 120 s; recall gives it 4 s per turn (1.5 s on voice). All are constants in `features/memory/` (`indexer.ts`, `recall.service.ts`), not deployment settings. |
 | Durable runs | A run waits only for approvals (no questions, timers or webhooks). An agent's run (section 5.26) is resumed in its agent's thread. A decision after WhatsApp's 24-hour window sends nothing there (the app shows it), and a request a continuation parks again is approved in the app, not with buttons. A resume a turn hook refuses (credits) runs no model and is not tried again. If the person keeps chatting meanwhile, the resumed run does not see those messages. A run parked before a deploy goes on under the new instructions and tools. A run whose resume never comes keeps the parked step's tokens unmetered. |
-| Approval levels | One decider per request: no level needs two approvers. A named approver who is away is not replaced (no delegation or escalation) until the request expires. A request decided in the app only never goes to WhatsApp (no template without buttons): push or email instead. Its inbox item stays when it is decided. A team member whose request someone else decided is not notified of the outcome (the app shows it). |
+| Approval levels | One decider per request: no level needs two approvers. A named approver who is away, or who left the business after the request parked naming them, is not replaced (no delegation or escalation) until the request expires; one who left before it parked gives way to the business. A request decided in the app only never goes to WhatsApp (no template without buttons): push or email instead. Its inbox item stays when it is decided. A team member whose request someone else decided is not notified of the outcome (the app shows it). |
 | Undo | Rows a delete removed by cascade are not put back. The assistant cannot undo (there is no tool): the person undoes in the app. Live updates, notifications and sends of an undoable write wait with its events until the window closes. Outbox rows of a second write in the same transaction are held with the first undoable one. |
 | Notifications to people who cannot open the record | A notification's words leave out what its recipient may not read, but `to` alone decides who gets it: nothing checks that they may read the record. |
 | A screen for the model policy | `GET /api/models` and `PUT /api/models/policy` work; neither app shows them yet. |
@@ -3711,6 +3777,9 @@ These are not built. Each has a workaround for now.
 | Metering everything | WhatsApp voice-note transcription, voice sessions whose worker never reported an end and embedding calls that fail or time out are not metered. Call `CreditsService.record` from the feature. |
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
+| Seeing failed stored events | A stored event the relay cannot read, or that a subscriber's `when` throws on, is kept with `failed_at` and `error` and logged; no screen or notification shows it. Query `app.domain_events where failed_at is not null`, fix the cause, and clear `failed_at` to relay it again. |
+| Two uploads, cancels, replies or calendar sign-ins at the same moment | A file's presign and discard, a job's cancel, a back-office reply and a calendar sign-in's `complete` honour `idempotency-key` one after another, but take no lock: two at the same moment with one key can both run (a second pending upload expires unused; a second `complete` finds the sign-in used up and answers 400 `calendar_sign_in_invalid`, with one connection and one code exchange). A presign repeated after its upload expired is 409 `upload_expired`. A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
+| Retrying a chat turn, a new thread, a voice session or a WhatsApp link | `POST /api/chat`, `POST /api/threads`, `POST /api/voice/session` and `/end`, the WhatsApp link's code, `verify`, `number` and `DELETE` ignore `idempotency-key`: a retry is a second turn, thread, room token (and `voice.session.start` audit row) or code. Retry them only when the first answer never came. |
 | Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |
 | A summary's view of hiding | The field check reads one record of the reader's scope through `toRead` and assumes a projector hides a field on every record alike. A projector that hides a field on some records only lets a summary over it through. |
 | A summary's scope without a recorder | `listWhere` reads the list's WHERE by running `repo.list` against a connection that records it (`define-entity.ts` gets a `repo.where` when it is next opened). |
@@ -3754,7 +3823,7 @@ These are not built. Each has a workaround for now.
 | The business's tagline in the app shell | The rail and the phone's top bar draw the first plugin's `Brand` (the settings plugin's `BrandMark`: the business's logo and name, else `app.title`), but the rail's tagline is still the product's `app.tagline`. |
 | A logo upload | `branding.logoUrl` is an https URL; there is no upload for it yet. |
 | Shared records that follow their source | An override is a full copy: later changes to the platform's row do not reach it. Only the platform business (`PLATFORM_TENANT_ID`) publishes shared rows. |
-| WebMCP actions | WebMCP tools only read; the API refuses any write on the `webmcp` channel. There are no declarative forms or write tools for a browser agent, and no read tool for a command. Public and share-link screens offer no tools. |
+| WebMCP actions | WebMCP tools only read; the API refuses any write on the `webmcp` channel, and every Better Auth route. There are no declarative forms or write tools for a browser agent, and no read tool for a command. Public and share-link screens offer no tools. |
 | One wording for read tools | The assistant's list and get tools (`tool-factory.ts`) still build their own text; WebMCP takes the same wording from `entityReadTools`. Keep the two in step until the assistant uses it. |
 | Tool ids from `toolContributions` | `defineServer`'s `ModulesError` checks only the catalog's tool ids (entities, commands, canvas). A contributed tool's id that repeats another is caught later, when the API starts (section 5.10). |
 | Per-module tools for the assistant | The assistant sees every module's tools on every turn. |

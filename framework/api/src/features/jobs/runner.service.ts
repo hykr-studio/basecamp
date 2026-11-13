@@ -13,9 +13,11 @@ import {
   CORE_OPTIONS,
   type CoreOptions,
   entityDef,
+  findRepeat,
   PrincipalResolver,
   recordEvents,
   runWrite,
+  saveReply,
   systemPrincipal,
   type Tx,
   toJson,
@@ -314,9 +316,19 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
 
   /**
    * People cancel a job they reach when it was started for them, or when they may change the
-   * record it is about. A finished job: 409. The service is then asked to stop.
+   * record it is about. A finished job: 409. The service is then asked to stop. A retry with the
+   * same idempotency-key answers the job as it is now, instead of 409.
    */
-  async cancel(p: Principal, id: string, requestId: string): Promise<JobInfo> {
+  async cancel(
+    p: Principal,
+    id: string,
+    meta: { requestId: string; idempotencyKey?: string },
+  ): Promise<JobInfo> {
+    const requestId = meta.requestId;
+    const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
+    const op = { name: 'job.cancel', args: { id } };
+    if (await findRepeat(this.db, ctx, op, {}))
+      return presentJob(infoOf(await this.reachable(p, id)), p);
     const row = await this.reachable(p, id);
     let may = row.startedFor !== null && row.startedFor === subjectKeyOf(p);
     if (!may && row.aboutType && row.aboutId) {
@@ -341,6 +353,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
     );
     if (!done)
       throw new ConflictException({ error: 'already_finished', message: 'The job has finished' });
+    await saveReply(this.db, ctx, op, {}, { status: 'done', value: { id: done.id } });
     await this.askToStop(done);
     return presentJob(infoOf(done), p);
   }

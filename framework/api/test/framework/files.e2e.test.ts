@@ -3,7 +3,7 @@
 // write path attaching and letting go of them (parked writes included), transcription, WhatsApp
 // media kept for its sender, erasure and the sweeper. The fixture's `cards` entity has every kind
 // of file field (fixture/src/features/files). Storage is the memory driver (vitest.config.ts).
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { createApiClient } from '@hykr/api-client';
 import type { CoreOptions } from '@hykr/core';
@@ -469,6 +469,58 @@ describe('uploading and reaching a file', () => {
     const wrongField = await card(owner, { title: 'Plan', photos: [doc.id] });
     expect(wrongField.body).toMatchObject({ rule: 'file_unavailable' });
     expect((await card(owner, { title: 'Plan', attachments: [doc.id] })).status).toBe(201);
+  });
+
+  it('a presign and a discard repeated with their idempotency-key run once', async () => {
+    const name = `retry-${randomUUID()}.png`;
+    const body = {
+      name,
+      mime: 'image/png',
+      size: png().length,
+      for: { entity: 'card', field: 'photos' },
+    };
+    const key = { 'idempotency-key': randomUUID() };
+    const first = await owner.call('POST', '/api/files', body, key);
+    const again = await owner.call('POST', '/api/files', body, key);
+    expect(first.status).toBe(201);
+    expect(again.status).toBe(201);
+    expect(again.body.file.id).toBe(first.body.file.id);
+    expect(again.body.upload.url).toBeTruthy();
+    const { rows } = await pool.query('select count(*) n from app.files where name = $1', [name]);
+    expect(Number(rows[0].n)).toBe(1);
+    // The signed upload URL is not kept with the stored answer.
+    const kept = await pool.query('select response from app.idempotency where key = $1', [
+      key['idempotency-key'],
+    ]);
+    expect(JSON.stringify(kept.rows[0].response)).not.toContain('upload');
+    expect((await owner.call('POST', '/api/files', { ...body, size: 1 }, key)).status).toBe(409);
+
+    const discard = { 'idempotency-key': randomUUID() };
+    const id = first.body.file.id as string;
+    expect((await owner.call('DELETE', `/api/files/${id}`, undefined, discard)).status).toBe(204);
+    expect((await owner.call('DELETE', `/api/files/${id}`, undefined, discard)).status).toBe(204);
+    // Without the key, the file is gone.
+    expect((await owner.call('DELETE', `/api/files/${id}`)).status).toBe(404);
+  });
+
+  it('a presign repeated after its upload expired says so, with no upload URL', async () => {
+    const body = {
+      name: `late-${randomUUID()}.png`,
+      mime: 'image/png',
+      size: png().length,
+      for: { entity: 'card', field: 'photos' },
+    };
+    const key = { 'idempotency-key': randomUUID() };
+    const first = await owner.call('POST', '/api/files', body, key);
+    expect(first.status).toBe(201);
+    await pool.query(
+      "update app.files set upload_expires_at = now() - interval '1 minute' where id = $1",
+      [first.body.file.id],
+    );
+    const again = await owner.call('POST', '/api/files', body, key);
+    expect(again.status).toBe(409);
+    expect(again.body).toMatchObject({ error: 'upload_expired' });
+    expect(again.body.upload).toBeUndefined();
   });
 });
 

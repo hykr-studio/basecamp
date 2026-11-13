@@ -166,6 +166,19 @@ function holds(
     : null;
 }
 
+/**
+ * May this person be shown a secret again (a repeated create or rotate)? What the write itself
+ * asks: managing integrations and, for an endpoint, every capability it reads with. The stored
+ * answer is the caller's, but their roles may have changed since.
+ */
+export function mayShowSecret(p: Principal, endpointCapabilities: readonly string[] = []) {
+  const allowed = manage(p);
+  return allowed.decision === 'allow'
+    ? (holds(p, endpointCapabilities, 'Only someone who holds what it reads may see its secret') ??
+        allowed)
+    : allowed;
+}
+
 /* ── Ops ───────────────────────────────────────────────────────────────────── */
 
 const notFound = (what: string) =>
@@ -217,6 +230,8 @@ export function createEndpointOp(): WriteOp<
           capabilities: input.capabilities,
           secretSealed: input.sealed,
           createdBy: userIdOf(principal) ?? null,
+          // The app's clock, as an event's occurredAt: it gets only events from now on.
+          createdAt: new Date(),
         })
         .returning();
       return {

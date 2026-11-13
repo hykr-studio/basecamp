@@ -64,7 +64,9 @@ export class OutboxRelay implements OnModuleInit, OnApplicationShutdown {
           .for('update', { skipLocked: true });
         if (!rows.length) return;
         for (const r of rows) {
-          const payload = r.payload as Pick<DispatchJob, 'row' | 'dedupe' | 'resourceType'>;
+          // A payload that is not an object (only SQL could store one) fails in its own job,
+          // never this tick's whole batch.
+          const payload = (r.payload ?? {}) as Pick<DispatchJob, 'row' | 'dedupe' | 'resourceType'>;
           await this.dispatch.add(
             'now',
             {

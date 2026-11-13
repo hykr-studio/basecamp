@@ -8,6 +8,7 @@ import { can, subjectKeyOf } from '@hykr/policy';
 import { Logger } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import type { TurnGate, TurnHook, TurnInfo, TurnOutcome } from '../../hooks.js';
+import { TURN_METERS } from './budget.js';
 import { type CreditsService, creditsService } from './credits.service.js';
 import { FrameworkMeters } from './meters.js';
 
@@ -43,11 +44,12 @@ async function contactOf(svc: CreditsService, tenantId: string, subject: Subject
 async function before(svc: CreditsService, turn: TurnInfo): Promise<TurnGate | null> {
   const p = turn.principal;
   if (!p.tenantId) return null;
-  const [tokens, tools] = await svc.checkMany(p.tenantId, [
-    { meter: FrameworkMeters.tokens.name },
-    { meter: FrameworkMeters.toolCalls.name },
-  ]);
-  const refusal = tokens ?? tools;
+  // What a turn spends, as `turnRefusal` (the credits status) reads it.
+  const refusals = await svc.checkMany(
+    p.tenantId,
+    TURN_METERS.map((m) => ({ meter: m.name })),
+  );
+  const refusal = refusals.find((r) => r !== null) ?? null;
   // Settings that do not parse: the model policy refuses the turn itself (503), naming why.
   if (!refusal || refusal.rule === 'credits_unavailable') return null;
   let say = labels('credits.paused');

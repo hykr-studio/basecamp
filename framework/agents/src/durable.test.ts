@@ -1,11 +1,12 @@
 import { safely, type ToolKit } from '@hykr/core/tools';
+import { defineLanguages, resetLanguages, setLanguages } from '@hykr/i18n';
 import { Agent } from '@mastra/core/agent';
 import { Mastra } from '@mastra/core/mastra';
 import { RequestContext } from '@mastra/core/request-context';
 import { InMemoryStore } from '@mastra/core/storage';
 import { createTool } from '@mastra/core/tools';
 import { extractAgentResponseMessages } from '@mastra/evals/scorers/utils';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { durableAgent, findSuspension, resumeSuspension } from './durable.js';
 import { call, decided, defineScript, fakeModel, items, say, written } from './fake/engine.js';
@@ -28,7 +29,8 @@ const parkIt = createTool({
       asked.push(`park-${n}`);
       return {
         status: 'needs_approval' as const,
-        approval: { id: `ap-${n}`, summary: `Tidy ${n}` },
+        // From 7 on, someone else decides (a capability's holders, a named person).
+        approval: { id: `ap-${n}`, summary: `Tidy ${n}`, ...(n >= 7 ? { canDecide: false } : {}) },
       };
     }),
 });
@@ -77,13 +79,13 @@ const scripts = [
   }),
 ];
 
-function setup() {
+function setup(tools: Record<string, unknown> = { 'park-it': parkIt, look }) {
   const agent = new Agent({
     id: 'tester',
     name: 'Tester',
     instructions: 'Help.',
     model: fakeModel(scripts, 'I tidy.'),
-    tools: { 'park-it': parkIt, look },
+    tools: tools as { look: typeof look },
   });
   const mastra = new Mastra({ agents: { tester: agent }, storage: new InMemoryStore() });
   return { mastra, agents: { tester: mastra.getAgent('tester') } };
@@ -99,6 +101,62 @@ const contextFor = (runId: string) => {
   rc.set('timeZone', 'Asia/Kolkata');
   return rc;
 };
+
+const replyOf = async (text: string, rc: RequestContext) => {
+  const { agents } = setup();
+  return (await durableAgent(agents.tester).generate(text, { requestContext: rc })).text;
+};
+
+// Hindi and Telugu, as an application declares them: the framework speaks only what it is given.
+const languages = defineLanguages({
+  hi: { name: 'हिंदी', english: 'Hindi', locale: 'hi-IN', letters: /[ऀ-ॣ०-९ॱ-ॿ]/ },
+  te: { name: 'తెలుగు', english: 'Telugu', locale: 'te-IN', letters: /[ఀ-౿]/ },
+});
+
+describe('the waiting line says who decides (V7)', () => {
+  beforeAll(() => setLanguages(languages));
+  afterAll(resetLanguages);
+
+  it('someone else decides: the team was asked; the person decides: their approval', async () => {
+    expect(await replyOf('tidy 7', contextFor(`run${Date.now()}t1`))).toBe(
+      "I've asked the team for approval: Tidy 7. Nothing changes until they decide.",
+    );
+    expect(await replyOf('tidy 1', contextFor(`run${Date.now()}t2`))).toBe(
+      "I've asked for your approval: Tidy 1. Nothing changes until you approve it.",
+    );
+  });
+
+  it('in every language, written or spoken', async () => {
+    const hindi = contextFor(`run${Date.now()}t3`);
+    hindi.set('lang', 'hi');
+    expect(await replyOf('tidy 7', hindi)).toBe(
+      'मैंने टीम से मंज़ूरी माँगी है: Tidy 7। उनके फ़ैसले तक कुछ नहीं बदलेगा।',
+    );
+    hindi.set('runId', `run${Date.now()}t4`);
+    expect(await replyOf('tidy 1', hindi)).toBe(
+      'मैंने आपकी मंज़ूरी माँगी है: Tidy 1। आपके मंज़ूर करने तक कुछ नहीं बदलेगा।',
+    );
+    const spoken = contextFor(`run${Date.now()}t5`);
+    spoken.set('surfaces', ['speech']);
+    expect(await replyOf('tidy 7', spoken)).toBe("Tidy 7 is waiting for the team's approval.");
+    spoken.set('surfaces', ['inline', 'speech']);
+    spoken.set('runId', `run${Date.now()}t6`);
+    expect(await replyOf('tidy 7', spoken)).toBe(
+      "That needs the team's OK. I've asked them and put it on screen.",
+    );
+  });
+});
+
+describe('a tool the turn does not offer (V7)', () => {
+  it('the scripted model says it cannot, instead of calling it', async () => {
+    const { agents } = setup({ look });
+    const out = await durableAgent(agents.tester).generate('tidy 1', {
+      requestContext: contextFor(`run${Date.now()}n`),
+    });
+    expect(out.text).toBe("I can't do that here.");
+    expect(asked).toEqual([]);
+  });
+});
 
 const decision = (approvalId: string, status: string) => ({
   approvalId,

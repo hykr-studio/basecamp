@@ -75,6 +75,11 @@ function Meters({ status }: { status: CreditsStatus }) {
           {m.usedPercent !== undefined && (
             <UsedBar percent={m.usedPercent} alertAt={status.alertAt} pauseAt={status.pauseAt} />
           )}
+          {m.refusal && (
+            <Text variant="muted" style={{ color: colors.danger }}>
+              {t('credits.pausedNow', { reason: m.refusal.reason })}
+            </Text>
+          )}
         </View>
       ))}
     </Card>
