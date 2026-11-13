@@ -338,6 +338,14 @@ describe('meetings, end to end', () => {
       kind: 'text',
       text: expect.stringContaining('Lookup review'),
     });
+    // On a screen with no canvas: the meeting's own view, with no list above it.
+    const inline = await ana.chat('open Lookup review', undefined, ['inline']);
+    expect(tools(inline)).toEqual(['list-meetings', 'get-meeting']);
+    expect(inline.body.toolCalls[0]).not.toHaveProperty('present');
+    expect(inline.body.toolCalls[1].present).toMatchObject({
+      kind: 'inline',
+      props: { id: meeting.id },
+    });
     // On a screen with a canvas: it opens there, with no list beside the chip.
     const app = await ana.chat('open Lookup review', undefined, ['inline', 'canvas']);
     expect(tools(app)).toEqual(['list-meetings', 'canvas-open']);
