@@ -2,10 +2,11 @@
 // check of the participant roles the application declares.
 import { checkParticipantRoles } from '@hykr/contracts';
 import { type Conn, entityDefs } from '@hykr/core';
-import { contacts, participations, parties, partyMembers } from '@hykr/db';
+import { events as auditEvents, contacts, participations, parties, partyMembers } from '@hykr/db';
 import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
-import { and, eq, inArray, notExists, or, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, notExists, or, type SQL, sql } from 'drizzle-orm';
 import type { DataSubject, ErasureContributor, ExportContributor } from '../../hooks.js';
+import { auditedWith, both } from '../../privacy/contributors.js';
 import { emailOf } from '../members/privacy.js';
 
 /**
@@ -23,6 +24,27 @@ const theirs = (a: DataSubject, email: string | null = null): SQL =>
     a.tenantId ? eq(partyMembers.tenantId, a.tenantId) : undefined,
   ) as SQL;
 
+/** What a party member's audit copy (`toMember`) names the subject by. */
+const naming = (a: DataSubject, email: string | null): object[] =>
+  a.subject.kind === 'contact'
+    ? [{ contactId: a.subject.contactId }]
+    : [{ userId: a.subject.userId }, ...(email ? [{ email }] : [])];
+
+/** The parties these members were on, from their audit rows: the members may be gone. */
+async function partiesOf(conn: Conn, ids: readonly string[]): Promise<string[]> {
+  if (!ids.length) return [];
+  const party = sql<
+    string | null
+  >`coalesce(${auditEvents.after} ->> 'partyId', ${auditEvents.before} ->> 'partyId')`;
+  const rows = await conn
+    .selectDistinct({ id: party })
+    .from(auditEvents)
+    .where(
+      and(eq(auditEvents.resourceType, 'party_member'), inArray(auditEvents.resourceId, [...ids])),
+    );
+  return rows.flatMap((r) => (r.id ? [r.id] : []));
+}
+
 /** The account's email, for a person; none for a contact. */
 const emailFor = (a: DataSubject, conn: Conn) =>
   a.subject.kind === 'user' ? emailOf(conn, a.subject.userId) : Promise.resolve(null);
@@ -31,17 +53,31 @@ const emailFor = (a: DataSubject, conn: Conn) =>
  * Their party memberships go, and invitations to join sent to their email. A person party left
  * with nobody in it goes too, with its participations: it was them. An organisation stays,
  * without them. Their copies (audit rows, replies) lose the person's name, number and email, and
- * the person party's name wherever a participation named it.
+ * the person party's name wherever a participation named it. So do the copies of the members
+ * that were them and were taken off before (their audit rows name them), and a person party
+ * such a member left empty goes as well.
  */
 export const partiesErasure: ErasureContributor = {
   name: 'parties',
   async erase(a) {
     const { tx } = a;
+    const email = await emailFor(a, tx);
     const gone = await tx
       .delete(partyMembers)
-      .where(theirs(a, await emailFor(a, tx)))
+      .where(theirs(a, email))
       .returning({ id: partyMembers.id, partyId: partyMembers.partyId });
-    const touched = [...new Set(gone.map((g) => g.partyId))];
+    const now = new Set(gone.map((g) => g.id));
+    const earlier = (
+      await auditedWith(tx, {
+        type: 'party_member',
+        contains: naming(a, email),
+        tenantId: a.tenantId,
+      })
+    ).filter((id) => !now.has(id));
+    const touched = both(
+      gone.map((g) => g.partyId),
+      await partiesOf(tx, earlier),
+    );
     if (!touched.length) return { count: 0 };
     const empty = and(
       inArray(parties.id, touched),
@@ -65,7 +101,7 @@ export const partiesErasure: ErasureContributor = {
       erased: [
         {
           type: 'party_member',
-          ids: gone.map((g) => g.id),
+          ids: [...now, ...earlier],
           fields: ['name', 'address', 'email'],
           deleted: true,
         },

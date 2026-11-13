@@ -4,7 +4,7 @@ import { type Mention, rewriteMentions } from '@hykr/contracts';
 import { comments } from '@hykr/db';
 import { and, eq, type SQL, sql } from 'drizzle-orm';
 import type { DataSubject, ErasureContributor, ExportContributor } from '../../hooks.js';
-import { both, createdBy } from '../../privacy/contributors.js';
+import { auditedWith, both, createdBy } from '../../privacy/contributors.js';
 
 const inBusiness = (a: DataSubject) => (a.tenantId ? eq(comments.tenantId, a.tenantId) : undefined);
 
@@ -22,7 +22,8 @@ const WORDS = ['body', 'mentions', 'anchor', 'excerpt', 'author', 'target'];
  * becomes `@—` and they leave the mentions. Contacts write no comments. Their comments' copies
  * lose the words and the author; the copies of a comment that named them lose its words and its
  * mentions (a token and a mention carry the name they were written with: `label`), and the
- * comment keeps its rewritten text.
+ * comment keeps its rewritten text. So do the copies of a comment that named them and was
+ * deleted, or edited not to, before: its audit rows still do.
  */
 export const CommentsErasure: ErasureContributor = {
   name: 'comments',
@@ -66,7 +67,15 @@ export const CommentsErasure: ErasureContributor = {
         },
         {
           type: 'comment',
-          ids: naming.map((c) => c.id),
+          // With those that named them and were deleted or edited since (decisions V8).
+          ids: both(
+            naming.map((c) => c.id),
+            await auditedWith(a.tx, {
+              type: 'comment',
+              contains: [{ mentions: [{ kind: 'user', id: userId }] }],
+              tenantId: a.tenantId,
+            }),
+          ),
           fields: ['body', 'excerpt', 'mentions', 'target'],
         },
       ],

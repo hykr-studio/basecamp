@@ -34,6 +34,11 @@ const M4 = `v8four${stamp}`; // a job started for Sam
 const WK = `v8wen${stamp}`; // the contact's name
 const M5 = `v8five${stamp}`; // the contact's message
 const M6 = `v8gone${stamp}`; // what Sam wrote and deleted before he asked
+const EV = `v8event${stamp}`; // a caller of the contact's, in the run an event trigger started
+const RM = `v8removed${stamp}`; // the contact's name on a party he was taken off
+const PP = `v8person${stamp}`; // a person party whose only member, the contact, was taken off
+const CM = `v8deleted${stamp}`; // Ana's comment naming Sam, which she deleted
+const CE = `v8edited${stamp}`; // Ana's comment naming Sam, which she edited him out of
 const KEEP = `v8keep${stamp}`; // Ana's own words: they stay
 const NUMBER = `9198${String(Date.now()).slice(-8)}`;
 
@@ -46,7 +51,7 @@ const here = { 'x-tenant-id': '' };
 const call = (p: Person, method: string, path: string, body?: unknown) =>
   p.call(method, path, body, here);
 
-const MARKERS = [MK, M1, M2, M3, M4, WK, M5, M6, NUMBER];
+const MARKERS = [MK, M1, M2, M3, M4, WK, M5, M6, EV, RM, PP, CM, CE, NUMBER];
 
 /** Every row of every table, in every schema, that holds one of these texts. */
 async function rowsHolding(texts: readonly string[]) {
@@ -319,6 +324,66 @@ describe('erasing a member and a contact (decisions V8)', () => {
       return rows.length ? true : undefined;
     }, 20_000);
 
+    // Ana's agent watches callers; she logs a call of the contact's, and its run holds it.
+    const watcher = await call(ana, 'POST', '/api/agents', {
+      name: 'Watcher',
+      instructions: 'Say who called.',
+      triggers: [{ kind: 'event', on: ['caller.created'] }],
+    });
+    expect(watcher.status, JSON.stringify(watcher.body)).toBeLessThan(300);
+    const caller = await call(ana, 'POST', '/api/callers', {
+      caller: `Wen ${EV}`,
+      phone: '+91 3',
+      contactId,
+    });
+    expect(caller.status, JSON.stringify(caller.body)).toBeLessThan(300);
+    await eventually(async () => {
+      const { rows } = await pool.query(
+        `select input::text as input from app.agent_runs
+         where agent_id = $1 and status in ('done', 'failed')`,
+        [watcher.body.value.id],
+      );
+      return rows[0]?.input.includes(EV) ? true : undefined;
+    }, 20_000);
+
+    // Ana puts the contact and Sam on a party and takes them off again, and the contact on a
+    // person party named after him, which stays empty once he is off it.
+    const was = await call(ana, 'POST', '/api/parties', { kind: 'organisation', name: KEEP });
+    const lone = await call(ana, 'POST', '/api/parties', { kind: 'person', name: `Wen ${PP}` });
+    for (const [partyId, body] of [
+      [was.body.value.id, { address: NUMBER, name: `Wen ${RM}` }],
+      [was.body.value.id, { email: sam.email }],
+      [lone.body.value.id, { address: NUMBER, name: `Wen ${PP}` }],
+    ] as const) {
+      const on = await call(ana, 'POST', `/api/parties/${partyId}/members`, body);
+      expect(on.status, JSON.stringify(on.body)).toBeLessThan(300);
+      const off = await call(
+        ana,
+        'DELETE',
+        `/api/parties/${partyId}/members/${on.body.value.member.id}`,
+      );
+      expect(off.status, JSON.stringify(off.body)).toBeLessThan(300);
+    }
+
+    // Ana names Sam in a comment she deletes, and in one she edits him out of.
+    const deleted = await call(ana, 'POST', '/api/comments', {
+      entity: 'task',
+      recordId: anaTask.body.value.id,
+      body: `@[${sam.name}](user:${sam.id}) ${CM} first thought`,
+    });
+    const edited = await call(ana, 'POST', '/api/comments', {
+      entity: 'task',
+      recordId: anaTask.body.value.id,
+      body: `@[${sam.name}](user:${sam.id}) ${CE} first thought`,
+    });
+    for (const res of [
+      await call(ana, 'DELETE', `/api/comments/${deleted.body.value.id}`),
+      await call(ana, 'PATCH', `/api/comments/${edited.body.value.id}`, {
+        body: `${KEEP} second thought`,
+      }),
+    ])
+      expect(res.status, JSON.stringify(res.body)).toBeLessThan(300);
+
     // What Sam wrote and deleted himself before: a comment, a memory, an agent.
     const removed = await call(sam, 'POST', '/api/comments', {
       entity: 'task',
@@ -345,7 +410,9 @@ describe('erasing a member and a contact (decisions V8)', () => {
     ];
     for (const res of gone) expect(res.status, JSON.stringify(res.body)).toBeLessThan(300);
 
-    // 7. A job about no record started for Sam, with a result file and its upload's audit row.
+    // 7. A job about no record started for Sam, with a result file: the rows `startJob` and the
+    // job's events write (its audit row names its kind; its events hold its input and message),
+    // and its file's upload audit row.
     const job = await pool.query(
       `insert into app.jobs (tenant_id, kind, started_for, started_by_kind, started_by_id, input,
          message, status, deadline_at)
@@ -371,7 +438,30 @@ describe('erasing a member and a contact (decisions V8)', () => {
         { name: `${M4}.csv`, on: { entity: 'job', id: jobId } },
         jobId,
         sam.id,
-        { id: jobId, input: { note: M4 }, message: `${M4} done` },
+        { kind: 'fixture.v8', about: null },
+      ],
+    );
+    // As `infoOf` makes it; already relayed, so no worker takes it.
+    await pool.query(
+      `insert into app.domain_events (id, tenant_id, name, resource_type, resource_id, row,
+         actor_kind, actor_id, occurred_at, available_at, relayed_at)
+       values ($1, $2, 'job.succeeded', 'job', $3, $4, 'system', 'jobs', now(), now(), now())`,
+      [
+        randomUUID(),
+        tenantId,
+        jobId,
+        {
+          id: jobId,
+          kind: 'fixture.v8',
+          status: 'succeeded',
+          progress: null,
+          message: `${M4} done`,
+          about: null,
+          input: { note: M4 },
+          output: null,
+          error: null,
+          files: [resultFile.rows[0].id],
+        },
       ],
     );
 

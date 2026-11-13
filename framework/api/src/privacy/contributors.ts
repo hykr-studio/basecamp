@@ -1,6 +1,6 @@
 import type { Conn, Tx } from '@hykr/core';
 import { events as auditEvents } from '@hykr/db';
-import { and, eq, or, type SQL } from 'drizzle-orm';
+import { and, eq, or, type SQL, sql } from 'drizzle-orm';
 import {
   type DataSubject,
   type ErasedRecords,
@@ -31,6 +31,38 @@ export async function createdBy(
           and(eq(auditEvents.actorKind, 'user'), eq(auditEvents.actorId, a.userId)),
           eq(auditEvents.actingFor, a.userId),
           eq(auditEvents.actingFor, `user:${a.userId}`),
+        ),
+        a.tenantId ? eq(auditEvents.tenantId, a.tenantId) : undefined,
+      ) as SQL,
+    );
+  return rows.flatMap((r) => (r.id ? [r.id] : []));
+}
+
+/**
+ * The ids of the records of this type whose audit rows (before or after) contain one of these
+ * JSON values, in one business or every one: records about the person removed or edited before
+ * the erasure (a party member taken off, a comment naming them since deleted). A contributor
+ * erases their copies too: the live rows no longer name them, but the copies do (decisions V8).
+ */
+export async function auditedWith(
+  conn: Conn,
+  a: { type: string; contains: readonly object[]; tenantId?: string },
+): Promise<string[]> {
+  if (!a.contains.length) return [];
+  const rows = await conn
+    .selectDistinct({ id: auditEvents.resourceId })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.resourceType, a.type),
+        or(
+          ...a.contains.flatMap((v) => {
+            const json = JSON.stringify(v);
+            return [
+              sql`${auditEvents.after} @> ${json}::jsonb`,
+              sql`${auditEvents.before} @> ${json}::jsonb`,
+            ];
+          }),
         ),
         a.tenantId ? eq(auditEvents.tenantId, a.tenantId) : undefined,
       ) as SQL,

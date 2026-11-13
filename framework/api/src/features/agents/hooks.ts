@@ -11,6 +11,8 @@ import type { ErasureContributor, ExportContributor, InboundHook, TurnHook } fro
 import { both, createdBy } from '../../privacy/contributors.js';
 import type { MentionContext, MentionKind } from '../comments/mention-kinds.js';
 import type { LiveResource } from '../live/resources.js';
+import { eraseRunTraces } from '../privacy/mastra.js';
+import type { RecordCopies } from '../privacy/registry.js';
 import { agentsService } from './agents.service.js';
 import { toolsOutside } from './scope.js';
 
@@ -186,14 +188,15 @@ const naming = (tx: Tx, userId: string, tenantId?: string) =>
 
 /**
  * Another person's agent's runs that carried the subject: they stay (that person's agent did the
- * work), without their input, reply and label, and without their turns in the agent's thread.
+ * work), without their input, reply, label, tool calls and reason, and without their turns in the
+ * agent's thread.
  */
 async function forgetRuns(tx: Tx, runs: readonly { id: string; runId: string }[]) {
   if (!runs.length) return [];
   const ids = runs.map((r) => r.id);
   await tx
     .update(agentRuns)
-    .set({ input: null, reply: null, triggerLabel: '' })
+    .set({ input: null, reply: null, triggerLabel: '', toolCalls: [], reason: null })
     .where(inArray(agentRuns.id, ids));
   await tx.delete(threadMessages).where(
     inArray(
@@ -250,6 +253,40 @@ export const AgentsErasure: ErasureContributor = {
       ],
       runs: [...runs, ...carried].map((r) => r.runId),
     };
+  },
+};
+
+/**
+ * A run keeps the record that started it (an event or condition trigger's `record` and `before`,
+ * a mention's `comment`): when records are erased or blanked, by an erasure or a retention rule,
+ * the business's runs whose input holds one of them (by id, at any depth) are forgotten as
+ * `forgetRuns` does, and their Mastra rows go (decisions V8). Their replies were made from it.
+ */
+export const agentRunCopies: RecordCopies = {
+  name: 'agents',
+  async redact({ tx, tenantId, set }): Promise<Record<string, number>> {
+    if (!set.ids.length) return {};
+    const held = sql.join(
+      set.ids.map((id) => sql`${id}`),
+      sql`, `,
+    );
+    const runs = await tx
+      .select({ id: agentRuns.id, runId: agentRuns.runId })
+      .from(agentRuns)
+      .where(
+        and(
+          eq(agentRuns.tenantId, tenantId),
+          sql`exists (select 1 from jsonb_path_query(${agentRuns.input}, 'lax $.**.id') as found(v)
+            where found.v #>> '{}' in (${held}))`,
+        ),
+      );
+    if (!runs.length) return {};
+    await forgetRuns(tx, runs);
+    const traces = await eraseRunTraces(
+      tx,
+      runs.map((r) => r.runId),
+    );
+    return { agentRuns: runs.length, ...(traces ? { assistant: traces } : {}) };
   },
 };
 

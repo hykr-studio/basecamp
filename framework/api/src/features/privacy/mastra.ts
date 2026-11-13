@@ -102,6 +102,15 @@ function theirs(ids: Identities, runs: readonly string[], scored: readonly strin
 }
 
 /**
+ * Delete what Mastra keeps of these runs alone: their traces, their scorers' traces and scores,
+ * their snapshots. The runs of another person's agent that carried an erased record go so
+ * (decisions V8), as part of `eraseMastra` for the person's own.
+ */
+export async function eraseRunTraces(tx: Tx, runs: readonly string[]): Promise<number> {
+  return eraseMastraOf(tx, null, runs, false);
+}
+
+/**
  * Delete what Mastra keeps of the person: their runs' traces and snapshots, and their memory.
  * Mastra's memory is keyed by subject, not by business: a contact's key is this business's, a
  * person's only once they are in no other business (`everywhere`).
@@ -109,6 +118,16 @@ function theirs(ids: Identities, runs: readonly string[], scored: readonly strin
 export async function eraseMastra(
   tx: Tx,
   ids: Identities,
+  runs: readonly string[],
+  everywhere: boolean,
+): Promise<number> {
+  return eraseMastraOf(tx, ids, runs, everywhere);
+}
+
+/** `eraseMastra`, or with no person (`ids` null) only the runs' rows. */
+async function eraseMastraOf(
+  tx: Tx,
+  ids: Identities | null,
   runs: readonly string[],
   everywhere: boolean,
 ): Promise<number> {
@@ -124,7 +143,7 @@ export async function eraseMastra(
     const byRun = runs.length
       ? sql`("runId" in (${list(runs)}) or "traceId" in (${list(traces)}))`
       : null;
-    const where = table === 'mastra_span_events' ? theirs(ids, runs, scored) : byRun;
+    const where = table === 'mastra_span_events' && ids ? theirs(ids, runs, scored) : byRun;
     if (!where) continue;
     n += rowsOf(await tx.execute(sql`delete from ${sql.raw(name)} where ${where}`));
   }
@@ -142,6 +161,7 @@ export async function eraseMastra(
             where "runId" in (${list(runs)}) or "traceId" in (${list(runs)})`,
       ),
     );
+  if (!ids) return n;
   // Mastra's own memory, keyed by resource: the framework keeps conversations itself, but an
   // agent with memory would key them by the subject.
   const resources = everywhere ? ids.keys : ids.keys.filter((k) => k.startsWith('contact:'));
