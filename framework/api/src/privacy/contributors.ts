@@ -1,6 +1,6 @@
 import type { Conn, Tx } from '@hykr/core';
 import { events as auditEvents } from '@hykr/db';
-import { and, eq, or, type SQL, sql } from 'drizzle-orm';
+import { and, eq, inArray, or, type SQL, sql } from 'drizzle-orm';
 import {
   type DataSubject,
   type ErasedRecords,
@@ -11,32 +11,58 @@ import {
 } from '../hooks.js';
 
 /**
- * The ids of the records of this type a person created (their `<type>.create` audit rows, as
- * themselves or through their assistant), in one business or every one. A contributor erases
- * the copies of these too: a record they deleted before is gone, but its copies are not
- * (decisions V8).
+ * The ids of the records of this type a person or contact created (their `<type>.create` audit
+ * rows, or the `actions` given, as themselves or through their assistant), in one business or
+ * every one. A contributor erases the copies of these too: a record they deleted before is
+ * gone, but its copies are not (decisions V8).
  */
 export async function createdBy(
   conn: Conn,
-  a: { type: string; userId: string; tenantId?: string },
+  a: {
+    type: string;
+    userId?: string;
+    contactId?: string;
+    tenantId?: string;
+    actions?: readonly string[];
+  },
 ): Promise<string[]> {
+  const who = a.userId
+    ? (['user', a.userId] as const)
+    : a.contactId
+      ? (['contact', a.contactId] as const)
+      : null;
+  if (!who) return [];
+  const [kind, id] = who;
   const rows = await conn
     .selectDistinct({ id: auditEvents.resourceId })
     .from(auditEvents)
     .where(
       and(
         eq(auditEvents.resourceType, a.type),
-        eq(auditEvents.action, `${a.type}.create`),
+        inArray(auditEvents.action, [...(a.actions ?? [`${a.type}.create`])]),
         or(
-          and(eq(auditEvents.actorKind, 'user'), eq(auditEvents.actorId, a.userId)),
-          eq(auditEvents.actingFor, a.userId),
-          eq(auditEvents.actingFor, `user:${a.userId}`),
+          and(eq(auditEvents.actorKind, kind), eq(auditEvents.actorId, id)),
+          eq(auditEvents.actingFor, id),
+          eq(auditEvents.actingFor, `${kind}:${id}`),
         ),
         a.tenantId ? eq(auditEvents.tenantId, a.tenantId) : undefined,
       ) as SQL,
     );
   return rows.flatMap((r) => (r.id ? [r.id] : []));
 }
+
+/**
+ * The approvals a person or contact asked for, deleted with them: every copy loses its summary
+ * and input (its audit rows and stored events, the park's row on its record, its notification,
+ * the reply kept for a retry), and the items in other people's inboxes that asked them to
+ * decide go (decisions V8).
+ */
+export const approvalCopies = (ids: readonly string[]): ErasedRecords => ({
+  type: 'approval',
+  ids,
+  fields: ['summary', 'input', 'payload'],
+  deleted: true,
+});
 
 /**
  * The ids of the records of this type whose audit rows (before or after) contain one of these

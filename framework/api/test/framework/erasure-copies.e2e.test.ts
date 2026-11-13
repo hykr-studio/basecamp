@@ -41,6 +41,14 @@ const CM = `v8deleted${stamp}`; // Ana's comment naming Sam, which she deleted
 const CE = `v8edited${stamp}`; // Ana's comment naming Sam, which she edited him out of
 const MX = `v8excerpt${stamp}`; // Ana's words naming Sam and Carol's agent: hers, they stay
 const KEEP = `v8keep${stamp}`; // Ana's own words: they stay
+const DC = `v8dcaller${stamp}`; // a caller of the contact's, deleted before
+const MC = `v8moved${stamp}`; // a caller of the contact's, moved to nobody before
+const PG = `v8page${stamp}`; // a page Sam saved and deleted
+const FD = `v8file${stamp}`; // a file Sam uploaded and threw away
+const AP = `v8asked${stamp}`; // what Sam's assistant asked and nobody decided yet
+const AQ = `v8about${stamp}`; // Ana's request about the contact's caller, in Carol's inbox
+const PD = `v8pdel${stamp}`; // a person party of the contact's, deleted before
+const RV = `v8ravi${stamp}`; // Ravi's person party, Sam on it by mistake: it stays
 const NUMBER = `9198${String(Date.now()).slice(-8)}`;
 
 const ana = new Person(`Ana ${KEEP}`); // owner
@@ -53,6 +61,8 @@ const call = (p: Person, method: string, path: string, body?: unknown) =>
   p.call(method, path, body, here);
 
 const MARKERS = [MK, M1, M2, M3, M4, WK, M5, M6, EV, RM, PP, CM, CE, NUMBER];
+/** What was about them and was gone or changed before they asked (decisions V8, round 3). */
+const BEFORE = [DC, MC, PG, FD, AP, AQ, PD];
 
 /** Every row of every table, in every schema, that holds one of these texts. */
 async function rowsHolding(texts: readonly string[]) {
@@ -181,6 +191,7 @@ afterAll(shutdown);
 describe('erasing a member and a contact (decisions V8)', () => {
   let samOutcome: Json = {};
   let wenOutcome: Json = {};
+  let raviParty = '';
 
   beforeAll(async () => {
     // 1. Sam comments on a task; Ana names him in a comment on hers.
@@ -430,6 +441,136 @@ describe('erasing a member and a contact (decisions V8)', () => {
     ];
     for (const res of gone) expect(res.status, JSON.stringify(res.body)).toBeLessThan(300);
 
+    // Gone or changed before they asked (round 3): a caller of the contact's Ana deleted, and
+    // one she moved to nobody and renamed; a page Sam saved and deleted; a file he uploaded
+    // and threw away; a person party of the contact's Ana deleted.
+    const dead = await call(ana, 'POST', '/api/callers', { caller: `Wen ${DC}`, contactId });
+    const moved = await call(ana, 'POST', '/api/callers', { caller: `Wen ${MC}`, contactId });
+    await pool.query('update app.fixture_ledgers_callers set contact_id = null where id = $1', [
+      moved.body.value.id,
+    ]);
+    const saved = await call(sam, 'POST', '/api/pages', {
+      name: `${PG} page`,
+      spec: {
+        title: `${PG} page`,
+        layout: 'stack',
+        blocks: [{ id: 'k', view: 'kpi.row', props: { items: [{ label: 'Open', value: 3 }] } }],
+      },
+    });
+    const upload = await call(sam, 'POST', '/api/files', {
+      name: `${FD} customers.csv`,
+      mime: 'text/csv',
+      size: 10,
+      for: { entity: 'import', field: 'file' },
+    });
+    const deletedParty = await call(ana, 'POST', '/api/parties', {
+      kind: 'person',
+      name: `Wen ${PD}`,
+    });
+    const onDeleted = await call(
+      ana,
+      'POST',
+      `/api/parties/${deletedParty.body.value.id}/members`,
+      {
+        address: NUMBER,
+        name: `Wen ${PD}`,
+      },
+    );
+    for (const res of [dead, moved, saved, upload, deletedParty, onDeleted])
+      expect(res.status, JSON.stringify(res.body)).toBeLessThan(300);
+    for (const res of [
+      await call(ana, 'DELETE', `/api/callers/${dead.body.value.id}`),
+      await call(ana, 'PATCH', `/api/callers/${moved.body.value.id}`, { caller: `${KEEP} caller` }),
+      await call(sam, 'DELETE', `/api/pages/${saved.body.value.id}`),
+      await call(sam, 'DELETE', `/api/files/${upload.body.file.id}`),
+      await call(ana, 'DELETE', `/api/parties/${deletedParty.body.value.id}`),
+    ])
+      expect(res.status, JSON.stringify(res.body)).toBeLessThan(300);
+
+    // Ravi's person party: Ravi was invited and taken off, and so was Sam, by mistake.
+    const ravi = await call(ana, 'POST', '/api/parties', { kind: 'person', name: `Ravi ${RV}` });
+    raviParty = ravi.body.value.id;
+    for (const email of [`ravi.${stamp}@example.com`, sam.email]) {
+      const on = await call(ana, 'POST', `/api/parties/${raviParty}/members`, { email });
+      expect(on.status, JSON.stringify(on.body)).toBeLessThan(300);
+      const off = await call(
+        ana,
+        'DELETE',
+        `/api/parties/${raviParty}/members/${on.body.value.member.id}`,
+      );
+      expect(off.status, JSON.stringify(off.body)).toBeLessThan(300);
+    }
+
+    // What Sam's assistant asked and nobody decided yet, with its copies as the write path,
+    // notifications and the inbox make them: the park's row on his task, the stored event,
+    // a notification's row, the reply kept for a retry, and Ana's inbox item. And Ana's
+    // request about the contact's caller, in Carol's inbox.
+    const pending = async (
+      owner: string,
+      type: string,
+      rid: string,
+      summary: string,
+      input: Json,
+    ) =>
+      (
+        await pool.query(
+          `insert into app.approvals (tenant_id, owner_id, action, rule, reason, resource_type,
+             resource_id, summary, payload, requested_by, status, expires_at)
+           values ($1, $2, $3, 'r', 'r', $4, $5, $6, $7, 'agent', 'pending',
+             now() + interval '1 day') returning id`,
+          [tenantId, owner, `${type}.update`, type, rid, summary, { op: `${type}.update`, input }],
+        )
+      ).rows[0].id as string;
+    const parked = await pending(sam.id, 'task', samTask.body.value.id, `Rename "${AP}"`, {
+      title: `${AP} renamed`,
+    });
+    const about = await pending(ana.id, 'caller', caller.body.value.id, `Rename "Wen ${AQ}"`, {
+      caller: `Wen ${AQ}`,
+    });
+    await pool.query(
+      `insert into audit.events (action, resource_type, resource_id, actor_kind, actor_id,
+         acting_for, tenant_id, outcome, after)
+       values ('task.update', 'task', $1, 'agent', 'assistant', $2, $3, 'needs_approval', $4)`,
+      [samTask.body.value.id, sam.id, tenantId, { approvalId: parked, summary: `Rename "${AP}"` }],
+    );
+    await pool.query(
+      `insert into app.domain_events (id, tenant_id, name, resource_type, resource_id, "row",
+         actor_kind, actor_id, occurred_at, available_at, relayed_at)
+       values (gen_random_uuid()::text, $1, 'approval.requested', 'approval', $2, $3, 'agent',
+         'assistant', now(), now(), now())`,
+      [tenantId, parked, { id: parked, summary: `Rename "${AP}"`, status: 'pending' }],
+    );
+    await pool.query(
+      `insert into app.outbox (tenant_id, key, payload, relayed_at) values ($1, $2, $3, now())`,
+      [tenantId, `v8-asked-${stamp}`, { row: { id: parked, summary: `Rename "${AP}"` } }],
+    );
+    await pool.query(
+      `insert into app.idempotency (key, principal_id, request_hash, response)
+       values ($1, $2, 'h', $3)`,
+      [
+        `v8-asked-${stamp}`,
+        `agent:assistant:${tenantId}:user:${sam.id}`,
+        {
+          status: 'needs_approval',
+          approval: { id: parked, summary: `Rename "${AP}"`, input: { title: `${AP} renamed` } },
+        },
+      ],
+    );
+    await pool.query(
+      `insert into channel.inbox_items (tenant_id, user_id, notification, dedupe, title, body, url)
+       values ($1, $2, 'approval.request', $3, 'Waiting', $4, '/approvals'),
+              ($1, $5, 'approval.request', $6, 'Waiting', $7, '/approvals')`,
+      [
+        tenantId,
+        ana.id,
+        `approval.request:${parked}`,
+        `Rename "${AP}"`,
+        carol.id,
+        `approval.request:${about}`,
+        `Rename "Wen ${AQ}"`,
+      ],
+    );
+
     // 7. A job about no record started for Sam, with a result file: the rows `startJob` and the
     // job's events write (its audit row names its kind; its events hold its input and message),
     // and its file's upload audit row.
@@ -489,6 +630,8 @@ describe('erasing a member and a contact (decisions V8)', () => {
     await mastraSettled();
     expect((await rowsHolding([M1, M2, M3, M4, M5])).length).toBeGreaterThan(5);
     expect((await rowsHolding([M6])).length).toBeGreaterThanOrEqual(3);
+    for (const marker of BEFORE)
+      expect((await rowsHolding([marker])).length, marker).toBeGreaterThan(0);
     expect((await keysHolding([MK, M1])).length).toBeGreaterThan(0);
 
     // Sam asks to be forgotten; Carol files the contact's erasure, and Ana approves it.
@@ -518,8 +661,26 @@ describe('erasing a member and a contact (decisions V8)', () => {
     expect(await rowsHolding(MARKERS)).toEqual([]);
   });
 
+  it('leaves no copy of what was about them and was gone or changed before', async () => {
+    expect(await rowsHolding(BEFORE)).toEqual([]);
+  });
+
+  it('keeps a person party someone else was on, and a moved record as it is now', async () => {
+    expect(
+      (await pool.query('select name from app.parties where id = $1', [raviParty])).rows,
+    ).toEqual([{ name: `Ravi ${RV}` }]);
+    expect(
+      (
+        await pool.query(
+          'select count(*)::int as n from app.fixture_ledgers_callers where caller = $1',
+          [`${KEEP} caller`],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+  });
+
   it('leaves no job in Redis holding them', async () => {
-    expect(await keysHolding(MARKERS)).toEqual([]);
+    expect(await keysHolding([...MARKERS, ...BEFORE])).toEqual([]);
   });
 
   it("keeps everyone else's words", async () => {

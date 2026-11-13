@@ -180,6 +180,22 @@ describe('personal data in the sample', () => {
     const brief = body.value;
     const whose = await pool.query('select customer_id from app.briefs where id = $1', [brief.id]);
     expect(whose.rows[0].customer_id).toBe(customer[asha.name]);
+    // An earlier brief of hers, which the team deleted before she asked: its copies (the audit
+    // rows and events of its answer and its delete) hold her name and number too.
+    const again = await call(owner, 'POST', '/api/shares', {
+      target: { form: 'briefs.brief' },
+      to: { customerId: customer[asha.name] },
+    });
+    const earlier = await fetch(`${server.base}/api/share/${again.body.value.token}/submit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        values: { name: 'Asha Privacy', phone: '+91 98450 22222', summary: 'A cane chair' },
+      }),
+    });
+    const first = await earlier.json();
+    expect(earlier.status, JSON.stringify(first)).toBe(201);
+    expect((await call(owner, 'DELETE', `/api/briefs/${first.value.id}`)).status).toBe(200);
     const note = 'Asha wrote from her personal address';
     // As the back office files it: with a key, so its reply is kept for a retry.
     const res = await owner.call(
@@ -209,7 +225,8 @@ describe('personal data in the sample', () => {
     ]);
     expect(left.rows.map((r) => r.title)).toEqual(['Bala likes teak']);
     expect((await asha.call('GET', '/api/me')).status).toBe(401);
-    // Her email and the team's note are in no approval, audit row or kept reply.
+    // Her email, the team's note and her numbers (the deleted brief's too) are in no approval,
+    // audit row, stored event or kept reply.
     const copies = await pool.query(
       `select 'approval' as at from app.approvals
          where tenant_id = $1 and lower(payload::text) like any($2)
@@ -218,9 +235,21 @@ describe('personal data in the sample', () => {
          where tenant_id = $1
            and lower(coalesce(before::text, '') || coalesce(after::text, '')) like any($2)
        union all
+       select 'event' from app.domain_events
+         where tenant_id = $1
+           and lower(coalesce("row"::text, '') || coalesce(before::text, '')) like any($2)
+       union all
        select 'reply' from app.idempotency
          where split_part(principal_id, ':', 3) = $1 and lower(response::text) like any($2)`,
-      [tenantId, [`%${asha.email.toLowerCase()}%`, `%${note.toLowerCase()}%`, '%98450 11111%']],
+      [
+        tenantId,
+        [
+          `%${asha.email.toLowerCase()}%`,
+          `%${note.toLowerCase()}%`,
+          '%98450 11111%',
+          '%98450 22222%',
+        ],
+      ],
     );
     expect(copies.rows).toEqual([]);
   });

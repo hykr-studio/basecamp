@@ -219,6 +219,9 @@ async function redactApprovals(
 
 const SLICE = 1000;
 
+/** The resource type approvals are audited and stored under. */
+const APPROVAL = 'approval';
+
 /** A set in slices of at most `SLICE` ids. */
 function slices(set: ErasedRecords): ErasedRecords[] {
   if (set.ids.length <= SLICE) return [set];
@@ -280,6 +283,11 @@ export async function redactCopies(
     const ofApprovals = approvalIds.length
       ? sql`or (resource_type = 'approval' and resource_id in (${list(approvalIds)}))`
       : sql``;
+    // Approvals themselves (a person's, deleted with them): the park's row on the record each
+    // was about names it by `approvalId`, and copies its summary.
+    const asked = set.type === APPROVAL;
+    const parkOf = (row: Obj) =>
+      asked && isObj(row.after) && t.ids.has(String(row.after.approvalId ?? ''));
 
     const audit: Obj[] = [];
     for (const row of rowsOf(
@@ -287,9 +295,10 @@ export async function redactCopies(
         select id, resource_type, resource_id, before, after from audit.events
         where tenant_id = ${tenantId}
           and ((resource_type = ${set.type} and resource_id in (${ids})) ${ofApprovals}
-            ${parks.length ? sql`or ${sql.join(parks, sql` or `)}` : sql``})`),
+            ${parks.length ? sql`or ${sql.join(parks, sql` or `)}` : sql``}
+            ${asked ? sql`or after ->> 'approvalId' in (${ids})` : sql``})`),
     )) {
-      const top = own(row);
+      const top = own(row) || parkOf(row);
       const before = scrubCopy(row.before, t, top);
       const after = scrubCopy(row.after, top ? tAfter : t, top);
       if (before !== row.before || after !== row.after) audit.push({ id: row.id, before, after });
@@ -372,24 +381,34 @@ export async function redactCopies(
       ),
     );
 
-    const def = entityDef(set.type);
-    const fileFields = fileFieldsOf(def?.spec)
-      .map(([f]) => f)
-      .filter((f) => set.fields.includes(f));
-    const files = await eraseFilesOn(tx, {
-      tenantId,
-      resourceType: set.type,
-      ids: set.ids,
-      ...(set.deleted ? {} : { fields: fileFields }),
-    });
-    out.files += files.length;
-    // The files' own copies (their names in `file.*` audit rows) go the same way.
-    if (files.length) queue.push(...slices(fileCopies(files)));
-    out.memory += await forgetRecords(tx, { tenantId, resourceType: set.type, ids: set.ids });
-    // Each feature's own copies (webhook bodies, payloads).
+    // A record that stays someone else's keeps its files and memory: only its copies change.
+    if (!set.copiesOnly) {
+      const def = entityDef(set.type);
+      const fileFields = fileFieldsOf(def?.spec)
+        .map(([f]) => f)
+        .filter((f) => set.fields.includes(f));
+      const files = await eraseFilesOn(tx, {
+        tenantId,
+        resourceType: set.type,
+        ids: set.ids,
+        ...(set.deleted ? {} : { fields: fileFields }),
+      });
+      out.files += files.length;
+      // The files' own copies (their names in `file.*` audit rows) go the same way.
+      if (files.length) queue.push(...slices(fileCopies(files)));
+      out.memory += await forgetRecords(tx, { tenantId, resourceType: set.type, ids: set.ids });
+    }
+    // Each feature's own copies (webhook bodies, payloads, inbox items), of the records and of
+    // the approvals about them: an approval's request in a decider's inbox repeats its summary
+    // ('Rename "<name>"'), and its key names the approval (decisions V8).
+    const about: ErasedRecords | null =
+      approvalIds.length && !asked
+        ? { type: APPROVAL, ids: approvalIds, fields: ['summary'] }
+        : null;
     for (const copies of recordCopies.all())
-      for (const [where, n] of Object.entries(await copies.redact({ tx, tenantId, set })))
-        out[where] = (out[where] ?? 0) + n;
+      for (const one of about ? [set, about] : [set])
+        for (const [where, n] of Object.entries(await copies.redact({ tx, tenantId, set: one })))
+          out[where] = (out[where] ?? 0) + n;
   }
   return out;
 }

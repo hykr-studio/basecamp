@@ -375,6 +375,11 @@ export interface ErasedRecords {
   /** The records are gone (all their files go), not only blanked. */
   deleted?: boolean;
   /**
+   * The records stay as they are (someone else's now, as a record whose subject was changed
+   * before the erasure): only their copies lose the fields; their files and memory stay.
+   */
+  copiesOnly?: boolean;
+  /**
    * Keys a command's input names these records by, besides `id` and `<type>Id`: an approval
    * whose input names one loses these fields there, in every copy of it.
    */

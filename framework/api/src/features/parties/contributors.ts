@@ -30,17 +30,63 @@ const naming = (a: DataSubject, email: string | null): object[] =>
     ? [{ contactId: a.subject.contactId }]
     : [{ userId: a.subject.userId }, ...(email ? [{ email }] : [])];
 
+/** The party a member's audit copy names (`toMember`): its row may be gone. */
+const partyOfRow = sql<
+  string | null
+>`coalesce(${auditEvents.after} ->> 'partyId', ${auditEvents.before} ->> 'partyId')`;
+
 /** The parties these members were on, from their audit rows: the members may be gone. */
 async function partiesOf(conn: Conn, ids: readonly string[]): Promise<string[]> {
   if (!ids.length) return [];
-  const party = sql<
-    string | null
-  >`coalesce(${auditEvents.after} ->> 'partyId', ${auditEvents.before} ->> 'partyId')`;
   const rows = await conn
-    .selectDistinct({ id: party })
+    .selectDistinct({ id: partyOfRow })
     .from(auditEvents)
     .where(
       and(eq(auditEvents.resourceType, 'party_member'), inArray(auditEvents.resourceId, [...ids])),
+    );
+  return rows.flatMap((r) => (r.id ? [r.id] : []));
+}
+
+/**
+ * Of these parties, those every member of which, as their audit rows show, was one of `mine`:
+ * a party someone else was ever on is not only the subject's (decisions V8).
+ */
+async function onlyTheirs(
+  conn: Conn,
+  partyIds: readonly string[],
+  mine: ReadonlySet<string>,
+): Promise<string[]> {
+  if (!partyIds.length) return [];
+  const rows = await conn
+    .selectDistinct({ party: partyOfRow, member: auditEvents.resourceId })
+    .from(auditEvents)
+    .where(and(eq(auditEvents.resourceType, 'party_member'), inArray(partyOfRow, [...partyIds])));
+  const others = new Set(rows.filter((r) => r.member && !mine.has(r.member)).map((r) => r.party));
+  return partyIds.filter((id) => !others.has(id));
+}
+
+/** Of these parties, gone already, the person parties (their audit rows say their kind). */
+async function personPartiesGone(conn: Conn, partyIds: readonly string[]): Promise<string[]> {
+  if (!partyIds.length) return [];
+  const live = new Set(
+    (
+      await conn
+        .select({ id: parties.id })
+        .from(parties)
+        .where(inArray(parties.id, [...partyIds]))
+    ).map((p) => p.id),
+  );
+  const gone = partyIds.filter((id) => !live.has(id));
+  if (!gone.length) return [];
+  const rows = await conn
+    .selectDistinct({ id: auditEvents.resourceId })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.resourceType, 'party'),
+        inArray(auditEvents.resourceId, gone),
+        sql`coalesce(${auditEvents.after} ->> 'kind', ${auditEvents.before} ->> 'kind') = 'person'`,
+      ),
     );
   return rows.flatMap((r) => (r.id ? [r.id] : []));
 }
@@ -55,7 +101,9 @@ const emailFor = (a: DataSubject, conn: Conn) =>
  * without them. Their copies (audit rows, replies) lose the person's name, number and email, and
  * the person party's name wherever a participation named it. So do the copies of the members
  * that were them and were taken off before (their audit rows name them), and a person party
- * such a member left empty goes as well.
+ * such a member left empty goes as well, and so do the copies of one deleted before. A person
+ * party someone else was ever on (as its members' audit rows show) is not only theirs: it stays,
+ * and only their members' copies change (decisions V8).
  */
 export const partiesErasure: ErasureContributor = {
   name: 'parties',
@@ -79,8 +127,10 @@ export const partiesErasure: ErasureContributor = {
       await partiesOf(tx, earlier),
     );
     if (!touched.length) return { count: 0 };
+    const mine = await onlyTheirs(tx, touched, new Set([...now, ...earlier]));
+    const deletedBefore = await personPartiesGone(tx, mine);
     const empty = and(
-      inArray(parties.id, touched),
+      inArray(parties.id, mine.length ? mine : ['']),
       eq(parties.kind, 'person'),
       notExists(
         tx
@@ -89,12 +139,18 @@ export const partiesErasure: ErasureContributor = {
           .where(eq(partyMembers.partyId, parties.id)),
       ),
     ) as SQL;
-    // Read before the cascade takes them: the participations copy the party's name.
+    // Read before the cascade takes them: the participations copy the party's name. A party
+    // deleted before took its participations; their audit rows name it.
     const on = await tx
       .select({ id: participations.id })
       .from(participations)
       .innerJoin(parties, eq(parties.id, participations.partyId))
       .where(empty);
+    const onGone = await auditedWith(tx, {
+      type: 'participation',
+      contains: deletedBefore.map((partyId) => ({ partyId })),
+      tenantId: a.tenantId,
+    });
     const emptied = await tx.delete(parties).where(empty).returning({ id: parties.id });
     return {
       count: gone.length + emptied.length,
@@ -105,8 +161,24 @@ export const partiesErasure: ErasureContributor = {
           fields: ['name', 'address', 'email'],
           deleted: true,
         },
-        { type: 'party', ids: emptied.map((p) => p.id), fields: ['name'], deleted: true },
-        { type: 'participation', ids: on.map((p) => p.id), fields: ['party'], deleted: true },
+        {
+          type: 'party',
+          ids: both(
+            emptied.map((p) => p.id),
+            deletedBefore,
+          ),
+          fields: ['name'],
+          deleted: true,
+        },
+        {
+          type: 'participation',
+          ids: both(
+            on.map((p) => p.id),
+            onGone,
+          ),
+          fields: ['party'],
+          deleted: true,
+        },
       ],
     };
   },

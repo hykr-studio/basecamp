@@ -27,6 +27,7 @@ import {
 } from '@hykr/db';
 import { and, asc, eq, inArray, isNotNull, or, type SQL } from 'drizzle-orm';
 import type { ErasedRecords } from '../../hooks.js';
+import { approvalCopies, both, createdBy } from '../../privacy/contributors.js';
 import type { Identities } from './subject.js';
 
 type Values = Record<string, unknown>;
@@ -252,8 +253,8 @@ export async function forgetGrants(tx: Tx, userId: string, tenantId?: string): P
  * The account's part of an erasure here: saved pages, WhatsApp links, threads (their messages go
  * with them), approvals left pending, customer records (anonymised, unlinked), the outside
  * clients they allowed here (consents and tokens) and the membership. The contacts go last, after
- * every contributor (`deleteContacts`). The pages and customer records whose copies lose their
- * words are added to `erased`.
+ * every contributor (`deleteContacts`). The pages (with those they deleted before), approvals
+ * and customer records whose copies lose their words are added to `erased`.
  */
 export async function eraseFramework(
   tx: Tx,
@@ -272,9 +273,14 @@ export async function eraseFramework(
     .where(and(eq(pages.tenantId, t), eq(pages.ownerId, u)))
     .returning({ id: pages.id });
   out.pages = pagesGone.length;
+  // With the pages they saved and deleted before: their copies stay otherwise.
+  const saved = await createdBy(tx, { type: 'page', userId: u, tenantId: t });
   erased.push({
     type: 'page',
-    ids: pagesGone.map((r) => r.id),
+    ids: both(
+      pagesGone.map((r) => r.id),
+      saved,
+    ),
     fields: ['name', 'spec'],
     deleted: true,
   });
@@ -284,14 +290,14 @@ export async function eraseFramework(
       .where(and(eq(channelLinks.tenantId, t), eq(channelLinks.ownerId, u)))
       .returning({ id: channelLinks.id }),
   );
-  out.approvals = count(
-    await tx
-      .delete(approvals)
-      .where(
-        and(eq(approvals.tenantId, t), eq(approvals.ownerId, u), eq(approvals.status, 'pending')),
-      )
-      .returning({ id: approvals.id }),
-  );
+  const asked = await tx
+    .delete(approvals)
+    .where(
+      and(eq(approvals.tenantId, t), eq(approvals.ownerId, u), eq(approvals.status, 'pending')),
+    )
+    .returning({ id: approvals.id });
+  out.approvals = asked.length;
+  erased.push(approvalCopies(asked.map((r) => r.id)));
   const unlinked = await tx
     .update(customers)
     .set({ displayName: ERASED_CUSTOMER, userId: null })

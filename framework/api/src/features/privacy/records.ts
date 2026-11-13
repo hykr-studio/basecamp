@@ -22,6 +22,7 @@ import {
   type Table,
 } from 'drizzle-orm';
 import type { ErasedRecords } from '../../hooks.js';
+import { auditedWith } from '../../privacy/contributors.js';
 import type { RetentionTarget } from './registry.js';
 import type { Identities } from './subject.js';
 
@@ -174,9 +175,56 @@ async function apply(
     : null;
 }
 
+/** What an audit copy of one of their records names them by: each subject column, each id. */
+function naming(pe: PersonalEntity, ids: Identities): object[] {
+  const pairs = (keys: readonly string[] | undefined, values: readonly string[]) =>
+    (keys ?? []).flatMap((k) => values.map((v) => ({ [k]: v })));
+  return [
+    ...pairs(pe.trait.subject.user, ids.userId ? [ids.userId] : []),
+    ...pairs(pe.trait.subject.customer, ids.customerIds),
+    ...pairs(pe.trait.subject.contact, ids.contactIds),
+  ];
+}
+
+/**
+ * Their records of this entity that were deleted, or moved to someone else, before the
+ * erasure: found by their audit rows, which name them (decisions V8). A gone one's copies lose
+ * its personal fields as a deleted record's do; a moved one stays as it is (someone else's
+ * now), and only its copies lose them, its files excepted.
+ */
+async function before(
+  tx: Tx,
+  pe: PersonalEntity,
+  ids: Identities,
+  live: ReadonlySet<string>,
+): Promise<ErasedRecords[]> {
+  const found = (
+    await auditedWith(tx, { type: pe.def.name, contains: naming(pe, ids), tenantId: ids.tenantId })
+  ).filter((id) => !live.has(id));
+  if (!found.length) return [];
+  const cols = columnsOf(pe.def);
+  const still = new Set<string>();
+  for (let i = 0; i < found.length; i += 1000) {
+    const rows = await tx
+      .select({ id: cols.id as never })
+      .from(pe.def.table as Table)
+      .where(inArray(cols.id as Column, found.slice(i, i + 1000)));
+    for (const r of rows) still.add(String(r.id));
+  }
+  const type = pe.def.name;
+  const fields = pe.trait.fields;
+  const gone = found.filter((id) => !still.has(id));
+  const moved = found.filter((id) => still.has(id));
+  return [
+    ...(gone.length ? [{ type, ids: gone, fields, deleted: true }] : []),
+    ...(moved.length ? [{ type, ids: moved, fields, copiesOnly: true }] : []),
+  ];
+}
+
 /**
  * Forget this person in every declared entity: delete, anonymise or keep (counted, with the
- * reason) as each trait says.
+ * reason) as each trait says. The copies of their records deleted or moved to someone else
+ * before go too (`before`); the counts are of the records there now.
  */
 export async function eraseRecords(
   tx: Tx,
@@ -197,6 +245,7 @@ export async function eraseRecords(
       continue;
     }
     const done = await apply(tx, pe, where, pe.trait.erase);
+    erased.push(...(await before(tx, pe, ids, new Set(done?.ids ?? []))));
     if (!done) continue;
     erased.push(done);
     outcome[pe.def.plural] =
