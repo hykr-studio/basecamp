@@ -1,4 +1,4 @@
-import { currencyExponent } from '@hykr/i18n';
+import { currencyExponent, knownCurrency } from '@hykr/i18n';
 import { z } from 'zod';
 import { defineListFieldType } from './list.js';
 
@@ -13,6 +13,23 @@ export const CurrencyCode = z
   .string()
   .regex(/^[A-Z]{3}$/, 'An ISO 4217 currency code, upper case: "EUR"');
 export type CurrencyCode = z.infer<typeof CurrencyCode>;
+
+/**
+ * A currency code that names a currency (`knownCurrency`: one Intl lists, or XXX), for inputs
+ * and configuration. `CurrencyCode` checks the format only: it is what reads parse, so a row
+ * stored with a made-up code still reads.
+ */
+export const KnownCurrencyCode = CurrencyCode.refine(
+  (code) => !/^[A-Z]{3}$/.test(code) || knownCurrency(code),
+  { error: (issue) => `"${String(issue.input)}" is not a currency` },
+);
+
+/** The code, if it names a currency; a RangeError otherwise (writes take no made-up code). */
+function knownCode(currency: string): string {
+  const code = CurrencyCode.parse(currency);
+  if (!knownCurrency(code)) throw new RangeError(`"${code}" is not a currency`);
+  return code;
+}
 
 /** A whole number of minor units, within what a JavaScript number holds exactly. */
 export const MinorUnits = z
@@ -182,11 +199,12 @@ export function allocateMinor(total: number, weights: readonly number[]): number
 
 /**
  * A decimal string as minor units of the currency ("1234.5" in a two-decimal currency is
- * 123450). More decimals than the currency has throw, unless they are zeros.
+ * 123450). More decimals than the currency has throw, unless they are zeros, and so does a
+ * currency that does not exist (its exponent would be a guess).
  */
 export function toMinor(decimal: string, currency: string): number {
   const text = DecimalAmount.parse(decimal.trim());
-  const exp = currencyExponent(CurrencyCode.parse(currency));
+  const exp = currencyExponent(knownCode(currency));
   const negative = text.startsWith('-');
   const [whole, frac = ''] = (negative ? text.slice(1) : text).split('.');
   const digits = frac.replace(/0+$/, '');
@@ -196,7 +214,10 @@ export function toMinor(decimal: string, currency: string): number {
   return safe(negative ? -n : n);
 }
 
-/** Minor units as a plain decimal string in the currency's exponent: 123450 → "1234.50". */
+/**
+ * Minor units as a plain decimal string in the currency's exponent: 123450 → "1234.50". The read
+ * side: any well-formed code, so a row stored with a made-up one still reads.
+ */
 export function fromMinor(minor: number, currency: string): string {
   const exp = currencyExponent(CurrencyCode.parse(currency));
   const n = int(minor, 'The amount');
@@ -208,14 +229,15 @@ export function fromMinor(minor: number, currency: string): string {
 
 /**
  * A write's amount in the record's currency. Minor units in another currency throw
- * (`CurrencyMismatch`); a decimal string is read with the currency's exponent.
+ * (`CurrencyMismatch`); a decimal string is read with the currency's exponent; a currency that
+ * does not exist throws a RangeError, in either shape.
  */
 export function resolveMoneyInput(input: MoneyInput, currency: string): Money {
   const parsed = MoneyInput.parse(input);
   if (typeof parsed === 'string') return { minor: toMinor(parsed, currency), currency };
   if (parsed.currency !== undefined && parsed.currency !== currency)
     throw new CurrencyMismatch(currency, parsed.currency);
-  return money(parsed.minor, currency);
+  return money(parsed.minor, knownCode(currency));
 }
 
 /** Is this value a Money object (read side)? */

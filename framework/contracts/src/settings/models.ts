@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CurrencyCode } from '../framework/money.js';
+import { KnownCurrencyCode } from '../framework/money.js';
 import { defineCapability } from '../roles.js';
 import { defineSettingsSection } from './sections.js';
 
@@ -29,7 +29,7 @@ export type ModelKind = z.infer<typeof ModelKind>;
  */
 export const ModelPrice = z
   .object({
-    currency: CurrencyCode,
+    currency: KnownCurrencyCode,
     inputPerMillion: z.number().finite().min(0),
     outputPerMillion: z.number().finite().min(0).optional(),
   })

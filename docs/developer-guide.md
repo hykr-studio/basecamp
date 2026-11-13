@@ -1207,7 +1207,17 @@ sample's `orders` module uses every part.
   `currencyColumn()` (`@hykr/db`), and give the spec the trait `money: { fields: ['total'] }`: reads
   carry `Money`, writes take `MoneyInput` (`{ minor }`, or a decimal string such as `"1500.00"` read
   with the currency's exponent), and a record keeps one currency (`currency_mismatch`,
-  `currency_fixed`, `currency_required`, `money_invalid`). Filter a money field with the `money`
+  `currency_fixed`, `currency_required`, `money_invalid`). The currency must exist
+  (`knownCurrency` in `@hykr/i18n`: one Intl lists, or `XXX`): a create in a made-up code such as
+  `ABC` is `money_invalid` (`"ABC" is not a currency`), and `toMinor` and `resolveMoneyInput`
+  throw a `RangeError` for it, so a command that prices in `authorize` refuses before it takes a
+  number (a command that takes a currency checks it in `authorize` too: the plugin acts only
+  when the command writes, after a parked request was made). Reads, `fromMinor` and formatting
+  still take any three capital letters, so a row stored
+  with such a code still shows. For an input or a configuration value, use `KnownCurrencyCode`
+  (`DEFAULT_CURRENCY`, `CREDITS_CONFIG` and a model's price are checked this way at start). Where
+  the runtime cannot list currencies (Hermes on a device), the format is the check and the server
+  refuses the rest (`docs/decisions/V4.md`). Filter a money field with the `money`
   list type, in minor units. Arithmetic is exact: `mulDiv`, `scaleMoney`, `allocateMinor`,
   `sumMoney`, with the rounding you name. `moneyText(m, lang)` and `spokenMoney` (`@hykr/i18n`) and
   `useMoneyText()` (`@hykr/app`) format through Intl.
@@ -3590,6 +3600,7 @@ These are not built. Each has a workaround for now.
 | Importing with no worker | `basecamp import` starts the job and follows it; the worker runs it. With no worker running it waits (and says so). Large JSON files through the local storage drivers (memory, fs) also pass the API's JSON body limit (`JSON_BODY_LIMIT`) on upload; S3 has no such limit. |
 | OpenAPI | Nothing generates or serves an OpenAPI document. `@nestjs/swagger` is not a dependency; only a comment in `spec.ts` mentions it. |
 | Production deploy | No Dockerfile, deploy workflow or `eas.json`. Only `ci.yml`. |
+| Rows stored in a made-up currency | Writes refuse a currency that does not exist (section 5.13), but rows written before that check (any three capital letters passed) are neither found nor repaired: they read and change as before, and refuse a new amount. Cancel and re-create such a record (`docs/decisions/V4.md`). |
 | A currency for an assistant's create | A plain create of an entity with the `money` trait names its currency; the business's (`money` settings) is not taken (`currency_required`, decisions B3B5). The assistant cannot see the business's currency, so the person has to say it (the sample's briefs: "new brief Asha: a bookshelf, budget 20000 INR"). For records the assistant creates often, write a command that reads `tenantMoney` (the sample's `save-order`). |
 | The exact versions a new application installs | The `@hykr/*` packages give ranges, and a new application starts with no lockfile: it gets the newest releases those ranges allow, tested only by the latest `consumer` run. `better-auth` and its Expo plugin are pinned to the OAuth plugin's version (decisions HCONS); Mastra's CLI and OpenTelemetry may float to releases whose peer ranges warn. |
 | A package installed but not used yet | `@mastra/memory` (in `@hykr/agents`): memory recall is the API's own (section 7.7). A feature that uses it adds its code. Versions and reasons: `docs/decisions/F6.md`. |

@@ -24,6 +24,7 @@ import {
 } from '@hykr/contracts';
 import { type Tx, zoneName } from '@hykr/core';
 import { membershipOf } from '@hykr/db';
+import { knownCurrency } from '@hykr/i18n';
 
 declare module '@hykr/contracts' {
   interface Contributions {
@@ -73,11 +74,6 @@ export const settingsChecks = createHookRegistry<SettingsCheck>(
 );
 
 /* ── The framework's own checks ────────────────────────────────────────── */
-
-const CURRENCIES = new Set([...Intl.supportedValuesOf('currency'), 'XXX']);
-
-/** A currency the runtime knows, or XXX (no currency: a business that set none). */
-export const knownCurrency = (code: string) => CURRENCIES.has(code);
 
 const currencyProblem = (path: string, m: Money) =>
   knownCurrency(m.currency) ? [] : [`${path}.currency: "${m.currency}" is not a currency`];

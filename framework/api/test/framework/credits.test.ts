@@ -53,6 +53,11 @@ describe('CREDITS_CONFIG', () => {
     expect(() => parseCreditsConfig(JSON.stringify({ defaults: { pauseAt: 0 } }))).toThrow(
       /pauseAt/,
     );
+    // Well formed, but no currency: a credit would be a guessed fraction of it.
+    expect(() => parseCreditsConfig(JSON.stringify({ currency: 'ABC' }))).toThrow(
+      /"ABC" is not a currency/,
+    );
+    expect(parseCreditsConfig(JSON.stringify({ currency: 'JPY' })).currency).toBe('JPY');
   });
 
   it('refuses defaults whose alert is not below their pause (V5)', () => {
@@ -251,7 +256,7 @@ describe('embedding tokens', () => {
           apiKey: 'k',
           models: [
             { id: 'embed', kind: 'embedding', price: { currency: 'XXX', inputPerMillion: 50 } },
-            { id: 'other', kind: 'embedding', price: { currency: 'XTS', inputPerMillion: 50 } },
+            { id: 'other', kind: 'embedding', price: { currency: 'USD', inputPerMillion: 50 } },
             { id: 'free', kind: 'embedding' },
           ],
         },

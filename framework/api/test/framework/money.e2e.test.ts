@@ -1,5 +1,6 @@
 // Money in minor units with a currency, and gapless number series (B3), on the fixture's
 // baskets (fixture/src/features/line-items).
+import { execFileSync } from 'node:child_process';
 import { formatNumber, type Money, numberPeriod, type Principal } from '@hykr/contracts';
 import {
   CORE_OPTIONS,
@@ -296,5 +297,105 @@ describe('number series', () => {
     } finally {
       setDefaultTimeZone(was === 'UTC' ? undefined : was);
     }
+  });
+});
+
+describe('a currency that does not exist (V4)', () => {
+  const save = (title: string, items: object[] = [], extra: object = {}) =>
+    owner.call('POST', '/api/baskets/save', { title, items, ...extra });
+  const seq = (r: { body: { value: { basket: { number: string } } } }) =>
+    Number(r.body.value.basket.number.split('-').at(-1));
+  const titled = async (title: string) =>
+    (
+      await pool.query('select id from app.fixture_baskets where tenant_id = $1 and title = $2', [
+        tenantId,
+        title,
+      ])
+    ).rows;
+
+  beforeAll(() => setMoney(tenantId, { currency: 'EUR' }));
+
+  it('a plain create in a made-up currency is refused, audited, and writes nothing', async () => {
+    const cases = [
+      { title: 'Made up', currency: 'ABC', total: '1.00' },
+      { title: 'Made up, no amount', currency: 'QZX' },
+      { title: 'Made up, minor units', total: { minor: 100, currency: 'ABC' } },
+    ];
+    for (const body of cases) {
+      const res = await owner.call('POST', '/api/baskets', body);
+      expect(res.status, body.title).toBe(403);
+      expect(res.body).toMatchObject({ error: 'forbidden', rule: 'money_invalid' });
+      expect(res.body.reason).toMatch(/^"(ABC|QZX)" is not a currency$/);
+      expect(await titled(body.title)).toEqual([]);
+    }
+    const denied = await audit('basket.create', 'money_invalid');
+    expect(denied.length).toBeGreaterThanOrEqual(3);
+    expect(denied.every((a) => a.outcome === 'denied')).toBe(true);
+    // XXX is ISO's "no currency", which a business that set none counts in.
+    const none = await owner.call('POST', '/api/baskets', { title: 'In XXX', currency: 'XXX' });
+    expect(none.status).toBe(201);
+  });
+
+  it("a command's write is refused too, and gives its number back", async () => {
+    const before = await save('Before ABC');
+    expect(before.status).toBe(200);
+    // No priced line: nothing resolves an amount, so the plugin refuses the insert in run.
+    const failed = await save('In ABC', [], { currency: 'ABC' });
+    expect(failed.status).toBe(403);
+    expect(failed.body).toMatchObject({ rule: 'money_invalid', reason: '"ABC" is not a currency' });
+    expect(await titled('In ABC')).toEqual([]);
+    const after = await save('After ABC');
+    expect(seq(after)).toBe(seq(before) + 1);
+  });
+
+  it('a row stored with one before still reads, sums and changes, but takes no new amount', async () => {
+    const made = await owner.call('POST', '/api/baskets', {
+      title: 'Stored ABC',
+      currency: 'EUR',
+      total: '1.00',
+    });
+    const id = made.body.value.id;
+    await pool.query(`update app.fixture_baskets set currency = 'ABC' where id = $1`, [id]);
+    const got = await owner.call('GET', `/api/baskets/${id}`);
+    expect(got.status).toBe(200);
+    expect(got.body.total).toEqual({ minor: 100, currency: 'ABC' });
+    const list = await owner.call('GET', '/api/baskets?total[eq]=100');
+    expect(list.body.items.map((b: { id: string }) => b.id)).toContain(id);
+    const sums = await owner.call('GET', '/api/baskets/summary?sum=total');
+    expect(sums.status).toBe(200);
+    expect(sums.body.totals).toContainEqual({
+      key: { currency: 'ABC' },
+      count: 1,
+      sum: { total: { minor: 100, currency: 'ABC' } },
+    });
+    const renamed = await owner.call('PATCH', `/api/baskets/${id}`, { title: 'Stored ABC, kept' });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.value.title).toBe('Stored ABC, kept');
+    const priced = await owner.call('PATCH', `/api/baskets/${id}`, { total: '2.00' });
+    expect(priced.status).toBe(403);
+    expect(priced.body).toMatchObject({ rule: 'money_invalid' });
+    expect(priced.body.reason).toContain('"ABC" is not a currency');
+  });
+
+  it('DEFAULT_CURRENCY must be a currency the runtime knows', () => {
+    const config = new URL('../../dist/config.js', import.meta.url).href;
+    const startWith = (code: string) => {
+      try {
+        execFileSync(
+          process.execPath,
+          [
+            '--input-type=module',
+            '-e',
+            `const { assertConfig } = await import(${JSON.stringify(config)}); assertConfig();`,
+          ],
+          { env: { ...process.env, DEFAULT_CURRENCY: code }, stdio: 'pipe' },
+        );
+        return 'started';
+      } catch (e) {
+        return String((e as { stderr?: Buffer }).stderr ?? e);
+      }
+    };
+    for (const code of ['ABC', 'eur']) expect(startWith(code), code).toContain('DEFAULT_CURRENCY');
+    for (const code of ['JPY', 'XXX']) expect(startWith(code), code).toBe('started');
   });
 });

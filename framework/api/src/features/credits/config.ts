@@ -6,7 +6,7 @@ import {
   type CreditsOverride,
   CreditsPlan,
   type CreditsSettings,
-  CurrencyCode,
+  KnownCurrencyCode,
   PriceKey,
 } from '@hykr/contracts';
 import { z } from 'zod';
@@ -15,7 +15,7 @@ import { z } from 'zod';
 export const CreditsConfig = z
   .object({
     /** ISO 4217: a credit is one minor unit of it. Unset: uses are metered at no cost. */
-    currency: CurrencyCode.optional(),
+    currency: KnownCurrencyCode.optional(),
     /** Credits per meter's pricing unit, by '<meter>' or '<meter>.<variant>'. */
     prices: z.record(PriceKey, z.number().finite().min(0)).default({}),
     /** Added to a model's own price (MODEL_PROVIDERS), per cent. */

@@ -7,6 +7,7 @@ import {
   resolveMoneyInput,
   type WriteAction,
 } from '@hykr/contracts';
+import { knownCurrency } from '@hykr/i18n';
 import { deny, RuleDenied } from '../authorize.js';
 import type { EntityPlugin } from '../hooks.js';
 
@@ -18,7 +19,8 @@ const given = (v: unknown) => v !== undefined && v !== null;
 
 /**
  * The currency a write's money is in, or a refusal: amounts in two currencies, a change of the
- * record's currency, no currency at all on a create, an amount the currency cannot hold.
+ * record's currency, no currency at all on a create, a currency that does not exist, an amount
+ * the currency cannot hold.
  */
 export function moneyCurrency(
   trait: MoneyTrait,
@@ -48,6 +50,10 @@ export function moneyCurrency(
   if (action === 'delete') return { currency: currency ?? '' };
   if (currency === undefined || !CurrencyCode.safeParse(currency).success)
     return deny('currency_required', 'Say which currency the amounts are in');
+  // A create stores the record's currency: it must be one (an update never writes it, so a row
+  // stored with a made-up code still changes; its new amounts are refused below).
+  if (action === 'create' && !knownCurrency(currency))
+    return deny('money_invalid', `"${currency}" is not a currency`);
   for (const field of trait.fields) {
     const v = input?.[field];
     if (!given(v)) continue;
