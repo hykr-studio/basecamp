@@ -2947,6 +2947,8 @@ Add it to the module's `<name>Views.views`. `createUiRegistry` refuses a spoken 
 
 On WhatsApp a list's rows (two or more) go as buttons or a list to tap, headed by the view's heading: the `title` it was shown with, else its `labels.title` in the turn's language (the text intent's `heading`). A view with neither is headed by its whole text, so give a list view a `labels.title`; its `text` need not start with one.
 
+A lookup is not the answer. The assistant reads before it writes ("delete Tiles": `list-todos`, then `delete-todo`), and that read's view is how it found the record, not what it tells the person. So a read whose view (`inline` or `text`) comes before a write in the same turn (done, waiting for approval, or a resumed run's decision) shows nothing on any channel: the turn's `toolCalls` carry no `present` for it (WhatsApp words nothing of it, and no "No orders." follows a waiting line), the saved thread keeps none, and the app hides its view once the write arrives (`useLookup`). The rule is `lookupsIn` in `@hykr/contracts`. A read with no write after it is the answer and shows, and a refused call is no write (it may be a read's). A canvas a call opened is not a view, so it always applies.
+
 Bind it to a component in the app, in its app module's `bind` (`application/mobile/src/modules/todos/index.tsx`):
 
 ```ts
@@ -3019,8 +3021,9 @@ Every business's use of what costs money is metered, priced and, when its plan s
   category as variant), `voice_seconds` (a reported voice session) and `embedding_tokens` (memory
   recall and indexing, the embedding model as variant; section 7.7). Each use is a row in
   `app.usage_events`, added to its period's counter (`app.usage_counters`). A feature or module adds
-  a meter with `defineMeter({ name, unit, per, fallbackPrice? })` (contributed as `meters`) and
-  records with `CreditsService.record({ tenantId, meter, quantity, source, ref })`, or
+  a meter with `defineMeter({ name, unit, per, label?, fallbackPrice? })` (contributed as
+  `meters`; `label` is what people call it, as `Labels` in the application's languages, and the
+  framework's own meters are named in its phrases, `credits.meter.*`) and records with `CreditsService.record({ tenantId, meter, quantity, source, ref })`, or
   `metering()?.record(...)` from code that must not depend on the feature; `ref` makes a retried
   report count once. A `tokens` use without a cost is priced like a turn's (`tokens.<model>`, then
   `tokens`, then the model's own price), with its input and output split when given
@@ -3057,6 +3060,15 @@ Every business's use of what costs money is metered, priced and, when its plan s
   voice relay is not), so a run that crosses the cap stops there: the assistant ends it with the
   paused sentence (`EndWhenPaused`) instead of carrying on. One action may overshoot the cap; the
   wallet goes below zero by that much.
+- **In people's words.** A refusal's `reason` names a meter by its label (`meterLabel`), never
+  its name in the code: "Assistant actions: this period's limit is reached". It is in the
+  reader's language: `GET /api/credits?lang=` and the operator's `GET …/:tenantId?lang=` (each
+  meter's `label` too), a refused turn's language, a pinned voice session's; English where the
+  caller names none (an agent's call, a recall's 402). A meter's `credits.threshold` event carries
+  its `label` in every language, so the application's alert can name a module's meter. One use
+  that passes both levels of a cap at once (a limit of 1, a long voice session) says only the
+  pause: the alert's row is stored and its event is not sent, so "low" never comes with "limit
+  reached", or after it.
 - **The operator** is a platform operator holding `platform.credits` (section 6.6), signed in:
   `GET /api/credits/operator/:tenantId` (full status) and `/ledger`, `PUT …/settings` (the
   plan), `PUT …/override` (`{ override: { mode: 'run' | 'pause', until?, reason } }` or `null`) and

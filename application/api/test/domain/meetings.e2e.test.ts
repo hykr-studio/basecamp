@@ -87,20 +87,8 @@ describe('meetings, end to end', () => {
       record: { type: 'meeting', id: siteReview.id },
     });
     expect(chat.body.toolCalls).toEqual([
-      {
-        tool: 'list-meetings',
-        ok: true,
-        outcome: 'done',
-        // A JSON caller has no screen: the list comes back in words.
-        // …with its rows, for a channel that can offer them to tap.
-        present: {
-          kind: 'text',
-          text: expect.stringContaining('• Site review'),
-          // The view's title, to head the rows (V7).
-          heading: 'Meetings',
-          choices: [{ id: siteReview.id, title: 'Site review' }],
-        },
-      },
+      // The list it read to find the meeting is no answer: it shows nothing (V13).
+      { tool: 'list-meetings', ok: true, outcome: 'done' },
       // Parked, not done: the trace says so, with what is waiting.
       {
         tool: 'close-meeting',
@@ -328,6 +316,14 @@ describe('meetings, end to end', () => {
     ]);
     expect(chat.body.reply).toContain('Tile showroom visit');
     expect(chat.body.reply).toContain('Pay the electrician');
+    // Read to answer, the lists show: a JSON caller has no screen, so in words, with their rows
+    // for a channel that can offer them to tap, headed by the view's title (V7).
+    expect(chat.body.toolCalls[0].present).toMatchObject({
+      kind: 'text',
+      text: expect.stringContaining('• Tile showroom visit'),
+      heading: 'Meetings',
+      choices: expect.arrayContaining([expect.objectContaining({ title: 'Tile showroom visit' })]),
+    });
   });
 
   it('agents cannot delete meetings: the tool does not exist and the API refuses', async () => {
