@@ -98,6 +98,9 @@ export const TodoSpec = entitySpec({
   traits: {
     // Each business adds its own fields to to-dos (Settings → Custom fields: a priority, say).
     customFields: {},
+    // Its meeting is one the writer can read in their business (named, not imported: meetings
+    // builds on to-dos).
+    references: { meetingId: 'meeting' },
     // The cost is for people who buy, and the business's owners and admins (roles.ts).
     fieldPolicy: { cost: 'todos.cost.read' },
     // Added, ticked, renamed or deleted on a phone without a network: kept on the phone and

@@ -399,6 +399,40 @@ describe('defineServer refuses modules that collide', () => {
   });
 });
 
+describe('defineServer refuses references it cannot check (V2)', () => {
+  it('to an entity that is not there, from a field no write sets, or on a child', () => {
+    const target = mod('refto');
+    const from = defineModule({
+      name: 'reffrom',
+      entities: {
+        reffroms: entity('reffrom', {
+          traits: { references: { title: 'refto', nowhere: 'refto', id: 'nothing' } },
+        }),
+      },
+      commands: [],
+    });
+    expect(problems(() => server(target, from))).toEqual([
+      'reffrom: the reference nowhere is not a field it creates or updates',
+      'reffrom: the reference id names nothing, which is not an entity',
+    ]);
+    const child = defineModule({
+      name: 'refkid',
+      entities: {
+        refkids: entity('refkid', {
+          traits: {
+            parent: { entity: 'refto', field: 'title' },
+            references: { title: 'refto' },
+          },
+        }),
+      },
+      commands: [],
+    });
+    expect(problems(() => server(target, child))).toContain(
+      'refkid: a record with a parent cannot declare references (its children are saved in bulk, unchecked)',
+    );
+  });
+});
+
 describe("the modules' agent parts", () => {
   const s = (name: string) =>
     defineScript({ name, match: () => undefined, step: () => [call('noop', {})] });

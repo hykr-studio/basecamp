@@ -17,6 +17,7 @@ import {
   type CoreOptions,
   entityDef,
   entityOp,
+  refusedReference,
   runWrite,
   type Tx,
 } from '@hykr/core';
@@ -82,7 +83,9 @@ function databaseProblem(e: unknown): RowProblem | undefined {
     return new RowProblem('conflict', 'Another import wrote this key first');
   if (code === '23505')
     return new RowProblem('conflict', 'Another record already has one of these values');
-  if (code === '23503') return new RowProblem('invalid', 'It names a record that does not exist');
+  // The same code as a reference the write path refused (V2): which one is not said.
+  if (code === '23503')
+    return new RowProblem('unknown_reference', 'It names a record that does not exist');
   if (code === '23502') return new RowProblem('invalid', 'A value it needs is missing');
   if (code === '23514') return new RowProblem('invalid', 'A value is outside what is allowed');
   if (code.startsWith('22')) return new RowProblem('invalid', 'A value does not fit its field');
@@ -115,6 +118,10 @@ export function problemOf(e: unknown): RowProblem {
         'forbidden',
         typeof body === 'object' && body.rule ? `${said} (${body.rule})` : said,
       );
+    // A record the row names that the importer cannot reach (V2): unknown, another business's,
+    // unreadable, or gone meanwhile (the database's key), all one code.
+    const ref = refusedReference(e);
+    if (ref) return new RowProblem('unknown_reference', ref.message, ref.field);
     if (status === 404) return new RowProblem('not_found', said);
     if (status === 409) return new RowProblem('conflict', said);
     if (status === 400 || status === 422) return new RowProblem('invalid', said);

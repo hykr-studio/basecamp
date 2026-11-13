@@ -96,7 +96,10 @@ export const ImportErrorCode = z.enum([
   'missing_key',
   /** Another row of the file has the same key. */
   'duplicate_key',
-  /** A `refs` column names a record that was not imported, or that the importer cannot reach. */
+  /**
+   * A `refs` column names a record that was not imported, or a reference field (or a `refs`
+   * column) names one the importer cannot reach: unknown, another business's, or unreadable.
+   */
   'unknown_reference',
   /** The record this key became is gone, or the importer no longer reaches it. */
   'not_found',

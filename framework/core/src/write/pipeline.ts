@@ -23,6 +23,7 @@ import { ConflictException, ForbiddenException, HttpException } from '@nestjs/co
 import { and, eq, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import { allow, RuleDenied } from '../authorize.js';
+import { referenceRefusal } from '../entity/references.js';
 import { writeHooks } from '../hooks.js';
 import type { Tx } from '../tokens.js';
 import { parkForApproval } from './approvals.js';
@@ -360,6 +361,8 @@ export async function runWrite<I, L, V>(
       });
     }
     if (e instanceof HttpException) throw e;
-    throw e;
+    // A key the database refused in the write's own code (a command's insert, a child's bulk
+    // insert): a 404 without the database's detail, never a 500 that tells an id exists (V2).
+    throw referenceRefusal(e, 'write');
   }
 }

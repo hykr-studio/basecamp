@@ -1,5 +1,5 @@
 /** The notes module's tables. */
-import { app, customerColumn, fileColumns, id, tableRef, tenantColumn, user } from '@hykr/db';
+import { app, customerColumn, fileColumns, id, tenantColumn, user } from '@hykr/db';
 import { index, text, timestamp } from 'drizzle-orm/pg-core';
 
 export const notes = app.table(
@@ -13,10 +13,9 @@ export const notes = app.table(
     customerId: customerColumn(),
     title: text('title').notNull(),
     body: text('body').notNull().default(''),
-    // The meeting it belongs to: meetings builds on notes, so the table is named, not imported.
-    meetingId: text('meeting_id').references(() => tableRef('meetings').id, {
-      onDelete: 'set null',
-    }),
+    // The meeting it belongs to, in the same business: the spec declares the reference, and
+    // sql/post/meeting-references.sql keys it (see the to-dos' schema).
+    meetingId: text('meeting_id'),
     /** Photos: file ids (app.files), in order. */
     photos: fileColumns('photos'),
     /** Who made the row: the person, or the assistant acting for them. Set by the framework. */

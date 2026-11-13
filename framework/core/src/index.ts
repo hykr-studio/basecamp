@@ -41,6 +41,12 @@ export {
 } from './entity/define-entity.js';
 export { entityHandlers, entityOp, ifMatchFor } from './entity/handlers.js';
 export {
+  checkReferences,
+  isForeignKeyViolation,
+  referenceRefusal,
+  refusedReference,
+} from './entity/references.js';
+export {
   entityDef,
   entityDefForSchema,
   entityDefs,

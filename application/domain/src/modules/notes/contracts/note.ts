@@ -73,6 +73,8 @@ export const NoteSpec = entitySpec({
   // personal data: it goes when they ask to be forgotten, and two years after its last change.
   traits: {
     files: { photos: { accept: ['image/*'], maxBytes: 10 * 1024 * 1024, max: 10 } },
+    // Its meeting is one the writer can read in their business (named, not imported).
+    references: { meetingId: 'meeting' },
     memory: {
       text: (n: NoteView) => [n.title, n.body?.trim()].filter(Boolean).join(': '),
       about: (n: NoteView) => (n.meetingId ? { type: 'meeting', id: n.meetingId } : null),

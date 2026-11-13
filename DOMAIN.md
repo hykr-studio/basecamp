@@ -72,8 +72,11 @@ Around the modules, the application keeps:
   `notes/server/public.ts` and `todos/server/public.ts`, in its own transaction). The
   dependency-cruiser rules `module-imports-public-parts`, `module-<name>-imports-its-dependencies`
   and `no-module-cycles` enforce it.
-- **A foreign key down the graph.** A lower module's table that points at a higher module's
-  (a note's `meeting_id`) names the table instead of importing it: `tableRef('meetings').id`.
+- **A reference down the graph.** A lower module's record that names a higher module's (a
+  note's `meeting_id`) names the entity on its spec instead of importing it
+  (`traits.references: { meetingId: 'meeting' }`, checked as the writer on every write), and
+  keys the column with its business, `(tenant_id, meeting_id)`, by `tableRef('meetings')` or a
+  SQL hook (`sql/post/meeting-references.sql`; developer guide 5.2).
 - **No collisions.** `defineServer` merges the modules and checks, at boot, that no two of them
   (or a module and the framework) declare the same entity name or plural, command, tool id,
   route (`/api/approvals` and the framework's other routes are reserved), approval op, view,
