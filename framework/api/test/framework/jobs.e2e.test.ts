@@ -701,6 +701,33 @@ describe('a polled job about no record', () => {
     expect(rows[0].outcome).toBe('denied');
   });
 
+  it('more starts with a file at once than the pool holds all answer, and nothing else waits', async () => {
+    // A job's input files are checked inside the starting write's transaction: that check must
+    // take no second pooled connection, or enough starts at once hold the whole pool for 30 s.
+    const { sharedDb } = await import('../../dist/infra/db.js');
+    const n = 2 * ((sharedDb.pool.options.max as number | undefined) ?? 10) + 2;
+    // A file nobody has: every start is refused in its transaction, and no job runs meanwhile.
+    const burst = () =>
+      Promise.all(
+        Array.from({ length: n }, (_, i) =>
+          owner.call('POST', '/api/drawings/convert', { text: `burst ${i}`, source: randomUUID() }),
+        ),
+      );
+    // Warm first: with the pool at its size, every start reaches its transaction at the same moment.
+    await burst();
+    const started = Date.now();
+    const all = burst();
+    await new Promise((r) => setTimeout(r, 200));
+    const asking = Date.now();
+    expect((await owner.call('GET', '/api/me')).status).toBe(200);
+    expect(Date.now() - asking).toBeLessThan(5_000);
+    const answered = await all;
+    expect(answered.map((r) => r.status)).toEqual(Array(n).fill(403));
+    expect(answered.every((r) => r.body.rule === 'file_unavailable')).toBe(true);
+    // Well under the pool's 30 s connection timeout, which a stall would take.
+    expect(Date.now() - started).toBeLessThan(20_000);
+  }, 120_000);
+
   it('a result URL to a private address fails it (the default download)', async () => {
     const started = await owner.call('POST', '/api/drawings/convert', { text: 'private' });
     const jid = started.body.value.id;

@@ -10,6 +10,7 @@ import {
 } from '@hykr/contracts';
 import {
   auditCtx,
+  type Conn,
   CORE_OPTIONS,
   type CoreOptions,
   entityDef,
@@ -151,7 +152,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
   }
 
   onModuleInit() {
-    setJobsRuntime({ filesReachable: (p, ids) => this.filesReachable(p, ids) });
+    setJobsRuntime({ filesReachable: (conn, p, ids) => this.filesReachable(conn, p, ids) });
   }
 
   onModuleDestroy() {
@@ -207,10 +208,17 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
     });
   }
 
-  /** May p use every one of these files (startJob's input files)? */
-  private async filesReachable(p: Principal, ids: readonly string[]): Promise<boolean> {
-    const found = await this.files().getMany(p, ids);
-    return ids.every((id) => found.some((f) => f.id === id));
+  /**
+   * May p use every one of these files (startJob's input files)? Asked on the starting write's
+   * transaction: it may wait for no second pooled connection while that one is held.
+   */
+  private async filesReachable(
+    conn: Conn,
+    p: Principal,
+    ids: readonly string[],
+  ): Promise<boolean> {
+    const found = await this.files().reachableIds(conn, p, ids);
+    return ids.every((id) => found.includes(id));
   }
 
   /* ── Reading ─────────────────────────────────────────────────────────────── */

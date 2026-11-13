@@ -351,6 +351,12 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       message: `That id is already used: a new ${label} needs another`,
     });
 
+  const nothingToChange = () =>
+    new BadRequestException({
+      error: 'nothing_to_change',
+      message: `Nothing to change on this ${label}`,
+    });
+
   /**
    * The id a person chose for a new record (B12): only for an entity that takes client ids, only
    * a UUID, only from a person (the assistant, a guest and the server's own work never choose
@@ -498,9 +504,13 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       await checkReferences(tx, p, spec, row as Values, parsed);
       const id = (row as { id: string }).id;
       const stale = staleWhere(row, parsed);
+      // Nothing left to write (an empty patch, or one an erasure's scrubbing emptied since it
+      // parked): a client error, never the driver's bare 500. The rules had their say first.
+      const values = toValues(p, 'update', row, parsed);
+      if (!Object.keys(values).length) throw nothingToChange();
       const [updated] = await tx
         .update(table as Table)
-        .set(toValues(p, 'update', row, parsed) as never)
+        .set(values as never)
         .where(scoped(p, 'write', eq(idCol, id), ...stale))
         .returning()
         .catch((e: unknown) => {

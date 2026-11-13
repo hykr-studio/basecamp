@@ -595,6 +595,47 @@ describe('the durable event outbox', () => {
   });
 });
 
+describe('an update with nothing to change', () => {
+  it('is refused as a 400, never a bare 500', async () => {
+    const made = await chore(owner, { title: 'Unchanged' });
+    const res = await owner.call('PATCH', `/api/chores/${made.body.value.id}`, {});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('nothing_to_change');
+    expect((await owner.call('GET', `/api/chores/${made.body.value.id}`)).body.title).toBe(
+      'Unchanged',
+    );
+  });
+
+  it('a parked update the erasure scrub emptied ends failed on approve, once; a second approve is 409', async () => {
+    // A record blanked rather than deleted (erase: 'anonymise') keeps its pending update, with
+    // every personal field taken out of the stored input. {} still validates, so the replay
+    // reaches the row with nothing to set: it must end as failed, not as a 500 left pending.
+    const { redactCopies } = await import('../../dist/index.js');
+    const made = await chore(owner, { title: 'Call Ravi' });
+    const id = made.body.value.id as string;
+    const parked = await owner.call('PATCH', `/api/chores/${id}`, {
+      title: 'Call Ravi again [ask]',
+    });
+    const approvalId = parked.body.approval.id as string;
+    await db().transaction((tx) =>
+      redactCopies(tx, tenantId, [{ type: 'chore', ids: [id], fields: ['title'] }]),
+    );
+    const { rows } = await pool.query(
+      `select payload->'input' as input from app.approvals where id = $1`,
+      [approvalId],
+    );
+    expect(rows[0].input).toEqual({});
+    const first = await owner.call('POST', `/api/approvals/${approvalId}/approve`);
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({
+      status: 'failed',
+      failureReason: expect.stringContaining('othing'),
+    });
+    expect((await owner.call('POST', `/api/approvals/${approvalId}/approve`)).status).toBe(409);
+    expect((await audit(approvalId)).filter((a) => a.action === 'approval.failed')).toHaveLength(1);
+  });
+});
+
 describe('registries', () => {
   it('an operation is registered for replay once', () => {
     expect(() => registerOp('chore.create', () => ({}) as never)).toThrow(

@@ -14,6 +14,7 @@ import {
 import {
   type AnyEntityDef,
   auditCtx,
+  type Conn,
   CORE_OPTIONS,
   type CoreOptions,
   entityDef,
@@ -439,12 +440,16 @@ export class FilesService implements OnApplicationBootstrap {
    * access, grants and plugins' scopes), an agent may read that entity, and the record as p
    * sees it still lists the file in that field (a hidden field hides its files). Not on a
    * record yet: only whoever uploaded it. Detached or erased: nobody.
+   *
+   * Reads on `conn`: a caller inside a transaction (a job's start, in its write) passes it, so
+   * nothing here waits for a second pooled connection while that one is held.
    */
   async reaches(
     p: Principal,
     row: FileRow,
     /** Records already read for p in this request, by "type:id" (null: not reached). */
     seen = new Map<string, Record<string, unknown> | null>(),
+    conn: Conn = this.db,
   ): Promise<boolean> {
     if (!p.tenantId || row.tenantId !== p.tenantId) return false;
     if (row.status !== 'ready' && row.status !== 'pending') return false;
@@ -459,13 +464,13 @@ export class FilesService implements OnApplicationBootstrap {
           resourceId: row.resourceId,
           field: row.field,
           fileId: row.id,
-          db: this.db,
+          db: conn,
         })) ?? false
       );
     if (p.actor.kind === 'agent' && def.spec.expose.get !== 'all') return false;
     const key = `${def.name}:${row.resourceId}`;
     if (!seen.has(key)) {
-      const record = await def.repo.find(this.db, p, row.resourceId);
+      const record = await def.repo.find(conn, p, row.resourceId);
       seen.set(key, record ? (def.toRead(record, p) as Record<string, unknown>) : null);
     }
     const record = seen.get(key);
@@ -521,21 +526,41 @@ export class FilesService implements OnApplicationBootstrap {
     return this.withUrl(await this.reachable(p, id), p);
   }
 
-  /** The files of these ids that p reaches; the others are left out, saying nothing of them. */
-  async getMany(p: Principal, ids: readonly string[]): Promise<FileInfo[]> {
+  /** The rows of these ids (the first 100) that p reaches, in the order asked, on `conn`. */
+  private async reachableRows(
+    conn: Conn,
+    p: Principal,
+    ids: readonly string[],
+  ): Promise<FileRow[]> {
     const unique = [...new Set(ids)].slice(0, 100);
     if (!unique.length || !p.tenantId) return [];
-    const rows = await this.db
+    const rows = await conn
       .select()
       .from(files)
       .where(and(inArray(files.id, unique), eq(files.tenantId, p.tenantId)));
     const seen = new Map<string, Record<string, unknown> | null>();
-    const out: FileInfo[] = [];
+    const out: FileRow[] = [];
     for (const id of unique) {
       const row = rows.find((r) => r.id === id);
-      if (row && (await this.reaches(p, row, seen))) out.push(await this.withUrl(row, p));
+      if (row && (await this.reaches(p, row, seen, conn))) out.push(row);
     }
     return out;
+  }
+
+  /** The files of these ids that p reaches; the others are left out, saying nothing of them. */
+  async getMany(p: Principal, ids: readonly string[]): Promise<FileInfo[]> {
+    const out: FileInfo[] = [];
+    for (const row of await this.reachableRows(this.db, p, ids)) out.push(await this.withUrl(row, p));
+    return out;
+  }
+
+  /**
+   * Of these ids, the ones p reaches: on the caller's connection and with no download URL, so a
+   * write's transaction (a job's start checking its input files) asks the pool for nothing and
+   * the storage for nothing while it is open.
+   */
+  async reachableIds(conn: Conn, p: Principal, ids: readonly string[]): Promise<string[]> {
+    return (await this.reachableRows(conn, p, ids)).map((r) => r.id);
   }
 
   /* ── Voice ───────────────────────────────────────────────────────────────── */

@@ -1,6 +1,6 @@
 // Holders of files that are not entities (a job's result files). Nothing here loads Nest.
 import { createHookRegistry, type Principal } from '@hykr/contracts';
-import type { Database } from '@hykr/db';
+import type { Conn } from '@hykr/core';
 
 declare module '@hykr/contracts' {
   interface Contributions {
@@ -19,14 +19,16 @@ export interface FileHolder {
   type: string;
   /**
    * Does p reach this file, kept on this resource's field? The business is checked already.
-   * Answer as the record would be shown to p: a field p does not see hides its files.
+   * Answer as the record would be shown to p: a field p does not see hides its files. Read on
+   * `db` only: it may be a write's open transaction (a job's start checking its input files),
+   * and nothing inside a transaction may wait for a second pooled connection.
    */
   reaches(a: {
     p: Principal;
     resourceId: string;
     field: string;
     fileId: string;
-    db: Database;
+    db: Conn;
   }): Promise<boolean>;
 }
 

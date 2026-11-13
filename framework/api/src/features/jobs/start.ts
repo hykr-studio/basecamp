@@ -1,15 +1,27 @@
 // Starting a job inside a write. Nothing here loads Nest's modules.
 import type { JobInfo, Principal } from '@hykr/contracts';
-import { auditCtx, deny, entityDef, RuleDenied, recordEvents, type Tx, toJson } from '@hykr/core';
+import {
+  auditCtx,
+  type Conn,
+  deny,
+  entityDef,
+  RuleDenied,
+  recordEvents,
+  type Tx,
+  toJson,
+} from '@hykr/core';
 import { jobs, writeAudit } from '@hykr/db';
 import { subjectKeyOf } from '@hykr/policy';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { type JobDef, jobDefs } from './define.js';
 import { infoOf, JOB, JobEvent } from './info.js';
 
-/** What startJob needs of the running feature: whether p reaches these files. */
+/**
+ * What startJob needs of the running feature: whether p reaches these files, read on the
+ * starting write's transaction (nothing inside it may wait for a second pooled connection).
+ */
 export interface JobsRuntime {
-  filesReachable(p: Principal, ids: readonly string[]): Promise<boolean>;
+  filesReachable(conn: Conn, p: Principal, ids: readonly string[]): Promise<boolean>;
 }
 
 let running: JobsRuntime | undefined;
@@ -68,7 +80,7 @@ export async function startJob<I>(
   }
 
   const fileIds = [...new Set(def.inputFiles?.(input) ?? [])];
-  if (fileIds.length && !(await running.filesReachable(p, fileIds)))
+  if (fileIds.length && !(await running.filesReachable(tx, p, fileIds)))
     throw new RuleDenied(deny('file_unavailable', 'A file this job needs is not one you can use'));
 
   const requestId = o.requestId ?? null;
