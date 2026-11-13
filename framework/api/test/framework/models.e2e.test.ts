@@ -75,10 +75,15 @@ const policyOf = async (person: Person) => (await person.call('GET', '/api/model
 const setPolicy = (person: Person, policy: object, headers: Record<string, string> = {}) =>
   person.call('PUT', '/api/models/policy', policy, headers);
 
+/**
+ * Audit rows, oldest first. One write's rows (the record it touched and the command itself)
+ * are inserted together and share its transaction's `now()`, so `at` alone leaves their order
+ * to Postgres: the action breaks the tie.
+ */
 async function auditRows(where: string, args: unknown[]) {
   const { rows } = await pool.query(
     `select action, outcome, actor_id, rule, before, after, agent_version from audit.events
-     where ${where} order by at`,
+     where ${where} order by at, action`,
     args,
   );
   return rows;
@@ -201,12 +206,13 @@ describe('PUT /api/models/policy', () => {
       [anaTenant],
     );
     expect(rows.map((r) => [r.action, r.outcome])).toEqual([
-      ['tenant.update', 'committed'],
       ['models.policy.set', 'committed'],
+      ['tenant.update', 'committed'],
     ]);
-    expect(rows[0].before).toEqual({ models: null });
-    expect(rows[0].after).toEqual({ models: ANA_POLICY });
-    expect(rows[0].actor_id).toBe(ana.id);
+    const change = rows.find((r) => r.action === 'tenant.update');
+    expect(change.before).toEqual({ models: null });
+    expect(change.after).toEqual({ models: ANA_POLICY });
+    expect(change.actor_id).toBe(ana.id);
   });
 
   it('another business is unaffected, and cannot be reached', async () => {
