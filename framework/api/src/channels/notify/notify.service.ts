@@ -3,7 +3,7 @@ import { type Database, type DbOrTx, schema } from '@hykr/db';
 import type { Labels } from '@hykr/i18n';
 import { channelsOf, type NotificationDef, type Row } from '@hykr/notifications';
 import { InjectQueue } from '@nestjs/bullmq';
-import { Inject, Injectable, type OnApplicationBootstrap } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import { and, desc, eq } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
@@ -15,8 +15,35 @@ import { QUEUES } from '../queues.js';
 import { REDIS } from '../whatsapp/adapter.provider.js';
 import { queueNotification } from './queue.js';
 
+const log = new Logger('Notify');
+
 /** Read when used: this module may load before the application registers. */
 const notifications = () => runtime().notifications.notifications;
+
+/**
+ * What one stored event asks of one notification, from the notification's own functions only:
+ * send now (its dedupe key), and schedule or cancel one (its dedupe key and when). Throws when
+ * one of them does, before anything is queued.
+ */
+function planOf(
+  def: NotificationDef<Row>,
+  event: string,
+  row: Row,
+): { now?: string; later?: { dedupe: string; at: Date | null | 'cancel' } } {
+  const plan: ReturnType<typeof planOf> = {};
+  if (def.send?.on.includes(event)) {
+    // Sent on this event, but not for this row: nothing else of it either.
+    if (def.when && !def.when(row)) return plan;
+    plan.now = def.dedupe(row);
+  }
+  const schedule = def.schedule;
+  if (!schedule) return plan;
+  const cancels = schedule.cancelOn?.includes(event);
+  if (cancels) plan.later = { dedupe: def.dedupe(row), at: 'cancel' };
+  else if (schedule.on.includes(event))
+    plan.later = { dedupe: def.dedupe(row), at: schedule.at(row) };
+  return plan;
+}
 
 /** One notify-dispatch job: a notification about one record, now or at a time. */
 export type DispatchJob = {
@@ -149,6 +176,9 @@ export class NotifyService implements OnApplicationBootstrap {
    * One stored event (the `notify.events` subscriber): every notification that names it is sent
    * now, scheduled or cancelled. A schedule moves only forward in time: an event older than the
    * last one applied to the same notification (relayed late, or by another worker) is skipped.
+   * A notification whose own functions (`when`, `dedupe`, `schedule.at`) throw on this row misses
+   * it alone, logged; the others still go. A queue or Redis that fails fails the whole event, so
+   * the subscriber's retry tries again.
    */
   async onStored(event: DomainEventEnvelope) {
     const stored = event.row;
@@ -157,23 +187,25 @@ export class NotifyService implements OnApplicationBootstrap {
     if (typeof row.id !== 'string') return;
     const resourceType = event.resourceType;
     for (const def of notifications()) {
-      if (def.send?.on.includes(event.name)) {
-        if (def.when && !def.when(row)) continue;
-        const dedupe = def.dedupe(row);
+      let plan: ReturnType<typeof planOf>;
+      try {
+        plan = planOf(def, event.name, row);
+      } catch (e) {
+        log.error(
+          `notification ${def.key} skipped ${event.name} ${row.id}: ${e instanceof Error ? e.message : e}`,
+        );
+        continue;
+      }
+      if (plan.now)
         await this.dispatch.add(
           'now',
-          { key: def.key, tenantId: row.tenantId, row, resourceType, dedupe },
-          { jobId: jobIdOf(dedupe), attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
+          { key: def.key, tenantId: row.tenantId, row, resourceType, dedupe: plan.now },
+          { jobId: jobIdOf(plan.now), attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
         );
-      }
-      const schedule = def.schedule;
-      if (!schedule) continue;
-      const cancels = schedule.cancelOn?.includes(event.name);
-      if (!cancels && !schedule.on.includes(event.name)) continue;
-      const dedupe = def.dedupe(row);
-      if (!(await this.newest(dedupe, event.occurredAt))) continue;
-      if (cancels) await this.cancel(dedupe);
-      else await this.schedule(def, row, schedule.at(row), resourceType);
+      const later = plan.later;
+      if (!later || !(await this.newest(later.dedupe, event.occurredAt))) continue;
+      if (later.at === 'cancel') await this.cancel(later.dedupe);
+      else await this.schedule(def, row, later.at, resourceType);
     }
   }
 
