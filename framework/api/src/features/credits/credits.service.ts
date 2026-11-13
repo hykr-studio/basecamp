@@ -38,6 +38,7 @@ import { ModuleRef } from '@nestjs/core';
 import { EventBus } from '@nestjs/cqrs';
 import { and, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { Subscription } from 'rxjs';
+import { storableInstant } from '../../infra/instant.js';
 import { type Metering, setMetering, type UsageInput } from '../../metering.js';
 import { type Assessment, assess, type Counter, headroomOf, refusalFor } from './budget.js';
 import {
@@ -662,15 +663,13 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
   /** Wallet entries, newest first: `limit` of them before `before` (an ISO time). */
   async ledger(tenantId: string, opts: { before?: string; limit?: number } = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
-    const before = opts.before ? new Date(opts.before) : undefined;
+    // A time it cannot read is no bound, as before; one Postgres cannot store is not either.
+    const before = storableInstant(opts.before);
     const rows = await this.db
       .select()
       .from(creditLedger)
       .where(
-        and(
-          eq(creditLedger.tenantId, tenantId),
-          before && !Number.isNaN(before.getTime()) ? lt(creditLedger.at, before) : undefined,
-        ),
+        and(eq(creditLedger.tenantId, tenantId), before ? lt(creditLedger.at, before) : undefined),
       )
       .orderBy(desc(creditLedger.at), desc(creditLedger.id))
       .limit(limit + 1);

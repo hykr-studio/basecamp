@@ -21,6 +21,7 @@ import { EventBus } from '@nestjs/cqrs';
 import { and, asc, desc, eq, lt } from 'drizzle-orm';
 import type { z } from 'zod';
 import { DB } from '../../infra/db.module.js';
+import { storableInstant } from '../../infra/instant.js';
 import { IntegrationsCapability } from './capability.js';
 import { DeliveriesService } from './deliveries.service.js';
 import {
@@ -177,8 +178,8 @@ export class IntegrationsService implements OnModuleInit {
     const tenantId = this.read(p);
     await this.endpointRow(tenantId, endpointId);
     const limit = Math.min(Math.max(Number(query.limit ?? LOG_LIMIT) || LOG_LIMIT, 1), 200);
-    const before = query.before ? new Date(query.before) : undefined;
-    if (before && Number.isNaN(before.getTime()))
+    const before = query.before ? storableInstant(query.before) : undefined;
+    if (query.before && !before)
       throw new BadRequestException({ error: 'invalid', message: 'before is not a time' });
     const rows = await this.db
       .select()

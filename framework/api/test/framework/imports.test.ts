@@ -236,6 +236,7 @@ describe('the error report', () => {
       handle: '@someone',
       tab: '\tx',
       plain: "it's fine",
+      '@column': 'a header that would start a formula',
     };
     const text = csvReport(Object.keys(risky), [
       { n: 1, code: 'invalid', field: 'qty', message: 'qty: Too small', values: risky },

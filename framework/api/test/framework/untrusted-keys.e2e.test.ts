@@ -3,12 +3,13 @@
 // request that pollutes shows here as an own key of Object.prototype; every test cleans it up.
 // On the settings fixture: gadgets (custom fields, shared) and the base fixture's tasks (a plain list).
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { boot, makeOperator, me, Person, pool, shutdown } from '../../dist/testing.js';
+import { boot, makeOperator, me, Person, pool, server, shutdown } from '../../dist/testing.js';
 import { settingsApp } from '../fixture/dist/features/settings/index.js';
 
 const a = new Person('Owner A Keys');
 const b = new Person('Owner B Keys');
 let tenantA = '';
+let tenantB = '';
 let fresh = 0;
 
 const polluted = () => Object.keys(Object.prototype);
@@ -43,6 +44,7 @@ beforeAll(async () => {
   await boot(settingsApp);
   for (const p of [a, b]) await p.signUp();
   tenantA = (await me(a)).tenantId;
+  tenantB = (await me(b)).tenantId;
   expect((await b.call('POST', '/api/tasks', { title: 'B task' })).status).toBe(201);
   expect((await b.call('POST', '/api/gadgets', { title: 'B gadget' })).status).toBe(201);
 });
@@ -225,6 +227,11 @@ describe('routes that read their own query string', () => {
       'limit=1&limit=2',
       'before=not-a-date',
       'before=a&before=b',
+      // A time JavaScript reads and Postgres has no room for.
+      'before=99999',
+      'before=-100000-01-01T00:00:00Z',
+      'from=99999&to=99999',
+      'from=-100000-01-01&to=-100000-01-02',
       'cursor=garbage',
       `cursor=${wrongTypes}`,
       'cursor=a&cursor=b',
@@ -293,15 +300,34 @@ describe('routes that read their own query string', () => {
       '/api/platform/routing',
       `/api/credits/operator/${tenantA}/ledger`,
     ];
+    // Routes anyone may call, with no session. A redirect (the calendar's callback) is an answer.
+    const anyone = {
+      call: async (_method: string, path: string) => {
+        const res = await fetch(`${server.base}${path}`, { redirect: 'manual' });
+        const text = await res.text();
+        return { status: res.status, body: text };
+      },
+    };
+    const open = [
+      '/api/calendar/google/callback',
+      '/webhooks/whatsapp',
+      '/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=x&hub.challenge=1',
+      '/api/share/not-a-token',
+      '/api/share/not-a-token/acceptances/documents/x',
+    ];
     const failures: string[] = [];
     for (const [who, paths] of [
       [a, member],
       [operator, platform],
+      [anyone, open],
     ] as const)
       for (const path of paths)
         for (const q of variants) {
           const res = await who.call('GET', `${path}${path.includes('?') ? '&' : '?'}${q}`);
           if (res.status >= 500) failures.push(`${path}?${q}: ${JSON.stringify(res.body)}`);
+          // Never another business's rows: nothing of B's in what A, the operator or anyone sees.
+          if (who !== operator && JSON.stringify(res.body).includes(tenantB))
+            failures.push(`${path}?${q}: shows the other business`);
           expect(polluted()).toEqual([]);
         }
     expect(failures).toEqual([]);

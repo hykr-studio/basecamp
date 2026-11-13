@@ -134,7 +134,8 @@ function parseCsv(text: string, maxRows: number): ParsedFile {
   const records = csvRecords(text, separatorOf(text));
   const [header, ...data] = records;
   if (!header) throw new Unreadable('The file is empty: a CSV file starts with a header row');
-  const columns = header.cells.map((c) => c.trim());
+  // A header an error report wrote (csvCell) reads back as its column's name.
+  const columns = header.cells.map((c) => formulaSafeRead(c.trim()));
   const empty = columns.findIndex((c) => !c);
   if (empty >= 0) throw new Unreadable(`Column ${empty + 1} of the header has no name`);
   const twice = columns.find((c, i) => columns.indexOf(c) !== i);
