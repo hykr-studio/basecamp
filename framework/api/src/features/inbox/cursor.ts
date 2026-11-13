@@ -68,6 +68,16 @@ export function beforeOf(
   return time(before);
 }
 
+/**
+ * Whether `before` is a token a page handed out, whatever its parts now hold: base64url of
+ * `<time>|<id>`. Text that is not one (`99999`, `not-a-date`) never decodes to that shape, so a
+ * log that takes unreadable text as no bound can still refuse a tampered token (V12).
+ */
+export function isKeysetToken(before: string): boolean {
+  if (!/^[A-Za-z0-9_-]+$/.test(before)) return false;
+  return /^\d{4}-\d{2}-\d{2}T[^|]*\|/.test(Buffer.from(before, 'base64url').toString());
+}
+
 /** Rows before a `before=` bound, newest first: past its keyset, or strictly before its time. */
 export const beforeWhere = (bound: Keyset | Date, time: Column, id: Column): SQL =>
   bound instanceof Date ? lt(time, bound) : olderThan(bound, time, id);

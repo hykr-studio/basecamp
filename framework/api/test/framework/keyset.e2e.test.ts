@@ -4,7 +4,7 @@
 // millisecond descending. Rows written in one transaction share their time exactly. Every keyset
 // read is walked here to its end, at limit=1 and 2, and must show each row exactly once, in the
 // order Postgres gives: the entity lists (every sort), the inbox, agent runs, the credits ledger,
-// the integrations delivery log and the platform routing log.
+// the integrations delivery log and the platform routing log, with the operator's ledger route.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { boot, makeOperator, me, Person, pool, shutdown } from '../../dist/testing.js';
 import { fixture } from '../fixture/dist/index.js';
@@ -227,6 +227,33 @@ describe('the other keyset reads', () => {
       });
       expect(seen, `limit=${limit}`).toEqual(all);
     }
+    // A cursor made before V12 (`[<ms ISO>, id]`), stopped on a row of the shared time, pages
+    // to the end and skips none after it; one Postgres cannot take is 400.
+    const stop = all[2];
+    const ms = (
+      await pool.query('select created_at from app.agent_runs where id = $1', [stop])
+    ).rows[0].created_at.toISOString();
+    const after = await walk(
+      async (cursor) => {
+        const res = await owner.call(
+          'GET',
+          `/api/agent-runs?agentId=${agent}&limit=1${cursor ? `&cursor=${cursor}` : ''}`,
+        );
+        return {
+          status: res.status,
+          body: res.body,
+          ids: (res.body.items ?? []).map((t: { id: string }) => t.id),
+          next: res.body.nextCursor ?? null,
+        };
+      },
+      encode([ms, stop]),
+    );
+    for (const id of all.slice(3)) expect(after).toContain(id);
+    for (const bad of [encode(['nonsense', stop]), encode(['0000-01-01T00:00:00.000000', stop])]) {
+      const res = await owner.call('GET', `/api/agent-runs?agentId=${agent}&cursor=${bad}`);
+      expect(res.status, bad).toBe(400);
+      expect(res.body.error, bad).toBe('bad_cursor');
+    }
   });
 
   it('the credits ledger', async () => {
@@ -262,6 +289,25 @@ describe('the other keyset reads', () => {
     );
     expect(day.status).toBe(200);
     expect(day.body.items).toHaveLength(TIMES.length - 1);
+    const date = await owner.call('GET', '/api/credits/ledger?limit=50&before=2026-01-02');
+    expect(date.status).toBe(200);
+    expect(date.body.items).toHaveLength(TIMES.length - 1);
+    // A tampered `next` is 400 `bad_cursor`, never the newest page as if none were sent.
+    for (const bad of [
+      token(`2026-02-31T00:00:00.000000|${all[0]}`),
+      token(`0000-01-01T00:00:00.000000|${all[0]}`),
+      token(`2026-01-01T00:00:00.000500|${'a'.repeat(129)}`),
+      token('2026-01-01T00:00:00.000500|a\u0000b'),
+      token('2026-01-01T00:00:00.000500|'),
+    ]) {
+      const res = await owner.call('GET', `/api/credits/ledger?before=${bad}`);
+      expect(res.status, bad).toBe(400);
+      expect(res.body.error, bad).toBe('bad_cursor');
+    }
+    // Text that is neither a token nor a time is no bound, as it always was (decision 9).
+    const none = await owner.call('GET', '/api/credits/ledger?limit=50&before=nonsense');
+    expect(none.status).toBe(200);
+    expect(none.body.items).toHaveLength(TIMES.length);
   });
 
   it('the integrations delivery log', async () => {
@@ -338,5 +384,46 @@ describe('the other keyset reads', () => {
     expect(at.body).toHaveLength(TIMES.length - 1);
     const bad = await owner.call('GET', `/api/platform/routing?before=nonsense`);
     expect(bad.status).toBe(400);
+  });
+
+  it("the operator's view of a business's ledger", async () => {
+    await makeOperator(owner);
+    const other = new Person('Other Keyset');
+    await other.signUp();
+    const theirs = (await me(other)).tenantId;
+    for (let i = 0; i < TIMES.length; i++)
+      await pool.query(
+        `insert into app.credit_ledger (tenant_id, kind, amount, balance_after, currency, actor_kind, actor_id, at)
+         values ($1, 'grant', 1, $2, 'credits', 'user', $3, $4)`,
+        [theirs, i + 1, other.id, TIMES[i]],
+      );
+    const all = await ids(
+      'select id from app.credit_ledger where tenant_id = $1 order by at desc, id desc',
+      [theirs],
+    );
+    for (const limit of [1, 2]) {
+      const seen = await walk(async (before) => {
+        const res = await owner.call(
+          'GET',
+          `/api/credits/operator/${theirs}/ledger?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`,
+        );
+        return {
+          status: res.status,
+          body: res.body,
+          ids: (res.body.items ?? []).map((t: { id: string }) => t.id),
+          next: res.body.next ?? null,
+        };
+      });
+      expect(seen, `limit=${limit}`).toEqual(all);
+    }
+    // Their `next`, sent to the owner's own ledger, shows none of theirs: the bound sits inside
+    // the business's own rows.
+    const page = await other.call('GET', '/api/credits/ledger?limit=1');
+    const mine = await owner.call(
+      'GET',
+      `/api/credits/ledger?limit=50&before=${encodeURIComponent(page.body.next)}`,
+    );
+    expect(mine.status).toBe(200);
+    for (const item of mine.body.items) expect(all).not.toContain(item.id);
   });
 });

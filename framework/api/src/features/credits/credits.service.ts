@@ -40,7 +40,14 @@ import { and, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { Subscription } from 'rxjs';
 import { storableInstant } from '../../infra/instant.js';
 import { type Metering, setMetering, type UsageInput } from '../../metering.js';
-import { beforeOf, beforeWhere, encodeKeyset, keysetTime } from '../inbox/cursor.js';
+import {
+  badKeyset,
+  beforeOf,
+  beforeWhere,
+  encodeKeyset,
+  isKeysetToken,
+  keysetTime,
+} from '../inbox/cursor.js';
 import {
   type Assessment,
   assess,
@@ -675,8 +682,11 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
    */
   async ledger(tenantId: string, opts: { before?: string; limit?: number } = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
-    // A time it cannot read is no bound, as before; one Postgres cannot store is not either.
+    // A time it cannot read is no bound, as before; one Postgres cannot store is not either. A
+    // tampered `next` is 400 `bad_cursor`, as every keyset cursor's is: a client paging on its own
+    // would otherwise start again at the newest page without knowing (V12).
     const before = beforeOf(opts.before, storableInstant);
+    if (opts.before && !before && isKeysetToken(opts.before)) throw badKeyset();
     const rows = await this.db
       .select({ row: creditLedger, at: keysetTime(creditLedger.at) })
       .from(creditLedger)
