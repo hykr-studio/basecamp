@@ -696,7 +696,7 @@ JSON:  { done: false, dueOn: { lte: '2026-10-31' }, sort: '-dueOn', limit: 20 }
 
 Field types are a registry. A feature adds one in two halves, each in its own file: the grammar in contracts, declared on `ListFieldTypes` (and new operators on `ListFilterOps`) and defined with `defineListFieldType({ name, ops, value, opValue?, summary? })`, which every process (server, tools, apps) loads; and the SQL in the server, `listFieldSql` (contributed as `listFieldSql`), `{ name, where({ table, field, column, op, value }), order? }`. `order({ field, column, dir, filters })` is how a field of the type sorts when it is in `sortable` (a point: by distance to its `near` point); it returns `{ expr, at(value), check?(value) }`, where `expr` is never null so cursors neither skip nor repeat rows, and `check` says whether a cursor could hold that value (the row's field, or null). `summary` says what the type's fields do in a summary (section 5.16). A field of an undefined type fails when its schema is built, and one without SQL fails its request. Neither filters nothing. `toQueryString` sends an operator whose value is an object (`near`) as JSON, which the type reads back.
 
-The response is `{ items, nextCursor, total? }`. Pagination is keyset: pass `nextCursor` back as `cursor`. A cursor from a different sort is a 400 `cursor_sort_mismatch`. A cursor is the client's to send back, so each value it holds is checked against its sort column's type (exactly what the server emits for it) before any SQL is built; one that does not fit, or a cursor of the wrong shape, is a 400 `bad_cursor`. As a backstop, a Postgres data exception from a list query with a cursor is `bad_cursor` too (`listQuery`). Sorting on a nullable column works only for dates, timestamps and numbers. A nullable text or enum column in `sortable` passes load-time checks, then throws `Sorting on nullable ... is not supported` (`framework/core/src/query/list-grammar.ts`) on the first request that sorts by it, which the client sees as a 500. Keep such columns `notNull()` or out of `sortable`.
+The response is `{ items, nextCursor, total? }`. Pagination is keyset: pass `nextCursor` back as `cursor`. A cursor from a different sort is a 400 `cursor_sort_mismatch`. A cursor is the client's to send back, so each value it holds is checked against its sort column's type (exactly what the server emits for it) before any SQL is built; one that does not fit, or a cursor of the wrong shape, is a 400 `bad_cursor`. As a backstop, a Postgres data exception from a list query with a cursor is `bad_cursor` too (`listQuery`). A cursor keeps a time sort key as Postgres stores it, to the microsecond: the list selects it beside the row (`exactTime`, `framework/core/src/query/exact-time.ts`) and compares it in SQL against the expression it orders by, never through a JavaScript `Date`, which keeps milliseconds. So rows that share a time (one transaction, one import) or lie within one millisecond are each shown exactly once, either way (docs/decisions/V12.md). A cursor made before that holds a millisecond and still pages: descending, it takes that whole millisecond, so its next page may repeat a row of it but skips none. Every other keyset in the framework (the inbox, comments, agent runs, SLA clocks, the credits ledger, the delivery and routing logs) keeps its time the same way, with the row's id as the tie-break. Sorting on a nullable column works only for dates, timestamps and numbers. A nullable text or enum column in `sortable` passes load-time checks, then throws `Sorting on nullable ... is not supported` (`framework/core/src/query/list-grammar.ts`) on the first request that sorts by it, which the client sees as a 500. Keep such columns `notNull()` or out of `sortable`.
 
 ### 5.7 Expose: who can reach an action
 
@@ -1292,7 +1292,8 @@ with it.
   development host through), and retried on `INTEGRATIONS_RETRY_SCHEDULE` (checked at start).
   Every try counts when it is claimed, so a try that never finishes (a worker that died) uses up
   its place: the sweeper logs it and moves the delivery on, or ends it `failed`. The log is
-  `GET /api/integrations/endpoints/:id/deliveries` and `GET /api/integrations/deliveries/:id`;
+  `GET /api/integrations/endpoints/:id/deliveries` (newest first; pass a page's `nextBefore` as
+  `before` for older ones, or an ISO time) and `GET /api/integrations/deliveries/:id`;
   `POST .../retry` sends one again. Each try sends the stored body projected again for the
   endpoint as it is then, so a capability taken away leaves retries and redeliveries too.
   Changing an endpoint's URL or capabilities, or retrying its delivery, needs every capability
@@ -2768,7 +2769,7 @@ routes refuse the assistant and a page's WebMCP tools (403 `humans_only`).
 | `platform.tenants` | `GET/POST /api/platform/tenants`, `GET/PATCH …/:id`, `PUT …/:id/features/:key` |
 | `platform.support` | Asking a business for support access, and using it (`/api/platform/support`) |
 | `platform.usage` | `GET /api/platform/usage`: every business's meters and wallet over a range |
-| `platform.routing` | `GET /api/platform/routing`: what happened to routed requests |
+| `platform.routing` | `GET /api/platform/routing`: what happened to routed requests, newest first (`before`: the last row's `cursor`, or an ISO time) |
 | `platform.credits` | A business's credits (section 7.6) |
 | `platform.queues` | Bull Board |
 | `platform.shared` | Platform scope: publishing the shared records |
@@ -3067,7 +3068,8 @@ Every business's use of what costs money is metered, priced and, when its plan s
   agent guard apply (`turnRefusal`: the operator's pause, the budget, or a `tokens` or
   `tool_calls` limit), null while turns run. Each meter whose own limit refuses its use is
   `paused` with its `refusal` (rule and reason), so a voice or memory-search limit shows there
-  while turns still run. Amounts, `GET /api/credits/ledger`, `GET /api/credits/usage` and
+  while turns still run. Amounts, `GET /api/credits/ledger` (newest first; a page's `next` back
+  as `before` for older entries, or an ISO time), `GET /api/credits/usage` and
   purchases need `credits.manage` (owner, admin). People only.
 - **Buying credits.** `POST /api/credits/purchases { amount, provider? }` goes through `runWrite`
   (a write hook may park it) and records the purchase; its `CreditPurchaseProvider` (contributed

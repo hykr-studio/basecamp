@@ -993,6 +993,7 @@ export function createApiClient(opts: ApiClientOptions) {
     /** The business's credits (people only): status for its team, the rest for its managers. */
     credits: {
       status: () => call<CreditsStatus>('GET', '/api/credits'),
+      /** Newest first; `before`: the `next` of the page before (or an ISO time). */
       ledger: (before?: string) =>
         call<{ items: LedgerEntry[]; next: string | null }>(
           'GET',
