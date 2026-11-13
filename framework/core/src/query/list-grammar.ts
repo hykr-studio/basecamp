@@ -134,8 +134,8 @@ const INTEGER_RANGE: Readonly<Record<string, Whole>> = {
   PgBigSerial64: BIGINT,
 };
 
-function wholeIn(v: unknown, { lo, hi, open }: Whole): boolean {
-  if (typeof v !== 'number' || !Number.isInteger(v)) return false;
+function wholeIn(v: number, { lo, hi, open }: Whole): boolean {
+  if (!Number.isInteger(v)) return false;
   return open ? v > lo && v < hi : v >= lo && v <= hi;
 }
 
@@ -150,8 +150,7 @@ const UUID_INPUT = /^(?:\{[0-9a-f]{4}(?:-?[0-9a-f]{4}){7}\}|[0-9a-f]{4}(?:-?[0-9
  * A number a `real` column compares with: Postgres refuses one that rounds past its largest
  * (about 3.4e38) or, not being zero, rounds to zero (within about 7e-46 of it), 22003.
  */
-function fitsReal(v: unknown): boolean {
-  if (typeof v !== 'number') return false;
+function fitsReal(v: number): boolean {
   const f = Math.fround(v);
   return Number.isFinite(f) && (f !== 0 || v === 0);
 }
@@ -161,17 +160,18 @@ function fitsReal(v: unknown): boolean {
  * when it reads the value as the column's type (a parameter compared with a column takes the
  * column's type, without its precision): an integer column's whole numbers and range, a `real`'s
  * range, a uuid's form, an enum's values. A `numeric` or `double precision` column compares with
- * any finite number; text and dates (their schemas bound them) are Postgres's to compare.
+ * any finite number; text and dates (their schemas bound them) are Postgres's to compare, and so
+ * is a string on a number column (an `id` filter), which its integer input reads loosely.
  * `list-columns.test.ts` (framework/api) pins each type against Postgres.
  */
 function unfit(column: Column, v: unknown): string | null {
   if (v === null || v === undefined) return null;
   const range = INTEGER_RANGE[column.columnType];
-  if (range)
+  if (range && typeof v === 'number')
     return wholeIn(v, range)
       ? null
       : `whole numbers ${range.says ?? `from ${range.lo} to ${range.hi}`}`;
-  if (column.columnType === 'PgReal')
+  if (column.columnType === 'PgReal' && typeof v === 'number')
     return fitsReal(v)
       ? null
       : 'numbers to about 3.4e38 either way, and none but zero within about 7e-46 of zero';

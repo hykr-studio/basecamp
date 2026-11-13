@@ -41,6 +41,8 @@ const things = temp.table('list_columns', {
   score: doublePrecision('score').notNull(),
   roomId: uuid('room_id').notNull(),
   kind: kind('kind').notNull(),
+  /** An id kept as a number elsewhere, filtered as an `id`: a string on an integer column. */
+  seq: integer('seq').notNull(),
 });
 const NUMBERS = ['small', 'rank', 'big', 'wide', 'price', 'amount', 'ratio', 'score'] as const;
 const Thing = z.object({
@@ -48,6 +50,7 @@ const Thing = z.object({
   ...Object.fromEntries(NUMBERS.map((n) => [n, z.number()])),
   roomId: z.string(),
   kind: z.string(),
+  seq: z.string(),
 });
 const Spec = entitySpec({
   name: 'listColumnsThing',
@@ -58,6 +61,7 @@ const Spec = entitySpec({
     filterable: {
       ...Object.fromEntries(NUMBERS.map((n) => [n, 'number' as const])),
       roomId: 'id',
+      seq: 'id',
       kind: 'enum',
     },
     sortable: ['rank'],
@@ -140,11 +144,12 @@ beforeAll(async () => {
     sql`create temp table list_columns (id text primary key, small smallint not null,
       rank integer not null, big bigint not null, wide bigint not null,
       price numeric(6,2) not null, amount numeric not null, ratio real not null,
-      score double precision not null, room_id uuid not null, kind pg_temp.list_columns_kind not null)`,
+      score double precision not null, room_id uuid not null, kind pg_temp.list_columns_kind not null,
+      seq integer not null)`,
   );
   await db.execute(
     sql`insert into list_columns values ('t', 1, 1, 1, 1, 12.50, 12.5, 0.5, 0.5,
-      'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'a')`,
+      'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'a', 5)`,
   );
 });
 
@@ -221,6 +226,18 @@ describe('a filter value its column cannot hold, against Postgres (V10)', () => 
     for (const v of ['a', 'b', 'c', 'A', 'a ']) {
       const w = await disagreement('kind', v);
       if (w) wrong.push(w);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('a string on a number column is left to Postgres, never refused by the builder', async () => {
+    // The number checks judge numbers only. Postgres's integer input takes ' 5', '+5' and '05'
+    // (and, from 16, '1_000' and '0x10'), so a string is its to read: one it cannot read is
+    // the backstop's, as it was before V10.
+    const wrong: string[] = [];
+    for (const v of ['5', ' 5', '+5', '05', '5 ', '1.5', 'x', '99999999999']) {
+      const w = await disagreement('seq', v);
+      if (w?.includes('refused, and Postgres answers')) wrong.push(w);
     }
     expect(wrong).toEqual([]);
   });
