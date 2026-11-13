@@ -10,6 +10,8 @@ import { createServer, type Server } from 'node:http';
 import { agentRunToken, pausedText, reportModelUsage } from '@hykr/agents';
 import { TenantConfigService } from '@hykr/core';
 import { contentHash } from '@hykr/notifications';
+import { getQueueToken } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CreditsService } from '../../dist/index.js';
 import {
@@ -1091,17 +1093,30 @@ describe('WhatsApp', () => {
     // Never quiet, so the test does not depend on the hour; one marketing message a week.
     await setTenantSettings(t, { quietHours: { from: '00:00', to: '00:00' }, marketingPerWeek: 1 });
     const params = Object.fromEntries(Object.keys(template.params.shape).map((k) => [k, 'x']));
-    /** What notify.send writes to the outbox once the send is approved. */
-    const sendByHand = (customerId: string) =>
-      pool.query('insert into app.outbox (tenant_id, key, payload) values ($1, $2, $3)', [
-        t,
-        `template:${template.name}`,
-        JSON.stringify({
-          row: { id: customerId, tenantId: t, params },
-          dedupe: `send:${randomUUID()}`,
-          queues: process.env.BULL_PREFIX ?? 'bull',
-        }),
-      ]);
+    /** What notify.send writes to the outbox once the send is approved; its row's id. */
+    const sendByHand = async (customerId: string) =>
+      (
+        await pool.query(
+          'insert into app.outbox (tenant_id, key, payload) values ($1, $2, $3) returning id',
+          [
+            t,
+            `template:${template.name}`,
+            JSON.stringify({
+              row: { id: customerId, tenantId: t, params },
+              dedupe: `send:${randomUUID()}`,
+              queues: process.env.BULL_PREFIX ?? 'bull',
+            }),
+          ],
+        )
+      ).rows[0].id as string;
+    /** Until the dispatcher has handled that outbox row (its job is `outbox-<id>`). */
+    const dispatched = async (outboxId: string) => {
+      const queue = server.app?.get(getQueueToken('notify-dispatch'), { strict: false }) as Queue;
+      await eventually(async () => {
+        const job = await queue.getJob(`outbox-${outboxId}`);
+        return job && (await job.isCompleted()) ? true : undefined;
+      });
+    };
     const marketingTo = async (contactId: string) =>
       (
         await pool.query(
@@ -1143,8 +1158,7 @@ describe('WhatsApp', () => {
     );
 
     // The cap still holds: a second marketing message this week is dropped.
-    await sendByHand(kofi.customerId);
-    await new Promise((r) => setTimeout(r, 1500));
+    await dispatched(await sendByHand(kofi.customerId));
     expect(delivered(kofi.address)).toHaveLength(1);
     expect(await marketingTo(kofi.contactId)).toHaveLength(2);
   });
