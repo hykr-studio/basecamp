@@ -593,7 +593,8 @@ describe('an approved replay is bounded by what was approved', () => {
     const started = Date.now();
     const all = await Promise.all(ids.map((id) => approve(owner, id)));
     expect(all.map((r) => r.body.status)).toEqual(Array(n).fill('approved'));
-    expect(Date.now() - started).toBeLessThan(10_000);
+    // Well under the pool's 30 s connection timeout, which a stall would take.
+    expect(Date.now() - started).toBeLessThan(20_000);
   }, 60_000);
 
   it('fails when its amount grew', async () => {

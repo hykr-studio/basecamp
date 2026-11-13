@@ -898,8 +898,9 @@ describe('one request at a time per key, with no connection held', () => {
     const ms = Date.now() - started;
     expect(all.map((r) => r.status)).toEqual(Array(n).fill(404));
     expect(meRes.status).toBe(200);
-    expect(meMs).toBeLessThan(3000);
-    expect(ms).toBeLessThan(5000);
+    // Well under the pool's 30 s connection timeout, which a stall would take.
+    expect(meMs).toBeLessThan(10_000);
+    expect(ms).toBeLessThan(15_000);
   }, 60_000);
 
   it('as many with one key cancel the job once and answer every one of them', async () => {
@@ -912,7 +913,7 @@ describe('one request at a time per key, with no connection held', () => {
       Array.from({ length: n }, () => owner.call('POST', `/api/jobs/${id}/cancel`, undefined, key)),
     );
     expect(all.map((r) => r.status)).toEqual(Array(n).fill(200));
-    expect(Date.now() - started).toBeLessThan(5000);
+    expect(Date.now() - started).toBeLessThan(15_000);
     expect(await audit(id, 'job.cancel')).toHaveLength(1);
   }, 60_000);
 
@@ -927,6 +928,15 @@ describe('one request at a time per key, with no connection held', () => {
       status: (e as { getStatus?: () => number }).getStatus?.(),
       body: (e as { getResponse?: () => unknown }).getResponse?.(),
     });
+    /** Until the key's claim row is there: the first request holds it. */
+    const claimed = (key: string) =>
+      eventually(async () => {
+        const rows = await pool.query(
+          'select 1 from app.idempotency where right(key, length($1)) = $1 and key <> $1',
+          [key],
+        );
+        return rows.rowCount ? true : undefined;
+      });
     /** A piece of work that ends when the test says so. */
     const held = () => {
       let open = () => {};
@@ -941,12 +951,12 @@ describe('one request at a time per key, with no connection held', () => {
       const ctx = ctxOf();
       const { gate, open } = held();
       const first = oneAtATime(db, ctx, () => gate.then(() => 'first'));
-      await sleep(100);
+      await claimed(ctx.idempotencyKey);
       let refused: unknown;
       try {
         await within(
           oneAtATime(db, ctx, async () => 'second', { waitMs: 300 }),
-          5000,
+          10_000,
         ).catch((e) => {
           refused = e;
         });
@@ -962,7 +972,7 @@ describe('one request at a time per key, with no connection held', () => {
       expect(
         await within(
           oneAtATime(db, ctx, async () => 'third'),
-          5000,
+          10_000,
         ),
       ).toBe('third');
     });
@@ -972,7 +982,7 @@ describe('one request at a time per key, with no connection held', () => {
       const ctx = ctxOf();
       const { gate, open } = held();
       const first = oneAtATime(db, ctx, () => gate);
-      await sleep(100);
+      await claimed(ctx.idempotencyKey);
       try {
         // As if its process had stopped an hour ago.
         await pool.query(
@@ -983,7 +993,7 @@ describe('one request at a time per key, with no connection held', () => {
         expect(
           await within(
             oneAtATime(db, ctx, async () => 'taken over'),
-            5000,
+            10_000,
           ),
         ).toBe('taken over');
       } finally {
@@ -1003,7 +1013,7 @@ describe('one request at a time per key, with no connection held', () => {
       expect(
         await within(
           oneAtATime(db, ctx, async () => 'again', { waitMs: 300 }),
-          5000,
+          10_000,
         ),
       ).toBe('again');
       const left = await pool.query(
