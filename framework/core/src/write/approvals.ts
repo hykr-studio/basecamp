@@ -379,13 +379,18 @@ async function teamOf(conn: Database | Tx, tenantId: string | undefined): Promis
   return teamRoles(rolesOfBusiness(await settingsIn(conn, tenantId)).map((r) => r.name));
 }
 
-/** Is the request's named approver on its business's team now (a membership with a team role)? */
+/**
+ * Is the request's named approver on its business's team now (a membership with a team role)?
+ * A business with no team role has nobody on its team.
+ */
 const approverOnTeam = (team: readonly string[]): SQL =>
-  sql`exists (select 1 from ${memberships} where ${and(
-    eq(memberships.tenantId, approvals.tenantId),
-    eq(memberships.userId, approvals.approverUserId),
-    arrayOverlaps(memberships.roles, [...team]),
-  )})`;
+  team.length === 0
+    ? sql`false`
+    : sql`exists (select 1 from ${memberships} where ${and(
+        eq(memberships.tenantId, approvals.tenantId),
+        eq(memberships.userId, approvals.approverUserId),
+        arrayOverlaps(memberships.roles, [...team]),
+      )})`;
 
 /**
  * Of these requests, the ones whose named approver is no longer on the business's team (left

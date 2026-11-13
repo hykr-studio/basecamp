@@ -599,7 +599,7 @@ export const CloseMeeting = defineCommand(CloseMeetingSpec, {
   load: (tx, p, input) => Meeting.repo.get(tx, p, input.meetingId), // scoped: 404 if not theirs
   authorize: (p, meeting) => {
     if (meeting.status === 'closed') return deny('already_closed', 'This meeting is already closed');
-    if (p.actor.kind === 'agent') return needsApproval('agent_close', 'Closing a meeting needs your approval');
+    if (p.actor.kind === 'agent') return needsApproval('agent_close', 'Closing a meeting needs approval');
     return allow('owner_closes');
   },
   summarize: (input, meeting) =>
@@ -786,7 +786,10 @@ What the write path does with them:
   park's audit row records the level.
 - A write that runs with `undoMs` can be undone (section 5.8.2), and its events wait that long.
 - An approved replay keeps the level and the amount, and fails (status `failed`) when it now needs
-  more: a higher level, or a larger amount, than was approved. It opens no undo window.
+  more: a higher level, or a larger amount, than was approved. It opens no undo window. A replay
+  refused for good also ends as `failed`, with why: what was asked no longer validates (a field
+  taken out of the stored input), or a 400, 401, 403, 404, 409, 410 or 422 from the write. A
+  5xx or a 429 leaves the request pending, to be decided again.
 - Rules, entity plugins, write hooks and level rules combine with `strongerDecision`: deny beats
   needs_approval beats allow; the higher-ranked level and the longest undo window survive, and between
   two decisions of the same kind the one at the higher level gives the rule and reason.

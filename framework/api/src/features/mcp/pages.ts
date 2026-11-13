@@ -133,7 +133,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
     const out = await res.json().catch(() => ({}));
     if (res.ok && out && out.url) {
       const q = document.getElementById('q').dataset;
-      location.href = afterSignIn(new URL(out.url, location.href).toString(), q.consent, q.lang);
+      location.href = afterSignIn(out.url, q.consent, q.lang);
       return;
     }
   } catch {}
