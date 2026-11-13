@@ -11,6 +11,7 @@ import {
   PgDialect,
   pgEnum,
   pgSchema,
+  real,
   smallint,
   text,
   timestamp,
@@ -269,6 +270,7 @@ describe('a filter value its column cannot hold (V10)', () => {
     small: smallint('small').notNull(),
     big: bigint('big', { mode: 'number' }).notNull(),
     price: numeric('price', { precision: 6, scale: 2 }).notNull(),
+    ratio: real('ratio').notNull(),
     roomId: uuid('room_id').notNull(),
     kind: kind('kind').notNull(),
   });
@@ -278,6 +280,7 @@ describe('a filter value its column cannot hold (V10)', () => {
     small: z.number(),
     big: z.number(),
     price: z.number(),
+    ratio: z.number(),
     roomId: z.string(),
     kind: z.string(),
   });
@@ -292,6 +295,7 @@ describe('a filter value its column cannot hold (V10)', () => {
         small: 'number',
         big: 'number',
         price: 'number',
+        ratio: 'number',
         roomId: 'id',
         kind: 'enum',
       },
@@ -318,9 +322,14 @@ describe('a filter value its column cannot hold (V10)', () => {
       { rank: 1.5 },
       { rank: { in: [1, 1e12] } },
       { small: 40_000 },
-      { big: 2 ** 53 },
-      { price: 10_000 },
+      { big: 2 ** 63 },
+      { big: { gt: -(2 ** 63) } },
+      { big: 1.5 },
+      { ratio: { lt: 1e300 } },
+      { ratio: 1e-50 },
       { roomId: 'not-a-uuid' },
+      { roomId: '{00000000-0000-4000-8000-000000000000' },
+      { roomId: '0000000-00000-4000-8000-000000000000' },
       { roomId: { in: ['00000000-0000-4000-8000-000000000000', 'x'] } },
       { kind: 'c' },
     ]) {
@@ -335,8 +344,18 @@ describe('a filter value its column cannot hold (V10)', () => {
       { rank: { in: [-(2 ** 31), 0] } },
       { small: -32_768 },
       { big: Number.MAX_SAFE_INTEGER },
-      { price: 9999.99 },
+      // Postgres compares a parameter as the column's type without its precision or a safe
+      // integer's bound: these were 400 (the V10 review), and Postgres answers each.
+      { big: 2 ** 53 },
+      { big: { lt: 1e16 } },
+      { big: 2 ** 63 - 1024 },
+      { price: 10_000 },
+      { price: { in: [12.5, 1e12] } },
+      { ratio: { lt: 3.4e38 } },
+      { ratio: 0 },
       { roomId: '00000000-0000-4000-8000-000000000000' },
+      { roomId: 'A0EEBC999C0B4EF8BB6D6BB9BD380A11' },
+      { roomId: '{a0eebc99-9c0b4ef8-bb6d6bb9-bd380a11}' },
       { kind: { in: ['a', 'b'] } },
     ])
       expect(refused(input), JSON.stringify(input)).toBeUndefined();
