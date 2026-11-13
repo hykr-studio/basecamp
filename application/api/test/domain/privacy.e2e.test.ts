@@ -157,19 +157,29 @@ describe('personal data in the sample', () => {
   });
 
   it('an erasure the team files waits for a second person, then forgets the customer', async () => {
-    // What she asked for on the brief form, with her name and number (decisions V8).
-    const made = await call(owner, 'POST', '/api/briefs', {
-      name: 'Asha Privacy',
-      phone: '+91 98450 11111',
-      summary: 'A teak dining table for six',
-      currency: 'INR',
+    // What she asked for on the brief form, sent to her, with her name and number: a brief of
+    // her customer record (decisions V8).
+    const link = await call(owner, 'POST', '/api/shares', {
+      target: { form: 'briefs.brief' },
+      to: { customerId: customer[asha.name] },
     });
-    expect(made.status, JSON.stringify(made.body)).toBe(201);
-    const brief = made.body.value;
-    await pool.query('update app.briefs set customer_id = $2 where id = $1', [
-      brief.id,
-      customer[asha.name],
-    ]);
+    expect(link.status, JSON.stringify(link.body)).toBe(201);
+    const answered = await fetch(`${server.base}/api/share/${link.body.value.token}/submit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        values: {
+          name: 'Asha Privacy',
+          phone: '+91 98450 11111',
+          summary: 'A teak dining table for six',
+        },
+      }),
+    });
+    const body = await answered.json();
+    expect(answered.status, JSON.stringify(body)).toBe(201);
+    const brief = body.value;
+    const whose = await pool.query('select customer_id from app.briefs where id = $1', [brief.id]);
+    expect(whose.rows[0].customer_id).toBe(customer[asha.name]);
     const note = 'Asha wrote from her personal address';
     // As the back office files it: with a key, so its reply is kept for a retry.
     const res = await owner.call(
