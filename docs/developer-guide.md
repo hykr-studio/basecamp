@@ -1184,7 +1184,9 @@ sample's `orders` module uses every part.
   (`knownCurrency` in `@hykr/i18n`: one Intl lists, or `XXX`): a create in a made-up code such as
   `ABC` is `money_invalid` (`"ABC" is not a currency`), and `toMinor` and `resolveMoneyInput`
   throw a `RangeError` for it, so a command that prices in `authorize` refuses before it takes a
-  number. Reads, `fromMinor` and formatting still take any three capital letters, so a row stored
+  number (a command that takes a currency checks it in `authorize` too: the plugin acts only
+  when the command writes, after a parked request was made). Reads, `fromMinor` and formatting
+  still take any three capital letters, so a row stored
   with such a code still shows. For an input or a configuration value, use `KnownCurrencyCode`
   (`DEFAULT_CURRENCY`, `CREDITS_CONFIG` and a model's price are checked this way at start). Where
   the runtime cannot list currencies (Hermes on a device), the format is the check and the server

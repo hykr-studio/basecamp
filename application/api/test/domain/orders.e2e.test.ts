@@ -586,6 +586,23 @@ describe('a currency that does not exist (V4)', () => {
     expect(seq(after)).toBe(seq(before) + 1);
   });
 
+  it("the assistant's save in one is refused, not parked for an approval that could only fail", async () => {
+    const asks = asAssistant(`user:${owner.id}`, { 'x-channel': 'app' });
+    for (const [title, items] of [
+      ['Asked ABC', []],
+      ['Asked ABC, priced', line],
+    ] as const) {
+      const res = await asks('POST', '/api/orders/save', { title, currency: 'ABC', items });
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.rule, title).toBe('money_invalid');
+    }
+    const { rows } = await pool.query(
+      `select count(*)::int as n from app.approvals where tenant_id = $1 and summary like '%Asked ABC%'`,
+      [tenantId],
+    );
+    expect(rows[0].n).toBe(0);
+  });
+
   it('a brief, a plain create, is refused the same way', async () => {
     const res = await owner.call('POST', '/api/briefs', {
       name: 'Made-up money',
@@ -648,14 +665,15 @@ describe('money in summaries (lead V4-L17)', () => {
     ]);
   });
 
-  it('a line cost is no measure, for staff without orders.cost.read or anyone', async () => {
+  it('a line cost is no measure: staff without orders.cost.read, and the owner, get a 400', async () => {
     const here = { 'x-tenant-id': tid };
     for (const [who, headers] of [
       [helper, here],
       [both, {}],
     ] as const) {
       const res = await who.call('GET', '/api/orderItems/summary?sum=cost', undefined, headers);
-      expect([400, 403], JSON.stringify(res.body)).toContain(res.status);
+      // Not a measure of order items at all (a 400 for anyone), so no capability is reached.
+      expect(res.status, JSON.stringify(res.body)).toBe(400);
       expect(JSON.stringify(res.body)).not.toMatch(/"minor"/);
     }
   });

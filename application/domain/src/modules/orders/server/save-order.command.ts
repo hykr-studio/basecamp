@@ -21,7 +21,7 @@ import {
   tenantMoney,
   tenantOf,
 } from '@hykr/core';
-import { moneyText } from '@hykr/i18n';
+import { knownCurrency, moneyText } from '@hykr/i18n';
 import { ConflictException } from '@nestjs/common';
 import {
   ORDER_VERSIONS,
@@ -120,14 +120,20 @@ export function price(input: SaveOrderInput, currency: string): Priced | Authori
 
 const refused = (x: Priced | AuthorizeResult): x is AuthorizeResult => 'decision' in x;
 
-/** The order's currency: an existing order's own; a new one's from the input or the business. */
+/**
+ * The order's currency: an existing order's own; a new one's from the input or the business,
+ * and one that exists. Refused here, in authorize: a save that would park (the assistant's, one
+ * over the limit) is refused before it asks anyone, and none takes a number.
+ */
 function currencyOf(input: SaveOrderInput, loaded: Loaded): string | AuthorizeResult {
   if (loaded.order) {
     if (input.currency && input.currency !== loaded.order.currency)
       return deny('currency_fixed', `This order is in ${loaded.order.currency}`);
     return loaded.order.currency;
   }
-  return input.currency ?? loaded.money.currency;
+  const currency = input.currency ?? loaded.money.currency;
+  if (!knownCurrency(currency)) return deny('money_invalid', `"${currency}" is not a currency`);
+  return currency;
 }
 
 type Loaded = {
