@@ -18,7 +18,9 @@ import {
   type CoreOptions,
   entityDef,
   entityDefs,
+  findRepeat,
   projectRead,
+  saveReply,
 } from '@hykr/core';
 import { type Database, type DbOrTx, files, writeAudit } from '@hykr/db';
 import { subjectOf } from '@hykr/policy';
@@ -107,6 +109,12 @@ const unavailable = () =>
 /** A refusal with a stable rule, as the write path answers. */
 const refused = (status: number, rule: string, reason: string) =>
   new HttpException({ error: 'forbidden', rule, reason }, status);
+
+/** Who asks, and how to recognise their retry: the request's id and idempotency-key. */
+export type FileWriteMeta = { requestId: string; idempotencyKey?: string };
+
+/** What a presign's idempotency-key is kept under. */
+const UPLOAD = { name: 'file.upload' };
 
 /**
  * Files: uploads (presign, the bytes straight to storage, confirm), what a caller may reach of
@@ -213,8 +221,9 @@ export class FilesService implements OnApplicationBootstrap {
   async presign(
     p: Principal,
     input: PresignFileInput,
-    requestId: string,
+    meta: FileWriteMeta,
   ): Promise<PresignFileResult> {
+    const requestId = meta.requestId;
     const s = subjectOf(p);
     if (s?.kind !== 'user' || !p.tenantId)
       throw refused(403, 'needs_an_account', 'Sign in to upload');
@@ -253,6 +262,20 @@ export class FilesService implements OnApplicationBootstrap {
     } else {
       const decision = def.decide(p, 'create', null, {});
       if (decision.decision === 'deny') throw refused(403, decision.rule, decision.reason);
+    }
+    // A retry with the same key is the same upload: a new URL for the file the first one made.
+    const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
+    const repeat = await findRepeat(this.db, ctx, UPLOAD, input);
+    if (repeat) {
+      const fileId = (repeat.result as { value?: { id?: string } }).value?.id ?? '';
+      const again = await this.ownUpload(p, fileId);
+      if (again.status !== 'pending')
+        throw new ConflictException({
+          error: 'already_uploaded',
+          message: 'This upload was finished already',
+        });
+      const left = Math.floor(((again.uploadExpiresAt as Date).getTime() - Date.now()) / 1000);
+      return this.presigned(again, p, Math.max(1, left));
     }
     const [{ n }] = await this.db
       .select({ n: count() })
@@ -295,14 +318,21 @@ export class FilesService implements OnApplicationBootstrap {
         })
         .returning();
       await this.audit(tx, p, requestId, 'file.upload', created, { for: input.for });
+      // The file's id, never its signed URL: a repeat signs a new one.
+      await saveReply(tx, ctx, UPLOAD, input, { status: 'done', value: { id: created.id } });
       return created;
     });
+    return this.presigned(row, p, this.config.uploadTtlS);
+  }
+
+  /** Where to PUT a pending file's bytes, until its upload expires. */
+  private async presigned(
+    row: FileRow,
+    p: Principal,
+    expiresIn: number,
+  ): Promise<PresignFileResult> {
     const upload = await this.store(() =>
-      this.storage.presignPut(row.key, {
-        mime,
-        size: input.size,
-        expiresIn: this.config.uploadTtlS,
-      }),
+      this.storage.presignPut(row.key, { mime: row.mime, size: row.size, expiresIn }),
     );
     return {
       file: this.project(infoOf(row), p),
@@ -368,13 +398,20 @@ export class FilesService implements OnApplicationBootstrap {
     return this.withUrl(ready, p);
   }
 
-  /** An upload not on any record yet, thrown away by whoever uploaded it. */
-  async discard(p: Principal, id: string, requestId: string): Promise<void> {
+  /**
+   * An upload not on any record yet, thrown away by whoever uploaded it. A retry with the same
+   * key answers as the first did.
+   */
+  async discard(p: Principal, id: string, meta: FileWriteMeta): Promise<void> {
+    const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
+    const op = { name: 'file.discard', args: { id } };
+    if (await findRepeat(this.db, ctx, op, {})) return;
     const row = await this.ownUpload(p, id);
     await this.store(() => this.storage.delete(row.key));
     await this.db.transaction(async (tx) => {
       await tx.delete(files).where(and(eq(files.id, row.id), isNull(files.resourceId)));
-      await this.audit(tx, p, requestId, 'file.discard', row);
+      await this.audit(tx, p, meta.requestId, 'file.discard', row);
+      await saveReply(tx, ctx, op, {}, { status: 'done', value: null });
     });
   }
 

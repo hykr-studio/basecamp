@@ -2353,7 +2353,8 @@ traits: { offline: {}, versioned: {} },        // offline: { writes: ['create', 
   to its answer after the write (a secret, a retry now) it must not do again, and a secret is
   read back from where it is sealed, never kept in the reply. `findRepeat(db, ctx, op, request)`
   looks before work that must not run twice (exchanging a one-time code); `saveReply` keeps the
-  answer of a write that does not go through `runWrite` (a file's upload, a job's cancel). A
+  answer of a write that does not go through `runWrite` (a file's upload, a job's cancel, a
+  back-office reply). A
   repeated calendar feed create answers the feed without its URL (only the token's hash is kept).
 - **Replies are kept** for `IDEMPOTENCY_KEEP_DAYS` (default 30); the `idempotency.purge` schedule
   forgets older ones every hour (`IdempotencyService.purge`). A key reused later runs again.
@@ -3677,7 +3678,8 @@ These are not built. Each has a workaround for now.
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Seeing failed stored events | A stored event the relay cannot read, or that a subscriber's `when` throws on, is kept with `failed_at` and `error` and logged; no screen or notification shows it. Query `app.domain_events where failed_at is not null`, fix the cause, and clear `failed_at` to relay it again. |
-| Two uploads or cancels at the same moment | A file's presign and discard and a job's cancel honour `idempotency-key` one after another, but take no lock: two at the same moment with one key can both run (a second pending upload expires unused). A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
+| Two uploads, cancels or replies at the same moment | A file's presign and discard, a job's cancel and a back-office reply honour `idempotency-key` one after another, but take no lock: two at the same moment with one key can both run (a second pending upload expires unused). A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
+| Retrying a chat turn, a new thread or a link code | `POST /api/chat`, `POST /api/threads` and the WhatsApp link code ignore `idempotency-key`: a retry is a second turn, thread or code. Retry them only when the first answer never came. |
 | Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |
 | A summary's view of hiding | The field check reads one record of the reader's scope through `toRead` and assumes a projector hides a field on every record alike. A projector that hides a field on some records only lets a summary over it through. |
 | A summary's scope without a recorder | `listWhere` reads the list's WHERE by running `repo.list` against a connection that records it (`define-entity.ts` gets a `repo.where` when it is next opened). |

@@ -48,7 +48,7 @@ export class FilesController {
     @Body() body: PresignDto,
     @RequestMeta() meta: RequestMetaValue,
   ) {
-    return this.files.presign(p, body as PresignFileInput, meta.requestId);
+    return this.files.presign(p, body as PresignFileInput, meta);
   }
 
   @Get()
@@ -91,7 +91,7 @@ export class FilesController {
     @Param('id', ParseUUIDPipe) id: string,
     @RequestMeta() meta: RequestMetaValue,
   ) {
-    await this.files.discard(p, id, meta.requestId);
+    await this.files.discard(p, id, meta);
   }
 
   @Post(':id/transcribe')

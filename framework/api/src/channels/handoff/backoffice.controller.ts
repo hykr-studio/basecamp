@@ -2,9 +2,13 @@ import type { ChannelAdapter, OutboundMessage } from '@hykr/channels';
 import { FrameworkCapabilities, type Principal, RequestHumanInput } from '@hykr/contracts';
 import {
   CurrentPrincipal,
+  findRepeat,
   HumanOnlyGuard,
   PrincipalGuard,
+  RequestMeta,
+  type RequestMetaValue,
   requireCapability,
+  saveReply,
   TenantConfigService,
 } from '@hykr/core';
 import { type Database, schema, writeAudit } from '@hykr/db';
@@ -130,9 +134,19 @@ export class BackOfficeController {
   /** Inside the window: their words as text. Outside it: the approved reply template. */
   @Post('handoffs/:id/reply')
   @HttpCode(200)
-  async reply(@CurrentPrincipal() p: Principal, @Param('id') id: string, @Body() body: unknown) {
+  async reply(
+    @CurrentPrincipal() p: Principal,
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @RequestMeta() meta: RequestMetaValue,
+  ) {
     staffOnly(p);
     const { text } = ReplyInput.parse(body);
+    // A retry with the same idempotency-key sends nothing again: it answers as the first did.
+    const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
+    const op = { name: 'handoff.reply', args: { id } };
+    const repeat = await findRepeat(this.db, ctx, op, { text });
+    if (repeat) return (repeat.result as { value?: unknown }).value;
     const { handoff, contact } = await this.load(p, id);
     if (handoff.state === 'closed') throw new ConflictException({ error: 'closed' });
     const from = await this.contacts.numberOfTenant(contact.tenantId);
@@ -175,6 +189,7 @@ export class BackOfficeController {
         .set({ state: 'taken', takenBy: p.actor.id, takenAt: new Date(), flaggedAt: null })
         .where(eq(handoffs.id, handoff.id));
     await this.audit(p, 'handoff.replied', handoff, { as: message.kind });
+    await saveReply(this.db, ctx, op, { text }, { status: 'done', value: { sent: message.kind } });
     return { sent: message.kind };
   }
 

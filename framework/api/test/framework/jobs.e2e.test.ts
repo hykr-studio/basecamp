@@ -833,6 +833,18 @@ describe('deadlines and cancelling', () => {
     await eventually(() => stand.cancelled.includes(s.id));
     expect((await owner.call('POST', `/api/jobs/${id}/cancel`)).status).toBe(409);
   });
+
+  it('a cancel repeated with its idempotency-key answers the first answer, cancelled once', async () => {
+    const id = await running((await drawing('Plan Stop Twice')).id);
+    await submitted(id);
+    const key = { 'idempotency-key': `cancel-${id}` };
+    const first = await owner.call('POST', `/api/jobs/${id}/cancel`, undefined, key);
+    const again = await owner.call('POST', `/api/jobs/${id}/cancel`, undefined, key);
+    expect(first.status).toBe(200);
+    expect(again.status).toBe(200);
+    expect(again.body).toMatchObject({ id, status: 'cancelled' });
+    expect(await audit(id, 'job.cancel')).toHaveLength(1);
+  });
 });
 
 describe('live updates', () => {
