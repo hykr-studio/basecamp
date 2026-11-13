@@ -34,11 +34,33 @@ async function exists(
   columns: readonly string[] = [],
 ): Promise<boolean> {
   const r = await conn.execute(sql`select to_regclass(${qualified}) is not null as ok,
-    (select count(distinct attname)::int from pg_attribute
+    (select coalesce(array_agg(distinct attname::text), '{}') from pg_attribute
       where attrelid = to_regclass(${qualified}) and not attisdropped
-        and attname in (${columns.length ? list(columns) : sql`''`})) as n`);
-  const row = (r as unknown as { rows: { ok: boolean; n: number }[] }).rows[0];
-  return Boolean(row?.ok) && Number(row?.n ?? 0) === columns.length;
+        and attname in (${columns.length ? list(columns) : sql`''`})) as found`);
+  const row = (r as unknown as { rows: { ok: boolean; found: string[] | null }[] }).rows[0];
+  if (!row?.ok) return false; // Mastra has not made it yet: nothing to erase there
+  const found = new Set(row.found ?? []);
+  const missing = columns.filter((c) => !found.has(c));
+  if (missing.length) warnSkipped(qualified, missing);
+  return !missing.length;
+}
+
+const warned = new Set<string>();
+
+/**
+ * A step skipped because Mastra's table lacks a column it names: once per process and table,
+ * as a process warning (`HYKR_MASTRA_SCHEMA`), so an upgrade that renamed one is seen in the
+ * logs while the erasure or retention run goes on without that step.
+ */
+function warnSkipped(table: string, missing: readonly string[]) {
+  const key = `${table}:${missing.join(',')}`;
+  if (warned.has(key)) return;
+  warned.add(key);
+  process.emitWarning(
+    `${table} has no column ${missing.map((c) => `"${c}"`).join(', ')}: the privacy step that ` +
+      'names it is skipped, so what it would erase there stays (a Mastra upgrade?)',
+    { code: 'HYKR_MASTRA_SCHEMA' },
+  );
 }
 
 const rowsOf = (r: unknown) => (r as { rowCount?: number | null }).rowCount ?? 0;

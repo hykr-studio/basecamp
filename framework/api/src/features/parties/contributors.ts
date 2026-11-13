@@ -35,14 +35,26 @@ const partyOfRow = sql<
   string | null
 >`coalesce(${auditEvents.after} ->> 'partyId', ${auditEvents.before} ->> 'partyId')`;
 
+/** This business's audit rows, or every business's (an account forgotten everywhere). */
+const inBusiness = (tenantId: string | undefined) =>
+  tenantId ? eq(auditEvents.tenantId, tenantId) : undefined;
+
 /** The parties these members were on, from their audit rows: the members may be gone. */
-async function partiesOf(conn: Conn, ids: readonly string[]): Promise<string[]> {
+async function partiesOf(
+  conn: Conn,
+  ids: readonly string[],
+  tenantId: string | undefined,
+): Promise<string[]> {
   if (!ids.length) return [];
   const rows = await conn
     .selectDistinct({ id: partyOfRow })
     .from(auditEvents)
     .where(
-      and(eq(auditEvents.resourceType, 'party_member'), inArray(auditEvents.resourceId, [...ids])),
+      and(
+        inBusiness(tenantId),
+        eq(auditEvents.resourceType, 'party_member'),
+        inArray(auditEvents.resourceId, [...ids]),
+      ),
     );
   return rows.flatMap((r) => (r.id ? [r.id] : []));
 }
@@ -55,18 +67,29 @@ async function onlyTheirs(
   conn: Conn,
   partyIds: readonly string[],
   mine: ReadonlySet<string>,
+  tenantId: string | undefined,
 ): Promise<string[]> {
   if (!partyIds.length) return [];
   const rows = await conn
     .selectDistinct({ party: partyOfRow, member: auditEvents.resourceId })
     .from(auditEvents)
-    .where(and(eq(auditEvents.resourceType, 'party_member'), inArray(partyOfRow, [...partyIds])));
+    .where(
+      and(
+        inBusiness(tenantId),
+        eq(auditEvents.resourceType, 'party_member'),
+        inArray(partyOfRow, [...partyIds]),
+      ),
+    );
   const others = new Set(rows.filter((r) => r.member && !mine.has(r.member)).map((r) => r.party));
   return partyIds.filter((id) => !others.has(id));
 }
 
 /** Of these parties, gone already, the person parties (their audit rows say their kind). */
-async function personPartiesGone(conn: Conn, partyIds: readonly string[]): Promise<string[]> {
+async function personPartiesGone(
+  conn: Conn,
+  partyIds: readonly string[],
+  tenantId: string | undefined,
+): Promise<string[]> {
   if (!partyIds.length) return [];
   const live = new Set(
     (
@@ -83,6 +106,7 @@ async function personPartiesGone(conn: Conn, partyIds: readonly string[]): Promi
     .from(auditEvents)
     .where(
       and(
+        inBusiness(tenantId),
         eq(auditEvents.resourceType, 'party'),
         inArray(auditEvents.resourceId, gone),
         sql`coalesce(${auditEvents.after} ->> 'kind', ${auditEvents.before} ->> 'kind') = 'person'`,
@@ -124,11 +148,11 @@ export const partiesErasure: ErasureContributor = {
     ).filter((id) => !now.has(id));
     const touched = both(
       gone.map((g) => g.partyId),
-      await partiesOf(tx, earlier),
+      await partiesOf(tx, earlier, a.tenantId),
     );
     if (!touched.length) return { count: 0 };
-    const mine = await onlyTheirs(tx, touched, new Set([...now, ...earlier]));
-    const deletedBefore = await personPartiesGone(tx, mine);
+    const mine = await onlyTheirs(tx, touched, new Set([...now, ...earlier]), a.tenantId);
+    const deletedBefore = await personPartiesGone(tx, mine, a.tenantId);
     const empty = and(
       inArray(parties.id, mine),
       eq(parties.kind, 'person'),

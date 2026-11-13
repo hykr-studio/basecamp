@@ -1721,14 +1721,31 @@ describe('the copies of what an erasure takes (decisions V3)', () => {
         });
       return outcome;
     };
-    expect(
-      await renamed('mastra.mastra_scorers', 'createdAtZ', (tx) => expireTraces(tx, new Date())),
-    ).toEqual({ count: expect.any(Number) });
-    expect(
-      await renamed('mastra_obs.mastra_score_events', 'scoreTraceId', (tx) =>
-        eraseRunTraces(tx, runs),
-      ),
-    ).toEqual({ count: expect.any(Number) });
+    // Each skipped step says so, once, as a process warning naming the table and the column.
+    const warnings: string[] = [];
+    const heard = (w: Error & { code?: string }) => {
+      if (w.code === 'HYKR_MASTRA_SCHEMA') warnings.push(w.message);
+    };
+    process.on('warning', heard);
+    try {
+      expect(
+        await renamed('mastra.mastra_scorers', 'createdAtZ', (tx) => expireTraces(tx, new Date())),
+      ).toEqual({ count: expect.any(Number) });
+      expect(
+        await renamed('mastra_obs.mastra_score_events', 'scoreTraceId', (tx) =>
+          eraseRunTraces(tx, runs),
+        ),
+      ).toEqual({ count: expect.any(Number) });
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      process.off('warning', heard);
+    }
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^mastra\.mastra_scorers has no column "createdAtZ"/),
+        expect.stringMatching(/^mastra_obs\.mastra_score_events has no column "scoreTraceId"/),
+      ]),
+    );
   });
 
   it('keep what only references the record, and what another business holds', async () => {
