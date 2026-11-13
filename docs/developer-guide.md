@@ -981,8 +981,14 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   contributed as `subscribers`. Events come from the registered `eventFeeds`, which the worker polls
   each second with this process's prefix and `ctx`. The framework's `outbox` feed returns the rows of
   `app.domain_events` with this prefix that are due (`available_at` passed), not withdrawn
-  (`cancelled_at`) and not yet relayed, oldest first. The relay adds one job per event and subscriber
-  (id `<subscriber>--<stored event id>`, so a repeat runs once), then sets `relayed_at`. `handle`
+  (`cancelled_at`), not failed and not yet relayed, oldest first. The relay adds one job per event
+  and subscriber (id `<subscriber>--<stored event id>`, so a repeat runs once), then sets
+  `relayed_at`. Each event is relayed on its own: a row that is not an event (the envelope refuses
+  it) or that a subscriber's `when` throws on gets `failed_at` and `error` instead, is logged, and
+  is never returned again, while the rest of the batch, of every business, goes on; clear
+  `failed_at` to relay it again. A queue that refuses a job (Redis down) stops the tick there and
+  the rest waits for the next one. A feed of your own may implement `failed` to keep such rows;
+  without it they come back each tick but hold nothing up. `handle`
   runs on the shared `events` queue; `queue` adds the envelope to your own queue. The envelope has
   the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
   (F3) before it leaves the server. The in-process `EventBus` is not relayed. Notifications are one
@@ -1251,8 +1257,12 @@ with it.
   `/api/integrations/*`. Agents never reach it. Every change goes through `runWrite` (audited,
   parked when a write hook asks, replayed after approval).
 - **Outbound.** `POST /api/integrations/endpoints { url, events: ['task.*'], capabilities? }`
-  returns the signing secret once. Each committed entity event becomes one delivery per matching
-  endpoint: the record projected as the endpoint may read it (it reads as the business's system
+  returns the signing secret. A retry with the same `idempotency-key` is the same endpoint and
+  answers the same secret, read back from its sealed row (none is kept with the stored reply); a
+  rotate, a connection with generated credentials and a delivery retry repeat the same way. Each
+  committed entity event that happened after the endpoint was made becomes one delivery per
+  matching endpoint (an event held by an undo window, or relayed late, does not reach an endpoint
+  made since): the record projected as the endpoint may read it (it reads as the business's system
   principal with the `capabilities` it was given, so a field that needs a capability stays
   hidden), signed the Standard Webhooks way (`webhook-id`, `webhook-timestamp`,
   `webhook-signature`), sent only to public addresses (`INTEGRATIONS_ALLOWED_HOSTS` lets a
@@ -2044,6 +2054,8 @@ the application's.
   work in the back office; the assistant still answers), `mention {}` (`@[Name](agent:<id>)` in a
   comment) and `webhook { connectionId, on }` (an `agent-webhooks` connection, section 5.14). The
   `agents.tick` schedule fires time triggers and conditions; subscribers and an inbound hook the rest.
+  An `event` or `mention` trigger sees only what happened after it was saved: an event held by an
+  undo window, or relayed late, does not start an agent made (or a trigger changed) since.
 - **A run** (`agents.run` queue, in the worker) passes the turn hooks (credits, the model policy),
   then runs the assistant once on one message: the instructions, then what started it as data. Its
   model gets only the scope's tools. Its tools call the API with a run token (`x-agent-run`, an HMAC
@@ -2334,6 +2346,15 @@ traits: { offline: {}, versioned: {} },        // offline: { writes: ['create', 
 - **One write per key.** `runWrite` takes an advisory lock on (principal, `idempotency-key`) in
   the write's transaction and looks for the stored reply again: two requests with one key at the
   same moment run once, and both answer the first reply.
+- **What the server makes is not the request.** A route whose op input carries what it made for
+  the request (a fresh id, a sealed secret, a token's hash) passes what the caller sent as
+  `requestBody`: the repeat is recognised by that, so the same body answers the first reply and
+  another body is a 409. A stored reply comes back with `repeat: true`; whatever the route adds
+  to its answer after the write (a secret, a retry now) it must not do again, and a secret is
+  read back from where it is sealed, never kept in the reply. `findRepeat(db, ctx, op, request)`
+  looks before work that must not run twice (exchanging a one-time code); `saveReply` keeps the
+  answer of a write that does not go through `runWrite` (a file's upload, a job's cancel). A
+  repeated calendar feed create answers the feed without its URL (only the token's hash is kept).
 - **Replies are kept** for `IDEMPOTENCY_KEEP_DAYS` (default 30); the `idempotency.purge` schedule
   forgets older ones every hour (`IdempotencyService.purge`). A key reused later runs again.
 - **The outbox** (`@hykr/app`, `features/offline`). `useEntityMutation`, `useCommand` and a
@@ -3655,6 +3676,8 @@ These are not built. Each has a workaround for now.
 | Metering everything | WhatsApp voice-note transcription, voice sessions whose worker never reported an end and embedding calls that fail or time out are not metered. Call `CreditsService.record` from the feature. |
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
+| Seeing failed stored events | A stored event the relay cannot read, or that a subscriber's `when` throws on, is kept with `failed_at` and `error` and logged; no screen or notification shows it. Query `app.domain_events where failed_at is not null`, fix the cause, and clear `failed_at` to relay it again. |
+| Two uploads or cancels at the same moment | A file's presign and discard and a job's cancel honour `idempotency-key` one after another, but take no lock: two at the same moment with one key can both run (a second pending upload expires unused). A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
 | Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |
 | A summary's view of hiding | The field check reads one record of the reader's scope through `toRead` and assumes a projector hides a field on every record alike. A projector that hides a field on some records only lets a summary over it through. |
 | A summary's scope without a recorder | `listWhere` reads the list's WHERE by running `repo.list` against a connection that records it (`define-entity.ts` gets a `repo.where` when it is next opened). |

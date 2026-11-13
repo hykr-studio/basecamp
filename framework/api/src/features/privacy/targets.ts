@@ -55,7 +55,10 @@ export const ChatMessages: RetentionTarget = {
   },
 };
 
-/** Stored events already passed on, or withdrawn by an undo (each holds a copy of its record). */
+/**
+ * Stored events already passed on, withdrawn by an undo, or failed (each holds a copy of its
+ * record).
+ */
 export const RelayedEvents: RetentionTarget = {
   name: 'events.relayed',
   label: { en: 'Events passed on', hi: 'आगे भेजे गए इवेंट', te: 'పంపిన ఈవెంట్‌లు' },
@@ -69,7 +72,11 @@ export const RelayedEvents: RetentionTarget = {
             .where(
               and(
                 eq(domainEvents.tenantId, tenantId),
-                or(isNotNull(domainEvents.relayedAt), isNotNull(domainEvents.cancelledAt)),
+                or(
+                  isNotNull(domainEvents.relayedAt),
+                  isNotNull(domainEvents.cancelledAt),
+                  isNotNull(domainEvents.failedAt),
+                ),
                 lt(domainEvents.occurredAt, before),
               ),
             )
