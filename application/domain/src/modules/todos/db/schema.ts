@@ -4,7 +4,6 @@ import {
   customerColumn,
   customFieldsColumn,
   id,
-  tableRef,
   tenantColumn,
   user,
   versionColumn,
@@ -25,10 +24,10 @@ export const todos = app.table(
     dueOn: date('due_on'),
     /** What it costs, in minor units of the business's currency (hidden by field policy). */
     cost: integer('cost'),
-    // The meeting it belongs to: meetings builds on notes, so the table is named, not imported.
-    meetingId: text('meeting_id').references(() => tableRef('meetings').id, {
-      onDelete: 'set null',
-    }),
+    // The meeting it belongs to, in the same business: the spec declares the reference, and
+    // sql/post/meeting-references.sql keys (tenant_id, meeting_id) to the meeting's
+    // (tenant_id, id) with ON DELETE SET NULL (meeting_id), which drizzle cannot say.
+    meetingId: text('meeting_id'),
     /** The business's own fields: keys and types from its custom field definitions. */
     custom: customFieldsColumn(),
     /** Counts changes: a change made on a phone offline is sent with the version it saw. */

@@ -15,7 +15,7 @@ import {
   user,
 } from '@hykr/db';
 import { sql } from 'drizzle-orm';
-import { doublePrecision, index, text, timestamp } from 'drizzle-orm/pg-core';
+import { doublePrecision, index, text, timestamp, unique } from 'drizzle-orm/pg-core';
 
 export const meetings = app.table(
   'meetings',
@@ -47,6 +47,8 @@ export const meetings = app.table(
       .notNull(),
   },
   (table) => [
+    // What a to-do's or a note's (tenant_id, meeting_id) points at: a meeting of its business.
+    unique('meetings_tenant_id_uq').on(table.tenantId, table.id),
     index('meetings_owner_starts_idx').on(table.ownerId, table.startsAt),
     index('meetings_tenant_customer_idx').on(table.tenantId, table.customerId),
     geoIndex('meetings_location_gist', table.location),
