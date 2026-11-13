@@ -7,6 +7,7 @@ import type { Queue } from 'bullmq';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { outboxFeed } from '../../dist/features/events/outbox-feed.js';
 import { EventRelay } from '../../dist/features/events/relay.service.js';
+import { RelayedEvents } from '../../dist/features/privacy/targets.js';
 import * as api from '../../dist/index.js';
 import { DB } from '../../dist/infra/db.module.js';
 import { ChatService } from '../../dist/modules/chat/chat.service.js';
@@ -167,6 +168,41 @@ describe('events and subscribers', () => {
     const prefix = String(process.env.BULL_PREFIX);
     const pending = await outboxFeed.pending({ limit: 10_000, prefix }, ctx);
     for (const id of Object.values(bad)) expect(pending.map((e) => e.id)).not.toContain(id);
+  });
+
+  it('retention removes failed and relayed stored events, never pending ones', async () => {
+    const at = Date.now();
+    const ids = { failed: `evt-ret-failed-${at}`, pending: `evt-ret-pending-${at}` };
+    const insert = (id: string, failed: boolean) =>
+      pool.query(
+        `insert into app.domain_events (id, tenant_id, name, resource_type, resource_id, row,
+           actor_kind, actor_id, channel, occurred_at, available_at, queues, failed_at, error)
+         values ($1, $2, 'task.noted', 'task', null, '{}'::jsonb, 'user', $3, null,
+           now() - interval '400 days', now() + interval '1 day', $4, $5, $6)`,
+        [
+          id,
+          raviTenant,
+          ravi.id,
+          process.env.BULL_PREFIX,
+          failed ? new Date() : null,
+          failed ? 'not an event' : null,
+        ],
+      );
+    await insert(ids.failed, true);
+    // Not due yet (an undo window): never relayed, so never removed.
+    await insert(ids.pending, false);
+    const db = server.app?.get(DB, { strict: false });
+    const out = await RelayedEvents.apply({
+      tenantId: raviTenant,
+      before: new Date(Date.now() - 300 * 86_400_000),
+      tx: db,
+    } as never);
+    expect(out.count).toBeGreaterThanOrEqual(1);
+    const left = await pool.query('select id from app.domain_events where id = any($1)', [
+      Object.values(ids),
+    ]);
+    expect(left.rows.map((r) => r.id)).toEqual([ids.pending]);
+    await pool.query('delete from app.domain_events where id = $1', [ids.pending]);
   });
 
   it('a batch with a bad event relays the others', async () => {

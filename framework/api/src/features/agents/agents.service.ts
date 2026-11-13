@@ -450,7 +450,14 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
       .where(and(eq(agentTriggers.agentId, agent.id), eq(agentTriggers.kind, 'mention')))
       .limit(1);
     // No saved trigger row is no time to compare with: nothing starts (as for an event trigger).
-    if (!trigger || savedAfter(trigger.createdAt, event)) return null;
+    // The definition says it listens, so the two are out of step: say so, or nobody would know.
+    if (!trigger) {
+      log.warn(
+        `agent ${agent.id} has a mention trigger but no saved trigger row: mention ${event.id} starts nothing`,
+      );
+      return null;
+    }
+    if (savedAfter(trigger.createdAt, event)) return null;
     return this.start({
       agent,
       triggerId: trigger.id,
