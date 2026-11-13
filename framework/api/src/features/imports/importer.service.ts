@@ -9,6 +9,8 @@ import {
   type ImportResult,
   ownValue,
   type Principal,
+  TEXT_FAULTS,
+  unstorableTextAt,
   type WriteResult,
 } from '@hykr/contracts';
 import {
@@ -297,6 +299,10 @@ export class Importer {
         values[field] = parsed.text
           ? cellValue(fields.create[field] ?? fields.update[field], String(v ?? ''), o.empty)
           : v;
+        // A cell spelling JSON is decoded after the file's check (`["a\ud800b"]`): text
+        // Postgres cannot keep is the row's problem here too, never repaired (V10).
+        const bad = unstorableTextAt(values[field], field);
+        if (bad) return { raw, problem: new RowProblem('invalid', TEXT_FAULTS[bad.rule], field) };
       }
       return { raw, key, values };
     });

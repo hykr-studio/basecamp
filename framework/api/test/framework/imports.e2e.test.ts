@@ -472,6 +472,31 @@ describe('text Postgres cannot keep, in a file', () => {
     expect(header.error.message).toMatch(/Column 2 of the header: Text may not hold the NUL/);
   });
 
+  it('a CSV cell that spells it as a JSON escape is its row’s problem too', async () => {
+    // The file's check reads each cell's text; a cell spelling JSON is decoded after it
+    // (`cellValue`). Before V10's second review `["a\ud800b"]` was imported with U+FFFD in
+    // place of the half pair, and `["a\u0000b"]` failed only at the database.
+    const csv = [
+      'id,title,tags',
+      'J1,Json one,"[""red""]"',
+      'J2,Json surrogate,"[""a\\ud800b""]"',
+      'J3,Json nul,"[""a\\u0000b""]"',
+      'J4,Json four,"[""blue""]"',
+      '',
+    ].join('\n');
+    for (const dryRun of [true, false]) {
+      const j = await importText(owner, 'item', csv, { source: `json-cell-${dryRun}`, dryRun });
+      expect(j.status, JSON.stringify(j.error)).toBe('succeeded');
+      expect(j.output).toMatchObject({ dryRun, created: 2, failed: 2, errors: { invalid: 2 } });
+      const report = await reportOf(owner, j);
+      expect(report).toContain('Text may not hold half of a UTF-16 surrogate pair');
+      expect(report).toContain('Text may not hold the NUL character');
+    }
+    expect(await itemByTitle('Json four')).toMatchObject({ tags: ['blue'] });
+    expect(await itemByTitle('Json surrogate')).toBeUndefined();
+    expect(await itemByTitle('Json nul')).toBeUndefined();
+  });
+
   it('in a failed import’s own message is kept as U+FFFD, and the job still says why', async () => {
     // V8 repeats a file's first character when it cannot read it, and a message cut at 500
     // characters may halve a surrogate pair: either failed the job's own row before V10.
