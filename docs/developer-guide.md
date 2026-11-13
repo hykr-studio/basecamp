@@ -696,15 +696,25 @@ JSON:  { done: false, dueOn: { lte: '2026-10-31' }, sort: '-dueOn', limit: 20 }
 - The query string's keys are the sender's. `nestBrackets` builds the nested objects with no
   prototype, and a key nested under a name every object has (`__proto__[x]`, `constructor[x]`)
   stays flat, so the strict schema refuses that request alone (docs/decisions/V1.md).
-- No text a request sends holds U+0000, which Postgres's text and jsonb cannot store. A global
-  guard (`infra/untrusted-text.ts`) refuses one anywhere in a route parameter, the query string
-  or the JSON or form body, keys and values at any depth, with 400
-  `{ error: 'invalid', rule: 'nul_character', where }`, before any pipe or handler reads it;
-  Better Auth's routes get the same check from a hook in front of its endpoints. A route whose
-  body is a file's bytes says `@TakesBytes()` (the blob upload), and only its body is skipped.
-  Text decoded later (a base64 cursor) is checked by its reader (docs/decisions/V10.md).
+- No text a request sends holds U+0000, which Postgres's text and jsonb cannot store, or half of
+  a UTF-16 surrogate pair, which jsonb refuses and text turns into U+FFFD. A global guard
+  (`infra/untrusted-text.ts`) refuses one anywhere in a route parameter, the query string (as
+  Express parsed it, and every key of the raw URL past the parser's 1000) or the JSON or form
+  body, keys and values at any depth, with 400
+  `{ error: 'invalid', rule: 'nul_character' | 'lone_surrogate', where }`, before any pipe or
+  handler reads it; Better Auth's routes get the same check from a hook in front of its
+  endpoints. A route whose body is a file's bytes says `@TakesBytes()` (the blob upload), and
+  only its body is skipped. Text decoded later is checked by its reader with the same rule
+  (`unstorableTextAt`, `@hykr/contracts`): a custom filter's JSON (`custom={"colour":"a\u0000b"}`
+  is the same 400, `where: 'query.custom'`), keyset cursors, an import's rows
+  (docs/decisions/V10.md).
+- A time a list filter, a cursor or a query parameter carries is one Postgres can store: years 1
+  to 9999 in UTC (`storableInstant`, `storableDateTime`, `storableDate` in `@hykr/contracts`).
+  `z.iso.datetime()` alone takes the year 0000 and `new Date()` the year 99999, and Postgres
+  refuses both; a list's `date` filter, history's `since`, credits usage's `from`/`to` and the
+  platform's routing `before` answer 400 for one.
 
-Field types are a registry. A feature adds one in two halves, each in its own file: the grammar in contracts, declared on `ListFieldTypes` (and new operators on `ListFilterOps`) and defined with `defineListFieldType({ name, ops, value, opValue?, summary? })`, which every process (server, tools, apps) loads; and the SQL in the server, `listFieldSql` (contributed as `listFieldSql`), `{ name, where({ table, field, column, op, value }), order? }`. `order({ field, column, dir, filters })` is how a field of the type sorts when it is in `sortable` (a point: by distance to its `near` point); it returns `{ expr, at(value), check?(value) }`, where `expr` is never null so cursors neither skip nor repeat rows, and `check` says whether a cursor could hold that value (the row's field, or null). `summary` says what the type's fields do in a summary (section 5.16). A field of an undefined type fails when its schema is built, and one without SQL fails its request. Neither filters nothing. `toQueryString` sends an operator whose value is an object (`near`) as JSON, which the type reads back.
+Field types are a registry. A feature adds one in two halves, each in its own file: the grammar in contracts, declared on `ListFieldTypes` (and new operators on `ListFilterOps`) and defined with `defineListFieldType({ name, ops, value, opValue?, summary? })`, which every process (server, tools, apps) loads; and the SQL in the server, `listFieldSql` (contributed as `listFieldSql`), `{ name, where({ table, field, column, op, value }), order? }`. `order({ field, column, dir, filters })` is how a field of the type sorts when it is in `sortable` (a point: by distance to its `near` point); it returns `{ expr, at(value), check?(value) }`, where `expr` is never null so cursors neither skip nor repeat rows, and `check` says whether a cursor could hold that value (the row's field, or null). `summary` says what the type's fields do in a summary (section 5.16). A field of an undefined type fails when its schema is built, and one without SQL fails its request. Neither filters nothing. `toQueryString` sends an operator whose value is an object (`near`) as JSON, which the type reads back. A type that decodes text after the request's edge (JSON) refuses what Postgres cannot keep in it: a zod issue `{ code: 'custom', params: { rule } }` from `unstorableTextAt`, which the API's validation pipe answers as the edge does (`CustomFilter` does this).
 
 The response is `{ items, nextCursor, total? }`. Pagination is keyset: pass `nextCursor` back as `cursor`. A cursor from a different sort is a 400 `cursor_sort_mismatch`. A cursor is the client's to send back, so each value it holds is checked against its sort column's type (exactly what the server emits for it) before any SQL is built; one that does not fit, or a cursor of the wrong shape, is a 400 `bad_cursor`. As a backstop, a Postgres data exception from a list query with a cursor is `bad_cursor` too (`listQuery`); since a NUL in a filter is refused before the query (above), what reaches it is the cursor's. The framework's own keyset cursors (the inbox, comments, agent runs) read their time through `storableInstant` (years 1 to 9999) and refuse an id with a NUL or over 128 characters (`keysetOf`): a 400, `bad_cursor`. Sorting on a nullable column works only for dates, timestamps and numbers. A nullable text or enum column in `sortable` passes load-time checks, then throws `Sorting on nullable ... is not supported` (`framework/core/src/query/list-grammar.ts`) on the first request that sorts by it, which the client sees as a 500. Keep such columns `notNull()` or out of `sortable`.
 
@@ -1458,7 +1468,10 @@ run: async ({ tx, principal, loaded }) => ({
   `ctx.progress(percent, message)`. It returns `{ externalId?, update? }`. Work done in `submit` itself
   (an export, an import) returns its finished update, with the files it made as bytes (`files`), and
   can act as whoever started it: `ctx.starter()` (refreshed, as an approval's replay) and `ctx.db`. A
-  throw is retried (`submitAttempts`, `submitBackoffMs`), then the job fails `submit_failed`. A job
+  throw is retried (`submitAttempts`, `submitBackoffMs`), then the job fails `submit_failed`. The
+  job keeps the error's message (`error.message`, which its starter reads), except a database
+  error's, which is `A database error stopped this work`: the query and its parameters stay in the
+  server's log (`features/jobs/told.ts`). A job
   stays unsubmitted until `submit` returns, even once its progress says `running`: a throw after
   `ctx.progress`, or a worker that stopped mid-way, is submitted again (the tick picks up the latter
   once its lease runs out), so `submit` must be safe to run twice.
@@ -1885,6 +1898,9 @@ pnpm exec basecamp import todo domain/src/modules/todos/import/todos.csv \
 - **The result.** The job's output is the counts (`ImportResult`: created, updated, unchanged,
   skipped, failed, errors by code). Rows not written are in the job's result file
   `<name>.errors.csv` (or `.ndjson`): `_row`, `_code`, `_field`, `_message`, then the row as given.
+  A row holding text Postgres cannot keep (a NUL, or half a surrogate pair from a JSON escape) is
+  `invalid`, and the report shows that character as U+FFFD; a header naming such a column fails
+  the file.
   Fix the rows in the report and import the report itself. A **dry run** (`dryRun: true`,
   `--dry-run`) does everything in transactions it rolls back: the counts and the report say what a
   real run would do. Its refusals are still audited as refused writes.
@@ -3807,7 +3823,8 @@ These are not built. Each has a workaround for now.
 | Web e2e (Playwright) | Use API e2e tests. Maestro covers native flows, outside CI. |
 | Voice tests without a key | `pnpm test` runs `framework/api/test/framework/voice.e2e.test.ts` and `application/api/test/voice/say.e2e.test.ts`. They need `VOICE_AGENT_KEY` (worker calls send `x-agent-key: process.env.VOICE_AGENT_KEY ?? ''`) and have no skip guard. CI sets the key in `ci.yml`; locally, set it in `.env` or these tests fail. |
 | Paging within one millisecond | A list sorted by a timestamp (`createdAt`, a common sort) keeps each row's time in its cursor as a JavaScript `Date`, to the millisecond, while `defaultNow()` stores microseconds. Rows written within the same millisecond can repeat or be skipped at a page boundary; so can the inbox, comments and agent runs, whose keyset cursors do the same. The SLA list avoids it by keeping Postgres's own text (`to_char(… 'US')`, docs/decisions/S3.md). Until list cursors do the same: sort by a column whose values differ by more than a millisecond, or truncate a table's stored times to milliseconds (`default date_trunc('milliseconds', now())`); the id the cursor also keeps does not help, since the cut itself is a millisecond early. |
-| A webhook that carries a NUL character | A signed inbound webhook (WhatsApp, an integration's `/webhooks/...`, a job callback) whose JSON holds U+0000 is refused 400, whole, at the request edge before its signature is read, as every request is: none of that delivery's events is stored (before, the ones ahead of it were, and the request failed with a 500), and the sender retries it until it gives up. Postgres's jsonb cannot store the character, and a connector cannot strip it, since the check runs before its `parse` (`docs/decisions/V10.md`). |
+| A webhook that carries a NUL character | A signed inbound webhook (WhatsApp, an integration's `/webhooks/...`, a job callback) whose JSON holds U+0000 (or half of a surrogate pair) is refused 400, whole, at the request edge before its signature is read, as every request is: none of that delivery's events is stored (before, the ones ahead of it were, and the request failed with a 500), and the sender retries it until it gives up. Postgres's jsonb cannot store the character, and a connector cannot strip it, since the check runs before its `parse` (`docs/decisions/V10.md`). |
+| A written value its column cannot hold | A body's value that the entity's schema takes and its column refuses is a 500, not a 400: a date or time in the year 0000 (`z.iso.date()` and `z.iso.datetime()` take it; `POST /api/tasks { dueOn: '0000-01-01' }` on the fixture), or a number past its column's range (`z.number().int()` on an `integer` column, `rank: 1e12`). The importer already reports such a row `invalid`. Until the write path checks values against their columns before a write can wait: bound such fields in the schema (`storableDateTime()`, `storableDate()` from `@hykr/contracts`, `.max(2147483647)` on an integer) (`docs/decisions/V10.md`). |
 | Finding a key that skips the business | Nothing at boot or in lint finds a drizzle foreign key to a table with `tenant_id` whose field is not declared in `traits.references`: such a key checks only that the id exists in some business. Review each `.references(() => x.id)` against section 5.2 (`docs/decisions/V2.md`). |
 | Process-wide prototype hardening | Each place that nests or merges keys someone sends builds objects with no prototype or skips a name every object has (docs/decisions/V1.md). Node's `--disable-proto=delete` or a frozen `Object.prototype` is not set for the API and worker, because every dependency would run under it. Never write a key from a request into a plain `{}` by assignment. |
 
