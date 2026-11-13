@@ -2911,13 +2911,14 @@ Every business's use of what costs money is metered, priced and, when its plan s
   `<meter>.<variant>` in credits per pricing unit (tokens per million, voice per minute),
   `markupPercent` on a model's own `MODEL_PROVIDERS` price (used when no `tokens` or
   `embedding_tokens` price is set and the currencies match), and `defaults`, the plan every
-  business starts on. Malformed JSON stops
-  the start. Unset, uses are metered at no cost and nothing is capped.
+  business starts on. Malformed JSON, or defaults whose `alertAt` is not below their `pauseAt`,
+  stops the start. Unset, uses are metered at no cost and nothing is capped.
 - **The plan** is the settings section `credits`: `enforce`, `allowance` (credits per period),
   `period` (`day`, `week`, `month` in the business's time zone), `alertAt` (80) and `pauseAt`
   (100), per-meter `limits`, `prices` and `pauseMessages` (message categories a paused business
-  does not send), each over the deployment's defaults. Only the operator writes it; the business
-  sets only its `alertAt` (`PUT /api/credits/alerts`, `credits.manage`).
+  does not send), each over the deployment's defaults. `alertAt` must be below `pauseAt` (an
+  alert at the pause is never early). Only the operator writes it; the business sets only its
+  `alertAt` (`PUT /api/credits/alerts`, `credits.manage`).
 - **Budget and wallet.** On credits, a period's spending uses the allowance first, then the
   prepaid wallet (`app.credit_wallets`, every change a row in `app.credit_ledger`). Used per cent is
   spent over spent plus what is left. At `alertAt` of a cap (the budget or a meter's limit) the
@@ -2928,7 +2929,8 @@ Every business's use of what costs money is metered, priced and, when its plan s
 - **What a pause refuses** (402, rules `credits_exhausted`, `usage_limit_reached`,
   `credits_suspended`): assistant turns and back-office drafts (the `credits` turn hook), new voice
   sessions (and a session's `maxSeconds` is cut to what is left), outbound messages of a
-  category in `pauseMessages` (recorded as failed, never sent), and embeddings (recall answers 402,
+  category in `pauseMessages` (recorded as failed, never sent, and not counted against a
+  contact's weekly marketing cap), and embeddings (recall answers 402,
   a turn runs without recall, the indexer leaves rows pending). Replies, codes, approvals, handoffs
   and staff messages always go. A paused business's WhatsApp customer is handed to the team.
   Every call an agent makes to the API (the assistant's key, an agent run's token, an MCP token)
@@ -2941,16 +2943,21 @@ Every business's use of what costs money is metered, priced and, when its plan s
   plan), `PUT …/override` (`{ override: { mode: 'run' | 'pause', until?, reason } }` or `null`) and
   `POST …/grants` (`{ amount, note }`). Each write runs through `runWrite` as the system job
   `credits.operator` on behalf of the operator, audited in that business (`on_behalf_of`).
-- **People.** `GET /api/credits` (`credits.view`: owner, admin, ops, staff) says whether the
-  business is paused and how much of each cap is used; amounts, `GET /api/credits/ledger`,
-  `GET /api/credits/usage` and purchases need `credits.manage` (owner, admin). People only.
+- **People.** `GET /api/credits` (`credits.view`: owner, admin, ops, staff) says how much of
+  each cap is used and whether turns are refused: `paused` is the refusal the turn hook and the
+  agent guard apply (`turnRefusal`: the operator's pause, the budget, or a `tokens` or
+  `tool_calls` limit), null while turns run. Each meter whose own limit refuses its use is
+  `paused` with its `refusal` (rule and reason), so a voice or memory-search limit shows there
+  while turns still run. Amounts, `GET /api/credits/ledger`, `GET /api/credits/usage` and
+  purchases need `credits.manage` (owner, admin). People only.
 - **Buying credits.** `POST /api/credits/purchases { amount, provider? }` goes through `runWrite`
   (a write hook may park it) and records the purchase; its `CreditPurchaseProvider` (contributed
   as `creditPurchaseProviders`, a payment connector's) starts it and returns a checkout URL or the
   outcome. The connector's confirmation (a `connectorHandler` on its verified webhook) calls
   `CreditsService.settlePurchase({ tenantId: event.tenantId, provider, purchaseId }, { status, ref })`,
   which tops the wallet up once, and only for a purchase of that business made with that
-  provider (anything else is 404). No provider ships with the framework: without one, 503.
+  provider (anything else is 404). No provider ships with the framework: without one, 503 (to
+  someone who may buy; anyone else gets 403 first, audited).
 - **In the app.** List `creditsPlugin` in `<AppShell plugins>`: a `/credits` screen (usage, the
   pause, the balance, buying, the history) and its destination for people with `credits.view`.
 - **In tests.** The scripted model reports usage (a token per four characters of prompt and
@@ -3578,6 +3585,8 @@ These are not built. Each has a workaround for now.
 | Operators inviting a business's owner | `POST /api/platform/tenants` makes a business for someone who has an account. An owner without one signs up first. A business made at sign-up announces no `tenant.provisioned`. |
 | Routing rules, keeping unrouted requests | The framework asks the application's `inboundRouters`; it keeps what happened to a request (`app.platform_routed`), not what it said. An operator cannot assign an unrouted request by hand. |
 | Suspending a business, plans and prices | Operators make, rename and switch flags of a business, and set its credits (section 7.6). Nothing suspends or deletes one; billing is the application's. |
+| The paused sentence for a usage limit | A turn refused by a `tokens` or `tool_calls` limit still says the business has used its credits and someone can add more (`credits.paused`, also said by `EndWhenPaused`). Its `rule` (`usage_limit_reached`) and `GET /api/credits` say it is a limit: raise it in the operator's plan, or wait for the next period. |
+| Telling the approver that the marketing cap dropped a send | A marketing message past the contact's weekly cap (`general.marketingPerWeek`) is dropped and only logged, also after someone approved it. Check the contact's sends this week before approving. |
 | Bull Board in production | It is mounted outside production only, for operators holding `platform.queues`. |
 | Support in history and events | `audit.events.on_behalf_of` marks support and operator writes, but the history screen does not label them, and stored events carry only the actor. Read a grant's activity (`GET /api/support-access/:id/activity`) or the audit. |
 | Support access and capabilities | Support access holds only capabilities declared `supportable: true` where they are defined (an application's own included); an application keeps a framework one from it with `supportWithheld`. Links made under support before this rule have no `on_behalf_of` and last until they expire. |
