@@ -60,12 +60,24 @@ export function defineSchedule(def: ScheduleDef): ScheduleDef {
   return def;
 }
 
+/**
+ * How long a finished job stays in Redis, in seconds, and how many at most: BullMQ keeps each
+ * one's whole data (an event's envelope with its row, a notification's row), so this bounds how
+ * long a copy of a record outlives it there. An erasure removes the person's finished jobs at once
+ * (`forgetJobs`); a job still in flight then goes within this bound. BullMQ applies it when the
+ * queue next finishes a job. The deployment sets it (`JOBS_KEEP_*`, config.ts).
+ */
+export interface KeepJobs {
+  completed: { age: number; count: number };
+  failed: { age: number; count: number };
+}
+
 /** What every job on a queue gets unless its add() says otherwise. */
-export function jobDefaults(def: QueueDef) {
+export function jobDefaults(def: QueueDef, keep: KeepJobs) {
   return {
     // Repeated from BullModule.forRoot: a queue's own defaultJobOptions replace the shared ones.
-    removeOnComplete: 1000,
-    removeOnFail: 5000,
+    removeOnComplete: keep.completed,
+    removeOnFail: keep.failed,
     ...(def.attempts ? { attempts: def.attempts } : {}),
     ...(def.backoffMs ? { backoff: { type: 'exponential' as const, delay: def.backoffMs } } : {}),
   };

@@ -16,6 +16,8 @@ export interface ContributorsErasure {
   erased: ErasedRecords[];
   /** What they kept on purpose, and why. */
   kept: KeptData[];
+  /** Assistant runs whose turns they erased: Mastra's rows of them go too. */
+  runs: string[];
   /** Their work outside the database, for once the erasure has committed. */
   afterCommit: NonNullable<ErasureResult['afterCommit']>[];
 }
@@ -27,12 +29,13 @@ export interface ContributorsErasure {
 export async function eraseWithContributors(
   a: DataSubject & { tx: Tx },
 ): Promise<ContributorsErasure> {
-  const out: ContributorsErasure = { counts: {}, erased: [], kept: [], afterCommit: [] };
+  const out: ContributorsErasure = { counts: {}, erased: [], kept: [], runs: [], afterCommit: [] };
   for (const c of erasureContributors.all()) {
     const r = await c.erase(a);
     out.counts[c.name] = r.count;
     out.erased.push(...(r.erased ?? []).filter((s) => s.ids.length));
     out.kept.push(...(r.kept ?? []).filter((k) => k.count > 0));
+    out.runs.push(...(r.runs ?? []));
     if (r.afterCommit) out.afterCommit.push(r.afterCommit);
   }
   return out;

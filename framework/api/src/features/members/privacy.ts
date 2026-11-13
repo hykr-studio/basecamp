@@ -8,7 +8,7 @@ import type { ErasureContributor, ExportContributor } from '../../hooks.js';
 import { definePersonalDataPart } from '../privacy/registry.js';
 
 /** The account's email, lower case, as invitations store it. */
-async function emailOf(conn: Conn, userId: string): Promise<string | null> {
+export async function emailOf(conn: Conn, userId: string): Promise<string | null> {
   const [u] = await conn.select({ email: user.email }).from(user).where(eq(user.id, userId));
   return u?.email.trim().toLowerCase() || null;
 }

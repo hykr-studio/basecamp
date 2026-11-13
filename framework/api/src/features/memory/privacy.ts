@@ -1,4 +1,4 @@
-import { subjectKey } from '@hykr/contracts';
+import { MemorySpec, subjectKey } from '@hykr/contracts';
 import type { Tx } from '@hykr/core';
 import { memories, memoryIndex } from '@hykr/db';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -7,7 +7,7 @@ import type { ErasureContributor, ExportContributor } from '../../hooks.js';
 /**
  * A person asks to be forgotten: the vectors of what they said go (a deleted message's vector
  * goes with it anyway), and for a person with an account, the business memories they wrote and
- * those memories' vectors.
+ * those memories' vectors. The memories' copies (audit rows, `memory.*` events) lose the text.
  */
 export const EraseMemory: ErasureContributor = {
   name: 'memory',
@@ -33,7 +33,12 @@ export const EraseMemory: ErasureContributor = {
           ),
         ),
       );
-    return { count: said.length + written.length };
+    return {
+      count: said.length + written.length,
+      erased: [
+        { type: MemorySpec.name, ids: written.map((m) => m.id), fields: ['text'], deleted: true },
+      ],
+    };
   },
 };
 

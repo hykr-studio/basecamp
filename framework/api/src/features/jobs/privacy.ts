@@ -1,7 +1,13 @@
 import { type Subject, subjectKey } from '@hykr/contracts';
 import { files, jobs } from '@hykr/db';
-import { and, eq, inArray, isNull, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, ne, type SQL } from 'drizzle-orm';
 import type { ErasureContributor, ExportContributor } from '../../hooks.js';
+import { fileCopies } from '../files/privacy.js';
+import {
+  definePersonalDataPart,
+  type PersonalDataPart,
+  type RetentionTarget,
+} from '../privacy/registry.js';
 import { JOB } from './info.js';
 
 /** The jobs started for a subject, in one business or in all. */
@@ -15,6 +21,8 @@ const startedFor = (subject: Subject, tenantId?: string): SQL =>
  * "Delete my data": the jobs about no record that were started for the subject lose their
  * input, output, message and error, their result files are erased (the files sweeper deletes the
  * objects), and unfinished ones are cancelled. Jobs about a record are the business's: they stay.
+ * Their copies lose the same (`job.*` audit rows, events, replies), and the files' copies their
+ * names (`file.*` audit rows).
  */
 export const jobsErasure: ErasureContributor = {
   name: 'jobs',
@@ -38,11 +46,18 @@ export const jobsErasure: ErasureContributor = {
         nextPollAt: null,
       })
       .where(and(inArray(jobs.id, ids), inArray(jobs.status, ['queued', 'running'])));
-    await tx
+    const gone = await tx
       .update(files)
-      .set({ status: 'erased', detachedAt: now, name: 'erased' })
-      .where(and(eq(files.resourceType, JOB), inArray(files.resourceId, ids)));
-    return { count: rows.length };
+      .set({ status: 'erased', detachedAt: now, name: 'erased', transcript: null })
+      .where(and(eq(files.resourceType, JOB), inArray(files.resourceId, ids)))
+      .returning({ id: files.id });
+    return {
+      count: rows.length,
+      erased: [
+        { type: JOB, ids, fields: ['input', 'output', 'message', 'error', 'principal'] },
+        fileCopies(gone.map((f) => f.id)),
+      ],
+    };
   },
 };
 
@@ -68,3 +83,52 @@ export const jobsExport: ExportContributor = {
     };
   },
 };
+
+/**
+ * A job's files (a business export's archive, an import's file and its error report) copy
+ * other people's records: erasing one of them leaves the copies made before (decisions V8), so
+ * they are on the register as kept, and this target erases them once the job is older than the
+ * period the application or the business sets. Without a period they stay.
+ */
+export const jobsFilesRetention: RetentionTarget = {
+  name: 'jobs.files',
+  label: {
+    en: 'Files of finished jobs: exports, imported files and their error reports',
+    hi: 'पूरे हो चुके कामों की फ़ाइलें: एक्सपोर्ट, इम्पोर्ट की गई फ़ाइलें और उनकी गड़बड़ियों की रिपोर्ट',
+    te: 'పూర్తయిన పనుల ఫైల్‌లు: ఎగుమతులు, దిగుమతి చేసిన ఫైల్‌లు, వాటి లోపాల నివేదికలు',
+  },
+  scope: 'tenant',
+  action: 'delete',
+  apply: async ({ tenantId, before, tx }) => {
+    if (!tenantId) return { count: 0 };
+    const old = tx
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(eq(jobs.tenantId, tenantId), lt(jobs.finishedAt, before)));
+    const gone = await tx
+      .update(files)
+      .set({ status: 'erased', detachedAt: new Date(), name: 'erased', transcript: null })
+      .where(
+        and(
+          eq(files.tenantId, tenantId),
+          eq(files.resourceType, JOB),
+          ne(files.status, 'erased'),
+          inArray(files.resourceId, old),
+        ),
+      )
+      .returning({ id: files.id });
+    const ids = gone.map((f) => f.id);
+    return { count: ids.length, erased: [fileCopies(ids)] };
+  },
+};
+
+/** What the register lists for jobs' files: kept on erasure, until their period. */
+export const jobsParts: PersonalDataPart[] = [
+  definePersonalDataPart({
+    name: 'jobs.files',
+    label: jobsFilesRetention.label,
+    fields: ['files'],
+    erase: 'keep',
+    keepReason: 'business_copy',
+  }),
+];

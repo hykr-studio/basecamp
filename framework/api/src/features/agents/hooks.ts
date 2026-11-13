@@ -13,7 +13,7 @@ import type { LiveResource } from '../live/resources.js';
 import { agentsService } from './agents.service.js';
 import { toolsOutside } from './scope.js';
 
-const { agents, agentRuns, approvals } = schema;
+const { agents, agentRuns, approvals, threadMessages } = schema;
 const log = new Logger('Agents');
 
 /** A run's token, at the door (`x-agent-run` with `x-run-id`). */
@@ -151,20 +151,70 @@ const ownedBy = (tx: Tx, userId: string, tenantId?: string) =>
     .from(agents)
     .where(and(eq(agents.ownerId, userId), tenantId ? eq(agents.tenantId, tenantId) : undefined));
 
-/** Erasing a person deletes the agents they own: their triggers, runs and thread go with them. */
+/** What an agent's copies hold that its owner wrote (audit rows, `agent.*` events, replies). */
+const AGENT_WORDS = ['name', 'description', 'instructions', 'triggers'];
+/** What a run's copies hold of what started it and what it said. */
+const RUN_WORDS = ['input', 'reply', 'reason', 'triggerLabel', 'trigger', 'toolCalls', 'messages'];
+
+/** Runs of this business's agents that a contact's message started (`input.message.from`). */
+const startedBy = (tx: Tx, contactId: string, tenantId?: string) =>
+  tx
+    .select({ id: agentRuns.id, runId: agentRuns.runId, threadId: agentRuns.threadId })
+    .from(agentRuns)
+    .where(
+      and(
+        sql`${agentRuns.input} -> 'message' -> 'from' ->> 'contactId' = ${contactId}`,
+        tenantId ? eq(agentRuns.tenantId, tenantId) : undefined,
+      ),
+    );
+
+/**
+ * Erasing a person deletes the agents they own: their triggers, runs and thread go with them,
+ * and the copies of the agents and runs lose what the person wrote and the runs said. Erasing a
+ * contact keeps the runs their messages started (another person's agent did the work), without
+ * the message, the reply and the run's turns in the agent's thread; the runs' Mastra rows go
+ * with the contact's own.
+ */
 export const AgentsErasure: ErasureContributor = {
   name: 'agents',
   erase: async ({ tx, subject, tenantId }) => {
-    if (subject.kind !== 'user') return { count: 0 };
+    if (subject.kind === 'contact') {
+      const runs = await startedBy(tx, subject.contactId, tenantId);
+      if (!runs.length) return { count: 0 };
+      const ids = runs.map((r) => r.id);
+      await tx
+        .update(agentRuns)
+        .set({ input: null, reply: null })
+        .where(inArray(agentRuns.id, ids));
+      await tx.delete(threadMessages).where(
+        inArray(
+          threadMessages.runId,
+          runs.map((r) => r.runId),
+        ),
+      );
+      return {
+        count: runs.length,
+        erased: [{ type: 'agent_run', ids, fields: RUN_WORDS }],
+        runs: runs.map((r) => r.runId),
+      };
+    }
     const mine = await ownedBy(tx, subject.userId, tenantId);
     if (!mine.length) return { count: 0 };
-    await tx.delete(agents).where(
-      inArray(
-        agents.id,
-        mine.map((m) => m.id),
-      ),
-    );
-    return { count: mine.length };
+    const agentIds = mine.map((m) => m.id);
+    // Read before the cascade takes them.
+    const runs = await tx
+      .select({ id: agentRuns.id, runId: agentRuns.runId })
+      .from(agentRuns)
+      .where(inArray(agentRuns.agentId, agentIds));
+    await tx.delete(agents).where(inArray(agents.id, agentIds));
+    return {
+      count: mine.length,
+      erased: [
+        { type: 'agent', ids: agentIds, fields: AGENT_WORDS, deleted: true },
+        { type: 'agent_run', ids: runs.map((r) => r.id), fields: RUN_WORDS, deleted: true },
+      ],
+      runs: runs.map((r) => r.runId),
+    };
   },
 };
 

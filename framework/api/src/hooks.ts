@@ -389,6 +389,11 @@ export interface ErasureResult {
   /** What it kept on purpose, and why. */
   kept?: readonly KeptData[];
   /**
+   * Assistant runs whose turns it erased (an agent's runs): their Mastra rows (traces, scores,
+   * snapshots) go with the subject's own runs.
+   */
+  runs?: readonly string[];
+  /**
    * Work outside the database once the erasure has committed (an outside account's grant
    * revoked). Best effort: a failure is logged, and the erasure stands.
    */

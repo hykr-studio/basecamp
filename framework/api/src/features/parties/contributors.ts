@@ -1,24 +1,37 @@
 // What parties hold about a person, for "delete my data" and their data export, and the start-up
 // check of the participant roles the application declares.
 import { checkParticipantRoles } from '@hykr/contracts';
-import { entityDefs } from '@hykr/core';
+import { type Conn, entityDefs } from '@hykr/core';
 import { contacts, participations, parties, partyMembers } from '@hykr/db';
 import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
-import { and, eq, inArray, notExists, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, notExists, or, type SQL } from 'drizzle-orm';
 import type { DataSubject, ErasureContributor, ExportContributor } from '../../hooks.js';
+import { emailOf } from '../members/privacy.js';
 
-/** The subject's party member rows: by contact, or by account (in one business, or every one). */
-const theirs = (a: DataSubject): SQL =>
+/**
+ * The subject's party member rows: by contact, or by account and by the email an invitation to
+ * join was sent to (lower case, as stored), in one business or every one.
+ */
+const theirs = (a: DataSubject, email: string | null = null): SQL =>
   and(
     a.subject.kind === 'contact'
       ? eq(partyMembers.contactId, a.subject.contactId)
-      : eq(partyMembers.userId, a.subject.userId),
+      : or(
+          eq(partyMembers.userId, a.subject.userId),
+          email ? eq(partyMembers.email, email) : undefined,
+        ),
     a.tenantId ? eq(partyMembers.tenantId, a.tenantId) : undefined,
   ) as SQL;
 
+/** The account's email, for a person; none for a contact. */
+const emailFor = (a: DataSubject, conn: Conn) =>
+  a.subject.kind === 'user' ? emailOf(conn, a.subject.userId) : Promise.resolve(null);
+
 /**
- * Their party memberships go. A person party left with nobody in it goes too, with its
- * participations: it was them. An organisation stays, without them.
+ * Their party memberships go, and invitations to join sent to their email. A person party left
+ * with nobody in it goes too, with its participations: it was them. An organisation stays,
+ * without them. Their copies (audit rows, replies) lose the person's name, number and email, and
+ * the person party's name wherever a participation named it.
  */
 export const partiesErasure: ErasureContributor = {
   name: 'parties',
@@ -26,26 +39,40 @@ export const partiesErasure: ErasureContributor = {
     const { tx } = a;
     const gone = await tx
       .delete(partyMembers)
-      .where(theirs(a))
-      .returning({ partyId: partyMembers.partyId });
+      .where(theirs(a, await emailFor(a, tx)))
+      .returning({ id: partyMembers.id, partyId: partyMembers.partyId });
     const touched = [...new Set(gone.map((g) => g.partyId))];
     if (!touched.length) return { count: 0 };
-    const emptied = await tx
-      .delete(parties)
-      .where(
-        and(
-          inArray(parties.id, touched),
-          eq(parties.kind, 'person'),
-          notExists(
-            tx
-              .select({ id: partyMembers.id })
-              .from(partyMembers)
-              .where(eq(partyMembers.partyId, parties.id)),
-          ),
-        ),
-      )
-      .returning({ id: parties.id });
-    return { count: gone.length + emptied.length };
+    const empty = and(
+      inArray(parties.id, touched),
+      eq(parties.kind, 'person'),
+      notExists(
+        tx
+          .select({ id: partyMembers.id })
+          .from(partyMembers)
+          .where(eq(partyMembers.partyId, parties.id)),
+      ),
+    ) as SQL;
+    // Read before the cascade takes them: the participations copy the party's name.
+    const on = await tx
+      .select({ id: participations.id })
+      .from(participations)
+      .innerJoin(parties, eq(parties.id, participations.partyId))
+      .where(empty);
+    const emptied = await tx.delete(parties).where(empty).returning({ id: parties.id });
+    return {
+      count: gone.length + emptied.length,
+      erased: [
+        {
+          type: 'party_member',
+          ids: gone.map((g) => g.id),
+          fields: ['name', 'address', 'email'],
+          deleted: true,
+        },
+        { type: 'party', ids: emptied.map((p) => p.id), fields: ['name'], deleted: true },
+        { type: 'participation', ids: on.map((p) => p.id), fields: ['party'], deleted: true },
+      ],
+    };
   },
 };
 
@@ -58,7 +85,7 @@ export const partiesExport: ExportContributor = {
       .from(partyMembers)
       .innerJoin(parties, eq(parties.id, partyMembers.partyId))
       .leftJoin(contacts, eq(contacts.id, partyMembers.contactId))
-      .where(theirs(a));
+      .where(theirs(a, await emailFor(a, a.db)));
     if (!rows.length) return { parties: [] };
     const on = await a.db
       .select()

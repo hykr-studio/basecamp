@@ -11,8 +11,17 @@ const inBusiness = (a: DataSubject) => (a.tenantId ? eq(comments.tenantId, a.ten
 export const ERASED_MENTION = '@—';
 
 /**
+ * What a comment's copies hold of its words and its author (audit rows, `comment.*` events,
+ * replies, notifications): `excerpt` and `author { id, name }` are `comment.mentioned`'s.
+ */
+const WORDS = ['body', 'mentions', 'anchor', 'excerpt', 'author', 'target'];
+
+/**
  * Forgetting a person: their comments are deleted, and in other comments each token naming them
- * becomes `@—` and they leave the mentions. Contacts write no comments.
+ * becomes `@—` and they leave the mentions. Contacts write no comments. Their comments' copies
+ * lose the words and the author; the copies of a comment that named them lose its words and its
+ * mentions (a token and a mention carry the name they were written with: `label`), and the
+ * comment keeps its rewritten text.
  */
 export const CommentsErasure: ErasureContributor = {
   name: 'comments',
@@ -41,7 +50,17 @@ export const CommentsErasure: ErasureContributor = {
       );
       await a.tx.update(comments).set({ body, mentions }).where(eq(comments.id, row.id));
     }
-    return { count: own.length + naming.length };
+    return {
+      count: own.length + naming.length,
+      erased: [
+        { type: 'comment', ids: own.map((c) => c.id), fields: WORDS, deleted: true },
+        {
+          type: 'comment',
+          ids: naming.map((c) => c.id),
+          fields: ['body', 'excerpt', 'mentions', 'target'],
+        },
+      ],
+    };
   },
 };
 
