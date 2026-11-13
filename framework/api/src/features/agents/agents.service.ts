@@ -77,6 +77,10 @@ type TriggerRow = typeof agentTriggers.$inferSelect;
 
 const log = new Logger('Agents');
 
+/** Was this trigger saved after the event happened? Then the event is not its to see. */
+const savedAfter = (createdAt: Date, event: { occurredAt: string }) =>
+  createdAt.getTime() > Date.parse(event.occurredAt);
+
 /** The queue runs go on, and its job ids. */
 export const RUN_QUEUE = 'agents.run';
 export const runJobId = (id: string) => `agent-run--${id}`;
@@ -375,9 +379,9 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * A stored event: every active agent of its business with a matching `event` trigger, for a
-   * record its owner may read, starts a run with the event as the owner sees it. A run's own
-   * events never start the same agent again.
+   * A stored event: every active agent of its business with a matching `event` trigger saved
+   * before the event happened, for a record its owner may read, starts a run with the event as
+   * the owner sees it. A run's own events never start the same agent again.
    */
   async onEvent(event: DomainEventEnvelope): Promise<number> {
     const found = await this.triggersOf(event.tenantId, 'event');
@@ -386,6 +390,8 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
     let started = 0;
     for (const { agent, trigger } of found) {
       if (from?.agentId === agent.id) continue;
+      // An event held (an undo window) or relayed late is not news to a trigger saved since.
+      if (savedAfter(trigger.createdAt, event)) continue;
       const t = AgentTrigger.safeParse(trigger.spec);
       if (!t.success || t.data.kind !== 'event') continue;
       if (!t.data.on.some((p) => matchesEvent(p, event.name))) continue;
@@ -439,10 +445,11 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
     const from = await this.runOf(event.runId);
     if (from?.agentId === agent.id) return null;
     const [trigger] = await this.db
-      .select({ id: agentTriggers.id })
+      .select({ id: agentTriggers.id, createdAt: agentTriggers.createdAt })
       .from(agentTriggers)
       .where(and(eq(agentTriggers.agentId, agent.id), eq(agentTriggers.kind, 'mention')))
       .limit(1);
+    if (trigger && savedAfter(trigger.createdAt, event)) return null;
     return this.start({
       agent,
       triggerId: trigger?.id ?? null,

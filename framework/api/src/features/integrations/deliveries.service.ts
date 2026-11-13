@@ -74,10 +74,11 @@ export class DeliveriesService {
 
   /**
    * An event, as the `integrations.webhooks` subscriber gets it: a delivery for each active
-   * endpoint of its business that wants it and may read its record. Unique per endpoint and
-   * event, so an event relayed twice is one delivery.
+   * endpoint of its business that wants it, was made before it happened, and may read its
+   * record. Unique per endpoint and event, so an event relayed twice is one delivery.
    */
   async fanOut(event: DomainEventEnvelope): Promise<number> {
+    const happened = Date.parse(event.occurredAt);
     const endpoints = await this.db
       .select()
       .from(integrationEndpoints)
@@ -90,6 +91,8 @@ export class DeliveriesService {
     let made = 0;
     for (const endpoint of endpoints) {
       if (!endpoint.events.some((p) => matchesEvent(p, event.name))) continue;
+      // An event held (an undo window) or relayed late is not news to an endpoint made since.
+      if (endpoint.createdAt.getTime() > happened) continue;
       const body = buildBody(event, endpointPrincipal(endpoint));
       if (body === null) continue;
       const [row] = await this.db

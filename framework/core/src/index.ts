@@ -176,11 +176,14 @@ export {
 } from './write/levels.js';
 export {
   auditCtx,
+  findRepeat,
   type RunResult,
   runWrite,
+  saveReply,
   type Touched,
   type WriteCtx,
   type WriteOp,
+  type WriteOutcome,
 } from './write/pipeline.js';
 export { presentOutput } from './write/present.js';
 export { UndoService } from './write/undo.js';

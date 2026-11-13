@@ -27,7 +27,15 @@ import {
   type Principal,
   parseTenantSettings,
 } from '@hykr/contracts';
-import { runWrite, tenantZone, toJson, type WriteOp } from '@hykr/core';
+import {
+  findRepeat,
+  runWrite,
+  tenantZone,
+  toJson,
+  type WriteCtx,
+  type WriteOp,
+  type WriteOutcome,
+} from '@hykr/core';
 import { calendarConnections, calendarFeeds, type Database, tenants, user } from '@hykr/db';
 import { can, subjectOf } from '@hykr/policy';
 import {
@@ -108,6 +116,16 @@ const userOf = (p: Principal) => {
 
 const feedTokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
 
+/** Who asks, and how to recognise their retry: the request's id and idempotency-key. */
+export type CalendarWriteMeta = { requestId: string; idempotencyKey?: string };
+
+const writeCtx = (p: Principal, meta: CalendarWriteMeta, requestBody?: unknown): WriteCtx => ({
+  principal: p,
+  requestId: meta.requestId,
+  ...(meta.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
+  ...(requestBody !== undefined ? { requestBody } : {}),
+});
+
 /** Where the browser lands after Google, with what it brought back. */
 const landing = (to: string, outcome: Record<string, string>) => {
   const url = new URL(to);
@@ -136,11 +154,21 @@ export class CalendarService implements OnModuleInit {
     registerCalendarOps();
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: any of the feature's ops
-  private async write(p: Principal, requestId: string, op: WriteOp<any, any, any>, input: unknown) {
-    const out = await runWrite(this.db, { principal: p, requestId }, op, input);
+  /**
+   * One write, honouring the caller's idempotency-key. `requestBody` is what the caller sent,
+   * when the input also holds what this request made (an id, sealed tokens, a token's hash).
+   */
+  private async run(
+    p: Principal,
+    meta: CalendarWriteMeta,
+    // biome-ignore lint/suspicious/noExplicitAny: any of the feature's ops
+    op: WriteOp<any, any, any>,
+    input: unknown,
+    requestBody?: unknown,
+  ): Promise<WriteOutcome> {
+    const out = await runWrite(this.db, writeCtx(p, meta, requestBody), op, input);
     for (const event of out.events) this.events.publish(event);
-    return out.result;
+    return out;
   }
 
   /* ── Connections ──────────────────────────────────────────────────────── */
@@ -209,9 +237,14 @@ export class CalendarService implements OnModuleInit {
    * Only then is the code exchanged, with the verifier kept here, and the connection written as
    * this person.
    */
-  async complete(p: Principal, requestId: string, body: unknown) {
+  async complete(p: Principal, meta: CalendarWriteMeta, body: unknown) {
     const input = parse(CompleteCalendarInput, body);
     const userId = userOf(p);
+    // A retry with the same key answers the first answer: the sign-in and Google's code were
+    // used up by it, so look before taking them.
+    const op = connectOp();
+    const repeat = await findRepeat(this.db, writeCtx(p, meta), op, input);
+    if (repeat) return repeat.result;
     const google = requireGoogle();
     const box = requireSecretBox();
     const signIn = await takeSignIn(this.db, input.state);
@@ -282,25 +315,31 @@ export class CalendarService implements OnModuleInit {
       existing && existing.account !== account ? await this.sync.leftovers(existing.id) : null;
     const id = existing?.id ?? randomUUID();
     const inboundId = randomUUID();
-    const result = await this.write(p, requestId, connectOp(), {
-      id,
-      provider: 'google',
-      account,
-      scopes: (tokens.scope ?? '').split(' ').filter(Boolean).slice(0, 20),
-      sealed: sealTokens(tenantId, id, {
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        expiresAt: tokens.expiresAt,
-      }),
-      inbound: {
-        id: inboundId,
-        sealed: box.seal(
-          JSON.stringify(googleCalendarConnector.generate?.()),
-          connectionAad(tenantId, inboundId),
-        ),
+    const { result, repeat: again } = await this.run(
+      p,
+      meta,
+      op,
+      {
+        id,
+        provider: 'google',
+        account,
+        scopes: (tokens.scope ?? '').split(' ').filter(Boolean).slice(0, 20),
+        sealed: sealTokens(tenantId, id, {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresAt: tokens.expiresAt,
+        }),
+        inbound: {
+          id: inboundId,
+          sealed: box.seal(
+            JSON.stringify(googleCalendarConnector.generate?.()),
+            connectionAad(tenantId, inboundId),
+          ),
+        },
       },
-    });
-    if (result.status === 'done' && old) await this.sync.cleanUp(old);
+      input,
+    );
+    if (result.status === 'done' && old && !again) await this.sync.cleanUp(old);
     return result;
   }
 
@@ -319,11 +358,11 @@ export class CalendarService implements OnModuleInit {
   }
 
   /** Disconnect: the write first (another person's is a 404), then Google cleaned up. */
-  async disconnect(p: Principal, requestId: string, id: string) {
+  async disconnect(p: Principal, meta: CalendarWriteMeta, id: string) {
     userOf(p);
     const left = await this.sync.leftovers(id);
-    const result = await this.write(p, requestId, disconnectOp({ id }), {});
-    if (result.status === 'done' && left) await this.sync.cleanUp(left);
+    const { result, repeat } = await this.run(p, meta, disconnectOp({ id }), {});
+    if (result.status === 'done' && left && !repeat) await this.sync.cleanUp(left);
     return result;
   }
 
@@ -440,22 +479,31 @@ export class CalendarService implements OnModuleInit {
     return rows.map(feedView);
   }
 
-  /** A new feed; its URL (the token in it) is returned this once. */
-  async createFeed(p: Principal, requestId: string, body: unknown) {
+  /**
+   * A new feed; its URL (the token in it) is returned this once. A retry with the same key is
+   * the same feed, without its URL: only the token's hash is kept.
+   */
+  async createFeed(p: Principal, meta: CalendarWriteMeta, body: unknown) {
     const input = parse(CreateFeedInput, body);
     userOf(p);
     const token = `cf${randomBytes(32).toString('base64url')}`;
-    const result = await this.write(p, requestId, createFeedOp(), {
-      id: randomUUID(),
-      ...(input.label ? { label: input.label } : {}),
-      tokenHash: feedTokenHash(token),
-    });
-    return result.status === 'done' ? { ...result, url: feedUrl(token) } : result;
+    const { result, repeat } = await this.run(
+      p,
+      meta,
+      createFeedOp(),
+      {
+        id: randomUUID(),
+        ...(input.label ? { label: input.label } : {}),
+        tokenHash: feedTokenHash(token),
+      },
+      input,
+    );
+    return result.status === 'done' && !repeat ? { ...result, url: feedUrl(token) } : result;
   }
 
-  revokeFeed(p: Principal, requestId: string, id: string) {
+  async revokeFeed(p: Principal, meta: CalendarWriteMeta, id: string) {
     userOf(p);
-    return this.write(p, requestId, revokeFeedOp({ id }), {});
+    return (await this.run(p, meta, revokeFeedOp({ id }), {})).result;
   }
 
   /**

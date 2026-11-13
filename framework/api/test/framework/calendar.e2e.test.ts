@@ -820,6 +820,27 @@ describe('feeds', () => {
       404,
     );
   });
+
+  it('asked for twice with one idempotency-key, is one feed; its URL only the first time', async () => {
+    const key = { 'idempotency-key': randomUUID(), 'x-tenant-id': tenantId };
+    const label = `Retry ${key['idempotency-key']}`;
+    const first = await staff.call('POST', '/api/calendar/feeds', { label }, key);
+    const again = await staff.call('POST', '/api/calendar/feeds', { label }, key);
+    expect(first.status).toBe(201);
+    expect(again.status).toBe(201);
+    expect(again.body.value.id).toBe(first.body.value.id);
+    expect(first.body.url).toMatch(/\.ics$/);
+    expect(again.body.url).toBeUndefined();
+    const { rows } = await pool.query(
+      'select count(*) n from app.calendar_feeds where label = $1',
+      [label],
+    );
+    expect(Number(rows[0].n)).toBe(1);
+    // Another label under the same key is another request.
+    expect((await staff.call('POST', '/api/calendar/feeds', { label: 'Other' }, key)).status).toBe(
+      409,
+    );
+  });
 });
 
 describe('calls', () => {

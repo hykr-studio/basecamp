@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { type Connector, generateWebhookSecret } from '@hykr/connectors';
 import type { Principal } from '@hykr/contracts';
-import { requireCapability, runWrite, type WriteOp } from '@hykr/core';
+import {
+  findRepeat,
+  requireCapability,
+  runWrite,
+  type WriteCtx,
+  type WriteOp,
+  type WriteOutcome,
+} from '@hykr/core';
 import {
   type Database,
   integrationAttempts,
@@ -67,6 +74,12 @@ const notFound = (what: string) =>
 
 const LOG_LIMIT = 50;
 
+/** Who asks, and how to recognise their retry: the request's id and idempotency-key. */
+export type WriteMeta = { requestId: string; idempotencyKey?: string };
+
+// biome-ignore lint/suspicious/noExplicitAny: any of the feature's ops
+type AnyOp = WriteOp<any, any, any>;
+
 /**
  * Endpoints, connections and their logs, for people with `integrations.manage` in their
  * business. Writes go through runWrite (ops.ts); reads check the capability and the business.
@@ -92,11 +105,56 @@ export class IntegrationsService implements OnModuleInit {
     return p.tenantId ?? '';
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: any of the feature's ops
-  private async write(p: Principal, requestId: string, op: WriteOp<any, any, any>, input: unknown) {
-    const out = await runWrite(this.db, { principal: p, requestId }, op, input);
+  /**
+   * One write, honouring the caller's idempotency-key. `requestBody` is what the caller sent,
+   * when the input also holds what this request made (an id, a sealed secret).
+   */
+  private async run(
+    p: Principal,
+    meta: WriteMeta,
+    op: AnyOp,
+    input: unknown,
+    requestBody?: unknown,
+  ): Promise<WriteOutcome> {
+    const out = await runWrite(this.db, this.ctx(p, meta, requestBody), op, input);
     for (const event of out.events) this.events.publish(event);
-    return out.result;
+    return out;
+  }
+
+  private async write(p: Principal, meta: WriteMeta, op: AnyOp, input: unknown) {
+    return (await this.run(p, meta, op, input)).result;
+  }
+
+  private ctx(p: Principal, meta: WriteMeta, requestBody?: unknown): WriteCtx {
+    return {
+      principal: p,
+      requestId: meta.requestId,
+      ...(meta.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
+      ...(requestBody !== undefined ? { requestBody } : {}),
+    };
+  }
+
+  /**
+   * A repeated create or rotate answers the endpoint's secret again: read from its sealed row,
+   * so no secret is ever kept with the stored answer.
+   */
+  private async withSecret(result: WriteOutcome['result'], p: Principal) {
+    if (result.status !== 'done') return result;
+    const id = (result.value as { id?: string } | null)?.id;
+    const [row] = id
+      ? await this.db
+          .select()
+          .from(integrationEndpoints)
+          .where(
+            and(
+              eq(integrationEndpoints.id, id),
+              eq(integrationEndpoints.tenantId, p.tenantId ?? ''),
+            ),
+          )
+      : [];
+    if (!row) return result;
+    const secret = requireSecretBox().open(row.secretSealed, endpointAad(row.tenantId, row.id));
+    return { ...result, secret };
   }
 
   /* ── Connectors ─────────────────────────────────────────────────────────── */
@@ -138,34 +196,47 @@ export class IntegrationsService implements OnModuleInit {
     return row;
   }
 
-  /** The secret is generated here, sealed into the op's input, and returned once. */
-  async createEndpoint(p: Principal, requestId: string, body: unknown) {
+  /**
+   * The secret is generated here, sealed into the op's input, and returned. A retry with the
+   * same idempotency-key is the same endpoint, answered with its secret again.
+   */
+  async createEndpoint(p: Principal, meta: WriteMeta, body: unknown) {
     const input = parse(EndpointCreate, body);
+    const op = createEndpointOp();
+    const repeat = await findRepeat(this.db, this.ctx(p, meta), op, input);
+    if (repeat) return this.withSecret(repeat.result, p);
     const box = requireSecretBox();
     const id = randomUUID();
     const secret = generateWebhookSecret();
     const sealed = box.seal(secret, endpointAad(p.tenantId ?? '', id));
-    const result = await this.write(p, requestId, createEndpointOp(), { ...input, id, sealed });
-    return { ...result, secret };
+    const out = await this.run(p, meta, op, { ...input, id, sealed }, input);
+    // Another request with this key made it first: its secret, not this one.
+    if (out.repeat) return this.withSecret(out.result, p);
+    return { ...out.result, secret };
   }
 
-  async updateEndpoint(p: Principal, requestId: string, id: string, body: unknown) {
-    return this.write(p, requestId, updateEndpointOp({ id }), parse(EndpointUpdate, body));
+  async updateEndpoint(p: Principal, meta: WriteMeta, id: string, body: unknown) {
+    return this.write(p, meta, updateEndpointOp({ id }), parse(EndpointUpdate, body));
   }
 
-  async deleteEndpoint(p: Principal, requestId: string, id: string) {
-    return this.write(p, requestId, deleteEndpointOp({ id }), {});
+  async deleteEndpoint(p: Principal, meta: WriteMeta, id: string) {
+    return this.write(p, meta, deleteEndpointOp({ id }), {});
   }
 
-  /** A new secret; the old one keeps signing for a day, so receivers can switch over. */
-  async rotateEndpoint(p: Principal, requestId: string, id: string) {
+  /**
+   * A new secret; the old one keeps signing for a day, so receivers can switch over. A retry
+   * with the same key rotates nothing again: it answers the secret the first one made.
+   */
+  async rotateEndpoint(p: Principal, meta: WriteMeta, id: string) {
+    const op = rotateEndpointOp({ id }, PREVIOUS_SECRET_MS);
+    const repeat = await findRepeat(this.db, this.ctx(p, meta), op, {});
+    if (repeat) return this.withSecret(repeat.result, p);
     const box = requireSecretBox();
     const secret = generateWebhookSecret();
     const sealed = box.seal(secret, endpointAad(p.tenantId ?? '', id));
-    const result = await this.write(p, requestId, rotateEndpointOp({ id }, PREVIOUS_SECRET_MS), {
-      sealed,
-    });
-    return { ...result, secret };
+    const out = await this.run(p, meta, op, { sealed }, {});
+    if (out.repeat) return this.withSecret(out.result, p);
+    return { ...out.result, secret };
   }
 
   /** The newest deliveries first; `before` (a time) pages back. */
@@ -197,10 +268,13 @@ export class IntegrationsService implements OnModuleInit {
     return { items, nextBefore: rows.length > limit ? (items.at(-1)?.createdAt ?? null) : null };
   }
 
-  /** One more try now (a delivered one is sent again, with the same webhook-id). */
-  async retryDelivery(p: Principal, requestId: string, id: string) {
-    const result = await this.write(p, requestId, retryDeliveryOp({ id }), {});
-    if (result.status === 'done')
+  /**
+   * One more try now (a delivered one is sent again, with the same webhook-id). A retry of this
+   * request with the same key tries nothing again.
+   */
+  async retryDelivery(p: Principal, meta: WriteMeta, id: string) {
+    const { result, repeat } = await this.run(p, meta, retryDeliveryOp({ id }), {});
+    if (result.status === 'done' && !repeat)
       await this.deliveriesService.retryNow(result.value as { id: string; attempts: number });
     return result;
   }
@@ -281,11 +355,18 @@ export class IntegrationsService implements OnModuleInit {
   }
 
   /**
-   * A connection: the credentials given, or ones the connector makes (returned once). Either
-   * way they are checked against the connector's schema and sealed for the new row.
+   * A connection: the credentials given, or ones the connector makes (returned). Either way
+   * they are checked against the connector's schema and sealed for the new row. A retry with
+   * the same idempotency-key is the same connection; made credentials are answered again,
+   * read from its sealed row.
    */
-  async createConnection(p: Principal, requestId: string, body: unknown) {
+  async createConnection(p: Principal, meta: WriteMeta, body: unknown) {
     const input = parse(ConnectionCreate, body);
+    const op = createConnectionOp();
+    const made = (out: WriteOutcome) =>
+      input.credentials ? out.result : this.withCredentials(out.result, p);
+    const repeat = await findRepeat(this.db, this.ctx(p, meta), op, input);
+    if (repeat) return made(repeat);
     const c = this.connector(input.connector);
     if (!input.credentials && !c.generate)
       throw new BadRequestException({
@@ -297,20 +378,50 @@ export class IntegrationsService implements OnModuleInit {
     const box = requireSecretBox();
     const id = randomUUID();
     const sealed = box.seal(JSON.stringify(creds.value), connectionAad(p.tenantId ?? '', id));
-    const result = await this.write(p, requestId, createConnectionOp(), {
-      id,
-      connector: c.name,
-      ...(input.label ? { label: input.label } : {}),
-      sealed,
-      public: creds.public,
-    });
-    return generated ? { ...result, credentials: generated } : result;
+    const out = await this.run(
+      p,
+      meta,
+      op,
+      {
+        id,
+        connector: c.name,
+        ...(input.label ? { label: input.label } : {}),
+        sealed,
+        public: creds.public,
+      },
+      input,
+    );
+    if (out.repeat) return made(out);
+    return generated ? { ...out.result, credentials: generated } : out.result;
   }
 
-  async updateConnection(p: Principal, requestId: string, id: string, body: unknown) {
+  /** A repeated create's made credentials, read from the connection's sealed row. */
+  private async withCredentials(result: WriteOutcome['result'], p: Principal) {
+    if (result.status !== 'done') return result;
+    const id = (result.value as { id?: string } | null)?.id;
+    const [row] = id
+      ? await this.db
+          .select()
+          .from(integrationConnections)
+          .where(
+            and(
+              eq(integrationConnections.id, id),
+              eq(integrationConnections.tenantId, p.tenantId ?? ''),
+            ),
+          )
+      : [];
+    if (!row) return result;
+    const plain = requireSecretBox().open(
+      row.credentialsSealed,
+      connectionAad(row.tenantId, row.id),
+    );
+    return { ...result, credentials: JSON.parse(plain) as unknown };
+  }
+
+  async updateConnection(p: Principal, meta: WriteMeta, id: string, body: unknown) {
     const input = parse(ConnectionUpdate, body);
     const { credentials, ...rest } = input;
-    if (!credentials) return this.write(p, requestId, updateConnectionOp({ id }), rest);
+    if (!credentials) return this.write(p, meta, updateConnectionOp({ id }), rest);
     // New credentials are checked against the connection's own connector, then sealed for it.
     // Whether this person may change it at all is the op's to decide (and audit).
     const row = await this.connectionRow(p.tenantId ?? '', id);
@@ -320,15 +431,18 @@ export class IntegrationsService implements OnModuleInit {
       JSON.stringify(creds.value),
       connectionAad(row.tenantId, row.id),
     );
-    return this.write(p, requestId, updateConnectionOp({ id }), {
-      ...rest,
-      sealed,
-      public: creds.public,
-    });
+    const out = await this.run(
+      p,
+      meta,
+      updateConnectionOp({ id }),
+      { ...rest, sealed, public: creds.public },
+      input,
+    );
+    return out.result;
   }
 
-  async deleteConnection(p: Principal, requestId: string, id: string) {
-    return this.write(p, requestId, deleteConnectionOp({ id }), {});
+  async deleteConnection(p: Principal, meta: WriteMeta, id: string) {
+    return this.write(p, meta, deleteConnectionOp({ id }), {});
   }
 
   /** What the connection received, newest first. */

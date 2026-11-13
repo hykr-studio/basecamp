@@ -659,6 +659,45 @@ describe('triggers', () => {
     }
   });
 
+  it('an event that happened before the trigger was saved starts no run; a later one does', async () => {
+    const t = await task(ana, 'Older than the agent');
+    const since = await agent(ana, {
+      name: 'Since',
+      instructions: 'Report what started this run.',
+      triggers: [{ kind: 'event', on: ['task.updated'] }],
+    });
+    try {
+      // A stored event of that task from before the agent, relayed only now (held, or late).
+      const before = `evt-before-${randomUUID()}`;
+      await pool.query(
+        `insert into app.domain_events (id, tenant_id, name, resource_type, resource_id, row,
+           actor_kind, actor_id, occurred_at, available_at, queues)
+         select $1, $2, 'task.updated', 'task', $3, e.row, 'user', $4,
+                now() - interval '1 minute', now(), $5
+           from app.domain_events e where e.resource_id = $3 and e.name = 'task.created'`,
+        [before, tenantId, t.id, ana.id, process.env.BULL_PREFIX],
+      );
+      const later = await ana.call('PATCH', `/api/tasks/${t.id}`, { title: 'Newer' }, inA());
+      expect(later.status).toBe(200);
+      const dedupes = async () =>
+        (
+          await pool.query('select dedupe from app.agent_runs where agent_id = $1', [since.id])
+        ).rows.map((r) => r.dedupe as string);
+      await eventually(async () => ((await dedupes()).length ? true : undefined), 20_000);
+      await eventually(
+        async () =>
+          (await pool.query('select relayed_at from app.domain_events where id = $1', [before]))
+            .rows[0]?.relayed_at ?? undefined,
+      );
+      await new Promise((r) => setTimeout(r, 1500));
+      const all = await dedupes();
+      expect(all).toHaveLength(1);
+      expect(all).not.toContain(`event:${before}`);
+    } finally {
+      await ana.call('PATCH', `/api/agents/${since.id}`, { status: 'paused' }, inA());
+    }
+  });
+
   it('a record’s fields the owner may not read stay out of the run’s data', async () => {
     const theirs = await agent(rex, {
       name: 'Projects (no cost)',

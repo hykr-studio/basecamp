@@ -59,7 +59,7 @@ export class CalendarController {
     @RequestMeta() meta: RequestMetaValue,
     @Body() body: unknown,
   ) {
-    return this.calendar.complete(p, meta.requestId, body);
+    return this.calendar.complete(p, meta, body);
   }
 
   @Get('connections')
@@ -75,7 +75,7 @@ export class CalendarController {
     @RequestMeta() meta: RequestMetaValue,
     @Param('id', uuid) id: string,
   ) {
-    return this.calendar.disconnect(p, meta.requestId, id);
+    return this.calendar.disconnect(p, meta, id);
   }
 
   @Get('busy')
@@ -111,7 +111,7 @@ export class CalendarController {
     @RequestMeta() meta: RequestMetaValue,
     @Body() body: unknown,
   ) {
-    return this.calendar.createFeed(p, meta.requestId, body);
+    return this.calendar.createFeed(p, meta, body);
   }
 
   @Delete('feeds/:id')
@@ -121,7 +121,7 @@ export class CalendarController {
     @RequestMeta() meta: RequestMetaValue,
     @Param('id', uuid) id: string,
   ) {
-    return this.calendar.revokeFeed(p, meta.requestId, id);
+    return this.calendar.revokeFeed(p, meta, id);
   }
 }
 

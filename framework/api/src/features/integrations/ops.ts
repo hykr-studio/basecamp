@@ -217,6 +217,8 @@ export function createEndpointOp(): WriteOp<
           capabilities: input.capabilities,
           secretSealed: input.sealed,
           createdBy: userIdOf(principal) ?? null,
+          // The app's clock, as an event's occurredAt: it gets only events from now on.
+          createdAt: new Date(),
         })
         .returning();
       return {
