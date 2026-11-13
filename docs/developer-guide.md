@@ -1259,8 +1259,11 @@ with it.
 - **Outbound.** `POST /api/integrations/endpoints { url, events: ['task.*'], capabilities? }`
   returns the signing secret. A retry with the same `idempotency-key` is the same endpoint and
   answers the same secret, read back from its sealed row (none is kept with the stored reply), to
-  someone who may still manage it; a rotate, a connection with generated credentials and a
-  delivery retry repeat the same way. A parked create repeated answers without the secret. Each
+  someone who may still manage it, and only while the endpoint is as that write left it (after a
+  later rotation or change, the stored reply without a secret); a rotate, a connection with
+  generated credentials and a delivery retry repeat the same way. A connection's credentials
+  sent in a body are recognised on a retry by a tag keyed from `SECRETS_KEY`, never a plain hash.
+  A parked create repeated answers without the secret. Each
   committed entity event that happened after the endpoint was made becomes one delivery per
   matching endpoint (an event held by an undo window, or relayed late, does not reach an endpoint
   made since): the record projected as the endpoint may read it (it reads as the business's system
@@ -3679,8 +3682,8 @@ These are not built. Each has a workaround for now.
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
 | Seeing failed stored events | A stored event the relay cannot read, or that a subscriber's `when` throws on, is kept with `failed_at` and `error` and logged; no screen or notification shows it. Query `app.domain_events where failed_at is not null`, fix the cause, and clear `failed_at` to relay it again. |
-| Two uploads, cancels or replies at the same moment | A file's presign and discard, a job's cancel and a back-office reply honour `idempotency-key` one after another, but take no lock: two at the same moment with one key can both run (a second pending upload expires unused). A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
-| Retrying a chat turn, a new thread or a link code | `POST /api/chat`, `POST /api/threads` and the WhatsApp link code ignore `idempotency-key`: a retry is a second turn, thread or code. Retry them only when the first answer never came. |
+| Two uploads, cancels, replies or calendar sign-ins at the same moment | A file's presign and discard, a job's cancel, a back-office reply and a calendar sign-in's `complete` honour `idempotency-key` one after another, but take no lock: two at the same moment with one key can both run (a second pending upload expires unused; a second `complete` finds the sign-in used up and answers 400 `calendar_sign_in_invalid`, with one connection and one code exchange). A presign repeated after its upload expired is 409 `upload_expired`. A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
+| Retrying a chat turn, a new thread, a voice session or a WhatsApp link | `POST /api/chat`, `POST /api/threads`, `POST /api/voice/session` and `/end`, the WhatsApp link's code, `verify`, `number` and `DELETE` ignore `idempotency-key`: a retry is a second turn, thread, room token (and `voice.session.start` audit row) or code. Retry them only when the first answer never came. |
 | Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |
 | A summary's view of hiding | The field check reads one record of the reader's scope through `toRead` and assumes a projector hides a field on every record alike. A projector that hides a field on some records only lets a summary over it through. |
 | A summary's scope without a recorder | `listWhere` reads the list's WHERE by running `repo.list` against a connection that records it (`define-entity.ts` gets a `repo.where` when it is next opened). |
