@@ -1472,8 +1472,8 @@ run: async ({ tx, principal, loaded }) => ({
   can act as whoever started it: `ctx.starter()` (refreshed, as an approval's replay) and `ctx.db`. A
   throw is retried (`submitAttempts`, `submitBackoffMs`), then the job fails `submit_failed`. The
   job keeps the error's message (`error.message`, which its starter reads), except a database
-  error's, which is `A database error stopped this work`: the query and its parameters stay in the
-  server's log (`features/jobs/told.ts`). A job
+  error's (drizzle's, or the driver's by its SQLSTATE), which is `A database error stopped this
+  work`: the query and its parameters stay in the server's log (`features/jobs/told.ts`). A job
   stays unsubmitted until `submit` returns, even once its progress says `running`: a throw after
   `ctx.progress`, or a worker that stopped mid-way, is submitted again (the tick picks up the latter
   once its lease runs out), so `submit` must be safe to run twice.
@@ -1731,8 +1731,8 @@ who hears about it are the application's. The sample's `orders` module uses ever
   the holders of the `escalate.notify` capabilities, then runs `escalate.transition` as `systemPrincipal({ job: 'sla.escalate' })`.
   A refused escalation is kept on the clock (`escalationError`). A business's `businessHours`
   settings (`week`, `holidays`, in its `timeZone`) decide what `hours: 'business'` counts; its
-  `sla` settings override a duration by name (`within: { 'orders.decision': '36h' }`) or switch
-  one off (`off`). It changes them with `PATCH /api/settings/sections/businessHours` (open
+  `sla` settings override a duration by name (`within: { 'orders.decision': '36h' }`, ten years at
+  most) or switch one off (`off`). It changes them with `PATCH /api/settings/sections/businessHours` (open
   intervals of a day may not overlap), `…/sla` (only declared SLA names) and its time zone with
   `…/general`; a clock started after the change counts with them. `GET /api/sla/<plural>/:id` and `GET /api/sla?status=breached` read clocks on
   records the caller reads (`&open=true`: only those whose record is still in the state, i.e.
@@ -2863,7 +2863,8 @@ audited there with `on_behalf_of = operator:<id>`.
   WhatsApp message is not answered by the platform's assistant, an unrouted one is.
 - **Usage.** `GET /api/platform/usage?from&to&tenantId&after&limit` sums each business's meters
   (quantities and credits as recorded) and its wallet's top-ups, grants and debits over UTC days
-  (the current month by default, a year at most). No plan or price is read.
+  (the current month by default, a year at most; a day Postgres cannot store, or a `from` whose
+  default end would be in the year 10000, is 400). No plan or price is read.
 - **The back office.** An operator signs in even without a business: the Operator screen
   (`OperatorScreen`, route `/operator`) has businesses, support access ("Work here" sends the
   business's id until "Stop"), usage, routed requests and operators. A business's people get the
@@ -3886,7 +3887,7 @@ These are not built. Each has a workaround for now.
 | Voice tests without a key | `pnpm test` runs `framework/api/test/framework/voice.e2e.test.ts` and `application/api/test/voice/say.e2e.test.ts`. They need `VOICE_AGENT_KEY` (worker calls send `x-agent-key: process.env.VOICE_AGENT_KEY ?? ''`) and have no skip guard. CI sets the key in `ci.yml`; locally, set it in `.env` or these tests fail. |
 | Paging within one millisecond | A list sorted by a timestamp (`createdAt`, a common sort) keeps each row's time in its cursor as a JavaScript `Date`, to the millisecond, while `defaultNow()` stores microseconds. Rows written within the same millisecond can repeat or be skipped at a page boundary; so can the inbox, comments and agent runs, whose keyset cursors do the same. The SLA list avoids it by keeping Postgres's own text (`to_char(… 'US')`, docs/decisions/S3.md). Until list cursors do the same: sort by a column whose values differ by more than a millisecond, or truncate a table's stored times to milliseconds (`default date_trunc('milliseconds', now())`); the id the cursor also keeps does not help, since the cut itself is a millisecond early. |
 | A webhook that carries a NUL character | A signed inbound webhook (WhatsApp, an integration's `/webhooks/...`, a job callback) whose JSON holds U+0000 (or half of a surrogate pair) is refused 400, whole, at the request edge before its signature is read, as every request is: none of that delivery's events is stored (before, the ones ahead of it were, and the request failed with a 500), and the sender retries it until it gives up. Postgres's jsonb cannot store the character, and a connector cannot strip it, since the check runs before its `parse` (`docs/decisions/V10.md`). |
-| A written value its column cannot hold | A body's value that the entity's schema takes and its column refuses is a 500, not a 400: a date or time in the year 0000 (`z.iso.date()` and `z.iso.datetime()` take it; `POST /api/tasks { dueOn: '0000-01-01' }` on the fixture), or a number past its column's range (`z.number().int()` on an `integer` column, `rank: 1e12`). The framework's own body times found so far (an agent's `once`, a call's `startedAt` and `endedAt`) read through `storableDateTime`. The importer already reports such a row `invalid`. Until the write path checks values against their columns before a write can wait: bound such fields in the schema (`storableDateTime()`, `storableDate()` from `@hykr/contracts`, `.max(2147483647)` on an integer) (`docs/decisions/V10.md`). |
+| A written value its column cannot hold | A body's value that the entity's schema takes and its column refuses is a 500, not a 400: a date or time in the year 0000 (`z.iso.date()` and `z.iso.datetime()` take it; `POST /api/tasks { dueOn: '0000-01-01' }` on the fixture), or a number past its column's range (`z.number().int()` on an `integer` column, `rank: 1e12`). The framework's own body times found so far (an agent's `once`, a call's `startedAt` and `endedAt`) and the sample's (a brief's `neededBy`, the public form's included, a to-do's `dueOn`, a meeting's times, an action item's `dueOn`) read through `storableDateTime` and `storableDate`; the fixture's `dueOn` is left bare as the example. The importer already reports such a row `invalid`. Until the write path checks values against their columns before a write can wait: bound such fields in the schema (`storableDateTime()`, `storableDate()` from `@hykr/contracts`, `.max(2147483647)` on an integer) (`docs/decisions/V10.md`). |
 | Finding a key that skips the business | Nothing at boot or in lint finds a drizzle foreign key to a table with `tenant_id` whose field is not declared in `traits.references`: such a key checks only that the id exists in some business. Review each `.references(() => x.id)` against section 5.2 (`docs/decisions/V2.md`). |
 | Process-wide prototype hardening | Each place that nests or merges keys someone sends builds objects with no prototype or skips a name every object has (docs/decisions/V1.md). Node's `--disable-proto=delete` or a frozen `Object.prototype` is not set for the API and worker, because every dependency would run under it. Never write a key from a request into a plain `{}` by assignment. |
 
