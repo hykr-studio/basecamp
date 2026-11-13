@@ -522,8 +522,8 @@ export class PrivacyService implements PrivacyIntake, OnApplicationBootstrap {
               };
             afterCommit.push(...done.afterCommit);
           }
-          const framework = await eraseFramework(tx, ids);
-          framework.contacts = await deleteContacts(tx, ids);
+          const framework = await eraseFramework(tx, ids, erased);
+          framework.contacts = await deleteContacts(tx, ids, erased);
           for (const contactId of ids.contactIds)
             await writeAudit(tx, {
               ...auditCtx(

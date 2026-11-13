@@ -2132,21 +2132,26 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
   `features/<kind>` (every export contributor) and their earlier requests. Among the features'
   parts: `calendarConnections`, `calendarEvents`, `calendarFeeds` and `calendarInvites` (never
   a sealed token), `calls` (the calls they were on: as the member, or by their contact's number),
-  `acceptances` (their evidence, in full) and `otpChallenges` (the codes sent to them, never a
-  code's hash). Stored webhook bodies and inbound payloads are not in a copy (section 14).
+  `acceptances` (their evidence, in full), `otpChallenges` (the codes sent to them, never a
+  code's hash) and `invites` (the business's invitations to them, never a token's hash). Stored webhook bodies and inbound payloads are not in a copy (section 14).
 - **Erasure** is one transaction, through `runWrite` as the system principal (audited
   `privacy.erase` and `privacy.erased`): declared records deleted, anonymised or counted as kept;
   every erasure contributor (files, comments, memory, documents, jobs, parties, push, inbox,
   calendars, calls, the integration bus, acceptance, the WhatsApp channel's trail); threads, pages,
   links, pending approvals, the outside clients (MCP) the person allowed here, the membership,
-  customer records and contacts; the `mastra` and `mastra_obs` rows of their runs; their earlier
+  customer records and contacts; the `mastra` and `mastra_obs` rows of their runs (the scorers'
+  results in `mastra.mastra_scorers` and the scorers' own traces included); their earlier
   archives. A contributor returns `{ count, erased?, kept?, afterCommit? }` (`ErasureResult`):
   records whose copies are redacted like declared ones, data it keeps on purpose
   (`outcome.kept`, with a `keepReason` code), and work outside the database once the erasure has
   committed (a calendar's grant revoked at Google; best effort). The later features
   (`docs/decisions/H4.md`) do the following:
-  - Calendars: the person's connections and their tokens, event links and push channel, their
-    feeds, their sign-ins and the invites sent to them are deleted, then cleaned up at Google.
+  - Calendars: the person's connections and their tokens, event links and push channel (its
+    inbound connection's label too), their feeds, their sign-ins and the invites sent to them are
+    deleted, then cleaned up at Google.
+  - Members: the business's invitations to the person's email, or accepted by them, are deleted
+    (`members.invites` on the register).
+  - Files: what they sent is erased, and the `file.*` audit rows lose its name.
   - Calls: a contact's number, the call's notes and its error leave each call with them; a member
     is unlinked from their calls and loses their own number on them.
   - The integration bus: stored webhook bodies and inbound payloads lose values that are the
@@ -2156,7 +2161,13 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
     goes.
   **Audit redaction** then takes the erased records' personal fields out of `audit.events`
   before and after, `app.domain_events`, `app.approvals` (and its summary), `app.outbox` and
-  `channel.messages` copies, keeping every row and id, and erases their files and memory vectors.
+  `channel.messages` copies, keeping every row and id, and erases their files (whose names leave
+  the files' own audit rows) and memory vectors. A copy is found by the record's id at any depth
+  (a reply's nested record, a notification's rows, an order's lines). An approval is about the
+  record when it is on it or its input names it (by `id`, `<type>Id`, or the set's `refs`: a
+  comment's commands park on the record the comment is on); it loses its summary and the input's
+  fields in every copy (its audit rows and stored events, its notification, its parked reply and
+  its park's row). A record that only references an erased one keeps its own fields.
   Each feature's own copies follow (`recordCopies`): the integration bus takes the fields out of
   the records' stored webhook bodies, drops the receivers' answers to them, and empties an
   inbound event whose handler wrote one of them. Retention redacts the same way.
@@ -3682,7 +3693,7 @@ These are not built. Each has a workaround for now.
 | Large data exports | An export is built in the worker's memory, one entity at a time, and fails `too_large` past `FILES_MAX_BYTES` (compressed): raise the limit, or export a few entities at a time (`only`). |
 | Telling someone an export is ready, export retention | Nothing notifies the person; the export screen polls. Archives stay until "delete my data" (B11). A person's copy of their own data (section 5.27) expires with `privacy.archives`. |
 | Correction, nomination, grievances, a breach log | Privacy requests are `export` and `erase` only. Record the rest outside the product. |
-| Copies erasure does not reach | BullMQ's kept jobs (`removeOnComplete`, `removeOnFail`) still hold their data until they are trimmed; other people's conversation messages that quoted the person stay; backups are the deployment's. |
+| Copies erasure does not reach | BullMQ's kept jobs (`removeOnComplete`, `removeOnFail`) still hold their data until they are trimmed; other people's conversation messages that quoted the person stay; backups are the deployment's. An approval of a parked create names no record (it did not exist yet), so erasing the record it made leaves the approval's input; a park's summary on another record stays unless the approval names the erased record by id (`docs/decisions/V3.md`). Mastra writes a turn's spans and scores after the turn: an erasure in the seconds after the person's last turn can miss them, until `assistant.traces` retention removes them. |
 | Checking who asks before a copy is released | A signed-in person's own request runs as they are; there is no OTP step, and the copy is not sent on WhatsApp or by email. The team downloads it for a contact. |
 | A privacy tool for the assistant | Requests are filed by people (the app, the back office, WhatsApp's keyword). |
 | Retention of the later features' logs | Webhook deliveries, attempts and inbound events, the call log and calendar invites have no retention target: they stay until erasure, or until their endpoint or connection is deleted (`docs/decisions/H4.md`). |

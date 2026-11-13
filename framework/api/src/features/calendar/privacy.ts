@@ -115,6 +115,13 @@ export const calendarErasure: ErasureContributor = {
         fields: ['account', 'lastError'],
         deleted: true,
       },
+      // The push channel's inbound connection: its label names the account.
+      {
+        type: 'integration_connection',
+        ids: connections.flatMap((c) => (c.inboundConnectionId ? [c.inboundConnectionId] : [])),
+        fields: ['label', 'public'],
+        deleted: true,
+      },
       { type: 'calendarFeed', ids: feeds.map((f) => f.id), fields: ['label'], deleted: true },
       {
         type: 'calendarInvite',

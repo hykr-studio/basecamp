@@ -26,6 +26,7 @@ import {
   verification,
 } from '@hykr/db';
 import { and, asc, eq, inArray, isNotNull, or, type SQL } from 'drizzle-orm';
+import type { ErasedRecords } from '../../hooks.js';
 import type { Identities } from './subject.js';
 
 type Values = Record<string, unknown>;
@@ -251,9 +252,14 @@ export async function forgetGrants(tx: Tx, userId: string, tenantId?: string): P
  * The account's part of an erasure here: saved pages, WhatsApp links, threads (their messages go
  * with them), approvals left pending, customer records (anonymised, unlinked), the outside
  * clients they allowed here (consents and tokens) and the membership. The contacts go last, after
- * every contributor (`deleteContacts`).
+ * every contributor (`deleteContacts`). The pages and customer records whose copies lose their
+ * words are added to `erased`.
  */
-export async function eraseFramework(tx: Tx, ids: Identities): Promise<Record<string, number>> {
+export async function eraseFramework(
+  tx: Tx,
+  ids: Identities,
+  erased: ErasedRecords[] = [],
+): Promise<Record<string, number>> {
   const t = ids.tenantId;
   const out: Record<string, number> = {};
   const theirThreads = threadsOf(ids);
@@ -261,12 +267,17 @@ export async function eraseFramework(tx: Tx, ids: Identities): Promise<Record<st
     out.threads = count(await tx.delete(threads).where(theirThreads).returning({ id: threads.id }));
   if (!ids.userId) return out;
   const u = ids.userId;
-  out.pages = count(
-    await tx
-      .delete(pages)
-      .where(and(eq(pages.tenantId, t), eq(pages.ownerId, u)))
-      .returning({ id: pages.id }),
-  );
+  const pagesGone = await tx
+    .delete(pages)
+    .where(and(eq(pages.tenantId, t), eq(pages.ownerId, u)))
+    .returning({ id: pages.id });
+  out.pages = pagesGone.length;
+  erased.push({
+    type: 'page',
+    ids: pagesGone.map((r) => r.id),
+    fields: ['name', 'spec'],
+    deleted: true,
+  });
   out.links = count(
     await tx
       .delete(channelLinks)
@@ -281,13 +292,13 @@ export async function eraseFramework(tx: Tx, ids: Identities): Promise<Record<st
       )
       .returning({ id: approvals.id }),
   );
-  out.customers = count(
-    await tx
-      .update(customers)
-      .set({ displayName: ERASED_CUSTOMER, userId: null })
-      .where(and(eq(customers.tenantId, t), eq(customers.userId, u)))
-      .returning({ id: customers.id }),
-  );
+  const unlinked = await tx
+    .update(customers)
+    .set({ displayName: ERASED_CUSTOMER, userId: null })
+    .where(and(eq(customers.tenantId, t), eq(customers.userId, u)))
+    .returning({ id: customers.id });
+  out.customers = unlinked.length;
+  erased.push({ type: 'customer', ids: unlinked.map((r) => r.id), fields: ['displayName'] });
   out.oauth = await forgetGrants(tx, u, t);
   out.memberships = count(
     await tx
@@ -299,14 +310,24 @@ export async function eraseFramework(tx: Tx, ids: Identities): Promise<Record<st
 }
 
 /** The contacts themselves: consents, messages, handoffs and their own threads go with them. */
-export async function deleteContacts(tx: Tx, ids: Identities): Promise<number> {
+export async function deleteContacts(
+  tx: Tx,
+  ids: Identities,
+  erased: ErasedRecords[] = [],
+): Promise<number> {
   if (!ids.contactIds.length) return 0;
-  return count(
-    await tx
-      .delete(contacts)
-      .where(and(eq(contacts.tenantId, ids.tenantId), inArray(contacts.id, ids.contactIds)))
-      .returning({ id: contacts.id }),
-  );
+  const gone = await tx
+    .delete(contacts)
+    .where(and(eq(contacts.tenantId, ids.tenantId), inArray(contacts.id, ids.contactIds)))
+    .returning({ id: contacts.id });
+  // Their copies: the number, the name, and a consent's note (`channel.consent.recorded`).
+  erased.push({
+    type: 'contact',
+    ids: gone.map((r) => r.id),
+    fields: ['address', 'displayName', 'note'],
+    deleted: true,
+  });
+  return gone.length;
 }
 
 /** The email an erased account keeps: unique, and never delivered. */

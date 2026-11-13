@@ -364,6 +364,11 @@ export interface ErasedRecords {
   fields: readonly string[];
   /** The records are gone (all their files go), not only blanked. */
   deleted?: boolean;
+  /**
+   * Keys a command's input names these records by, besides `id` and `<type>Id`: an approval
+   * whose input names one loses these fields there, in every copy of it.
+   */
+  refs?: readonly string[];
 }
 
 /** Personal data a feature keeps on purpose when its person is forgotten, counted as evidence. */
