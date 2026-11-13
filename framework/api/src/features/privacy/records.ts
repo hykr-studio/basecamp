@@ -8,6 +8,7 @@ import {
   subjectColumnsOf,
 } from '@hykr/contracts';
 import { type AnyEntityDef, type Conn, entityDefs, type Tx, toJson } from '@hykr/core';
+import { approvals } from '@hykr/db';
 import {
   and,
   type Column,
@@ -16,13 +17,15 @@ import {
   inArray,
   isNotNull,
   lt,
+  ne,
   or,
   type SQL,
   sql,
   type Table,
 } from 'drizzle-orm';
 import type { ErasedRecords } from '../../hooks.js';
-import { auditedWith } from '../../privacy/contributors.js';
+import { approvalCopies, auditedWith } from '../../privacy/contributors.js';
+import { copyTarget, scrubInput } from './redact.js';
 import type { RetentionTarget } from './registry.js';
 import type { Identities } from './subject.js';
 
@@ -222,9 +225,45 @@ async function before(
 }
 
 /**
+ * The requests on this entity whose input names them by a subject column (`{ contactId }`): a
+ * parked create of one of their records, or a write that would hand a record to them. Deciding
+ * one still waiting would make their record again, so it is deleted; a decided one stays, without
+ * its summary and the trait's fields in its input. Either way its copies (audit rows, events,
+ * notification, kept reply, a decider's inbox item) lose what was asked (decisions V8).
+ */
+async function asked(tx: Tx, pe: PersonalEntity, ids: Identities): Promise<ErasedRecords[]> {
+  const contains = naming(pe, ids);
+  if (!contains.length) return [];
+  const about = and(
+    eq(approvals.tenantId, ids.tenantId),
+    eq(approvals.resourceType, pe.def.name),
+    or(...contains.map((c) => sql`${approvals.payload} -> 'input' @> ${JSON.stringify(c)}::jsonb`)),
+  ) as SQL;
+  const waiting = await tx
+    .delete(approvals)
+    .where(and(about, eq(approvals.status, 'pending')))
+    .returning({ id: approvals.id });
+  const decided = await tx
+    .select({ id: approvals.id, payload: approvals.payload })
+    .from(approvals)
+    .where(and(about, ne(approvals.status, 'pending')));
+  const t = copyTarget({ type: pe.def.name, ids: [], fields: pe.trait.fields });
+  for (const row of decided) {
+    const payload = (row.payload ?? {}) as Values;
+    await tx
+      .update(approvals)
+      .set({ summary: null, payload: { ...payload, input: scrubInput(payload.input, t, true) } })
+      .where(eq(approvals.id, row.id));
+  }
+  const all = [...waiting, ...decided].map((r) => r.id);
+  return all.length ? [approvalCopies(all)] : [];
+}
+
+/**
  * Forget this person in every declared entity: delete, anonymise or keep (counted, with the
  * reason) as each trait says. The copies of their records deleted or moved to someone else
- * before go too (`before`); the counts are of the records there now.
+ * before go too (`before`), and the requests that would make one again (`asked`); the counts are
+ * of the records there now.
  */
 export async function eraseRecords(
   tx: Tx,
@@ -246,6 +285,7 @@ export async function eraseRecords(
     }
     const done = await apply(tx, pe, where, pe.trait.erase);
     erased.push(...(await before(tx, pe, ids, new Set(done?.ids ?? []))));
+    erased.push(...(await asked(tx, pe, ids)));
     if (!done) continue;
     erased.push(done);
     outcome[pe.def.plural] =

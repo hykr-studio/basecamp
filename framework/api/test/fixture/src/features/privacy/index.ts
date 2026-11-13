@@ -227,16 +227,17 @@ export const UndoLevel = defineApprovalLevel({
 
 /**
  * Only for the callers a test marks: deleting a caller whose name says "(undoable)" can be
- * undone, and renaming one to a name that says "(waits)" waits for a decider (decisions V8).
+ * undone, and logging or renaming one with a name that says "(waits)" waits for a decider
+ * (decisions V8).
  */
 export const CallerLevels = defineLevelRule({
   name: 'fixture.callers',
-  on: ['caller.delete', 'caller.update'],
+  on: ['caller.create', 'caller.delete', 'caller.update'],
   decide: ({ op, input, row }) => {
     if (op.name === 'caller.delete' && String(row?.caller ?? '').includes('(undoable)'))
       return atLevel(UndoLevel.name, 'caller_undoable', 'A caller marked so can be undone');
-    if (op.name === 'caller.update' && String(input?.caller ?? '').includes('(waits)'))
-      return atLevel(ForgetLevel.name, 'caller_waits', 'A rename marked so waits');
+    if (op.name !== 'caller.delete' && String(input?.caller ?? '').includes('(waits)'))
+      return atLevel(ForgetLevel.name, 'caller_waits', 'A caller marked so waits');
     return null;
   },
 });
