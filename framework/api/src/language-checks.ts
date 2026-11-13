@@ -4,6 +4,7 @@
 // language's WhatsApp keywords name a keyword. A missing language is not a problem: it reads in
 // English.
 import { keywordProblems } from '@hykr/channels';
+import type { Contributions } from '@hykr/contracts';
 import type { Labels, Languages } from '@hykr/i18n';
 import { languageProblems } from '@hykr/ui-registry';
 import type { ModuleDef } from './module.js';
@@ -17,6 +18,8 @@ export function languageCheckProblems(input: {
   modules: readonly ModuleDef[];
   languages: Languages;
   does?: Labels;
+  /** The server's own contributions (its meters' labels). */
+  contributes?: Partial<Contributions>;
 }): string[] {
   const { modules, languages: set } = input;
   const problems = [
@@ -45,5 +48,14 @@ export function languageCheckProblems(input: {
           `${m.name}: the voice eval case "${c.why}" is in "${c.lang}", not one of the application's languages`,
         );
   }
+  // What a meter is called, where a refusal and the credits screen name it.
+  const meters = [
+    ...modules.flatMap((m) =>
+      (m.contributes?.meters ?? []).map((meter) => ({ by: m.name, meter })),
+    ),
+    ...(input.contributes?.meters ?? []).map((meter) => ({ by: 'the server', meter })),
+  ];
+  for (const { by, meter } of meters)
+    problems.push(...undeclared(set, meter.label, `${by}: the meter ${meter.name}'s label`));
   return problems;
 }

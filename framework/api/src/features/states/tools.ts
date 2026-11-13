@@ -1,4 +1,10 @@
-import { type EntitySpec, type Present, statesOf, type WriteResult } from '@hykr/contracts';
+import {
+  type EntitySpec,
+  type Present,
+  statesOf,
+  transitionToolId,
+  type WriteResult,
+} from '@hykr/contracts';
 import { safely, type ToolContribution } from '@hykr/core/tools';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
@@ -60,7 +66,7 @@ export const transitionTools: ToolContribution = {
           .filter((f) => update[f])
           .map((f) => [f, (update[f] as z.ZodType).optional()]),
       );
-      const id = `transition-${spec.plural}`;
+      const id = transitionToolId(spec);
       out[id] = createTool({
         id,
         description: `Move a ${spec.label} to another ${trait.field} by one of its transitions. Moves: ${moves(spec)}. Send the ${spec.label}'s id (from list-${spec.plural}) and the transition's name. A move that waits returns { status: "needs_approval", approval }: tell the user what is waiting.`,

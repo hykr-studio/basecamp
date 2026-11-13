@@ -3032,6 +3032,12 @@ Add it to the module's `<name>Views.views`. `createUiRegistry` refuses a spoken 
 
 On WhatsApp a list's rows (two or more) go as buttons or a list to tap, headed by the view's heading: the `title` it was shown with, else its `labels.title` in the turn's language (the text intent's `heading`). A view with neither is headed by its whole text, so give a list view a `labels.title`; its `text` need not start with one.
 
+A lookup is not the answer. The assistant reads before it writes or opens ("delete Tiles": `list-todos`, then `delete-todo`; "open Site review": `list-meetings`, then `get-meeting` or `canvas-open`), and that read's view is how it found the record, not what it tells the person. So a read whose view (`inline` or `text`) comes before either of these in the same turn shows nothing on any channel:
+- a write, whatever it answered: done, waiting for approval, a resumed run's decision, refused by the API, or its input refused by the tool. A call is a write by its tool, the catalog's `writeToolIds` (creates, updates, deletes, commands, transitions), or, for a contributed tool the catalog does not list, by its result;
+- a later call that showed or opened one of the records the read listed (a record's view, its words, a screen opened on it).
+
+The turn's `toolCalls` carry no `present` for a lookup (WhatsApp words nothing of it, and no "No orders." follows a waiting line), the saved thread keeps none, and the app hides its view as soon as the write is called or the record shows (`useLookup`). The rule is `lookupsIn` in `@hykr/contracts`. A read with neither after it is the answer and shows: one list, several lists ("today"), a list before a refused read. A canvas a call opened is not a view, so it always applies.
+
 Bind it to a component in the app, in its app module's `bind` (`application/mobile/src/modules/todos/index.tsx`):
 
 ```ts
@@ -3104,8 +3110,10 @@ Every business's use of what costs money is metered, priced and, when its plan s
   category as variant), `voice_seconds` (a reported voice session) and `embedding_tokens` (memory
   recall and indexing, the embedding model as variant; section 7.7). Each use is a row in
   `app.usage_events`, added to its period's counter (`app.usage_counters`). A feature or module adds
-  a meter with `defineMeter({ name, unit, per, fallbackPrice? })` (contributed as `meters`) and
-  records with `CreditsService.record({ tenantId, meter, quantity, source, ref })`, or
+  a meter with `defineMeter({ name, unit, per, label?, fallbackPrice? })` (contributed as
+  `meters`; `label` is what people call it, as `Labels` in the application's languages, which
+  `defineServer` checks like every other word, and the framework's own meters are named in its
+  phrases, `credits.meter.*`) and records with `CreditsService.record({ tenantId, meter, quantity, source, ref })`, or
   `metering()?.record(...)` from code that must not depend on the feature; `ref` makes a retried
   report count once. Inside a command's `run`, pass the write's transaction,
   `record(use, { tx })`: the uses are recorded in a savepoint of it, on its connection, and go
@@ -3129,7 +3137,9 @@ Every business's use of what costs money is metered, priced and, when its plan s
   `alertAt` (`PUT /api/credits/alerts`, `credits.manage`).
 - **Budget and wallet.** On credits, a period's spending uses the allowance first, then the
   prepaid wallet (`app.credit_wallets`, every change a row in `app.credit_ledger`). Used per cent is
-  spent over spent plus what is left. At `alertAt` of a cap (the budget or a meter's limit) the
+  spent over spent plus what is left, at most 100: one use past what was left takes the wallet
+  below zero (below) and reads 100%, in the reason, the status and an alert. The levels follow
+  the real numbers, so a `pauseAt` past 100 still pauses. At `alertAt` of a cap (the budget or a meter's limit) the
   named event `credits.threshold` (`{ cap, level: 'alert' | 'pause', usedPercent, threshold }`) is
   stored in the outbox and published, once per period and level (a meter's limit that stops
   nothing under the plan, `messages` with no kind in `pauseMessages`, raises neither level); the application's notification
@@ -3147,6 +3157,22 @@ Every business's use of what costs money is metered, priced and, when its plan s
   voice relay is not), so a run that crosses the cap stops there: the assistant ends it with the
   paused sentence (`EndWhenPaused`) instead of carrying on. One action may overshoot the cap; the
   wallet goes below zero by that much.
+- **In people's words.** A refusal's `reason` names a meter by its label (`meterLabel`), never
+  its name in the code: "Assistant actions: this period's limit is reached". It is in the
+  reader's language: `GET /api/credits?lang=` and the operator's `GET …/:tenantId?lang=` (each
+  meter's `label` too), a refused turn's language, a pinned voice session's; English where the
+  caller names none (an agent's call, a recall's 402). The app sends no turn language, so its
+  thread words a turn the credits refused itself, in its own language, with the sentence every
+  other channel says: `credits.paused`, or `credits.suspended` for the operator's pause, which
+  adding credits does not lift (`pausedSentenceKey(rule)`, `@hykr/contracts`: WhatsApp's paused
+  turn, `EndWhenPaused`, the app's thread and its voice). The ledger
+  (`GET /api/credits/ledger?lang=`, and the operator's) words a debit when it is read, from the
+  use it paid for: `use: { meter, label, quantity }`, never its stored note, which names the
+  meter in the code. A meter's `credits.threshold` event carries
+  its `label` in every language, so the application's alert can name a module's meter. One use
+  that passes both levels of a cap at once (a limit of 1, a long voice session) says only the
+  pause: the alert's row is stored and its event is not sent, so "low" never comes with "limit
+  reached", or after it.
 - **The operator** is a platform operator holding `platform.credits` (section 6.6), signed in:
   `GET /api/credits/operator/:tenantId` (full status) and `/ledger`, `PUT …/settings` (the
   plan), `PUT …/override` (`{ override: { mode: 'run' | 'pause', until?, reason } }` or `null`) and
@@ -3813,7 +3839,7 @@ These are not built. Each has a workaround for now.
 | A transaction that reaches the pool | The rule (section 5.8): nothing inside a transaction waits for a second pooled connection, and the framework's suite and the sample's run with every pool at one connection to hold it for what they exercise. Nothing checks an application's `run`, hooks, plugins and helpers at compile time or at start, and CI does not run at one connection. Run the application's suite that way yourself (`NODE_OPTIONS="--import ../../framework/api/test/one-connection.mjs" pnpm vitest run` in `application/api`; the file says how to read what it logs) to find a site: it then fails its test instead of stalling the API. |
 | Routing rules, keeping unrouted requests | The framework asks the application's `inboundRouters`; it keeps what happened to a request (`app.platform_routed`), not what it said. An operator cannot assign an unrouted request by hand. |
 | Suspending a business, plans and prices | Operators make, rename and switch flags of a business, and set its credits (section 7.6). Nothing suspends or deletes one; billing is the application's. |
-| The paused sentence for a usage limit | A turn refused by a `tokens` or `tool_calls` limit still says the business has used its credits and someone can add more (`credits.paused`, also said by `EndWhenPaused`). Its `rule` (`usage_limit_reached`) and `GET /api/credits` say it is a limit: raise it in the operator's plan, or wait for the next period. The credits screen shows a refusal's `reason` as the server wrote it, in English, inside its localized "Paused: …" line. |
+| The paused sentence for a usage limit | A turn refused by a `tokens` or `tool_calls` limit still says the business has used its credits and someone can add more (`credits.paused`, also said by `EndWhenPaused`). Its `rule` (`usage_limit_reached`) and `GET /api/credits` say it is a limit: raise it in the operator's plan, or wait for the next period. |
 | Telling the approver that the marketing cap dropped a send | A marketing message past the contact's weekly cap (`general.marketingPerWeek`) is dropped and only logged, also after someone approved it. Check the contact's sends this week before approving. |
 | Bull Board in production | It is mounted outside production only, for operators holding `platform.queues`. |
 | Support in history and events | `audit.events.on_behalf_of` marks support and operator writes, but the history screen does not label them, and stored events carry only the actor. Read a grant's activity (`GET /api/support-access/:id/activity`) or the audit. |
@@ -3878,6 +3904,9 @@ These are not built. Each has a workaround for now.
 | Memory recall at scale | Recall compares every vector of one business (no approximate index), and the compose and CI images have no pgvector, so it runs on `app.memory_cosine`. Fine for thousands of memories per business; beyond that, install pgvector and add an index. |
 | Memory of the record on screen | A turn's recall does not prefer memory of the record the person is looking at. Ask with `recall-memory` and `about`. |
 | Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it. Its `memory` settings are edited as JSON on the back office's Settings screen. |
+| A limit's alert past 100% | A plan that pauses a meter above its limit (`pauseAt` over 100) can send the sample's "low" alert at, say, 120%, still worded "At the limit it pauses". The event carries no `pauseAt`, so the alert cannot say when it will pause. Keep `pauseAt` at 100 for limits, or word the alert as past the limit when `usedPercent` is 100 or more (a new template). The budget's share stops at 100, so under such a plan its alert reads "100% used" while the wallet goes below zero, and the credits screen's bar never takes the pause's colour (the paused banner still shows). |
+| A credits refusal to an agent, in the person's language | An agent's call the credits refuse (402), and a recall's 402, give their reason in English: an agent's call carries no language. The turn still ends with the paused sentence in its own language (`EndWhenPaused`). |
+| A lookup before a contributed tool's refused write | A write tool a module contributes (`toolContributions`) is not in the catalog's `writeToolIds`, so a list before its refused call still shows; a done or waiting call of it is known by its result. The generated, command and transition tools are all known. |
 | Settings screens | Every editable section (section 5.18) has the API and client methods, and the back office edits each as JSON; neither app has a form per section. |
 | Settings across processes | A settings change drops the cached copy of the process that made it; other processes keep theirs up to 10 s. Approvals and SLA clocks read settings in the write's transaction, so they are never late. |
 | Memory timings | The indexer gives the embedding provider 30 s per batch and takes over a claim after 120 s; recall gives it 4 s per turn (1.5 s on voice). All are constants in `features/memory/` (`indexer.ts`, `recall.service.ts`), not deployment settings. |

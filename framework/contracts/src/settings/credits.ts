@@ -1,3 +1,4 @@
+import type { Labels } from '@hykr/i18n';
 import { z } from 'zod';
 import { defineCapability } from '../roles.js';
 import { defineSettingsSection } from './sections.js';
@@ -119,6 +120,15 @@ export const UsageRefusalRule = z.enum([
 ]);
 export type UsageRefusalRule = z.infer<typeof UsageRefusalRule>;
 
+/**
+ * The sentence (an i18n key) people are told when a credits rule stops the assistant: the
+ * operator's pause has its own, since adding credits does not lift it; every other rule (the
+ * credits used, a limit reached) says the paused sentence. WhatsApp's paused turn, a run ended
+ * mid-way, the app's thread and its voice share it.
+ */
+export const pausedSentenceKey = (rule: unknown): 'credits.suspended' | 'credits.paused' =>
+  rule === 'credits_suspended' ? 'credits.suspended' : 'credits.paused';
+
 export interface UsageRefusal {
   rule: UsageRefusalRule;
   reason: string;
@@ -129,6 +139,8 @@ export interface UsageRefusal {
 /** One meter in a period, as `GET /api/credits` shows it. */
 export interface MeterStatus {
   meter: string;
+  /** The meter as people call it, in the reader's language (`?lang=`): 'Assistant actions'. */
+  label: string;
   unit: string;
   /** Used this period, in base units. */
   quantity: number;
@@ -157,7 +169,10 @@ export interface CreditsStatus {
    * turns run. A limit on another meter refuses only that meter's use: see `meters`.
    */
   paused: UsageRefusal | null;
-  /** Of the budget (allowance + wallet); null without a budget. */
+  /**
+   * Of the budget (allowance + wallet), at most 100: one use past what was left takes the wallet
+   * below zero and reads as all of it. Null without a budget.
+   */
   usedPercent: number | null;
   alertAt: number;
   pauseAt: number;
@@ -184,7 +199,13 @@ export interface LedgerEntry {
   currency: string;
   /** What it was for: a purchase, a use. */
   ref: string | null;
+  /** Words written with it (a grant's, a top-up's). A debit has none: see `use`. */
   note: string | null;
+  /**
+   * A debit's use, worded when read: its meter (`meter` as the code names it, `label` as people
+   * call it, in the reader's language) and how much, in the meter's base unit.
+   */
+  use?: { meter: string; label: string; quantity: number };
   actor: { kind: string; id: string };
   at: string;
 }
@@ -241,5 +262,11 @@ export interface CreditsThresholdRow {
   usedPercent: number;
   threshold: number;
   periodStart: string;
+  /**
+   * A meter's cap as people call it, in each of the application's languages (the label the meter
+   * declares, or the framework's phrase for its own): an alert never says 'tool_calls'. Absent
+   * for the budget (`cap: 'credits'`), which the application words itself.
+   */
+  label?: Labels;
   [key: string]: unknown;
 }

@@ -118,6 +118,35 @@ export const commandToolId = (spec: CommandSpec): string | undefined =>
 
 const WRITES: readonly WriteAction[] = ['create', 'update', 'delete'];
 
+/** The tool an entity with states gives the agent to move a record (the `states` feature). */
+export const transitionToolId = (spec: Pick<EntitySpec, 'plural'>): string =>
+  `transition-${spec.plural}`;
+
+const writeTools = new WeakMap<object, ReadonlySet<string>>();
+
+/**
+ * Every tool of the catalog that writes, whatever its call answered: an entity's create, update
+ * and delete, each command's tool, and the transition tool of an entity with a move the assistant
+ * may ask for. A call of one is a write even when it was refused, or its input was (`lookupsIn`).
+ */
+export function writeToolIds(catalog: Pick<Catalog, 'entities' | 'commands'>): ReadonlySet<string> {
+  const known = writeTools.get(catalog);
+  if (known) return known;
+  const ids = new Set<string>();
+  for (const spec of Object.values(catalog.entities) as EntitySpec[]) {
+    for (const action of WRITES)
+      if (spec.expose[action] === 'all') ids.add(`${action}-${spec.name}`);
+    const moves = spec.traits?.states?.transitions ?? [];
+    if (moves.some((t) => (t.expose ?? 'all') === 'all')) ids.add(transitionToolId(spec));
+  }
+  for (const spec of catalog.commands) {
+    const id = commandToolId(spec);
+    if (id) ids.add(id);
+  }
+  writeTools.set(catalog, ids);
+  return ids;
+}
+
 /** `/api/meetings/:meetingId/close` → ['api', 'meetings', ':', 'close']. */
 function routeOf(path: string): string[] {
   const rest = path.replace(/^\/+/, '').replace(/^api\//, '');

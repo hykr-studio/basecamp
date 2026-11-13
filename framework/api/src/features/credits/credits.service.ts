@@ -23,7 +23,7 @@ import {
   tenantZoneOf,
 } from '@hykr/core';
 import { type Database, schema } from '@hykr/db';
-import type { Lang } from '@hykr/i18n';
+import { type Lang, t } from '@hykr/i18n';
 import {
   ConflictException,
   Inject,
@@ -57,6 +57,7 @@ import {
   refusalFor,
   turnRefusal,
 } from './budget.js';
+import { meterLabel, meterLabels } from './caps.js';
 import {
   type CreditsPlanResolved,
   creditsConfig,
@@ -76,6 +77,9 @@ import {
   settlePurchase,
   toPurchase,
 } from './writes.js';
+
+/** A usage row's id: a debit's `ref`. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const { usageEvents, usageCounters, creditWallets, creditLedger, creditAlerts, creditPurchases } =
   schema;
@@ -114,12 +118,15 @@ async function periodOf(conn: Conn, unit: Period['unit'], zone: string): Promise
   return { unit, start: new Date(rows[0].start), end: new Date(rows[0].end) };
 }
 
-/** The plan's refusal when the settings cannot be read: everything stops (fail closed). */
-const UNAVAILABLE: UsageRefusal = {
+/**
+ * The plan's refusal when the settings cannot be read: everything stops (fail closed). Its
+ * reason in the reader's language.
+ */
+const unavailable = (lang: Lang): UsageRefusal => ({
   rule: 'credits_unavailable',
-  reason: "This business's credits settings are not valid",
+  reason: t(lang, 'credits.reason.unavailable'),
   cap: 'credits',
-};
+});
 
 const reasonOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -303,19 +310,27 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
 
   /* ── The Metering slot ───────────────────────────────────────────────── */
 
-  /** May this business use this meter now? Fails closed when its settings do not parse. */
+  /**
+   * May this business use this meter now? Fails closed when its settings do not parse. A refusal's
+   * reason is in `lang`, the reader's, when the caller knows it.
+   */
   async check(a: {
     tenantId: string;
     meter: string;
     variant?: string | null;
+    lang?: Lang;
   }): Promise<UsageRefusal | null> {
-    return (await this.checkMany(a.tenantId, [{ meter: a.meter, variant: a.variant }]))[0] ?? null;
+    return (
+      (await this.checkMany(a.tenantId, [{ meter: a.meter, variant: a.variant }], a.lang))[0] ??
+      null
+    );
   }
 
   /** The first refusal among these meters, from one look at the counters. */
   async checkMany(
     tenantId: string,
     uses: readonly { meter: string; variant?: string | null }[],
+    lang: Lang = 'en',
   ): Promise<(UsageRefusal | null)[]> {
     const defs = uses.map((u) => ({ def: this.meter(u.meter), variant: u.variant }));
     let plan: CreditsPlanResolved;
@@ -327,7 +342,9 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       // Fail closed, except for what is never paused (a reply, a code, an approval request).
       const fallback = resolvePlan(creditsConfig(), undefined);
       return defs.map((d) =>
-        !d.def || (d.def.pausable && !d.def.pausable(d.variant, fallback)) ? null : UNAVAILABLE,
+        !d.def || (d.def.pausable && !d.def.pausable(d.variant, fallback))
+          ? null
+          : unavailable(lang),
       );
     }
     // Nothing caps these uses: no need to read the counters.
@@ -335,7 +352,7 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       !d.def || (d.def.pausable && !d.def.pausable(d.variant, plan));
     if ((!plan.enforce && !plan.override) || defs.every(free)) return defs.map(() => null);
     const { a } = await this.assessIn(this.db, tenantId, plan, zone);
-    return defs.map((d) => (d.def ? refusalFor(a, d.def, d.variant) : null));
+    return defs.map((d) => (d.def ? refusalFor(a, d.def, d.variant, lang) : null));
   }
 
   async headroom(a: { tenantId: string; meter: string }): Promise<number | undefined> {
@@ -575,18 +592,25 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       .onConflictDoNothing()
       .returning();
     if (!added.length) return [];
-    const events = added.map(
-      (r) =>
-        new CreditsThreshold({
-          id: r.id,
-          tenantId,
-          cap: r.cap,
-          level: r.level as 'alert' | 'pause',
-          usedPercent: r.usedPercent,
-          threshold: r.threshold,
-          periodStart: period.start.toISOString(),
-        }),
-    );
+    // One use can pass both levels of a cap at once (a limit of 1, a long voice session): then
+    // only the pause is said, never "low" beside it. The alert's row stays, so it is not said
+    // after the pause either.
+    const paused = new Set(added.filter((r) => r.level === 'pause').map((r) => r.cap));
+    const said = added.filter((r) => r.level === 'pause' || !paused.has(r.cap));
+    const events = said.map((r) => {
+      // A meter's cap carries its label, so an alert names it as people do.
+      const meter = meters.get(r.cap);
+      return new CreditsThreshold({
+        id: r.id,
+        tenantId,
+        cap: r.cap,
+        level: r.level as 'alert' | 'pause',
+        usedPercent: r.usedPercent,
+        threshold: r.threshold,
+        periodStart: period.start.toISOString(),
+        ...(meter ? { label: meterLabels(meter) } : {}),
+      });
+    });
     await recordEvents(tx, {
       principal: systemPrincipal({ tenantId, job: METER_JOB }),
       events,
@@ -630,16 +654,19 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
 
   /* ── Reads ───────────────────────────────────────────────────────────── */
 
-  /** The business's credits this period. Amounts only with `manage`. */
-  async status(tenantId: string, manage: boolean): Promise<CreditsStatus> {
+  /**
+   * The business's credits this period. Amounts only with `manage`. Its words (each meter's label,
+   * a refusal's reason) are in `lang`, the reader's.
+   */
+  async status(tenantId: string, manage: boolean, lang: Lang = 'en'): Promise<CreditsStatus> {
     let plan: CreditsPlanResolved;
     let zone: string;
     try {
       ({ plan, zone } = await this.planOf(tenantId));
     } catch {
       throw new ServiceUnavailableException({
-        error: UNAVAILABLE.rule,
-        reason: UNAVAILABLE.reason,
+        error: 'credits_unavailable',
+        reason: unavailable(lang).reason,
       });
     }
     const { period, a } = await this.assessIn(this.db, tenantId, plan, zone);
@@ -652,16 +679,17 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       },
       // What the turn hook and the agent guard refuse on: the operator's pause, the budget, or
       // a limit on what a turn spends.
-      paused: turnRefusal(a),
+      paused: turnRefusal(a, lang),
       usedPercent: a.budget?.usedPercent ?? null,
       alertAt: plan.alertAt,
       pauseAt: plan.pauseAt,
       meters: meters.all().map((def): MeterStatus => {
         const counter = a.quantities.get(def.name);
         const limit = a.limits.get(def.name);
-        const refusal = limitRefusal(a, def);
+        const refusal = limitRefusal(a, def, lang);
         return {
           meter: def.name,
+          label: meterLabel(def, lang),
           unit: def.unit,
           quantity: counter?.quantity ?? 0,
           ...(limit ? { limit: limit.limit, usedPercent: limit.usedPercent } : {}),
@@ -685,9 +713,12 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
 
   /**
    * Wallet entries, newest first: `limit` of them before `before`, the `next` a page handed out
-   * (entries in one transaction share their time, so it keeps the id too, V12) or an ISO time.
+   * (entries in one transaction share their time, so it keeps the id too, V12) or an ISO time. A
+   * debit is worded when it is read, in `lang`, from the use it paid for (`use`: its meter as
+   * people call it, and how much): its stored note is the code's words ('tool_calls × 1'), never
+   * shown.
    */
-  async ledger(tenantId: string, opts: { before?: string; limit?: number } = {}) {
+  async ledger(tenantId: string, opts: { before?: string; limit?: number; lang?: Lang } = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
     // A time it cannot read is no bound, as before; one Postgres cannot store is not either. A
     // tampered `next` is 400 `bad_cursor`, as every keyset cursor's is: a client paging on its own
@@ -705,17 +736,43 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       )
       .orderBy(desc(creditLedger.at), desc(creditLedger.id))
       .limit(limit + 1);
-    const items: LedgerEntry[] = rows.slice(0, limit).map(({ row: r }) => ({
-      id: r.id,
-      kind: r.kind as LedgerEntry['kind'],
-      amount: r.amount,
-      balanceAfter: r.balanceAfter,
-      currency: r.currency,
-      ref: r.ref,
-      note: r.note,
-      actor: { kind: r.actorKind, id: r.actorId },
-      at: r.at.toISOString(),
-    }));
+    const page = rows.slice(0, limit);
+    // The uses the page's debits paid for (a debit's `ref` is its usage row), this business's.
+    const refs = page.flatMap(({ row: r }) =>
+      r.kind === 'debit' && r.ref && UUID.test(r.ref) ? [r.ref] : [],
+    );
+    const uses = refs.length
+      ? await this.db
+          .select({ id: usageEvents.id, meter: usageEvents.meter, quantity: usageEvents.quantity })
+          .from(usageEvents)
+          .where(and(eq(usageEvents.tenantId, tenantId), inArray(usageEvents.id, refs)))
+      : [];
+    const useOf = new Map(uses.map((u) => [u.id, u]));
+    const lang = opts.lang ?? 'en';
+    const items: LedgerEntry[] = page.map(({ row: r }) => {
+      const use = r.kind === 'debit' && r.ref ? useOf.get(r.ref) : undefined;
+      return {
+        id: r.id,
+        kind: r.kind as LedgerEntry['kind'],
+        amount: r.amount,
+        balanceAfter: r.balanceAfter,
+        currency: r.currency,
+        ref: r.ref,
+        // A debit's note names the meter in the code: it is worded from its use instead.
+        note: r.kind === 'debit' ? null : r.note,
+        ...(use
+          ? {
+              use: {
+                meter: use.meter,
+                label: meterLabel(meters.get(use.meter) ?? { name: use.meter }, lang),
+                quantity: use.quantity,
+              },
+            }
+          : {}),
+        actor: { kind: r.actorKind, id: r.actorId },
+        at: r.at.toISOString(),
+      };
+    });
     const last = rows.length > limit ? rows[limit - 1] : undefined;
     return { items, next: last ? encodeKeyset({ at: last.at, id: last.row.id }) : null };
   }

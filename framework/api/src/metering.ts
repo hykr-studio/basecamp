@@ -4,6 +4,7 @@
 // the configuration or loads Nest.
 import type { UsageRefusal } from '@hykr/contracts';
 import type { Tx } from '@hykr/core';
+import type { Lang } from '@hykr/i18n';
 
 /** One use of something metered. */
 export interface UsageInput {
@@ -34,11 +35,15 @@ export interface UsageInput {
 }
 
 export interface Metering {
-  /** May this business use this meter now? null: yes; otherwise why not. */
+  /**
+   * May this business use this meter now? null: yes; otherwise why not, its reason in `lang`
+   * (the reader's; English without it).
+   */
   check(a: {
     tenantId: string;
     meter: string;
     variant?: string | null;
+    lang?: Lang;
   }): Promise<UsageRefusal | null>;
   /** How much of this meter is left before the business is paused; undefined: no cap. */
   headroom(a: { tenantId: string; meter: string }): Promise<number | undefined>;

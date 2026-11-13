@@ -6,6 +6,9 @@ export const creditsMessages = defineMessages({
   en: {
     'credits.paused':
       "The assistant is paused: this business has used its credits for now. Someone who manages the business's credits can add more.",
+    // The operator's pause: adding credits does not lift it.
+    'credits.suspended':
+      'The assistant is paused: this business is paused by its operator for now.',
     'credits.title': 'Credits',
     'credits.used': '{percent}% used this period',
     'credits.notEnforced': 'Usage is measured, with no cap.',
@@ -27,10 +30,16 @@ export const creditsMessages = defineMessages({
     'credits.kind.topup': 'Top-up',
     'credits.kind.grant': 'Grant',
     'credits.kind.debit': 'Use',
+    // Why a use is refused: the API's reason, in the reader's language.
+    'credits.reason.limit': "{what}: this period's limit is reached",
+    'credits.reason.budget': 'This business has used {percent}% of its credits this period',
+    'credits.reason.operator': 'The business is paused by its operator: {reason}',
+    'credits.reason.unavailable': "This business's credits settings are not valid",
   },
   hi: {
     'credits.paused':
       'असिस्टेंट रुका हुआ है: इस व्यवसाय के क्रेडिट अभी खत्म हो गए हैं। व्यवसाय के क्रेडिट संभालने वाला कोई व्यक्ति और जोड़ सकता है।',
+    'credits.suspended': 'असिस्टेंट रुका हुआ है: इस व्यवसाय को अभी उसके ऑपरेटर ने रोका है।',
     'credits.title': 'क्रेडिट',
     'credits.used': 'इस अवधि में {percent}% उपयोग हुआ',
     'credits.notEnforced': 'उपयोग मापा जाता है, कोई सीमा नहीं है।',
@@ -52,10 +61,15 @@ export const creditsMessages = defineMessages({
     'credits.kind.topup': 'टॉप-अप',
     'credits.kind.grant': 'अनुदान',
     'credits.kind.debit': 'उपयोग',
+    'credits.reason.limit': '{what}: इस अवधि की सीमा पूरी हो गई',
+    'credits.reason.budget': 'इस व्यवसाय ने इस अवधि में अपने क्रेडिट का {percent}% उपयोग कर लिया है',
+    'credits.reason.operator': 'व्यवसाय को उसके ऑपरेटर ने रोका है: {reason}',
+    'credits.reason.unavailable': 'इस व्यवसाय की क्रेडिट सेटिंग मान्य नहीं हैं',
   },
   te: {
     'credits.paused':
       'అసిస్టెంట్ ఆగిపోయింది: ఈ వ్యాపారం ప్రస్తుతానికి తన క్రెడిట్‌లను వాడేసింది. వ్యాపార క్రెడిట్‌లను నిర్వహించే వారు మరిన్ని జోడించవచ్చు.',
+    'credits.suspended': 'అసిస్టెంట్ ఆగిపోయింది: ఈ వ్యాపారాన్ని ప్రస్తుతానికి దాని ఆపరేటర్ ఆపారు.',
     'credits.title': 'క్రెడిట్‌లు',
     'credits.used': 'ఈ వ్యవధిలో {percent}% వాడారు',
     'credits.notEnforced': 'వినియోగం కొలవబడుతుంది, పరిమితి లేదు.',
@@ -77,5 +91,9 @@ export const creditsMessages = defineMessages({
     'credits.kind.topup': 'టాప్-అప్',
     'credits.kind.grant': 'గ్రాంట్',
     'credits.kind.debit': 'వినియోగం',
+    'credits.reason.limit': '{what}: ఈ వ్యవధి పరిమితి పూర్తయింది',
+    'credits.reason.budget': 'ఈ వ్యాపారం ఈ వ్యవధిలో తన క్రెడిట్‌లలో {percent}% వాడింది',
+    'credits.reason.operator': 'వ్యాపారాన్ని దాని ఆపరేటర్ ఆపారు: {reason}',
+    'credits.reason.unavailable': 'ఈ వ్యాపారం క్రెడిట్ సెట్టింగ్‌లు చెల్లవు',
   },
 });

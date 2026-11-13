@@ -11,6 +11,7 @@ import { useT } from '../framework/lang';
 import { getRegistry } from '../runtime';
 import { colors } from '../theme';
 import { InlineView } from '../views/InlineView';
+import { useLookup } from './lookup';
 import { toolWords } from './toolWords';
 
 /** How a resumed call's request was decided (@hykr/core tools: durable.ts). */
@@ -133,14 +134,16 @@ function Shown({ present, toolCallId }: { present: Present; toolCallId: string }
 
 /**
  * Every tool call in the thread renders here (assistant-ui's Fallback): a line saying what
- * it amounted to. What a result shows (a view, the canvas) is added by the present intent.
+ * it amounted to. What a result shows (a view, the canvas) is added by the present intent,
+ * unless the call only looked up what the reply then changed (`useLookup`).
  */
 export function ToolPart(props: ToolCallMessagePartProps) {
   const out = props.result as ToolOutput | undefined;
+  const lookup = useLookup(props.toolCallId);
   return (
     <View className="gap-2">
       <ToolLine {...props} />
-      {props.status.type !== 'running' && out?.ok && out.present ? (
+      {props.status.type !== 'running' && out?.ok && out.present && !lookup ? (
         <Shown present={out.present} toolCallId={props.toolCallId} />
       ) : null}
     </View>

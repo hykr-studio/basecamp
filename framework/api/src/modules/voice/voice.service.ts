@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  langOfVoice,
   type Principal,
   parseVoiceRoom,
   VOICE_AGENT_ID,
@@ -61,7 +62,12 @@ export class VoiceService {
     const meter = metering();
     let left: number | undefined;
     if (meter && p.tenantId) {
-      const refused = await meter.check({ tenantId: p.tenantId, meter: 'voice_seconds' });
+      // Why, in the session's language when it is pinned.
+      const refused = await meter.check({
+        tenantId: p.tenantId,
+        meter: 'voice_seconds',
+        lang: langOfVoice(input.lang),
+      });
       if (refused)
         throw new HttpException(
           { error: 'credits_paused', rule: refused.rule, reason: refused.reason },

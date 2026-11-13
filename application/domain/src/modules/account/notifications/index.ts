@@ -79,8 +79,12 @@ const CAPS: Record<string, Labels> = {
   },
 };
 
+/**
+ * The cap in this application's words, else as the event names it (a module's meter, by the
+ * label it declares), else as it is (an event stored without one).
+ */
 const what = (row: CreditsThresholdRow, lang: Lang) =>
-  CAPS[row.cap] ? pick(CAPS[row.cap], lang) : row.cap;
+  CAPS[row.cap] ? pick(CAPS[row.cap], lang) : row.label ? pick(row.label, lang) : row.cap;
 
 const ASSISTANT_PAUSED: Labels = {
   en: 'the assistant is paused',

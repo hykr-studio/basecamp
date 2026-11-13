@@ -1030,8 +1030,12 @@ function toMessage(r: typeof threadMessages.$inferSelect): ThreadMessage {
   };
 }
 
-/** A saved continuation's tool parts, summarized as the chat does a turn's calls. */
-function summarizeParts(parts: readonly SavedPart[]): ToolCallSummary[] {
+/**
+ * A saved continuation's tool parts, summarized as the chat does a turn's calls. A call whose
+ * input the tool refused is saved `ok: false`; one saved before that was marked has no `ok` and
+ * an error, and reads refused too.
+ */
+export function summarizeParts(parts: readonly SavedPart[]): ToolCallSummary[] {
   return parts
     .filter((p) => p.type.startsWith('tool-'))
     .map((p) => {
@@ -1041,7 +1045,7 @@ function summarizeParts(parts: readonly SavedPart[]): ToolCallSummary[] {
         error?: { reason?: string };
       };
       const tool = p.type.slice(5);
-      if (out.ok === false)
+      if (out.ok === false || (out.ok === undefined && out.error))
         return {
           tool,
           ok: false,

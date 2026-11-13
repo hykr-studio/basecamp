@@ -992,13 +992,26 @@ export function createApiClient(opts: ApiClientOptions) {
     },
     /** The business's credits (people only): status for its team, the rest for its managers. */
     credits: {
-      status: () => call<CreditsStatus>('GET', '/api/credits'),
-      /** Newest first; `before`: the `next` of the page before (or an ISO time). */
-      ledger: (before?: string) =>
-        call<{ items: LedgerEntry[]; next: string | null }>(
+      /** In `lang`, the reader's: each meter's label and why it is paused. */
+      status: (lang?: string) =>
+        call<CreditsStatus>(
           'GET',
-          `/api/credits/ledger${before ? `?before=${encodeURIComponent(before)}` : ''}`,
+          `/api/credits${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`,
         ),
+      /**
+       * Newest first; `before`: the `next` of the page before (or an ISO time). In `lang`, the
+       * reader's: what each debit was for.
+       */
+      ledger: (before?: string, lang?: string) => {
+        const q = new URLSearchParams({
+          ...(before ? { before } : {}),
+          ...(lang ? { lang } : {}),
+        }).toString();
+        return call<{ items: LedgerEntry[]; next: string | null }>(
+          'GET',
+          `/api/credits/ledger${q ? `?${q}` : ''}`,
+        );
+      },
       /** Buy credits: the answer carries the checkout, or waits for an approval. */
       buy: (amount: number, provider?: string, key = newKey()) =>
         call<WriteResult<CreditPurchase>>(

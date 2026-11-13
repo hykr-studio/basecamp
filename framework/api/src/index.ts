@@ -60,6 +60,8 @@ export {
   FrameworkMeters,
   GRANT_CREDITS,
   type MeterDef,
+  meterLabel,
+  meterLabels,
   meters,
   type PurchaseStart,
   type PurchaseStarted,

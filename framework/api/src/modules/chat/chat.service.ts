@@ -5,10 +5,12 @@ import {
   type ChatResponse,
   isTimeZone,
   type Lang,
+  lookupsIn,
   type Present,
   type Principal,
   type Surface,
   type ToolCallSummary,
+  writeToolIds,
 } from '@hykr/contracts';
 import { TenantConfigService, tenantZone } from '@hykr/core';
 import { toolsFor } from '@hykr/core/tools';
@@ -44,33 +46,60 @@ const INTERRUPTED = '(The reply was interrupted.)';
 
 /**
  * What a tool result keeps once saved: what the chat renders (the outcome, what it showed, an
- * approval, a refusal's reason), not the data. A list's rows are fetched again by its view.
+ * approval, a refusal's reason), not the data. A list's rows are fetched again by its view. A
+ * lookup (`lookupsIn`) shows nothing, so it keeps no view. A call whose input the tool refused
+ * (`inputRefused`: it never ran) is saved refused, as `summarize` reads it, with no words: they
+ * are for the model. The resume feature saves a resumed run's calls with it too.
  */
-function compact(result: RawToolResult['result']) {
+export function compact(result: RawToolResult['result'], lookup = false) {
   if (!result) return null;
   const { ok, present, speech, error } = result;
   const r = result.result;
   return {
-    ok,
-    ...(present ? { present } : {}),
-    ...(speech ? { speech } : {}),
-    ...(error ? { error: { reason: error.reason, message: error.message } } : {}),
+    ok: inputRefused(result) ? false : ok,
+    ...(present && !lookup ? { present } : {}),
+    ...(speech && !lookup ? { speech } : {}),
+    ...(error && typeof error === 'object'
+      ? { error: { reason: error.reason, message: error.message } }
+      : {}),
     ...(r?.status ? { result: { status: r.status, approval: r.approval } } : {}),
   };
 }
 
-/** The reply's tool calls, as UI message parts, so a reloaded thread renders as it streamed. */
+/** A tool result as Mastra hands it over: bare, or in a chunk's payload. */
+const rawOf = (r: unknown) =>
+  (r && typeof r === 'object' && 'payload' in r ? r.payload : r) as RawToolResult & {
+    args?: unknown;
+  };
+
+/**
+ * The turn's lookups (`lookupsIn`): reads whose view came before a write of the same turn, or
+ * before a call that showed one of their rows. A call is a write by its tool, from the catalog.
+ */
+export const lookupsOf = (results: readonly unknown[]) =>
+  lookupsIn(
+    results.map((r) => ({ tool: rawOf(r).toolName, output: rawOf(r).result })),
+    writeToolIds(runtime().catalog),
+  );
+
+/** Mastra's answer to an input the tool's schema refused: the tool never ran. */
+const inputRefused = (result: unknown) =>
+  !!result && typeof result === 'object' && (result as { error?: unknown }).error === true;
+
+/**
+ * The reply's tool calls, as UI message parts, so a reloaded thread renders as the app showed it
+ * once the turn was done: a lookup without its view.
+ */
 function partsOf(results: unknown[]): SavedPart[] {
-  return results.map((r) => {
-    const x = (r && typeof r === 'object' && 'payload' in r ? r.payload : r) as RawToolResult & {
-      args?: unknown;
-    };
+  const lookups = lookupsOf(results);
+  return results.map((r, i) => {
+    const x = rawOf(r);
     return {
       type: `tool-${x.toolName ?? 'tool'}`,
       toolCallId: x.toolCallId ?? randomUUID(),
       state: 'output-available',
       input: x.args ?? {},
-      output: compact(x.result),
+      output: compact(x.result, lookups.has(i)),
     };
   });
 }
@@ -87,15 +116,24 @@ type RawToolResult = {
   };
 };
 
-/** What each tool call amounted to: "ok" only means the API answered. */
+/**
+ * What each tool call amounted to: "ok" only means the API answered. A lookup (a read the
+ * assistant made to find what it then wrote, opened or showed) shows nothing: what it found is
+ * the answer.
+ */
 export function summarize(results: unknown[]): ToolCallSummary[] {
-  return results.map((r) => {
-    const x = (r && typeof r === 'object' && 'payload' in r ? r.payload : r) as RawToolResult;
+  const lookups = lookupsOf(results);
+  return results.map((r, i) => {
+    const x = rawOf(r);
     const tool = String(x.toolName ?? 'tool');
-    const shown = {
-      ...(x.result?.present ? { present: x.result.present } : {}),
-      ...(x.result?.speech ? { speech: x.result.speech } : {}),
-    };
+    const shown = lookups.has(i)
+      ? {}
+      : {
+          ...(x.result?.present ? { present: x.result.present } : {}),
+          ...(x.result?.speech ? { speech: x.result.speech } : {}),
+        };
+    // Its input refused, the call did nothing: refused too, with no reason for people.
+    if (inputRefused(x.result)) return { tool, ok: false, outcome: 'refused' };
     if (x.result?.ok === false) {
       const reason = x.result.error?.reason ?? x.result.error?.message;
       return {

@@ -2,6 +2,7 @@
 // through `contributes` (meters, creditPurchaseProviders). Nothing here reads the configuration.
 import { priceOf } from '@hykr/agents';
 import { createHookRegistry, MeterName } from '@hykr/contracts';
+import type { Labels } from '@hykr/i18n';
 import type { CreditsPlanResolved } from './config.js';
 
 declare module '@hykr/contracts' {
@@ -15,6 +16,12 @@ declare module '@hykr/contracts' {
 export interface MeterDef {
   /** Unique: 'tokens', 'messages', or a module's ('pages_rendered'). */
   name: string;
+  /**
+   * What people call it, in each of the application's languages ('Pages rendered'): a refusal's
+   * reason and the credits screen name it so. The framework's meters are named in its own
+   * phrases (`credits.meter.<name>`); a meter with neither reads as its name.
+   */
+  label?: Labels;
   /** Its base unit, as quantities are counted: 'token', 'call', 'message', 'second'. */
   unit: string;
   /** A price is per this many base units (1,000,000 tokens; 60 seconds). Default 1. */
