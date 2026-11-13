@@ -214,11 +214,32 @@ describe('a verified business domain', () => {
   });
 });
 
+describe('the caller’s address', () => {
+  it('is the API’s to say on every route: a client’s own x-hykr-client-address is replaced', async () => {
+    const res = await ana.call('GET', '/api/fixture-echo', undefined, {
+      'x-hykr-client-address': '203.0.113.7',
+      'x-forwarded-for': '203.0.113.8',
+    });
+    const seen = res.body as { clientAddress: string | null; ip: string | null };
+    // No proxy is trusted by default (TRUST_PROXY unset): the socket's address, never the client's.
+    expect(seen.ip).toBeTruthy();
+    expect(seen.ip).not.toMatch(/203\.0\.113/);
+    expect(seen.clientAddress).toBe(seen.ip);
+  });
+});
+
 describe('Better Auth’s own rate limits', () => {
-  const wrong = () =>
+  /** A failed sign-in; `n` sends addresses of its own choosing, which must count for nothing. */
+  const wrong = (n?: number) =>
     fetch(`${server.base}/api/auth/sign-in/email`, {
       method: 'POST',
-      headers: { origin, 'content-type': 'application/json' },
+      headers: {
+        origin,
+        'content-type': 'application/json',
+        ...(n === undefined
+          ? {}
+          : { 'x-hykr-client-address': `203.0.113.${n}`, 'x-forwarded-for': `198.51.100.${n}` }),
+      },
       body: JSON.stringify({ email: bo.email, password: 'not-the-password' }),
     });
 
@@ -229,7 +250,9 @@ describe('Better Auth’s own rate limits', () => {
     process.env.THROTTLE = 'on';
     try {
       const on: number[] = [];
-      for (let i = 0; i < 5; i++) on.push((await wrong()).status);
+      // Each from an address the client names (x-hykr-client-address, x-forwarded-for): with no
+      // proxy trusted, they are all the one caller, so naming another address escapes nothing.
+      for (let i = 0; i < 5; i++) on.push((await wrong(i + 1)).status);
       // Three a 10 s window per address and route (Better Auth's rule for sign-in).
       expect(on).toEqual([401, 401, 401, 429, 429]);
     } finally {
