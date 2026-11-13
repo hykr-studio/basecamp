@@ -767,11 +767,12 @@ describe('alerts a plan makes due', () => {
     expect(await alertsOf(zed)).toEqual(['credits/alert', 'credits/pause']);
     const credits = server.app?.get(CreditsService, { strict: false }) as CreditsService;
     expect(await credits.sweep()).toBeGreaterThan(0);
+    // Both levels were passed at once: only the pause is said (V13), and only once.
     const { rows } = await pool.query(
-      `select count(*)::int as n from app.domain_events where tenant_id = $1 and name = 'credits.threshold'`,
+      `select row->>'level' as level from app.domain_events where tenant_id = $1 and name = 'credits.threshold'`,
       [tenant[zed.name]],
     );
-    expect(rows[0].n).toBe(2);
+    expect(rows.map((r) => r.level)).toEqual(['pause']);
     // A bigger allowance re-arms both levels.
     await setPlan(zed, { enforce: true, allowance: spent * 10 });
     await eventually(async () => ((await alertsOf(zed)).length === 0 ? true : undefined));

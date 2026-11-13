@@ -58,6 +58,8 @@ export {
   defineMeter,
   FrameworkMeters,
   type MeterDef,
+  meterLabel,
+  meterLabels,
   meters,
   type PurchaseStart,
   type PurchaseStarted,

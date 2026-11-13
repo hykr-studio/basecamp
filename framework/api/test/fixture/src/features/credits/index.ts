@@ -115,7 +115,12 @@ export const settleFromGateway = defineConnectorHandler({
 /* ── A module's own metered work ─────────────────────────────────────────── */
 
 /** Report pages rendered: priced per page by the test's CREDITS_CONFIG or a business's plan. */
-export const ReportPages = defineMeter({ name: 'report_pages', unit: 'page' });
+/** A module's meter names itself for people: a refusal and the credits screen say its label. */
+export const ReportPages = defineMeter({
+  name: 'report_pages',
+  unit: 'page',
+  label: { en: 'Report pages', hi: 'रिपोर्ट पेज', te: 'రిపోర్ట్ పేజీలు' },
+});
 
 export const RenderReportSpec = commandSpec({
   name: 'credit_checks.render',

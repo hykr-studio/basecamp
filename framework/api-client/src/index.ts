@@ -992,7 +992,12 @@ export function createApiClient(opts: ApiClientOptions) {
     },
     /** The business's credits (people only): status for its team, the rest for its managers. */
     credits: {
-      status: () => call<CreditsStatus>('GET', '/api/credits'),
+      /** In `lang`, the reader's: each meter's label and why it is paused. */
+      status: (lang?: string) =>
+        call<CreditsStatus>(
+          'GET',
+          `/api/credits${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`,
+        ),
       ledger: (before?: string) =>
         call<{ items: LedgerEntry[]; next: string | null }>(
           'GET',

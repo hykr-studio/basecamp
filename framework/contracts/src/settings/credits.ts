@@ -1,3 +1,4 @@
+import type { Labels } from '@hykr/i18n';
 import { z } from 'zod';
 import { defineCapability } from '../roles.js';
 import { defineSettingsSection } from './sections.js';
@@ -129,6 +130,8 @@ export interface UsageRefusal {
 /** One meter in a period, as `GET /api/credits` shows it. */
 export interface MeterStatus {
   meter: string;
+  /** The meter as people call it, in the reader's language (`?lang=`): 'Assistant actions'. */
+  label: string;
   unit: string;
   /** Used this period, in base units. */
   quantity: number;
@@ -236,5 +239,11 @@ export interface CreditsThresholdRow {
   usedPercent: number;
   threshold: number;
   periodStart: string;
+  /**
+   * A meter's cap as people call it, in each of the application's languages (the label the meter
+   * declares, or the framework's phrase for its own): an alert never says 'tool_calls'. Absent
+   * for the budget (`cap: 'credits'`), which the application words itself.
+   */
+  label?: Labels;
   [key: string]: unknown;
 }

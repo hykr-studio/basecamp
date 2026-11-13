@@ -27,6 +27,11 @@ export const creditsMessages = defineMessages({
     'credits.kind.topup': 'Top-up',
     'credits.kind.grant': 'Grant',
     'credits.kind.debit': 'Use',
+    // Why a use is refused: the API's reason, in the reader's language.
+    'credits.reason.limit': "{what}: this period's limit is reached",
+    'credits.reason.budget': 'This business has used {percent}% of its credits this period',
+    'credits.reason.operator': 'The business is paused by its operator: {reason}',
+    'credits.reason.unavailable': "This business's credits settings are not valid",
   },
   hi: {
     'credits.paused':
@@ -52,6 +57,10 @@ export const creditsMessages = defineMessages({
     'credits.kind.topup': 'टॉप-अप',
     'credits.kind.grant': 'अनुदान',
     'credits.kind.debit': 'उपयोग',
+    'credits.reason.limit': '{what}: इस अवधि की सीमा पूरी हो गई',
+    'credits.reason.budget': 'इस व्यवसाय ने इस अवधि में अपने क्रेडिट का {percent}% उपयोग कर लिया है',
+    'credits.reason.operator': 'व्यवसाय को उसके ऑपरेटर ने रोका है: {reason}',
+    'credits.reason.unavailable': 'इस व्यवसाय की क्रेडिट सेटिंग मान्य नहीं हैं',
   },
   te: {
     'credits.paused':
@@ -77,5 +86,9 @@ export const creditsMessages = defineMessages({
     'credits.kind.topup': 'టాప్-అప్',
     'credits.kind.grant': 'గ్రాంట్',
     'credits.kind.debit': 'వినియోగం',
+    'credits.reason.limit': '{what}: ఈ వ్యవధి పరిమితి పూర్తయింది',
+    'credits.reason.budget': 'ఈ వ్యాపారం ఈ వ్యవధిలో తన క్రెడిట్‌లలో {percent}% వాడింది',
+    'credits.reason.operator': 'వ్యాపారాన్ని దాని ఆపరేటర్ ఆపారు: {reason}',
+    'credits.reason.unavailable': 'ఈ వ్యాపారం క్రెడిట్ సెట్టింగ్‌లు చెల్లవు',
   },
 });

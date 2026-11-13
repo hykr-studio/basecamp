@@ -7,6 +7,7 @@ import {
   runWrite,
 } from '@hykr/core';
 import { schema } from '@hykr/db';
+import { isLang } from '@hykr/i18n';
 import {
   BadRequestException,
   Body,
@@ -87,9 +88,13 @@ export class CreditsOperatorController {
     return result;
   }
 
+  /** `?lang=`: the operator's language, for its words. */
   @Get()
-  async status(@Param('tenantId') tenantId: string): Promise<CreditsStatus> {
-    return this.credits.status(await this.business(tenantId), true);
+  async status(
+    @Param('tenantId') tenantId: string,
+    @Query('lang') lang?: string,
+  ): Promise<CreditsStatus> {
+    return this.credits.status(await this.business(tenantId), true, isLang(lang) ? lang : 'en');
   }
 
   @Get('ledger')

@@ -1,8 +1,9 @@
 // How much of its caps a business has used this period, and what that refuses. Pure: the
 // service reads the counters and the wallet, this does the arithmetic.
 import type { UsageRefusal } from '@hykr/contracts';
+import { type Lang, t } from '@hykr/i18n';
 import type { CreditsPlanResolved } from './config.js';
-import { FrameworkMeters, type MeterDef } from './meters.js';
+import { FrameworkMeters, type MeterDef, meterLabel } from './meters.js';
 
 /** One meter's use this period. */
 export interface Counter {
@@ -110,12 +111,14 @@ export function assess(
 /**
  * Whether a use of this meter (and variant) is refused now. The operator's override wins: `run`
  * lets it through, `pause` stops it. Otherwise a business on credits is stopped by its budget or
- * by the meter's limit. A variant its meter never pauses (a reply, a code) always goes.
+ * by the meter's limit. A variant its meter never pauses (a reply, a code) always goes. The
+ * reason is in `lang`, the reader's (English when the caller has none).
  */
 export function refusalFor(
   a: Assessment,
   meter: MeterDef,
   variant?: string | null,
+  lang: Lang = 'en',
 ): UsageRefusal | null {
   const { plan } = a;
   if (meter.pausable && !meter.pausable(variant, plan)) return null;
@@ -123,30 +126,35 @@ export function refusalFor(
   if (plan.override?.mode === 'pause')
     return {
       rule: 'credits_suspended',
-      reason: `The business is paused by its operator: ${plan.override.reason}`,
+      reason: t(lang, 'credits.reason.operator', { reason: plan.override.reason }),
       cap: 'credits',
     };
   if (!plan.enforce) return null;
   if (a.budget?.pause)
     return {
       rule: 'credits_exhausted',
-      reason: `This business has used ${a.budget.usedPercent}% of its credits this period`,
+      reason: t(lang, 'credits.reason.budget', { percent: a.budget.usedPercent }),
       cap: 'credits',
     };
-  return limitRefusal(a, meter);
+  return limitRefusal(a, meter, lang);
 }
 
 /**
  * Whether this meter's own limit refuses its use now, whatever the budget: what the credits
  * screen shows beside the meter. The operator's `run` lets everything through.
  */
-export function limitRefusal(a: Assessment, meter: MeterDef): UsageRefusal | null {
+export function limitRefusal(
+  a: Assessment,
+  meter: MeterDef,
+  lang: Lang = 'en',
+): UsageRefusal | null {
   if (a.plan.override?.mode === 'run') return null;
   const limit = a.limits.get(meter.name);
   if (!limit?.pause) return null;
   return {
     rule: 'usage_limit_reached',
-    reason: `This business has used ${limit.quantity} of its ${limit.limit} ${meter.unit}s of ${meter.name} this period`,
+    // The meter as people call it: never its name in the code ('tool_calls').
+    reason: t(lang, 'credits.reason.limit', { what: meterLabel(meter, lang) }),
     cap: meter.name,
   };
 }
@@ -161,8 +169,11 @@ export const TURN_METERS: readonly MeterDef[] = [FrameworkMeters.tokens, Framewo
  * Why turns are refused now, or null when they run: the operator's pause, the budget, or a
  * limit on what a turn spends. The turn hook, the agent guard and the credits status share it.
  */
-export const turnRefusal = (a: Assessment): UsageRefusal | null =>
-  TURN_METERS.reduce<UsageRefusal | null>((r, meter) => r ?? refusalFor(a, meter), null);
+export const turnRefusal = (a: Assessment, lang: Lang = 'en'): UsageRefusal | null =>
+  TURN_METERS.reduce<UsageRefusal | null>(
+    (r, meter) => r ?? refusalFor(a, meter, undefined, lang),
+    null,
+  );
 
 /**
  * How many base units of this meter may still be used before the business is paused, by its

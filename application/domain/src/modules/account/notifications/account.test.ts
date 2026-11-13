@@ -60,7 +60,17 @@ describe('the credits alerts', () => {
     expect(LimitLowNotification.whatsapp?.params(row({ cap: 'embedding_tokens' }), en).what).toBe(
       'Memory search tokens',
     );
-    // A cap the application has no words for is named as it is.
+    // A meter the application has no words for is named by the label its event carries (the
+    // one its module declares), in the reader's language (V13); one stored without, as it is.
+    const pages = row({
+      cap: 'pages_rendered',
+      label: { en: 'Pages rendered', hi: 'रेंडर किए पेज', te: 'రెండర్ చేసిన పేజీలు' },
+    });
+    expect(LimitLowNotification.whatsapp?.params(pages, en).what).toBe('Pages rendered');
+    expect(LimitLowNotification.whatsapp?.params(pages, hi).what).toBe('रेंडर किए पेज');
+    expect(LimitReachedNotification.email?.subject({ ...pages, level: 'pause' }, en)).toBe(
+      'Pages rendered: limit reached, it is paused',
+    );
     expect(LimitLowNotification.whatsapp?.params(row({ cap: 'pages_rendered' }), en).what).toBe(
       'pages_rendered',
     );

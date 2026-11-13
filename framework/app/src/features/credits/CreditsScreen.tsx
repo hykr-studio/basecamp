@@ -43,15 +43,6 @@ function UsedBar({
   );
 }
 
-/** The framework's meters have names in every language; a meter a module added shows its own. */
-const METER_NAMES: Readonly<Record<string, MessageKey>> = {
-  tokens: 'credits.meter.tokens',
-  tool_calls: 'credits.meter.tool_calls',
-  messages: 'credits.meter.messages',
-  voice_seconds: 'credits.meter.voice_seconds',
-  embedding_tokens: 'credits.meter.embedding_tokens',
-};
-
 function Meters({ status }: { status: CreditsStatus }) {
   const { t, lang } = useT();
   const shown = status.meters.filter((m) => m.quantity > 0 || m.limit !== undefined);
@@ -61,9 +52,8 @@ function Meters({ status }: { status: CreditsStatus }) {
       {shown.map((m) => (
         <View key={m.meter} className="gap-1">
           <View className="flex-row items-center justify-between gap-2">
-            <Text className="font-semibold">
-              {METER_NAMES[m.meter] ? t(METER_NAMES[m.meter]) : m.meter}
-            </Text>
+            {/* As people call it, in this language (a module's meter by the label it declares). */}
+            <Text className="font-semibold">{m.label}</Text>
             <Text variant="muted">
               {meterQuantity(m.meter, m.quantity)}
               {m.limit !== undefined ? ` / ${meterQuantity(m.meter, m.limit)}` : ''}
@@ -184,8 +174,9 @@ export function CreditsScreen() {
   // Use moves while the screen is open (the assistant's turns, a pause, the operator lifting it):
   // read it again every little while, not only when the screen is opened.
   const status = useQuery({
-    queryKey: ['credits'],
-    queryFn: () => api.credits.status(),
+    queryKey: ['credits', lang],
+    // Its words (a meter's label, why it is paused) in this language.
+    queryFn: () => api.credits.status(lang),
     refetchInterval: CREDITS_REFRESH_MS,
   });
   const s = status.data;

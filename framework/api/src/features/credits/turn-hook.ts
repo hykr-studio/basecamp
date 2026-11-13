@@ -44,10 +44,12 @@ async function contactOf(svc: CreditsService, tenantId: string, subject: Subject
 async function before(svc: CreditsService, turn: TurnInfo): Promise<TurnGate | null> {
   const p = turn.principal;
   if (!p.tenantId) return null;
-  // What a turn spends, as `turnRefusal` (the credits status) reads it.
+  // What a turn spends, as `turnRefusal` (the credits status) reads it; why, in the turn's
+  // language.
   const refusals = await svc.checkMany(
     p.tenantId,
     TURN_METERS.map((m) => ({ meter: m.name })),
+    turn.lang ?? 'en',
   );
   const refusal = refusals.find((r) => r !== null) ?? null;
   // Settings that do not parse: the model policy refuses the turn itself (503), naming why.

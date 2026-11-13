@@ -17,6 +17,7 @@ import {
   type RequestMetaValue,
   runWrite,
 } from '@hykr/core';
+import { isLang } from '@hykr/i18n';
 import { can } from '@hykr/policy';
 import {
   BadRequestException,
@@ -68,10 +69,15 @@ export class CreditsController {
     private readonly credits: CreditsService,
   ) {}
 
+  /** `?lang=`: the reader's language, for its words (a meter's label, why it is paused). */
   @Get()
-  status(@CurrentPrincipal() p: Principal): Promise<CreditsStatus> {
+  status(@CurrentPrincipal() p: Principal, @Query('lang') lang?: string): Promise<CreditsStatus> {
     need(p, CreditsViewCapability, 'credits_view', "the business's team can see its usage");
-    return this.credits.status(p.tenantId as string, can(p, CreditsManageCapability));
+    return this.credits.status(
+      p.tenantId as string,
+      can(p, CreditsManageCapability),
+      isLang(lang) ? lang : 'en',
+    );
   }
 
   @Get('ledger')
