@@ -48,6 +48,7 @@ export const approvalMessages = defineMessages({
     'approval.pointer.teamAbove': 'Waiting for the team above',
     'approval.pointer.thePage': 'the page',
     'approval.pointer.show': '{summary}: {where}. Show it',
+    'approval.pointer.aRequest': 'A request',
     'approval.whyItWaits': 'Why it waits: {reason}.',
   },
   hi: {
@@ -93,6 +94,7 @@ export const approvalMessages = defineMessages({
     'approval.pointer.teamAbove': 'ऊपर टीम का इंतज़ार',
     'approval.pointer.thePage': 'पेज',
     'approval.pointer.show': '{summary}: {where}। दिखाएँ',
+    'approval.pointer.aRequest': 'एक अनुरोध',
     'approval.whyItWaits': 'यह क्यों रुका है: {reason}।',
   },
   te: {
@@ -138,6 +140,7 @@ export const approvalMessages = defineMessages({
     'approval.pointer.teamAbove': 'పైన బృందం కోసం వేచి ఉంది',
     'approval.pointer.thePage': 'పేజీ',
     'approval.pointer.show': '{summary}: {where}. చూపించు',
+    'approval.pointer.aRequest': 'ఒక అభ్యర్థన',
     'approval.whyItWaits': 'ఇది ఎందుకు వేచి ఉంది: {reason}.',
   },
 });

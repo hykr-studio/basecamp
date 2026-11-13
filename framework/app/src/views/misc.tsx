@@ -73,7 +73,7 @@ export function ApprovalCardComponent({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t('approval.pointer.show', {
-          summary: summary ?? pending.summary ?? 'A request',
+          summary: summary ?? pending.summary ?? t('approval.pointer.aRequest'),
           where,
         })}
         onPress={() => {
