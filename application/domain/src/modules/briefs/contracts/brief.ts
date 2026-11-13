@@ -6,11 +6,14 @@ import {
   entitySpec,
   Money,
   MoneyInput,
+  storableDate,
 } from '@hykr/contracts';
 import { z } from 'zod';
 
 const name = z.string().trim().min(1).max(80);
 const summary = z.string().trim().min(1).max(2000);
+/** A day Postgres can store: `z.iso.date()` takes the year 0000 (developer guide, section 14). */
+const neededBy = storableDate();
 
 /** Where a brief came from: the team typed it in, or a customer answered the brief form. */
 export const BRIEF_SOURCES = ['team', 'form'] as const;
@@ -26,7 +29,7 @@ export const BriefView = z.object({
   summary: z.string(),
   budget: Money.nullable(),
   currency: CurrencyCode,
-  neededBy: z.iso.date().nullable(),
+  neededBy: neededBy.nullable(),
   notes: z.string(),
   status: z.enum(BRIEF_STATUSES),
   source: z.enum(BRIEF_SOURCES),
@@ -43,7 +46,7 @@ export const CreateBriefInput = z.object({
   summary,
   budget: MoneyInput.optional(),
   currency: CurrencyCode.optional(),
-  neededBy: z.iso.date().optional(),
+  neededBy: neededBy.optional(),
   notes: z.string().max(2000).optional(),
   source: z.enum(BRIEF_SOURCES).optional(),
   custom: CustomFieldsInput.optional(),
@@ -54,7 +57,7 @@ export const UpdateBriefInput = z
     phone: z.string().trim().max(20).nullable().optional(),
     summary: summary.optional(),
     budget: MoneyInput.nullable().optional(),
-    neededBy: z.iso.date().nullable().optional(),
+    neededBy: neededBy.nullable().optional(),
     notes: z.string().max(2000).optional(),
     status: z.enum(BRIEF_STATUSES).optional(),
     custom: CustomFieldsInput.optional(),

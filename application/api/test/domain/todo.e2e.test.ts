@@ -147,4 +147,14 @@ describe('to-dos, end to end', () => {
     expect(otherSort.status).toBe(400);
     expect(otherSort.body.error).toBe('cursor_sort_mismatch');
   });
+
+  it('9. a due date Postgres cannot store is refused, not a 500', async () => {
+    // `z.iso.date()` takes the year 0000, which Postgres's date has no room for (V10).
+    const made = await alice.call('POST', '/api/todos', { title: 'Never', dueOn: '0000-01-01' });
+    expect(made.status).toBe(400);
+    const id = (await alice.call('POST', '/api/todos', { title: 'Some day' })).body.value.id;
+    expect((await alice.call('PATCH', `/api/todos/${id}`, { dueOn: '0000-01-01' })).status).toBe(
+      400,
+    );
+  });
 });

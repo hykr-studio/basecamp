@@ -325,5 +325,10 @@ describe('the brief form', () => {
     expect(
       ((await owner.call('GET', '/api/briefs?source=form')).body.items as Json[]).map((b) => b.id),
     ).toContain(id);
+    // A date Postgres cannot store is the guest's mistake, not a 500 (docs/decisions/V10.md).
+    const unstorable = await guest('POST', `/api/share/${link.token}/submit`, {
+      values: { name: 'Meera', summary: 'Shelves for a study', neededBy: '0000-01-01' },
+    });
+    expect(unstorable.status).toBe(400);
   });
 });
