@@ -57,11 +57,15 @@ describe('a meeting named by a to-do or a note', () => {
         expect(res.status, `${path} ${JSON.stringify(res.body)}`).toBe(404);
         bodies.push(res.body);
       }
-      const own = await bob.call('POST', '/api/todos', { title: 'Mine' });
-      const patched = await bob.call('PATCH', `/api/todos/${own.body.value.id}`, { meetingId });
-      expect(patched.status).toBe(404);
-      bodies.push(patched.body);
-      expect(await linkOf('todos', own.body.value.id)).toBeNull();
+      for (const table of ['todos', 'notes'] as const) {
+        const own = await bob.call('POST', `/api/${table}`, { title: 'Mine' });
+        const patched = await bob.call('PATCH', `/api/${table}/${own.body.value.id}`, {
+          meetingId,
+        });
+        expect(patched.status, `${table} ${JSON.stringify(patched.body)}`).toBe(404);
+        bodies.push(patched.body);
+        expect(await linkOf(table, own.body.value.id)).toBeNull();
+      }
     }
     for (const body of bodies) expect(body).toEqual(refused);
     // Bob's own meeting is his to name.
@@ -81,6 +85,42 @@ describe('a meeting named by a to-do or a note', () => {
     const asked = await ask('POST', '/api/todos', { title: 'Linked', meetingId: aliceMeeting });
     expect(asked.status).toBe(404);
     expect(asked.body).toEqual(refused);
+  });
+
+  it('a member of two businesses names only the meetings of the one they work in', async () => {
+    const both = new Person('Both References');
+    await both.signUp();
+    const ownTenant = (await me(both)).tenantId;
+    await addMember(both, aliceTenant, ['admin']);
+    const ownMeeting = await meeting(both, 'Own review');
+    const inAlice = { 'x-tenant-id': aliceTenant };
+    // In their own business, Alice's meeting is no meeting of theirs, though they can read it there.
+    for (const path of ['/api/todos', '/api/notes']) {
+      const res = await both.call('POST', path, { title: 'Crossed', meetingId: aliceMeeting });
+      expect(res.status, `${path} ${JSON.stringify(res.body)}`).toBe(404);
+      expect(res.body).toEqual(refused);
+      const back = await both.call(
+        'POST',
+        path,
+        { title: 'Crossed back', meetingId: ownMeeting },
+        inAlice,
+      );
+      expect(back.status, `${path} ${JSON.stringify(back.body)}`).toBe(404);
+      expect(back.body).toEqual(refused);
+    }
+    const there = await both.call(
+      'POST',
+      '/api/todos',
+      { title: 'Theirs', meetingId: aliceMeeting },
+      inAlice,
+    );
+    expect(there.status, JSON.stringify(there.body)).toBe(201);
+    const here = await both.call('POST', '/api/todos', { title: 'Mine', meetingId: ownMeeting });
+    expect(here.status).toBe(201);
+    expect(
+      (await pool.query('select tenant_id from app.todos where id = $1', [here.body.value.id]))
+        .rows[0].tenant_id,
+    ).toBe(ownTenant);
   });
 
   it('the database refuses a cross-business link written by SQL', async () => {
@@ -126,5 +166,30 @@ describe('the SQL hook that adds the keys', () => {
       'FOREIGN KEY (tenant_id, meeting_id) REFERENCES app.meetings(tenant_id, id) ON DELETE SET NULL (meeting_id)',
       'FOREIGN KEY (tenant_id, meeting_id) REFERENCES app.meetings(tenant_id, id) ON DELETE SET NULL (meeting_id)',
     ]);
+  });
+
+  it('looks for each key on its own table: the same name elsewhere does not stop it (V10)', async () => {
+    const hook = await readFile(
+      fileURLToPath(new URL('../../../domain/sql/post/meeting-references.sql', import.meta.url)),
+      'utf8',
+    );
+    const onNotes = () =>
+      pool.query(
+        `select count(*)::int n from pg_constraint where conname = 'notes_meeting_fk' and conrelid = 'app.notes'::regclass`,
+      );
+    await pool.query('alter table app.notes drop constraint notes_meeting_fk');
+    await pool.query(
+      'create table app.v10_decoy (n int constraint notes_meeting_fk check (n > 0))',
+    );
+    try {
+      await pool.query(hook);
+      expect((await onNotes()).rows[0].n).toBe(1);
+      // A database that ran it already (both keys in place): it changes nothing.
+      await pool.query(hook);
+      expect((await onNotes()).rows[0].n).toBe(1);
+    } finally {
+      await pool.query('drop table app.v10_decoy');
+      await pool.query(hook);
+    }
   });
 });
