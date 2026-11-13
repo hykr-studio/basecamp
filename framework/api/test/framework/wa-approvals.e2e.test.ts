@@ -305,6 +305,61 @@ describe('approvals on WhatsApp', () => {
     await heard(address, /That was rejected, so nothing changed: Delete "Return tiles"/);
   });
 
+  it('a run that goes on and parks again on WhatsApp: the team is told, and her own is in the app (V7)', async () => {
+    // A customer's run: the business approves the first delete in the app, the run goes on and
+    // parks the second. Someone else decides it: the waiting line, no link and no buttons.
+    const address = phone();
+    const customer = await seedContact(tenantId, 'Nila', address);
+    const as = asAssistant(`contact:${customer.contactId}`);
+    for (const title of ['Return grout', 'Return tape']) await as('POST', '/api/tasks', { title });
+    await say(address, 'remove Return grout then Return tape');
+    await heard(address, /asked the team for approval: Delete "Return grout"/);
+    const first = await eventually(async () => {
+      const { rows } = await pool.query(
+        `select id from app.approvals where requester_contact_id = $1 and status = 'pending'`,
+        [customer.contactId],
+      );
+      return rows[0]?.id as string | undefined;
+    });
+    const heardBefore = textsTo(address).length;
+    expect((await ana.call('POST', `/api/approvals/${first}/approve`)).body.status).toBe(
+      'approved',
+    );
+    const again = await heard(address, /asked the team for approval: Delete "Return tape"/);
+    expect(again).not.toContain('/approvals/');
+    expect(
+      textsTo(address)
+        .slice(heardBefore)
+        .some((t) => t.includes('/approvals/') || /your approval|until you approve/.test(t)),
+    ).toBe(false);
+    expect(
+      toNumber(address).some((s) => JSON.stringify(s.interactive ?? '').includes('apr:')),
+    ).toBe(false);
+
+    // Her own run: she approves the first with its button; the second, parked as the run goes
+    // on, is hers to decide, in the app.
+    for (const title of ['Order nails', 'Order screws'])
+      await ana.call('POST', '/api/tasks', { title });
+    await say(anaPhone, 'remove Order nails then Order screws');
+    const buttons = await eventually(() =>
+      toNumber(anaPhone).find(
+        (s) =>
+          s.interactive?.body?.text?.includes('Order nails') &&
+          s.interactive?.action.buttons?.some((b) => b.reply.id.startsWith('apr:')),
+      ),
+    );
+    await tap(anaPhone, buttons.interactive?.action.buttons?.[0].reply.id ?? '');
+    const second = await eventually(async () => {
+      const { rows } = await pool.query(
+        `select id from app.approvals where owner_id = $1 and status = 'pending'
+           and summary like '%Order screws%'`,
+        [ana.id],
+      );
+      return rows[0]?.id as string | undefined;
+    });
+    await heard(anaPhone, new RegExp(`/approvals/${second}`));
+  });
+
   it("the business's own roles count: a role it made, or one it gave approvals.decide, is asked", async () => {
     // Bea holds a role the business made; Cal is staff, a role it gave approvals.decide.
     const bea = new Person('Bea Approves');

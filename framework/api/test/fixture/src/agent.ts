@@ -1,6 +1,7 @@
 import {
   type AgentModule,
   call,
+  decided,
   defineScript,
   items,
   sameTitle,
@@ -15,8 +16,32 @@ const ADD = verbs('add', 'जोड़ो', 'జోడించు');
 const DELETE = verbs('delete', 'हटाओ', 'తొలగించు');
 const quoted = (title: string) => `"${title}"`;
 
-/** add <title> → create-task; delete <title> → list-tasks → delete-task (parked for approval). */
+/**
+ * add <title> → create-task; delete <title> → list-tasks → delete-task (parked for approval);
+ * remove <a> then <b> → list-tasks → delete-task a (parked); once a is approved, the run goes on
+ * and deletes b (parked again).
+ */
 const scripts = [
+  defineScript({
+    name: 'remove-then',
+    match: (text) => {
+      const m = /^remove (.+) then (.+)$/i.exec(text.trim());
+      return m ? [m[1], m[2]] : undefined;
+    },
+    step: ([first, second], turn) => {
+      const deletes = turn.steps.filter((s) => s.toolName === 'delete-task');
+      const last = deletes[deletes.length - 1]?.outcome;
+      if (deletes.length === 2 && last) return [say(written(last, () => 'Removed both.', turn))];
+      const list = turn.result('list-tasks');
+      if (!list) return [call('list-tasks', {})];
+      const idOf = (title: string) => items(list).find((t) => sameTitle(t.title, title))?.id;
+      if (deletes.length === 1 && last && decided(last) !== 'approved')
+        return [say(written(last, () => 'Removed.', turn))];
+      const id = idOf(deletes.length ? second : first);
+      if (!id) return [say('No such task.')];
+      return [call('delete-task', { id })];
+    },
+  }),
   defineScript({
     name: 'add',
     match: (text) => new RegExp(`^(?:${ADD})\\s+(.+)$`, 'iu').exec(text.trim())?.[1],
