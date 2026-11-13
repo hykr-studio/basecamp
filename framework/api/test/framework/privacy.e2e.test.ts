@@ -1673,16 +1673,23 @@ describe('the copies of what an erasure takes (decisions V3)', () => {
       call(ana, 'POST', '/api/members/invites', { email, roles: ['staff'] });
     const taken = await invite(uma.email);
     expect(taken.status).toBe(200);
-    expect(
-      (await call(ana, 'DELETE', `/api/members/invites/${taken.body.value.invite.id}`)).status,
-    ).toBe(200);
+    // Taken back with a key, as the app sends one: its reply (the invitation) is kept.
+    const takenBack = await ana.call(
+      'DELETE',
+      `/api/members/invites/${taken.body.value.invite.id}`,
+      undefined,
+      here({ 'idempotency-key': `v3-revoke-${MK}` }),
+    );
+    expect(takenBack.status).toBe(200);
     const sent = await invite(uma.email);
     expect(sent.status).toBe(200);
     const joined = await uma.call('POST', '/api/members/invites/accept', {
       token: sent.body.value.token,
     });
     expect(joined.status).toBe(200);
-    expect((await copiesHolding(uma.email)).length).toBeGreaterThanOrEqual(3);
+    expect((await copiesHolding(uma.email)).map((c) => c.at)).toEqual(
+      expect.arrayContaining(['audit', 'reply']),
+    );
     // A page she saved here: its audit rows carry its name and spec.
     const page = await call(uma, 'POST', '/api/pages', {
       name: `${MK} page`,
@@ -1694,6 +1701,16 @@ describe('the copies of what an erasure takes (decisions V3)', () => {
     });
     expect(page.status).toBe(201);
     expect((await copiesHolding(`${MK} page`)).length).toBeGreaterThanOrEqual(1);
+    // Her copy of her data lists both invitations, never a token's hash.
+    const asked = await file(uma, 'export');
+    expect(asked.status).toBe(200);
+    const exported = await finished(uma, asked.body.value.id);
+    expect(exported.status).toBe('completed');
+    const zip = await archive(uma, exported.files[0]);
+    const invites = json(zip, 'features/invites.json') as Json[];
+    expect(invites.map((i) => i.email)).toEqual([uma.email.toLowerCase(), uma.email.toLowerCase()]);
+    expect(invites.some((i) => i.revokedAt) && invites.some((i) => i.acceptedAt)).toBe(true);
+    expect(JSON.stringify(invites)).not.toContain('tokenHash');
 
     const res = await file(uma, 'erase');
     expect(res.status).toBe(200);
