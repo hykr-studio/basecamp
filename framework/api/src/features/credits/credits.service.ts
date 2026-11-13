@@ -40,6 +40,7 @@ import { and, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { Subscription } from 'rxjs';
 import { storableInstant } from '../../infra/instant.js';
 import { type Metering, setMetering, type UsageInput } from '../../metering.js';
+import { beforeOf, beforeWhere, encodeKeyset, keysetTime } from '../inbox/cursor.js';
 import {
   type Assessment,
   assess,
@@ -668,20 +669,26 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
     };
   }
 
-  /** Wallet entries, newest first: `limit` of them before `before` (an ISO time). */
+  /**
+   * Wallet entries, newest first: `limit` of them before `before`, the `next` a page handed out
+   * (entries in one transaction share their time, so it keeps the id too, V12) or an ISO time.
+   */
   async ledger(tenantId: string, opts: { before?: string; limit?: number } = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
     // A time it cannot read is no bound, as before; one Postgres cannot store is not either.
-    const before = storableInstant(opts.before);
+    const before = beforeOf(opts.before, storableInstant);
     const rows = await this.db
-      .select()
+      .select({ row: creditLedger, at: keysetTime(creditLedger.at) })
       .from(creditLedger)
       .where(
-        and(eq(creditLedger.tenantId, tenantId), before ? lt(creditLedger.at, before) : undefined),
+        and(
+          eq(creditLedger.tenantId, tenantId),
+          before ? beforeWhere(before, creditLedger.at, creditLedger.id) : undefined,
+        ),
       )
       .orderBy(desc(creditLedger.at), desc(creditLedger.id))
       .limit(limit + 1);
-    const items: LedgerEntry[] = rows.slice(0, limit).map((r) => ({
+    const items: LedgerEntry[] = rows.slice(0, limit).map(({ row: r }) => ({
       id: r.id,
       kind: r.kind as LedgerEntry['kind'],
       amount: r.amount,
@@ -692,7 +699,8 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       actor: { kind: r.actorKind, id: r.actorId },
       at: r.at.toISOString(),
     }));
-    return { items, next: rows.length > limit ? (items.at(-1)?.at ?? null) : null };
+    const last = rows.length > limit ? rows[limit - 1] : undefined;
+    return { items, next: last ? encodeKeyset({ at: last.at, id: last.row.id }) : null };
   }
 
   /** One of this business's purchases; another business's is not found. */

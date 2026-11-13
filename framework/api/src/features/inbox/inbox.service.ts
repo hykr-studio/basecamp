@@ -7,7 +7,7 @@ import { and, count, desc, eq, inArray, isNull, type SQL } from 'drizzle-orm';
 import type { z } from 'zod';
 import type { DeliveryOutcome, DeliveryRequest } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
-import { decodeKeyset, encodeKeyset, olderThan } from './cursor.js';
+import { decodeKeyset, encodeKeyset, keysetTime, olderThan } from './cursor.js';
 
 type ItemRow = typeof inboxItems.$inferSelect;
 
@@ -101,7 +101,7 @@ export class InboxService {
   async list(p: Principal, q: z.output<typeof InboxQuery>): Promise<InboxPage> {
     const mine = this.owner(p);
     const rows = await this.db
-      .select()
+      .select({ row: inboxItems, at: keysetTime(inboxItems.createdAt) })
       .from(inboxItems)
       .where(
         and(
@@ -117,8 +117,9 @@ export class InboxService {
     const items = rows.slice(0, q.limit);
     const last = items.at(-1);
     return {
-      items: items.map(entryOf),
-      nextCursor: rows.length > q.limit && last ? encodeKeyset(last) : null,
+      items: items.map((r) => entryOf(r.row)),
+      nextCursor:
+        rows.length > q.limit && last ? encodeKeyset({ at: last.at, id: last.row.id }) : null,
       unread: await this.unread(p),
     };
   }

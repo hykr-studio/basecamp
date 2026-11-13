@@ -26,10 +26,11 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { EventBus } from '@nestjs/cqrs';
-import { and, asc, desc, eq, lt } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import type { z } from 'zod';
 import { DB } from '../../infra/db.module.js';
 import { storableInstant } from '../../infra/instant.js';
+import { beforeOf, beforeWhere, encodeKeyset, keysetTime } from '../inbox/cursor.js';
 import { IntegrationsCapability } from './capability.js';
 import { DeliveriesService } from './deliveries.service.js';
 import {
@@ -265,7 +266,10 @@ export class IntegrationsService implements OnModuleInit {
     return { ...out.result, secret };
   }
 
-  /** The newest deliveries first; `before` (a time) pages back. */
+  /**
+   * The newest deliveries first; `before` pages back: the `nextBefore` a page handed out, which
+   * keeps the last delivery's id beside its time (one event's deliveries share it, V12), or a time.
+   */
   async deliveries(
     p: Principal,
     endpointId: string,
@@ -274,24 +278,27 @@ export class IntegrationsService implements OnModuleInit {
     const tenantId = this.read(p);
     await this.endpointRow(tenantId, endpointId);
     const limit = Math.min(Math.max(Number(query.limit ?? LOG_LIMIT) || LOG_LIMIT, 1), 200);
-    const before = query.before ? storableInstant(query.before) : undefined;
+    const before = beforeOf(query.before, storableInstant);
     if (query.before && !before)
       throw new BadRequestException({ error: 'invalid', message: 'before is not a time' });
     const rows = await this.db
-      .select()
+      .select({ row: integrationDeliveries, at: keysetTime(integrationDeliveries.createdAt) })
       .from(integrationDeliveries)
       .where(
         and(
           eq(integrationDeliveries.tenantId, tenantId),
           eq(integrationDeliveries.endpointId, endpointId),
           query.status ? eq(integrationDeliveries.status, query.status) : undefined,
-          before ? lt(integrationDeliveries.createdAt, before) : undefined,
+          before
+            ? beforeWhere(before, integrationDeliveries.createdAt, integrationDeliveries.id)
+            : undefined,
         ),
       )
       .orderBy(desc(integrationDeliveries.createdAt), desc(integrationDeliveries.id))
       .limit(limit + 1);
-    const items = rows.slice(0, limit).map(deliveryView);
-    return { items, nextBefore: rows.length > limit ? (items.at(-1)?.createdAt ?? null) : null };
+    const items = rows.slice(0, limit).map((r) => deliveryView(r.row));
+    const last = rows.length > limit ? rows[limit - 1] : undefined;
+    return { items, nextBefore: last ? encodeKeyset({ at: last.at, id: last.row.id }) : null };
   }
 
   /**
