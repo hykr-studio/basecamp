@@ -1592,12 +1592,13 @@ describe('the copies of what an erasure takes (decisions V3)', () => {
         { row: { id: seeded.other, cardId: X, name: `${KEEP} references` } },
       ],
     );
-    // A file kept on the card, and its own audit row (the name the person gave it).
+    // A file kept on the card, put there by Ana (so it goes with the card, not as Gus's own
+    // upload), and its own audit row (the name it was given).
     seeded.file = await id(
       `insert into app.files (tenant_id, owner_id, key, name, mime, size, status, resource_type,
          resource_id, field)
        values ($1, $2, $3, $4, 'image/png', 10, 'attached', 'card', $5, 'photos') returning id`,
-      [tenantId, gus.id, `v3/${MK}`, `${MK}.png`, X],
+      [tenantId, ana.id, `v3/${MK}`, `${MK}.png`, X],
     );
     await audit('file.attach', 'file', seeded.file, {
       after: { name: `${MK}.png`, on: { entity: 'card', id: X, field: 'photos' } },
@@ -1656,6 +1657,30 @@ describe('the copies of what an erasure takes (decisions V3)', () => {
     expect(await one(`select response from app.idempotency where key = $1`, [`v3-${MK}`])).toEqual({
       response: { status: 'done', value: { card: { id: seeded.card }, token: 'kept' } },
     });
+  });
+
+  it("expire Mastra's score results with the traces they scored", async () => {
+    const at = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    const score = (key: string, when: string) =>
+      pool.query(
+        `insert into mastra.mastra_scorers (id, "scorerId", "runId", scorer, score, input, output,
+           source, "createdAt", "updatedAt", "createdAtZ", "updatedAtZ")
+         values ($1, 'v3', $1, '{}', 1, '{}', '{}', 'LIVE', ($2::timestamptz at time zone 'UTC'),
+           ($2::timestamptz at time zone 'UTC'), $2, $2)`,
+        [key, when],
+      );
+    await score(`v3-old-${MK}`, at(60));
+    await score(`v3-new-${MK}`, at(0));
+    const { DB } = await import('../../dist/testing-internals.js');
+    const { expireTraces } = await import('../../dist/features/privacy/mastra.js');
+    const db = server.app?.get(DB, { strict: false });
+    expect(
+      await db.transaction((tx: unknown) => expireTraces(tx, new Date(at(30)))),
+    ).toBeGreaterThan(0);
+    expect(
+      (await pool.query('select id from mastra.mastra_scorers where id like $1', [`v3-%-${MK}`]))
+        .rows,
+    ).toEqual([{ id: `v3-new-${MK}` }]);
   });
 
   it('keep what only references the record, and what another business holds', async () => {

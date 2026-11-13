@@ -312,9 +312,9 @@ describe('personal data contributors', () => {
       [contactId],
     );
     // The framework's own (acceptance, agents, calendar, calls, comments, files, inbox,
-    // integrations, jobs, memory, parties, push, share links) run too: a contact has no codes,
-    // agents, calendars, calls, comments, files, inbox items, payloads naming them, jobs,
-    // memories, party memberships, devices or links made for them. The channel's own trail
+    // integrations, invites, jobs, memory, parties, push, share links) run too: a contact has no
+    // codes, agents, calendars, calls, comments, files, inbox items, payloads naming them,
+    // invitations, jobs, memories, party memberships, devices or links made for them. The channel's own trail
     // anonymises its customer record (B18: a privacy request now).
     expect(rows).toEqual([
       {
@@ -329,6 +329,7 @@ describe('personal data contributors', () => {
             comments: 0,
             files: 0,
             inbox: 0,
+            invites: 0,
             jobs: 0,
             memory: 0,
             parties: 0,
@@ -347,8 +348,9 @@ describe('personal data contributors', () => {
     const subject = { kind: 'user' as const, userId: ana.id };
     expect(await api.exportPersonalData({ subject, tenantId, db })).toEqual({
       // The framework's comments, documents, files, inbox, jobs and push: Ana wrote, made,
-      // uploaded, got, started and registered nothing; parties: she is no party's member; and
-      // acceptance, calendars and calls: she accepted, connected and called nothing.
+      // uploaded, got, started and registered nothing; parties: she is no party's member;
+      // acceptance, calendars and calls: she accepted, connected and called nothing; and
+      // invites: nobody invited her (she made the business).
       acceptances: [],
       otpChallenges: [],
       calendarConnections: [],
@@ -360,6 +362,7 @@ describe('personal data contributors', () => {
       documents: [],
       files: [],
       inbox: [],
+      invites: [],
       jobs: [],
       parties: [],
       pushDevices: [],
