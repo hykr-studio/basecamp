@@ -3048,7 +3048,9 @@ Every business's use of what costs money is metered, priced and, when its plan s
   `alertAt` (`PUT /api/credits/alerts`, `credits.manage`).
 - **Budget and wallet.** On credits, a period's spending uses the allowance first, then the
   prepaid wallet (`app.credit_wallets`, every change a row in `app.credit_ledger`). Used per cent is
-  spent over spent plus what is left. At `alertAt` of a cap (the budget or a meter's limit) the
+  spent over spent plus what is left, at most 100: one use past what was left takes the wallet
+  below zero (below) and reads 100%, in the reason, the status and an alert. The levels follow
+  the real numbers, so a `pauseAt` past 100 still pauses. At `alertAt` of a cap (the budget or a meter's limit) the
   named event `credits.threshold` (`{ cap, level: 'alert' | 'pause', usedPercent, threshold }`) is
   stored in the outbox and published, once per period and level; the application's notification
   words it and addresses `{ capability: 'credits.manage' }`, which dispatch expands with the
@@ -3070,8 +3072,13 @@ Every business's use of what costs money is metered, priced and, when its plan s
   reader's language: `GET /api/credits?lang=` and the operator's `GET …/:tenantId?lang=` (each
   meter's `label` too), a refused turn's language, a pinned voice session's; English where the
   caller names none (an agent's call, a recall's 402). The app sends no turn language, so its
-  thread words a turn the credits refused itself, in its own language (`credits.paused`, as
-  every other channel's paused sentence). A meter's `credits.threshold` event carries
+  thread words a turn the credits refused itself, in its own language, with the sentence every
+  other channel says: `credits.paused`, or `credits.suspended` for the operator's pause, which
+  adding credits does not lift (`pausedSentenceKey(rule)`, `@hykr/contracts`: WhatsApp's paused
+  turn, `EndWhenPaused`, the app's thread and its voice). The ledger
+  (`GET /api/credits/ledger?lang=`, and the operator's) words a debit when it is read, from the
+  use it paid for: `use: { meter, label, quantity }`, never its stored note, which names the
+  meter in the code. A meter's `credits.threshold` event carries
   its `label` in every language, so the application's alert can name a module's meter. One use
   that passes both levels of a cap at once (a limit of 1, a long voice session) says only the
   pause: the alert's row is stored and its event is not sent, so "low" never comes with "limit
@@ -3736,7 +3743,7 @@ These are not built. Each has a workaround for now.
 | Operators inviting a business's owner | `POST /api/platform/tenants` makes a business for someone who has an account. An owner without one signs up first. A business made at sign-up announces no `tenant.provisioned`. |
 | Routing rules, keeping unrouted requests | The framework asks the application's `inboundRouters`; it keeps what happened to a request (`app.platform_routed`), not what it said. An operator cannot assign an unrouted request by hand. |
 | Suspending a business, plans and prices | Operators make, rename and switch flags of a business, and set its credits (section 7.6). Nothing suspends or deletes one; billing is the application's. |
-| The paused sentence for a usage limit | A turn refused by a `tokens` or `tool_calls` limit still says the business has used its credits and someone can add more (`credits.paused`, also said by `EndWhenPaused`). Its `rule` (`usage_limit_reached`) and `GET /api/credits` say it is a limit: raise it in the operator's plan, or wait for the next period. |
+| The paused sentence for a usage limit | A turn refused by a `tokens` or `tool_calls` limit still says the business has used its credits and someone can add more (`credits.paused`, also said by `EndWhenPaused`). Its `rule` (`usage_limit_reached`) and `GET /api/credits` say it is a limit: raise it in the operator's plan, or wait for the next period. (The operator's pause says its own sentence, `credits.suspended`.) |
 | Telling the approver that the marketing cap dropped a send | A marketing message past the contact's weekly cap (`general.marketingPerWeek`) is dropped and only logged, also after someone approved it. Check the contact's sends this week before approving. |
 | Bull Board in production | It is mounted outside production only, for operators holding `platform.queues`. |
 | Support in history and events | `audit.events.on_behalf_of` marks support and operator writes, but the history screen does not label them, and stored events carry only the actor. Read a grant's activity (`GET /api/support-access/:id/activity`) or the audit. |
@@ -3801,7 +3808,7 @@ These are not built. Each has a workaround for now.
 | Memory recall at scale | Recall compares every vector of one business (no approximate index), and the compose and CI images have no pgvector, so it runs on `app.memory_cosine`. Fine for thousands of memories per business; beyond that, install pgvector and add an index. |
 | Memory of the record on screen | A turn's recall does not prefer memory of the record the person is looking at. Ask with `recall-memory` and `about`. |
 | Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it. Its `memory` settings are edited as JSON on the back office's Settings screen. |
-| A limit's alert past 100% | A plan that pauses a meter above its limit (`pauseAt` over 100) can send the sample's "low" alert at, say, 120%, still worded "At the limit it pauses". The event carries no `pauseAt`, so the alert cannot say when it will pause. Keep `pauseAt` at 100 for limits, or word the alert as past the limit when `usedPercent` is 100 or more (a new template). |
+| A limit's alert past 100% | A plan that pauses a meter above its limit (`pauseAt` over 100) can send the sample's "low" alert at, say, 120%, still worded "At the limit it pauses". The event carries no `pauseAt`, so the alert cannot say when it will pause. Keep `pauseAt` at 100 for limits, or word the alert as past the limit when `usedPercent` is 100 or more (a new template). The budget's share stops at 100, so under such a plan its alert reads "100% used" while the wallet goes below zero. |
 | A credits refusal to an agent, in the person's language | An agent's call the credits refuse (402), and a recall's 402, give their reason in English: an agent's call carries no language. The turn still ends with the paused sentence in its own language (`EndWhenPaused`). |
 | A lookup before a contributed tool's refused write | A write tool a module contributes (`toolContributions`) is not in the catalog's `writeToolIds`, so a list before its refused call still shows; a done or waiting call of it is known by its result. The generated, command and transition tools are all known. |
 | Settings screens | Every editable section (section 5.18) has the API and client methods, and the back office edits each as JSON; neither app has a form per section. |
