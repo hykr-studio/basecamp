@@ -3107,7 +3107,11 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   Everything else is the API's: access, field hiding, approvals, audit. A person who left the
   business gets 403. The throttle counts each client for its person and business (any
   contributed identity provider's credential gets its own bucket, as the agent key does), not
-  the address: every tool call reaches the API from the API's own process.
+  the address: every tool call reaches the API from the API's own process. Better Auth's routes
+  (`/api/auth/*`, sign-in and the OAuth endpoints) are outside that throttle: Better Auth's own
+  limits apply there (3 sign-ins, sign-ups, password or email changes per 10 s per address, 100
+  calls elsewhere), counted in the same Redis, in production and with `THROTTLE=on`, never with
+  `THROTTLE=off` (`authRateLimit`, `infra/throttle.ts`).
 - **Scopes** are `<module>:read` and `<module>:write` for each application module (`write` covers
   `read`), plus `offline_access`. `PrincipalGuard` enforces them for any scoped credential (any
   identity provider that returns `scopes`): it reaches only routes that declare a scope
