@@ -156,7 +156,10 @@ export interface CreditsStatus {
    * turns run. A limit on another meter refuses only that meter's use: see `meters`.
    */
   paused: UsageRefusal | null;
-  /** Of the budget (allowance + wallet); null without a budget. */
+  /**
+   * Of the budget (allowance + wallet), at most 100: one use past what was left takes the wallet
+   * below zero and reads as all of it. Null without a budget.
+   */
   usedPercent: number | null;
   alertAt: number;
   pauseAt: number;
@@ -183,7 +186,13 @@ export interface LedgerEntry {
   currency: string;
   /** What it was for: a purchase, a use. */
   ref: string | null;
+  /** Words written with it (a grant's, a top-up's). A debit has none: see `use`. */
   note: string | null;
+  /**
+   * A debit's use, worded when read: its meter (`meter` as the code names it, `label` as people
+   * call it, in the reader's language) and how much, in the meter's base unit.
+   */
+  use?: { meter: string; label: string; quantity: number };
   actor: { kind: string; id: string };
   at: string;
 }

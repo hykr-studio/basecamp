@@ -18,7 +18,7 @@ import { Loading } from '../../framework/Loading';
 import { useT } from '../../framework/lang';
 import { useToast } from '../../framework/Toast';
 import { colors, styles } from '../../theme';
-import { formatCredits, meterQuantity, parseCredits } from './money';
+import { entryDetail, formatCredits, meterQuantity, parseCredits } from './money';
 
 /** A bar for how much of a cap is used: warning past the alert, danger at the pause. */
 function UsedBar({
@@ -132,8 +132,9 @@ function Buy({ currency }: { currency: string }) {
 function Ledger({ currency }: { currency: string }) {
   const { t, lang } = useT();
   const ledger = useQuery({
-    queryKey: ['credits', 'ledger'],
-    queryFn: () => api.credits.ledger(),
+    queryKey: ['credits', 'ledger', lang],
+    // A debit's use (its meter's label) in this language.
+    queryFn: () => api.credits.ledger(undefined, lang),
     refetchInterval: CREDITS_REFRESH_MS,
   });
   const items: LedgerEntry[] = ledger.data?.items ?? [];
@@ -147,7 +148,7 @@ function Ledger({ currency }: { currency: string }) {
             <Text className="font-semibold">{t(`credits.kind.${e.kind}` as MessageKey)}</Text>
             <Text variant="muted">
               {when(e.at)}
-              {e.note ? ` · ${e.note}` : ''}
+              {entryDetail(e) ? ` · ${entryDetail(e)}` : ''}
             </Text>
           </View>
           <Text style={{ color: e.amount < 0 ? colors.text : colors.success }}>

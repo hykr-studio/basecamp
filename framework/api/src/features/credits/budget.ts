@@ -22,6 +22,7 @@ export interface Budget {
   remaining: number;
   /** spent + remaining: the allowance plus what the wallet held for this period. */
   total: number;
+  /** Of the total, to one decimal, at most 100: past what was left reads all of it. */
   usedPercent: number;
   alert: boolean;
   pause: boolean;
@@ -80,7 +81,10 @@ export function assess(
       balance: wallet,
       remaining,
       total,
-      usedPercent: percent(spent, total),
+      // What people read (the reason, the status, an alert): at most all of it. One use may
+      // overshoot what was left (the wallet goes below zero by that much), so spent can pass
+      // the total; the levels below still follow the real numbers (a plan may pause past 100).
+      usedPercent: Math.min(100, percent(spent, total)),
       alert: reached(spent, total, plan.alertAt),
       pause: reached(spent, total, plan.pauseAt),
     };

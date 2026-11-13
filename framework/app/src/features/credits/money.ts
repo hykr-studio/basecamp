@@ -1,7 +1,7 @@
 // Credits are whole minor units of the deployment's currency: shown and typed in major units.
 // The currency's exponent and its words come from the framework's money helpers, as for every
 // other amount: nothing here rounds or assumes a currency.
-import { toMinor } from '@hykr/contracts';
+import { type LedgerEntry, toMinor } from '@hykr/contracts';
 import { type Lang, moneyText } from '@hykr/i18n';
 
 /** An amount of credits as money in the reader's language: 12345 EUR minor → "€123.45". */
@@ -36,4 +36,17 @@ export function parseCredits(typed: string, currency: string): number | undefine
 export function meterQuantity(meter: string, quantity: number): string {
   if (meter === 'voice_seconds') return `${Math.ceil(quantity / 60)} min`;
   return new Intl.NumberFormat('en').format(quantity);
+}
+
+/**
+ * What a wallet entry was for, in the reader's words: a debit by its use (the meter as people
+ * call it, and how much), never its stored note, which names the meter in the code; a grant or a
+ * top-up by the words written with it.
+ */
+export function entryDetail(
+  e: Partial<Pick<LedgerEntry, 'kind' | 'use'>> & Pick<LedgerEntry, 'note'>,
+): string {
+  if (e.use) return `${e.use.label}: ${meterQuantity(e.use.meter, e.use.quantity)}`;
+  if (e.kind === 'debit') return '';
+  return e.note ?? '';
 }

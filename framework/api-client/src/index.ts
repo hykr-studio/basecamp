@@ -998,11 +998,17 @@ export function createApiClient(opts: ApiClientOptions) {
           'GET',
           `/api/credits${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`,
         ),
-      ledger: (before?: string) =>
-        call<{ items: LedgerEntry[]; next: string | null }>(
+      /** In `lang`, the reader's: what each debit was for. */
+      ledger: (before?: string, lang?: string) => {
+        const q = new URLSearchParams({
+          ...(before ? { before } : {}),
+          ...(lang ? { lang } : {}),
+        }).toString();
+        return call<{ items: LedgerEntry[]; next: string | null }>(
           'GET',
-          `/api/credits/ledger${before ? `?before=${encodeURIComponent(before)}` : ''}`,
-        ),
+          `/api/credits/ledger${q ? `?${q}` : ''}`,
+        );
+      },
       /** Buy credits: the answer carries the checkout, or waits for an approval. */
       buy: (amount: number, provider?: string, key = newKey()) =>
         call<WriteResult<CreditPurchase>>(

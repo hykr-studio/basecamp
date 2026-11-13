@@ -80,16 +80,19 @@ export class CreditsController {
     );
   }
 
+  /** `?lang=`: the reader's language, for a debit's words (its use's meter). */
   @Get('ledger')
   ledger(
     @CurrentPrincipal() p: Principal,
     @Query('before') before?: string,
     @Query('limit') limit?: string,
+    @Query('lang') lang?: string,
   ) {
     need(p, CreditsManageCapability, 'credits_manage', 'people who manage the credits see this');
     return this.credits.ledger(p.tenantId as string, {
       ...(before ? { before } : {}),
       ...(limit ? { limit: Number(limit) } : {}),
+      lang: isLang(lang) ? lang : 'en',
     });
   }
 

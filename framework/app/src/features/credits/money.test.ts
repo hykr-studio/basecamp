@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatCredits, meterQuantity, parseCredits } from './money';
+import { entryDetail, formatCredits, meterQuantity, parseCredits } from './money';
 
 describe('credits as money', () => {
   it('formats minor units in major units, and shows bare credits without a currency', () => {
@@ -34,5 +34,17 @@ describe('credits as money', () => {
   it('shows voice in minutes', () => {
     expect(meterQuantity('voice_seconds', 61)).toBe('2 min');
     expect(meterQuantity('tokens', 12345)).toBe('12,345');
+  });
+
+  it('words a debit by its use, never by the note naming the meter in the code', () => {
+    const use = { meter: 'tool_calls', label: 'Assistant actions', quantity: 1 };
+    expect(entryDetail({ note: null, use })).toBe('Assistant actions: 1');
+    // A debit read before the API worded it (or by an older API): its note is not shown.
+    expect(entryDetail({ kind: 'debit', note: 'tool_calls × 1' })).toBe('');
+    const voice = { meter: 'voice_seconds', label: 'वॉइस मिनट', quantity: 150 };
+    expect(entryDetail({ note: null, use: voice })).toBe('वॉइस मिनट: 3 min');
+    // A grant or a top-up keeps the words written with it.
+    expect(entryDetail({ kind: 'grant', note: 'Welcome credits' })).toBe('Welcome credits');
+    expect(entryDetail({ kind: 'topup', note: null })).toBe('');
   });
 });

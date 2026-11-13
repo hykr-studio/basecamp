@@ -14,13 +14,14 @@ const saved = Object.fromEntries(ENV.map((n) => [n, process.env[n]]));
 
 const mia = new Person('Mia Words'); // a tool-call limit
 const rao = new Person('Rao Words'); // a module meter's limit
+const lin = new Person('Lin Words'); // one use past what is left: the wallet below zero
 const opal = new Person('Opal Words'); // a platform operator holding platform.credits
 const tenant: Record<string, string> = {};
 
 beforeAll(async () => {
   process.env.CREDITS_CONFIG = JSON.stringify({ currency: 'XXX', prices: { tool_calls: 100 } });
   await boot(creditsApp);
-  for (const person of [mia, rao]) {
+  for (const person of [mia, rao, lin]) {
     await person.signUp();
     tenant[person.name] = (await me(person)).tenantId;
   }
@@ -165,5 +166,59 @@ describe('one use past both levels of a cap', () => {
       'report_pages/alert',
       'report_pages/pause',
     ]);
+  });
+});
+
+describe('one use past what is left', () => {
+  it("the budget's reason and share read 100%, never past it", async () => {
+    expect((await setPlan(lin, { enforce: true, allowance: 1 })).status).toBe(200);
+    const grant = await opal.call('POST', `/api/credits/operator/${tenant[lin.name]}/grants`, {
+      amount: 50,
+      note: 'Welcome credits',
+    });
+    expect(grant.status).toBe(201);
+    // One tool call at 100: 1 from the allowance, 99 from a wallet of 50, which ends at -49.
+    expect((await lin.chat('add overshoot task')).status).toBe(200);
+
+    const en = (await lin.call('GET', '/api/credits')).body;
+    expect(en).toMatchObject({
+      usedPercent: 100,
+      balance: -49,
+      paused: {
+        rule: 'credits_exhausted',
+        reason: 'This business has used 100% of its credits this period',
+      },
+    });
+    const hi = (await lin.call('GET', '/api/credits?lang=hi')).body;
+    expect(hi.paused.reason).toBe('इस व्यवसाय ने इस अवधि में अपने क्रेडिट का 100% उपयोग कर लिया है');
+    const refused = await lin.chat('add one more overshoot task');
+    expect(refused.status).toBe(402);
+    expect(refused.body.reason).toBe(en.paused.reason);
+  });
+
+  it("the ledger names a use's meter as people call it, never by its name in the code", async () => {
+    type Entry = { kind: string; amount: number; note: string | null; use?: object };
+    const items = async (path: string, who = lin): Promise<Entry[]> => {
+      const res = await who.call('GET', path);
+      expect(res.status).toBe(200);
+      return res.body.items;
+    };
+    const en = await items('/api/credits/ledger');
+    expect(en.find((e) => e.kind === 'debit')).toMatchObject({
+      amount: -99,
+      note: null,
+      use: { meter: 'tool_calls', label: 'Assistant actions', quantity: 1 },
+    });
+    // A grant keeps the words its operator wrote.
+    expect(en.find((e) => e.kind === 'grant')).toMatchObject({
+      amount: 50,
+      note: 'Welcome credits',
+    });
+    expect(JSON.stringify(en)).not.toMatch(/tool_calls ×/);
+    // In the reader's language: the business's people and the operator.
+    const hi = await items('/api/credits/ledger?lang=hi');
+    expect(hi.find((e) => e.kind === 'debit')?.use).toMatchObject({ label: 'असिस्टेंट के काम' });
+    const te = await items(`/api/credits/operator/${tenant[lin.name]}/ledger?lang=te`, opal);
+    expect(te.find((e) => e.kind === 'debit')?.use).toMatchObject({ label: 'అసిస్టెంట్ చర్యలు' });
   });
 });

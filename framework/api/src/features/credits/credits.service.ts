@@ -70,6 +70,9 @@ import {
   toPurchase,
 } from './writes.js';
 
+/** A usage row's id: a debit's `ref`. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const { usageEvents, usageCounters, creditWallets, creditLedger, creditAlerts, creditPurchases } =
   schema;
 
@@ -693,8 +696,12 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
     };
   }
 
-  /** Wallet entries, newest first: `limit` of them before `before` (an ISO time). */
-  async ledger(tenantId: string, opts: { before?: string; limit?: number } = {}) {
+  /**
+   * Wallet entries, newest first: `limit` of them before `before` (an ISO time). A debit is
+   * worded when it is read, in `lang`, from the use it paid for (`use`: its meter as people call
+   * it, and how much): its stored note is the code's words ('tool_calls × 1'), never shown.
+   */
+  async ledger(tenantId: string, opts: { before?: string; limit?: number; lang?: Lang } = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
     // A time it cannot read is no bound, as before; one Postgres cannot store is not either.
     const before = storableInstant(opts.before);
@@ -706,17 +713,43 @@ export class CreditsService implements Metering, OnModuleInit, OnModuleDestroy {
       )
       .orderBy(desc(creditLedger.at), desc(creditLedger.id))
       .limit(limit + 1);
-    const items: LedgerEntry[] = rows.slice(0, limit).map((r) => ({
-      id: r.id,
-      kind: r.kind as LedgerEntry['kind'],
-      amount: r.amount,
-      balanceAfter: r.balanceAfter,
-      currency: r.currency,
-      ref: r.ref,
-      note: r.note,
-      actor: { kind: r.actorKind, id: r.actorId },
-      at: r.at.toISOString(),
-    }));
+    const page = rows.slice(0, limit);
+    // The uses the page's debits paid for (a debit's `ref` is its usage row), this business's.
+    const refs = page.flatMap((r) =>
+      r.kind === 'debit' && r.ref && UUID.test(r.ref) ? [r.ref] : [],
+    );
+    const uses = refs.length
+      ? await this.db
+          .select({ id: usageEvents.id, meter: usageEvents.meter, quantity: usageEvents.quantity })
+          .from(usageEvents)
+          .where(and(eq(usageEvents.tenantId, tenantId), inArray(usageEvents.id, refs)))
+      : [];
+    const useOf = new Map(uses.map((u) => [u.id, u]));
+    const lang = opts.lang ?? 'en';
+    const items: LedgerEntry[] = page.map((r) => {
+      const use = r.kind === 'debit' && r.ref ? useOf.get(r.ref) : undefined;
+      return {
+        id: r.id,
+        kind: r.kind as LedgerEntry['kind'],
+        amount: r.amount,
+        balanceAfter: r.balanceAfter,
+        currency: r.currency,
+        ref: r.ref,
+        // A debit's note names the meter in the code: it is worded from its use instead.
+        note: r.kind === 'debit' ? null : r.note,
+        ...(use
+          ? {
+              use: {
+                meter: use.meter,
+                label: meterLabel(meters.get(use.meter) ?? { name: use.meter }, lang),
+                quantity: use.quantity,
+              },
+            }
+          : {}),
+        actor: { kind: r.actorKind, id: r.actorId },
+        at: r.at.toISOString(),
+      };
+    });
     return { items, next: rows.length > limit ? (items.at(-1)?.at ?? null) : null };
   }
 
