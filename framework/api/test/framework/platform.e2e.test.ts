@@ -954,6 +954,24 @@ describe('routing inbound requests', () => {
     await expect(routing.route({ source: 'Bad Source', ref: 'x' })).rejects.toThrow();
   });
 
+  it('a routed write the rules refuse fails the delivery, and the refusal is audited once', async () => {
+    const routing = server.app?.get(PlatformRoutingService, {
+      strict: false,
+    }) as PlatformRoutingService;
+    const refused = async () =>
+      (await audits(A, 'issue.create')).filter((a) => a.rule === 'fixture_issue_refused');
+    const before = (await refused()).length;
+    const failed = await routing.route({
+      source: 'form',
+      ref: `refused-${Date.now()}`,
+      text: 'Please #acme #refused',
+    });
+    expect(failed).toMatchObject({ status: 'failed', tenantId: A });
+    const after = await refused();
+    expect(after).toHaveLength(before + 1);
+    expect(after.at(-1)).toMatchObject({ outcome: 'denied', actor_kind: 'system' });
+  });
+
   it('operators read the routing log', async () => {
     const log = (await root.call('GET', '/api/platform/routing?status=failed')).body;
     expect(log.length).toBeGreaterThanOrEqual(2);

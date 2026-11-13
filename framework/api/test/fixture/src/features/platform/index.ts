@@ -23,6 +23,7 @@ import {
   defineCommand,
   defineEntity,
   defineSharedEntity,
+  deny,
   entityController,
   entityHandlers,
   entityOp,
@@ -130,6 +131,13 @@ export const IssueDef = defineEntity(IssueSpec, {
   owner: (t) => t.ownerId,
   customer: (t) => t.customerId,
   access: ISSUE_ACCESS,
+  rules: [
+    // A request marked #refused: the routed write is refused, and the delivery fails.
+    (_p, action, _row, input) =>
+      action === 'create' && String(input?.title ?? '').includes('#refused')
+        ? deny('fixture_issue_refused', 'Issues marked #refused are refused')
+        : null,
+  ],
 });
 
 export const PartDef = defineSharedEntity(PartSpec, {

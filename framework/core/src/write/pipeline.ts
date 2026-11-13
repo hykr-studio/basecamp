@@ -13,6 +13,7 @@ import {
 } from '@hykr/contracts';
 import {
   type WriteCtx as AuditCtx,
+  type AuditInput,
   type Database,
   idempotencyKeys,
   writeAudit,
@@ -49,8 +50,14 @@ export interface WriteCtx {
    * updates and deletes check it against the row they load; nothing else takes one.
    */
   ifMatch?: string;
-  /** Run inside this transaction instead of opening one (an approval replay). */
-  tx?: Tx;
+  /**
+   * Run inside the caller's transaction instead of opening one (an approval replay, an SLA
+   * escalation, a routed delivery, an import row). Nothing then asks the pool for a second
+   * connection while the caller holds this one: a refusal's audit row goes to `refused`, and the
+   * caller writes it where it survives, since its transaction or savepoint rolls back with the
+   * refusal.
+   */
+  outer?: { tx: Tx; refused: (audit: AuditInput) => void };
   /**
    * An approval replay: what the decider approved (the level and amount it parked with). A
    * replay that now needs more (a higher level, a larger amount) fails instead of running.
@@ -338,7 +345,7 @@ export async function runWrite<I, L, V>(
   const storedReply = async (conn: Database | Tx): Promise<WriteOutcome | undefined> =>
     key ? stored(conn, p, key, requestHash) : undefined;
   // A repeat answers at once, without a transaction.
-  const repeat = await storedReply(ctx.tx ?? db);
+  const repeat = await storedReply(ctx.outer?.tx ?? db);
   if (repeat) return repeat;
 
   let refusal: { result: AuthorizeResult; resourceId: string | null } | undefined;
@@ -495,18 +502,21 @@ export async function runWrite<I, L, V>(
   };
 
   try {
-    return ctx.tx ? await work(ctx.tx) : await db.transaction(work);
+    return ctx.outer ? await work(ctx.outer.tx) : await db.transaction(work);
   } catch (e) {
     if (e instanceof RuleDenied) {
-      // The transaction rolled back; the refusal is evidence, so record it on its own.
+      // The refusal is evidence. Its own transaction rolled back: record it on its own. In the
+      // caller's, still open: hand it over, never waiting on the pool for a second connection.
       const result = e.result;
-      await writeAudit(db, {
+      const audit: AuditInput = {
         ...auditCtx(p, result, ctx),
         action: op.name,
         resourceType: op.resourceType,
         resourceId: refusal?.resourceId ?? null,
         outcome: 'denied',
-      });
+      };
+      if (ctx.outer) ctx.outer.refused(audit);
+      else await writeAudit(db, audit);
       throw new ForbiddenException({
         error: 'forbidden',
         rule: result.rule,

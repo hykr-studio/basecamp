@@ -22,7 +22,15 @@ import {
   type TenantConfig,
   teamRoles,
 } from '@hykr/contracts';
-import { approvals, type Database, membershipOf, memberships, writeAudit } from '@hykr/db';
+import {
+  type AuditInput,
+  approvals,
+  type Database,
+  membershipOf,
+  memberships,
+  writeAudit,
+  writeAuditMany,
+} from '@hykr/db';
 import { subjectOf, userIdOf } from '@hykr/policy';
 import {
   ConflictException,
@@ -568,6 +576,7 @@ export class ApprovalService {
       tx: Tx,
       status: 'rejected' | 'expired' | 'failed',
       failureReason?: string,
+      refusals: readonly AuditInput[] = [],
     ) => {
       // Only while still pending: a decision made meanwhile (a double tap) is not overwritten.
       const [row] = await tx
@@ -581,6 +590,8 @@ export class ApprovalService {
         .where(and(eq(approvals.id, found.id), eq(approvals.status, 'pending')))
         .returning();
       if (!row) throw new ConflictException({ error: 'already_decided' });
+      // The replay's refusal, beside the failure it caused: once, by whoever closes it.
+      if (refusals.length) await writeAuditMany(tx, refusals);
       await writeAudit(tx, {
         ...auditCtx(p, decision(status), ctx),
         action: `approval.${status}`,
@@ -619,6 +630,9 @@ export class ApprovalService {
       );
     }
 
+    // A refusal on replay is audited in the transaction that closes the request as failed: the
+    // replay's own rolls back, and it may wait for no second pooled connection meanwhile.
+    const refusals: AuditInput[] = [];
     try {
       // Replay as the original requester, as they stand today (still in the business, still
       // allowed). Looked up before the transaction: nothing in it may wait for another pooled
@@ -640,7 +654,7 @@ export class ApprovalService {
           principal: { ...requester, approvedBy: deciderKey },
           requestId,
           idempotencyKey: `approval:${found.id}`,
-          tx,
+          outer: { tx, refused: (audit) => refusals.push(audit) },
           approved: {
             ...(found.level ? { level: found.level } : {}),
             ...(stored.decision?.amount ? { amount: stored.decision.amount } : {}),
@@ -674,9 +688,10 @@ export class ApprovalService {
       return this.decided(approval, p, approverGone);
     } catch (e) {
       // What was asked no longer validates (a field taken out of the stored input since, by an
-      // erasure's scrubbing): no approval will ever replay it, so it ends as failed.
-      if (e instanceof z.ZodError) {
-        const where = e.issues.map((i) => i.path.join('.') || '(input)').join(', ');
+      // erasure's scrubbing): no approval will ever replay it, so it ends as failed. Any zod's
+      // error (classic, mini or core): an op's schema may be built with either.
+      if (e instanceof z.core.$ZodError) {
+        const where = e.issues.map((i) => i.path.map(String).join('.') || '(input)').join(', ');
         return this.decided(
           await this.db.transaction((tx) =>
             close(tx, 'failed', `What was asked is no longer complete (${where})`.slice(0, 500)),
@@ -693,7 +708,7 @@ export class ApprovalService {
           throw e;
         return this.decided(
           await this.db.transaction((tx) =>
-            close(tx, 'failed', body?.reason ?? body?.message ?? e.message),
+            close(tx, 'failed', body?.reason ?? body?.message ?? e.message, refusals),
           ),
           p,
           approverGone,
