@@ -64,6 +64,7 @@ import {
 } from './info.js';
 import { JOB_SIGNATURE_HEADER, verifyJobCallback } from './signature.js';
 import { setJobsRuntime } from './start.js';
+import { told } from './told.js';
 
 const log = new Logger('Jobs');
 
@@ -84,7 +85,7 @@ const MAX_FILES = 20;
 /** `complete` runs at most this many times. */
 export const COMPLETE_ATTEMPTS = 5;
 
-/** An error as one line, short enough for a job's error and the logs. */
+/** An error as one line, short enough for the logs; `told` is what a job keeps of it. */
 const brief = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 500);
 
 const notFound = () => new NotFoundException({ error: 'not_found', message: 'No such job' });
@@ -463,7 +464,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
       await this.finish(
         jobId,
         'failed',
-        { code: 'submit_failed', message: brief(e) },
+        { code: 'submit_failed', message: told(e) },
         { action: 'job.failed' },
       );
       return 'failed';
@@ -536,7 +537,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
           await this.finish(
             jobId,
             'failed',
-            { code: 'result_unavailable', message: brief(e) },
+            { code: 'result_unavailable', message: told(e) },
             { action: 'job.failed' },
           );
           return 'result unavailable';
@@ -610,7 +611,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
     try {
       raw = options.parse ? options.parse(req.body, req.headers) : req.body;
     } catch (e) {
-      return { status: 400, body: { error: 'bad_update', message: brief(e) } };
+      return { status: 400, body: { error: 'bad_update', message: told(e) } };
     }
     if (raw === null || raw === undefined)
       return { status: 200, body: { received: true, ignored: true } };
@@ -671,12 +672,12 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
       );
     } catch (e) {
       if (!(e instanceof ResultRefused) && !last) throw e;
-      outcome = `failed: ${brief(e)}`;
+      outcome = `failed: ${told(e)}`;
       if (stored.status === 'succeeded')
         await this.finish(
           row.id,
           'failed',
-          { code: 'result_unavailable', message: brief(e) },
+          { code: 'result_unavailable', message: told(e) },
           { action: 'job.failed' },
         );
     }
