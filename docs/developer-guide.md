@@ -990,11 +990,13 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   (`cancelled_at`), not failed and not yet relayed, oldest first. The relay adds one job per event
   and subscriber (id `<subscriber>--<stored event id>`, so a repeat runs once), then sets
   `relayed_at`. Each event is relayed on its own: a row that is not an event (the envelope refuses
-  it) or that a subscriber's `when` throws on gets `failed_at` and `error` instead, is logged, and
-  is never returned again, while the rest of the batch, of every business, goes on; clear
-  `failed_at` to relay it again. A queue that refuses a job (Redis down) stops the tick there and
-  the rest waits for the next one. A feed of your own may implement `failed` to keep such rows;
-  without it they come back each tick but hold nothing up. `handle`
+  it) gets `failed_at` and `error` instead, is logged, and is never returned again, while the rest
+  of the batch, of every business, goes on; clear `failed_at` to relay it again. A subscriber whose
+  `when` throws on an event misses that event alone: the other subscribers get it, the row gets
+  `relayed_at`, and which subscriber missed it, and why, is logged and kept in `error`. A queue that
+  refuses a job (Redis down) stops the tick there and the rest waits for the next one. A feed of
+  your own may implement `failed` to keep such rows (without it they come back each tick but hold
+  nothing up) and `skipped` to keep who missed one. `handle`
   runs on the shared `events` queue; `queue` adds the envelope to your own queue. The envelope has
   the stored id, the actor who wrote and the row unfiltered: pass it through `eventFor(event, p)`
   (F3) before it leaves the server. The in-process `EventBus` is not relayed. Notifications are one
@@ -3738,7 +3740,7 @@ These are not built. Each has a workaround for now.
 | Metering everything | WhatsApp voice-note transcription, voice sessions whose worker never reported an end and embedding calls that fail or time out are not metered. Call `CreditsService.record` from the feature. |
 | Operator-set model policies | Each business's owners and admins set its policy; the platform operator cannot lock one, and a deployment cannot refuse to start with a provider outside a region. |
 | Removing stale schedules | A schedule taken out of the code keeps its job scheduler in Redis. Remove it with Bull Board or `queue.removeJobScheduler(name)`. |
-| Seeing failed stored events | A stored event the relay cannot read, or that a subscriber's `when` throws on, is kept with `failed_at` and `error` and logged; no screen or notification shows it. Query `app.domain_events where failed_at is not null`, fix the cause, and clear `failed_at` to relay it again. |
+| Seeing failed stored events | A stored event the relay cannot read is kept with `failed_at` and `error` and logged; one a subscriber's `when` throws on is relayed to the others, with that subscriber's error in `error`. No screen or notification shows either, and a subscriber that missed an event never gets it later. Query `app.domain_events where error is not null`, fix the cause, and clear `failed_at` to relay a failed one again. |
 | Two uploads, cancels, replies or calendar sign-ins at the same moment | A file's presign and discard, a job's cancel, a back-office reply and a calendar sign-in's `complete` honour `idempotency-key` one after another, but take no lock: two at the same moment with one key can both run (a second pending upload expires unused; a second `complete` finds the sign-in used up and answers 400 `calendar_sign_in_invalid`, with one connection and one code exchange). A presign repeated after its upload expired is 409 `upload_expired`. A transcription asked for twice at the same moment runs speech to text twice; asked again after, it answers the stored words. |
 | Retrying a chat turn, a new thread, a voice session or a WhatsApp link | `POST /api/chat`, `POST /api/threads`, `POST /api/voice/session` and `/end`, the WhatsApp link's code, `verify`, `number` and `DELETE` ignore `idempotency-key`: a retry is a second turn, thread, room token (and `voice.session.start` audit row) or code. Retry them only when the first answer never came. |
 | Summaries beyond counts and totals | No distinct counts, percentiles, `min`/`max` of dates, fiscal quarters (from `fyStartMonth`) or summaries across entities. Use a command that loads through repos. |

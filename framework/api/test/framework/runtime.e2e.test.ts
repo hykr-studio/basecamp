@@ -127,7 +127,7 @@ describe('events and subscribers', () => {
     ).not.toContain(id);
   });
 
-  it('a stored row that is not an event, or that a filter throws on, fails alone', async () => {
+  it('a stored row that is not an event fails alone; one a filter throws on skips only that subscriber', async () => {
     const now = Date.now();
     const bad = { notEvent: `evt-bad-${now}`, filterThrows: `evt-throws-${now}` };
     const insert = (id: string, channel: string | null, row: string | null) =>
@@ -150,14 +150,18 @@ describe('events and subscribers', () => {
         'select id, relayed_at, failed_at, error from app.domain_events where id = any($1)',
         [Object.values(bad)],
       );
-      return r.rows.every((x) => x.failed_at) ? r.rows : undefined;
+      return r.rows.every((x) => x.failed_at || x.relayed_at) ? r.rows : undefined;
     });
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
     expect(byId[bad.notEvent].relayed_at).toBeNull();
+    expect(byId[bad.notEvent].failed_at).not.toBeNull();
     expect(byId[bad.notEvent].error).toContain('channel');
-    expect(byId[bad.filterThrows].relayed_at).toBeNull();
+    // The filter that throws misses it, with why kept on the row; every other subscriber gets it.
+    expect(byId[bad.filterThrows].failed_at).toBeNull();
+    expect(byId[bad.filterThrows].relayed_at).not.toBeNull();
     expect(byId[bad.filterThrows].error).toContain('fixture.runtime.forward');
-    expect(seen.events.filter((e) => Object.values(bad).includes(e.id))).toEqual([]);
+    await eventually(() => seen.events.find((e) => e.id === bad.filterThrows));
+    expect(seen.events.filter((e) => e.id === bad.notEvent)).toEqual([]);
     // Never returned again.
     const ctx = { db: server.app?.get(DB, { strict: false }) } as never;
     const prefix = String(process.env.BULL_PREFIX);

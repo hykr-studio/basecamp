@@ -33,7 +33,8 @@ async function markFailed(
  * relayed, oldest first. A row with a future `available_at` (an undo window) waits; one with
  * `cancelled_at` (an undone write) is never returned. Once on its subscribers' queues, a row gets
  * `relayed_at`. A row that is not an event (the envelope refuses it) gets `failed_at` and
- * `error` instead, and the rest of the batch goes on.
+ * `error` instead, and the rest of the batch goes on. A row some subscriber's filter threw on is
+ * relayed to the others, with `relayed_at`, and keeps which subscriber missed it in `error`.
  */
 export const outboxFeed: EventFeed = {
   name: 'outbox',
@@ -75,4 +76,12 @@ export const outboxFeed: EventFeed = {
       .where(and(inArray(domainEvents.id, [...ids]), eq(domainEvents.queues, prefix)));
   },
   failed: (items, { prefix }, ctx) => markFailed(ctx, items, prefix),
+  // Relayed to every subscriber but these: why stays in `error`, beside `relayed_at`.
+  skipped: async (items, { prefix }, ctx) => {
+    for (const f of items)
+      await ctx.db
+        .update(domainEvents)
+        .set({ error: f.error })
+        .where(and(eq(domainEvents.id, f.id), eq(domainEvents.queues, prefix)));
+  },
 };
