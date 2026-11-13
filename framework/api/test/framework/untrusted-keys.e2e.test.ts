@@ -3,7 +3,7 @@
 // request that pollutes shows here as an own key of Object.prototype; every test cleans it up.
 // On the settings fixture: gadgets (custom fields, shared) and the base fixture's tasks (a plain list).
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { boot, me, Person, pool, shutdown } from '../../dist/testing.js';
+import { boot, makeOperator, me, Person, pool, shutdown } from '../../dist/testing.js';
 import { settingsApp } from '../fixture/dist/features/settings/index.js';
 
 const a = new Person('Owner A Keys');
@@ -206,5 +206,104 @@ describe('a tampered list cursor', () => {
         expect(res.body.error).toBe('bad_cursor');
       }
     }
+  });
+});
+
+describe('routes that read their own query string', () => {
+  it('answer a malformed one with a 4xx or a page, never a 500', async () => {
+    const operator = new Person('Operator Keys');
+    await operator.signUp();
+    await makeOperator(operator);
+    const id = '00000000-0000-4000-8000-000000000000';
+    const wrongTypes = Buffer.from(JSON.stringify({ at: { a: 1 }, id: 5, s: [], v: 'x' })).toString(
+      'base64url',
+    );
+    const variants = [
+      'limit=-1',
+      'limit=1e9',
+      'limit=abc',
+      'limit=1&limit=2',
+      'before=not-a-date',
+      'before=a&before=b',
+      'cursor=garbage',
+      `cursor=${wrongTypes}`,
+      'cursor=a&cursor=b',
+      'status=a&status=b',
+      'from=x&to=y',
+      'from=a&from=b',
+      'lang=constructor',
+      'lang=__proto__',
+      'lang=a&lang=b',
+      'entity=constructor',
+      'entity=__proto__',
+      'entity=a&entity=b',
+      'id=a&id=b',
+      'ids=a&ids=b',
+      'q=a&q=b',
+      'page=a&page=b',
+      'form=a&form=b',
+      'kind=a&kind=b',
+      'origin=a&origin=b',
+    ];
+    const task = await a.call('POST', '/api/tasks', { title: 'Fuzzed' });
+    const on = `entity=task&id=${task.body.value.id}`;
+    const resource = `resourceType=task&resourceId=${task.body.value.id}`;
+    const day = 'from=2026-11-01T00:00:00.000Z&to=2026-11-02T00:00:00.000Z';
+    // Each route bare, and with the parameters it needs, so a malformed one reaches its reading.
+    const member = [
+      '/api/calls',
+      '/api/comments',
+      `/api/comments?${on}`,
+      `/api/comments/mentionable?${on}`,
+      `/api/calendar/busy?${day}`,
+      `/api/calendar/free?${day}&minutes=30`,
+      '/api/calendar/invites',
+      `/api/calendar/invites?${on}`,
+      '/api/inbox',
+      '/api/privacy/requests',
+      '/api/privacy/register',
+      '/api/memory/recall?q=hello',
+      `/api/memory/recall?q=hello&about=task:${task.body.value.id}`,
+      '/api/agent-runs',
+      '/api/agent-templates',
+      `/api/integrations/endpoints/${id}/deliveries`,
+      `/api/integrations/connections/${id}/inbound`,
+      '/api/members',
+      '/api/sla',
+      '/api/parties',
+      `/api/participants?${resource}`,
+      '/api/jobs',
+      '/api/history',
+      `/api/history/versions?${resource}`,
+      '/api/credits/ledger',
+      `/api/credits/usage?${day}`,
+      '/api/files',
+      `/api/acceptances?${on}`,
+      '/api/acceptances/kinds?entity=task',
+      `/api/shares?${on}`,
+      `/api/documents?${on}`,
+      '/api/documents/kinds?entity=task',
+      '/api/branding/public',
+    ];
+    const platform = [
+      '/api/platform/tenants',
+      '/api/platform/support',
+      '/api/platform/usage',
+      '/api/platform/usage?from=2026-11-01&to=2026-11-02',
+      '/api/platform/routing',
+      `/api/credits/operator/${tenantA}/ledger`,
+    ];
+    const failures: string[] = [];
+    for (const [who, paths] of [
+      [a, member],
+      [operator, platform],
+    ] as const)
+      for (const path of paths)
+        for (const q of variants) {
+          const res = await who.call('GET', `${path}${path.includes('?') ? '&' : '?'}${q}`);
+          if (res.status >= 500) failures.push(`${path}?${q}: ${JSON.stringify(res.body)}`);
+          expect(polluted()).toEqual([]);
+        }
+    expect(failures).toEqual([]);
   });
 });

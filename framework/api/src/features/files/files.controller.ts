@@ -54,11 +54,13 @@ export class FilesController {
   @Get()
   async list(
     @CurrentPrincipal() p: Principal,
-    @Query('ids') ids?: string,
+    @Query('ids') ids?: string | string[],
   ): Promise<{ items: FileInfo[] }> {
+    // A comma list, or the key repeated (`ids=a&ids=b`), as a query string may send it.
     const parsed = Ids.safeParse(
-      (ids ?? '')
-        .split(',')
+      [ids ?? '']
+        .flat()
+        .flatMap((s) => String(s).split(','))
         .map((s) => s.trim())
         .filter(Boolean),
     );
