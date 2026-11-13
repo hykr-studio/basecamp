@@ -12,7 +12,6 @@ import {
   RenameTenantInput,
   SetPlatformFeatureInput,
   SupportRequestInput,
-  storableDateTime,
   UpdateOperatorInput,
 } from '@hykr/contracts';
 import {
@@ -50,8 +49,10 @@ import {
 } from '@nestjs/common';
 import { EventBus } from '@nestjs/cqrs';
 import { OptionalAuth } from '@thallesp/nestjs-better-auth';
-import { and, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { storableInstant } from '../../infra/instant.js';
+import { beforeOf, beforeWhere, encodeKeyset, keysetTime } from '../inbox/cursor.js';
 import { SetFeature } from '../settings/commands.js';
 import {
   type ActingOperator,
@@ -99,12 +100,19 @@ const TenantsQuery = z
   })
   .strict();
 
+/** The routing log's `before`: a row's cursor, or an ISO time Postgres can store. */
+const routingBefore = (v: string | undefined) =>
+  beforeOf(v, (t) => (z.iso.datetime().safeParse(t).success ? storableInstant(t) : undefined));
+
 const RoutingQuery = z
   .object({
     status: z.enum(['routed', 'unrouted', 'failed']).optional(),
     tenantId: z.uuid().optional(),
-    // A time Postgres can store: `z.iso.datetime()` takes the year 0000 (V10).
-    before: storableDateTime().optional(),
+    // A row's `cursor` (V12), or a time as it always took.
+    before: z
+      .string()
+      .refine((v) => routingBefore(v) !== undefined, 'A row’s cursor, or an ISO time')
+      .optional(),
     limit: z.coerce.number().int().min(1).max(200).default(50),
   })
   .strict();
@@ -394,19 +402,23 @@ export class PlatformController {
   @OperatorCan(PlatformCapabilities.routing)
   async routing(@Query() query: unknown) {
     const q = parsed(RoutingQuery, query);
+    const before = routingBefore(q.before);
     const rows = await this.core.db
-      .select()
+      .select({ row: routedRequests, at: keysetTime(routedRequests.createdAt) })
       .from(routedRequests)
       .where(
         and(
           q.status ? eq(routedRequests.status, q.status) : undefined,
           q.tenantId ? eq(routedRequests.tenantId, q.tenantId) : undefined,
-          q.before ? lt(routedRequests.createdAt, new Date(q.before)) : undefined,
+          before ? beforeWhere(before, routedRequests.createdAt, routedRequests.id) : undefined,
         ),
       )
-      .orderBy(desc(routedRequests.createdAt))
+      .orderBy(desc(routedRequests.createdAt), desc(routedRequests.id))
       .limit(q.limit);
-    return rows.map(toRouted);
+    return rows.map((r) => ({
+      ...toRouted(r.row),
+      cursor: encodeKeyset({ at: r.at, id: r.row.id }),
+    }));
   }
 }
 

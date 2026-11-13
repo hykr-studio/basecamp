@@ -132,6 +132,48 @@ describe('comments on a record', () => {
     expect(older.body.nextCursor).toBeNull();
   });
 
+  it('comments that share a time, or one millisecond, page once each (V12)', async () => {
+    // Three of one microsecond, two either side within its millisecond, the next millisecond and
+    // the next day: a cursor that kept a Date's millisecond skipped the rest of it.
+    const times = [
+      '2026-03-01 00:00:00.0005+00',
+      '2026-03-01 00:00:00.0005+00',
+      '2026-03-01 00:00:00.0005+00',
+      '2026-03-01 00:00:00.0001+00',
+      '2026-03-01 00:00:00.0009+00',
+      '2026-03-01 00:00:00.001+00',
+      '2026-03-02 00:00:00+00',
+    ];
+    const on = (await ana.call('POST', '/api/tasks', { title: 'Paged talk' })).body.value.id;
+    for (const [i, at] of times.entries()) {
+      const res = await add(ana, `Comment ${i}`, {}, on);
+      expect(res.status).toBe(200);
+      await pool.query('update app.comments set created_at = $2 where id = $1', [
+        res.body.value.id,
+        at,
+      ]);
+    }
+    const all = (
+      await pool.query(
+        'select id from app.comments where tenant_id = $1 and resource_id = $2 order by created_at desc, id desc',
+        [tenantId, on],
+      )
+    ).rows.map((r: { id: string }) => r.id);
+    expect(all).toHaveLength(times.length);
+    for (const limit of [1, 2]) {
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let i = 0; i < 60 && (i === 0 || cursor); i++) {
+        const res = await list(ana, on, `&limit=${limit}${cursor ? `&cursor=${cursor}` : ''}`);
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        seen.push(...res.body.items.map((c: { id: string }) => c.id));
+        cursor = res.body.nextCursor;
+      }
+      expect(cursor, 'the walk never ended').toBeNull();
+      expect(seen, `limit=${limit}`).toEqual(all);
+    }
+  });
+
   it('another business, and staff who reach only their own rows, get 404 for everything', async () => {
     const all = [
       await ravi.call('GET', `/api/comments?entity=task&id=${taskId}`),

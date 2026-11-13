@@ -46,7 +46,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { and, desc, eq, gte, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { config } from '../../config.js';
 import type { InboundInfo, Jobs, ServerContext } from '../../hooks.js';
@@ -56,7 +56,7 @@ import { JOBS } from '../../queues/define.js';
 import { serverContext } from '../../queues/jobs.service.js';
 import { runtime } from '../../runtime.js';
 import { matchesEvent } from '../events/subscriber.js';
-import { badKeyset, type Keyset, keysetOf } from '../inbox/cursor.js';
+import { badKeyset, type Keyset, keysetOf, keysetTime, olderThan } from '../inbox/cursor.js';
 import { liveResources } from '../live/resources.js';
 import { allToolIds, scopesFor } from './scope.js';
 import { agentTemplates, setAgentWebhookSink } from './templates.js';
@@ -898,7 +898,7 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
     const me = p.subject?.kind === 'user' ? p.subject.userId : '';
     const cursor = q.cursor ? decodeCursor(q.cursor) : undefined;
     const rows = await this.db
-      .select({ run: agentRuns, ownerId: agents.ownerId })
+      .select({ run: agentRuns, ownerId: agents.ownerId, at: keysetTime(agentRuns.createdAt) })
       .from(agentRuns)
       .innerJoin(agents, eq(agents.id, agentRuns.agentId))
       .where(
@@ -907,12 +907,7 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
           q.agentId ? eq(agentRuns.agentId, q.agentId) : undefined,
           q.status ? eq(agentRuns.status, q.status) : undefined,
           manager ? undefined : eq(agents.ownerId, me),
-          cursor
-            ? or(
-                lt(agentRuns.createdAt, cursor.at),
-                and(eq(agentRuns.createdAt, cursor.at), lt(agentRuns.id, cursor.id)),
-              )
-            : undefined,
+          cursor ? olderThan(cursor, agentRuns.createdAt, agentRuns.id) : undefined,
         ),
       )
       .orderBy(desc(agentRuns.createdAt), desc(agentRuns.id))
@@ -920,8 +915,8 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
     const items = rows
       .slice(0, limit)
       .map((r) => (r.ownerId === me ? toRun(r.run) : outline(toRun(r.run))));
-    const last = rows.length > limit ? rows[limit - 1].run : undefined;
-    return { items, nextCursor: last ? encodeCursor(last) : null };
+    const last = rows.length > limit ? rows[limit - 1] : undefined;
+    return { items, nextCursor: last ? encodeCursor(last.at, last.run.id) : null };
   }
 
   /**
@@ -987,8 +982,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** `GET /api/agent-runs`'s query, parsed. */
 export const AgentRunsQueryParsed = AgentRunsQuery;
 
-function encodeCursor(r: RunRow) {
-  return Buffer.from(JSON.stringify([r.createdAt.toISOString(), r.id])).toString('base64url');
+/** The cursor after a run: its time as Postgres stores it (`keysetTime`), and its id (V12). */
+function encodeCursor(at: string, id: string) {
+  return Buffer.from(JSON.stringify([at, id])).toString('base64url');
 }
 /** A page's cursor back, read as every keyset cursor is (`keysetOf`); anything else is 400. */
 function decodeCursor(c: string): Keyset {

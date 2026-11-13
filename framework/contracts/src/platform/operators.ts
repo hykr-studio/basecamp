@@ -310,4 +310,9 @@ export type RoutedRequest = {
   attempts: number;
   createdAt: string;
   updatedAt: string;
+  /**
+   * In the routing log: pass the last row's as `before` for the rows after it. It keeps the row's
+   * time as stored and its id, so rows that share a time are neither repeated nor skipped (V12).
+   */
+  cursor?: string;
 };

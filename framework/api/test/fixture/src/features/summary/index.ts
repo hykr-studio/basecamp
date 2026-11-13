@@ -65,7 +65,8 @@ const list = {
     bookedAt: 'date',
     dueOn: 'date',
   },
-  sortable: ['createdAt'],
+  // bookedAt: a nullable time a list sorts by (keyset-nullable.e2e, V12).
+  sortable: ['createdAt', 'bookedAt'],
   defaultSort: [['createdAt', 'asc']],
   search: ['title'],
   pageSize: { default: 50, max: 100 },

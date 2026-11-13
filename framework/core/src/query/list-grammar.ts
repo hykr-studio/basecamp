@@ -11,6 +11,7 @@ import {
   sql,
   type Table,
 } from 'drizzle-orm';
+import { exactTime, readTimeKey, type TimeKey, timeAfter, timeSame, zoned } from './exact-time.js';
 import { escapeLike, filterSql, listFieldSql, toColumnValue } from './field-sql.js';
 
 /**
@@ -29,6 +30,15 @@ type SortKey = {
   keep: (row: Record<string, unknown>) => unknown;
   /** Could `keep` have made this value? A cursor is the client's to send back, and to tamper with. */
   check: (value: unknown) => boolean;
+  /**
+   * What the cursor keeps instead of `keep`'s value, selected with the row: a time as Postgres
+   * stores it, which the row's Date has lost (V12). `past` and `same` then compare it.
+   */
+  exact?: SQL;
+  /** The sort expression past this kept value in the key's direction. */
+  past?: (value: unknown) => SQL;
+  /** The sort expression at this kept value. */
+  same?: (value: unknown) => SQL;
 };
 
 const badCursor = () =>
@@ -71,7 +81,7 @@ function columnCheck(column: Column): (value: unknown) => boolean {
     case 'PgDate':
       return str((s) => isDay(s) || isIsoInstant(s));
     case 'PgTimestamp':
-      return str(isIsoInstant);
+      return (v) => readTimeKey(v) !== undefined;
     case 'PgTimestampString':
       return str(isPgTimestamp);
     case 'PgInteger':
@@ -212,7 +222,13 @@ function sortExpr(column: Column, dir: 'asc' | 'desc'): SQL | Column {
       return sql`coalesce(${column}, ${far === 'max' ? '9999-12-31' : '0001-01-01'}::date)`;
     case 'PgTimestamp':
     case 'PgTimestampString':
-      return sql`coalesce(${column}, ${far === 'max' ? '9999-12-31T00:00:00Z' : '0001-01-01T00:00:00Z'}::timestamptz)`;
+      // The far-off time in the column's own type. A `timestamptz` one made a column without a
+      // zone `timestamptz` too: read in the session's zone, so its order moved with that zone,
+      // and west of UTC the year 1 printed as 1 BC with no era (`exactTime`), a walk that never
+      // ended (V12, decision 13).
+      return zoned(column)
+        ? sql`coalesce(${column}, ${far === 'max' ? '9999-12-31T00:00:00Z' : '0001-01-01T00:00:00Z'}::timestamptz)`
+        : sql`coalesce(${column}, ${far === 'max' ? '9999-12-31T00:00:00' : '0001-01-01T00:00:00'}::timestamp)`;
     case 'PgInteger':
     case 'PgNumeric':
     case 'PgDoublePrecision':
@@ -347,11 +363,12 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
       };
     }
     const column = col(s.field);
+    const expr = sortExpr(column, s.dir);
     return {
       field: s.field,
       dir: s.dir,
       column,
-      expr: sortExpr(column, s.dir),
+      expr,
       at: (value) => toColumnValue(column, value),
       check: columnCheck(column),
       keep: (row) => {
@@ -359,6 +376,15 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
         if (value !== null && value !== undefined) return value;
         return column.notNull ? value : farValue(column, s.dir === 'asc' ? 'max' : 'min');
       },
+      // A time: the cursor keeps it as stored, to the microsecond (V12). Its `coalesce` too, so
+      // a row with none keeps the far-off time in the same form.
+      ...(column.columnType === 'PgTimestamp'
+        ? {
+            exact: exactTime(column, expr),
+            past: (value: unknown) => timeAfter(column, expr, value as TimeKey, s.dir),
+            same: (value: unknown) => timeSame(column, expr, value as TimeKey),
+          }
+        : {}),
     };
   });
   const orderBy: SQL[] = [
@@ -371,9 +397,16 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
     if (cursor.v.length !== keys.length || !keys.every((k, i) => k.check(cursor.v[i])))
       throw badCursor();
     if (!idCheck(cursor.id)) throw badCursor();
+    // A time's kept text, read once: `check` has passed it.
+    const kept = (k: SortKey, value: unknown) => (k.exact ? readTimeKey(value) : value);
     const cmp = (k: SortKey, value: unknown) =>
-      k.dir === 'asc' ? sql`${k.expr} > ${k.at(value)}` : sql`${k.expr} < ${k.at(value)}`;
-    const same = (k: SortKey, value: unknown) => sql`${k.expr} = ${k.at(value)}`;
+      k.past
+        ? k.past(kept(k, value))
+        : k.dir === 'asc'
+          ? sql`${k.expr} > ${k.at(value)}`
+          : sql`${k.expr} < ${k.at(value)}`;
+    const same = (k: SortKey, value: unknown) =>
+      k.same ? k.same(kept(k, value)) : sql`${k.expr} = ${k.at(value)}`;
     const branches: SQL[] = keys.map(
       (k, i) =>
         and(...keys.slice(0, i).map((p, j) => same(p, cursor.v[j])), cmp(k, cursor.v[i])) as SQL,
@@ -382,21 +415,34 @@ export function buildListSql(table: Table, list: ListConfig, q: ListQuery) {
     return or(...branches) as SQL;
   }
 
-  /** The values a cursor stores for a row: what each sort expression evaluates to. */
-  function cursorValues(row: Record<string, unknown>): unknown[] {
-    return keys.map((k) => k.keep(row));
+  /**
+   * What a list selects: its row, and beside it each time key as Postgres stores it. A cursor
+   * made from the row alone would keep the millisecond its Date holds (V12).
+   */
+  const fields: ListFields = { row: table };
+  keys.forEach((k, i) => {
+    if (k.exact) fields[`key${i}`] = k.exact;
+  });
+
+  /** The cursor after this selected row: what each sort expression evaluates to, and its id. */
+  function cursorAfter(selected: ListSelected): string {
+    const values = keys.map((k, i) => (k.exact ? selected[`key${i}`] : k.keep(selected.row)));
+    return encodeCursor(q.sort, values, String(selected.row.id));
   }
 
-  return { where, orderBy, after, cursorValues, limit: q.limit };
+  return { where, orderBy, after, fields, cursorAfter, limit: q.limit };
 }
+
+/** What `buildListSql`'s `fields` select: the table's row, and the keys its cursor keeps. */
+export type ListFields = { row: Table } & Record<string, Table | SQL>;
+/** A row as `fields` selected it. */
+export type ListSelected = { row: Record<string, unknown> } & Record<string, unknown>;
 
 function farValue(column: Column, far: 'max' | 'min') {
   switch (column.columnType) {
     case 'PgDateString':
     case 'PgDate':
       return far === 'max' ? '9999-12-31' : '0001-01-01';
-    case 'PgTimestamp':
-      return new Date(far === 'max' ? '9999-12-31T00:00:00Z' : '0001-01-01T00:00:00Z');
     case 'PgTimestampString':
       return far === 'max' ? '9999-12-31 00:00:00+00' : '0001-01-01 00:00:00+00';
     case 'PgBigInt53':

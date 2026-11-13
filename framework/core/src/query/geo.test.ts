@@ -140,7 +140,8 @@ describe('the geo SQL', () => {
     expect(order).toMatch(/desc, "app"."places"."id" asc$/);
     // A cursor keeps the row's point and compares distances computed the same way.
     const point = { lat: 13, lng: 77.6 };
-    expect(built.cursorValues({ id: 'a', location: point })).toEqual([point]);
+    const made = built.cursorAfter({ row: { id: 'a', location: point } });
+    expect(decodeCursor(made, q.sort).v).toEqual([point]);
     const cursor = decodeCursor(encodeCursor(q.sort, [point], 'a'), q.sort);
     const after = render(built.after(cursor));
     expect(after.sql).toContain('< ST_Distance(ST_SetSRID(ST_MakePoint(');

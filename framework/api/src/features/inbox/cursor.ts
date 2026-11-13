@@ -1,31 +1,39 @@
-// Keyset cursors over (created_at, id), newest first: what comes after the last row shown.
-import { storableInstant, textFault } from '@hykr/contracts';
+// Keyset cursors over (time, id), newest first: what comes after the last row shown. A cursor
+// keeps its row's time as Postgres stores it (`keysetTime`, to the microsecond), selected with
+// the row: a Date keeps milliseconds, and a cut on one skipped the rows of that millisecond
+// (docs/decisions/V12.md). The inbox, comments, agent runs, the credits ledger, the integrations
+// delivery log and the platform routing log read theirs here.
+import { textFault } from '@hykr/contracts';
+import { exactTime, readTimeKey, type TimeKey, timeAfter, timeSame } from '@hykr/core';
 import { BadRequestException } from '@nestjs/common';
-import { and, type Column, eq, lt, or, type SQL } from 'drizzle-orm';
+import { and, type Column, lt, or, type SQL } from 'drizzle-orm';
 
-export type Keyset = { at: Date; id: string };
+export type Keyset = { at: TimeKey; id: string };
 
 /** No id is longer: ids are uuids (36 characters) or shorter. */
 const MAX_ID = 128;
 
-/** The cursor after this row. */
-export const encodeKeyset = (row: { createdAt: Date; id: string }) =>
-  Buffer.from(`${row.createdAt.toISOString()}|${row.id}`).toString('base64url');
+/** What a keyset read selects beside its row: the row's time as its cursor keeps it. */
+export const keysetTime = (time: Column) => exactTime(time);
+
+/** The cursor after this row: its time as `keysetTime` read it, and its id. */
+export const encodeKeyset = (row: { at: string; id: string }) =>
+  Buffer.from(`${row.at}|${row.id}`).toString('base64url');
 
 export const badKeyset = () =>
   new BadRequestException({ error: 'bad_cursor', message: 'Unknown cursor' });
 
 /**
- * A keyset from a cursor's two parts, when Postgres can take both: a time it can store (years 1
- * to 9999, not merely one JavaScript reads) and an id it can hold (text, no NUL or half of a
- * surrogate pair, at most MAX_ID long). Else undefined. Every keyset cursor reads its parts
- * through this (V10).
+ * A keyset from a cursor's two parts, when Postgres can take both: a time `keysetTime` wrote (or
+ * the millisecond a cursor made before V12 kept), from the year 1 to 9999, and an id it can hold
+ * (text, no NUL or half of a surrogate pair, at most MAX_ID long). Else undefined. Every keyset
+ * cursor reads its parts through this.
  */
 export function keysetOf(at: unknown, id: unknown): Keyset | undefined {
-  const date = storableInstant(at);
-  if (!date || typeof id !== 'string' || !id || id.length > MAX_ID || textFault(id))
+  const time = readTimeKey(at);
+  if (!time || typeof id !== 'string' || !id || id.length > MAX_ID || textFault(id))
     return undefined;
-  return { at: date, id };
+  return { at: time, id };
 }
 
 /** A cursor back to a keyset, or 400 `bad_cursor`. */
@@ -36,6 +44,38 @@ export function decodeKeyset(cursor: string): Keyset {
   return keyset;
 }
 
-/** Rows older than the keyset, in (created_at desc, id desc) order. */
-export const olderThan = (k: Keyset, createdAt: Column, id: Column): SQL =>
-  or(lt(createdAt, k.at), and(eq(createdAt, k.at), lt(id, k.id))) as SQL;
+/** Rows older than the keyset, in (time desc, id desc) order. */
+export const olderThan = (k: Keyset, time: Column, id: Column): SQL =>
+  or(timeAfter(time, time, k.at, 'desc'), and(timeSame(time, time, k.at), lt(id, k.id))) as SQL;
+
+/**
+ * A `before=` bound on a log paged back in time: the token its last page handed out (a keyset),
+ * or a time someone chose (rows strictly before it, as `before` always took). Undefined when it
+ * is neither.
+ */
+export function beforeOf(
+  before: string | undefined,
+  time: (text: string) => Date | undefined,
+): Keyset | Date | undefined {
+  if (!before) return undefined;
+  if (/^[A-Za-z0-9_-]+$/.test(before)) {
+    const [at, id] = Buffer.from(before, 'base64url').toString().split('|');
+    const keyset = keysetOf(at, id);
+    if (keyset) return keyset;
+  }
+  return time(before);
+}
+
+/**
+ * Whether `before` is a token a page handed out, whatever its parts now hold: base64url of
+ * `<time>|<id>`. Text that is not one (`99999`, `not-a-date`) never decodes to that shape, so a
+ * log that takes unreadable text as no bound can still refuse a tampered token (V12).
+ */
+export function isKeysetToken(before: string): boolean {
+  if (!/^[A-Za-z0-9_-]+$/.test(before)) return false;
+  return /^\d{4}-\d{2}-\d{2}T[^|]*\|/.test(Buffer.from(before, 'base64url').toString());
+}
+
+/** Rows before a `before=` bound, newest first: past its keyset, or strictly before its time. */
+export const beforeWhere = (bound: Keyset | Date, time: Column, id: Column): SQL =>
+  bound instanceof Date ? lt(time, bound) : olderThan(bound, time, id);

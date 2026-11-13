@@ -38,7 +38,7 @@ import type { z } from 'zod';
 import type { ServerContext } from '../../hooks.js';
 import { DB } from '../../infra/db.module.js';
 import { serverContext } from '../../queues/jobs.service.js';
-import { decodeKeyset, encodeKeyset, olderThan } from '../inbox/cursor.js';
+import { decodeKeyset, encodeKeyset, keysetTime, olderThan } from '../inbox/cursor.js';
 import { type MentionContext, type MentionKind, mentionKinds } from './mention-kinds.js';
 
 export type CommentRow = typeof comments.$inferSelect;
@@ -187,7 +187,7 @@ export class CommentsService implements OnModuleInit {
     const parent = await this.parent(this.db, p, { entity: q.entity, id: q.id });
     if (!parent.policy) return { items: [], nextCursor: null };
     const rows = await this.db
-      .select()
+      .select({ row: comments, at: keysetTime(comments.createdAt) })
       .from(comments)
       .where(
         and(
@@ -203,8 +203,13 @@ export class CommentsService implements OnModuleInit {
     const items = rows.slice(0, q.limit);
     const last = items.at(-1);
     return {
-      items: await this.present(this.db, items, p),
-      nextCursor: rows.length > q.limit && last ? encodeKeyset(last) : null,
+      items: await this.present(
+        this.db,
+        items.map((r) => r.row),
+        p,
+      ),
+      nextCursor:
+        rows.length > q.limit && last ? encodeKeyset({ at: last.at, id: last.row.id }) : null,
     };
   }
 
