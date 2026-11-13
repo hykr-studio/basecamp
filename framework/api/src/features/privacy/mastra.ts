@@ -23,10 +23,22 @@ const list = (xs: readonly string[]) =>
     sql`, `,
   );
 
-/** Is this table there (Mastra made it)? */
-async function exists(conn: Conn, qualified: string): Promise<boolean> {
-  const r = await conn.execute(sql`select to_regclass(${qualified}) is not null as ok`);
-  return Boolean((r as unknown as { rows: { ok: boolean }[] }).rows[0]?.ok);
+/**
+ * Is this table there (Mastra made it), with every column a statement here names? A Mastra
+ * upgrade that renames or drops one skips the step instead of failing the erasure or the
+ * retention run that holds it.
+ */
+async function exists(
+  conn: Conn,
+  qualified: string,
+  columns: readonly string[] = [],
+): Promise<boolean> {
+  const r = await conn.execute(sql`select to_regclass(${qualified}) is not null as ok,
+    (select count(distinct attname)::int from pg_attribute
+      where attrelid = to_regclass(${qualified}) and not attisdropped
+        and attname in (${columns.length ? list(columns) : sql`''`})) as n`);
+  const row = (r as unknown as { rows: { ok: boolean; n: number }[] }).rows[0];
+  return Boolean(row?.ok) && Number(row?.n ?? 0) === columns.length;
 }
 
 const rowsOf = (r: unknown) => (r as { rowCount?: number | null }).rowCount ?? 0;
@@ -80,10 +92,10 @@ async function scorerTraces(conn: Conn, runs: readonly string[]): Promise<string
     const r = (await conn.execute(q)) as unknown as { rows: { t: string | null }[] };
     for (const row of r.rows) if (row.t) found.add(row.t);
   };
-  if (await exists(conn, 'mastra_obs.mastra_score_events'))
+  if (await exists(conn, 'mastra_obs.mastra_score_events', ['scoreTraceId', 'runId', 'traceId']))
     await read(sql`select distinct "scoreTraceId" as t from mastra_obs.mastra_score_events
       where "runId" in (${list(runs)}) or "traceId" in (${list(runs)})`);
-  if (await exists(conn, 'mastra_obs.mastra_span_events'))
+  if (await exists(conn, 'mastra_obs.mastra_span_events', ['traceId', 'metadataRaw']))
     await read(sql`select distinct "traceId" as t from mastra_obs.mastra_span_events
       where "metadataRaw" ->> 'targetTraceId' in (${list(runs)})`);
   for (const r of runs) found.delete(r);
@@ -138,23 +150,25 @@ async function eraseMastraOf(
   const traces = [...runs, ...scored];
   for (const [table] of OBSERVED) {
     const name = `mastra_obs.${table}`;
-    if (!(await exists(tx, name))) continue;
+    const spans = table === 'mastra_span_events' && ids;
+    const named = ['runId', 'traceId', ...(spans ? ['userId', 'requestContext'] : [])];
+    if (!(await exists(tx, name, named))) continue;
     // Only span events carry the request context; the others go by run or subject alone.
     const byRun = runs.length
       ? sql`("runId" in (${list(runs)}) or "traceId" in (${list(traces)}))`
       : null;
-    const where = table === 'mastra_span_events' && ids ? theirs(ids, runs, scored) : byRun;
+    const where = spans ? theirs(ids, runs, scored) : byRun;
     if (!where) continue;
     n += rowsOf(await tx.execute(sql`delete from ${sql.raw(name)} where ${where}`));
   }
-  if (runs.length && (await exists(tx, 'mastra.mastra_workflow_snapshot')))
+  if (runs.length && (await exists(tx, 'mastra.mastra_workflow_snapshot', ['run_id'])))
     n += rowsOf(
       await tx.execute(
         sql`delete from mastra.mastra_workflow_snapshot where run_id in (${list(runs)})`,
       ),
     );
   // The scorers' results: each keeps the turn's input and output, by the run it scored.
-  if (runs.length && (await exists(tx, SCORERS)))
+  if (runs.length && (await exists(tx, SCORERS, ['runId', 'traceId'])))
     n += rowsOf(
       await tx.execute(
         sql`delete from ${sql.raw(SCORERS)}
@@ -166,19 +180,19 @@ async function eraseMastraOf(
   // agent with memory would key them by the subject.
   const resources = everywhere ? ids.keys : ids.keys.filter((k) => k.startsWith('contact:'));
   if (!resources.length) return n;
-  if (await exists(tx, 'mastra.mastra_messages'))
+  if (await exists(tx, 'mastra.mastra_messages', ['resourceId']))
     n += rowsOf(
       await tx.execute(
         sql`delete from mastra.mastra_messages where "resourceId" in (${list(resources)})`,
       ),
     );
-  if (await exists(tx, 'mastra.mastra_threads'))
+  if (await exists(tx, 'mastra.mastra_threads', ['resourceId']))
     n += rowsOf(
       await tx.execute(
         sql`delete from mastra.mastra_threads where "resourceId" in (${list(resources)})`,
       ),
     );
-  if (await exists(tx, 'mastra.mastra_resources'))
+  if (await exists(tx, 'mastra.mastra_resources', ['id']))
     n += rowsOf(
       await tx.execute(sql`delete from mastra.mastra_resources where id in (${list(resources)})`),
     );
@@ -191,7 +205,8 @@ export async function exportMastra(
   ids: Identities,
   runs: readonly string[],
 ): Promise<Record<string, unknown>[]> {
-  if (!(await exists(conn, 'mastra_obs.mastra_span_events'))) return [];
+  const columns = ['runId', 'traceId', 'startedAt', 'userId', 'requestContext'];
+  if (!(await exists(conn, 'mastra_obs.mastra_span_events', columns))) return [];
   const r = await conn.execute(sql`
     select coalesce("runId", "traceId") as "runId", min("startedAt") as "startedAt",
            count(*)::int as spans
@@ -215,7 +230,7 @@ export async function expireTraces(tx: Tx, before: Date): Promise<number> {
   let n = 0;
   for (const [table, at] of OBSERVED) {
     const name = `mastra_obs.${table}`;
-    if (!(await exists(tx, name))) continue;
+    if (!(await exists(tx, name, [at]))) continue;
     n += rowsOf(
       await tx.execute(
         sql`delete from ${sql.raw(name)} where ${sql.identifier(at)} < ${before.toISOString()}`,
@@ -223,7 +238,7 @@ export async function expireTraces(tx: Tx, before: Date): Promise<number> {
     );
   }
   // `createdAtZ`: the time with its zone (`createdAt` is UTC without one).
-  if (await exists(tx, SCORERS))
+  if (await exists(tx, SCORERS, ['createdAtZ']))
     n += rowsOf(
       await tx.execute(
         sql`delete from ${sql.raw(SCORERS)} where "createdAtZ" < ${before.toISOString()}`,
