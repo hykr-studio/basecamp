@@ -2947,7 +2947,11 @@ Add it to the module's `<name>Views.views`. `createUiRegistry` refuses a spoken 
 
 On WhatsApp a list's rows (two or more) go as buttons or a list to tap, headed by the view's heading: the `title` it was shown with, else its `labels.title` in the turn's language (the text intent's `heading`). A view with neither is headed by its whole text, so give a list view a `labels.title`; its `text` need not start with one.
 
-A lookup is not the answer. The assistant reads before it writes ("delete Tiles": `list-todos`, then `delete-todo`), and that read's view is how it found the record, not what it tells the person. So a read whose view (`inline` or `text`) comes before a write in the same turn (done, waiting for approval, or a resumed run's decision) shows nothing on any channel: the turn's `toolCalls` carry no `present` for it (WhatsApp words nothing of it, and no "No orders." follows a waiting line), the saved thread keeps none, and the app hides its view once the write arrives (`useLookup`). The rule is `lookupsIn` in `@hykr/contracts`. A read with no write after it is the answer and shows, and a refused call is no write (it may be a read's). A canvas a call opened is not a view, so it always applies.
+A lookup is not the answer. The assistant reads before it writes or opens ("delete Tiles": `list-todos`, then `delete-todo`; "open Site review": `list-meetings`, then `get-meeting` or `canvas-open`), and that read's view is how it found the record, not what it tells the person. So a read whose view (`inline` or `text`) comes before either of these in the same turn shows nothing on any channel:
+- a write, whatever it answered: done, waiting for approval, a resumed run's decision, refused by the API, or its input refused by the tool. A call is a write by its tool, the catalog's `writeToolIds` (creates, updates, deletes, commands, transitions), or, for a contributed tool the catalog does not list, by its result;
+- a later call that showed or opened one of the records the read listed (a record's view, its words, a screen opened on it).
+
+The turn's `toolCalls` carry no `present` for a lookup (WhatsApp words nothing of it, and no "No orders." follows a waiting line), the saved thread keeps none, and the app hides its view as soon as the write is called or the record shows (`useLookup`). The rule is `lookupsIn` in `@hykr/contracts`. A read with neither after it is the answer and shows: one list, several lists ("today"), a list before a refused read. A canvas a call opened is not a view, so it always applies.
 
 Bind it to a component in the app, in its app module's `bind` (`application/mobile/src/modules/todos/index.tsx`):
 
@@ -3022,8 +3026,9 @@ Every business's use of what costs money is metered, priced and, when its plan s
   recall and indexing, the embedding model as variant; section 7.7). Each use is a row in
   `app.usage_events`, added to its period's counter (`app.usage_counters`). A feature or module adds
   a meter with `defineMeter({ name, unit, per, label?, fallbackPrice? })` (contributed as
-  `meters`; `label` is what people call it, as `Labels` in the application's languages, and the
-  framework's own meters are named in its phrases, `credits.meter.*`) and records with `CreditsService.record({ tenantId, meter, quantity, source, ref })`, or
+  `meters`; `label` is what people call it, as `Labels` in the application's languages, which
+  `defineServer` checks like every other word, and the framework's own meters are named in its
+  phrases, `credits.meter.*`) and records with `CreditsService.record({ tenantId, meter, quantity, source, ref })`, or
   `metering()?.record(...)` from code that must not depend on the feature; `ref` makes a retried
   report count once. A `tokens` use without a cost is priced like a turn's (`tokens.<model>`, then
   `tokens`, then the model's own price), with its input and output split when given
@@ -3064,7 +3069,9 @@ Every business's use of what costs money is metered, priced and, when its plan s
   its name in the code: "Assistant actions: this period's limit is reached". It is in the
   reader's language: `GET /api/credits?lang=` and the operator's `GET …/:tenantId?lang=` (each
   meter's `label` too), a refused turn's language, a pinned voice session's; English where the
-  caller names none (an agent's call, a recall's 402). A meter's `credits.threshold` event carries
+  caller names none (an agent's call, a recall's 402). The app sends no turn language, so its
+  thread words a turn the credits refused itself, in its own language (`credits.paused`, as
+  every other channel's paused sentence). A meter's `credits.threshold` event carries
   its `label` in every language, so the application's alert can name a module's meter. One use
   that passes both levels of a cap at once (a limit of 1, a long voice session) says only the
   pause: the alert's row is stored and its event is not sent, so "low" never comes with "limit
@@ -3796,7 +3803,7 @@ These are not built. Each has a workaround for now.
 | Screens for memory | The `memory.list` view shows the business's memory in chat; there is no screen to edit it. Its `memory` settings are edited as JSON on the back office's Settings screen. |
 | A limit's alert past 100% | A plan that pauses a meter above its limit (`pauseAt` over 100) can send the sample's "low" alert at, say, 120%, still worded "At the limit it pauses". The event carries no `pauseAt`, so the alert cannot say when it will pause. Keep `pauseAt` at 100 for limits, or word the alert as past the limit when `usedPercent` is 100 or more (a new template). |
 | A credits refusal to an agent, in the person's language | An agent's call the credits refuse (402), and a recall's 402, give their reason in English: an agent's call carries no language. The turn still ends with the paused sentence in its own language (`EndWhenPaused`). |
-| A lookup before a refused write | A read whose view came before a write that was refused still shows it: a refused call does not say whether it was a write. The reply says why it was refused. |
+| A lookup before a contributed tool's refused write | A write tool a module contributes (`toolContributions`) is not in the catalog's `writeToolIds`, so a list before its refused call still shows; a done or waiting call of it is known by its result. The generated, command and transition tools are all known. |
 | Settings screens | Every editable section (section 5.18) has the API and client methods, and the back office edits each as JSON; neither app has a form per section. |
 | Settings across processes | A settings change drops the cached copy of the process that made it; other processes keep theirs up to 10 s. Approvals and SLA clocks read settings in the write's transaction, so they are never late. |
 | Memory timings | The indexer gives the embedding provider 30 s per batch and takes over a claim after 120 s; recall gives it 4 s per turn (1.5 s on voice). All are constants in `features/memory/` (`indexer.ts`, `recall.service.ts`), not deployment settings. |
