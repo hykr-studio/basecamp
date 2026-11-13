@@ -198,6 +198,9 @@ describe('a tampered list cursor', () => {
         { ...genuine, v: 'x' },
         { ...genuine, v: [] },
         { ...genuine, id: { a: 1 } },
+        // Text Postgres cannot hold: the class-22 backstop answers for it (V10).
+        { ...genuine, v: ['a\u0000b'] },
+        { ...genuine, id: 'a\u0000b' },
         null,
         5,
       ]) {
