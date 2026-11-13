@@ -1091,7 +1091,7 @@ export class JobRunner implements OnModuleInit, OnApplicationBootstrap, OnModule
       const last = counted.completionAttempts >= COMPLETE_ATTEMPTS;
       await this.db
         .update(jobs)
-        .set({ completionError: brief(e), ...(last ? { completion: 'failed' as const } : {}) })
+        .set({ completionError: told(e), ...(last ? { completion: 'failed' as const } : {}) })
         .where(eq(jobs.id, jobId));
       log.warn(`complete ${jobId} (${row.kind}) #${counted.completionAttempts}: ${brief(e)}`);
       if (!last) throw e;
