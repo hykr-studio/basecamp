@@ -1,7 +1,7 @@
 // The assistant's turns under credits: refused before the model runs when the business is
 // paused (tokens or tool calls capped), and metered after (tokens, priced by the model, and one
 // tool call per tool it called).
-import { CreditsViewCapability, type Subject } from '@hykr/contracts';
+import { CreditsViewCapability, pausedSentenceKey, type Subject } from '@hykr/contracts';
 import { schema } from '@hykr/db';
 import { type Labels, languages, type MessageKey, pick, t } from '@hykr/i18n';
 import { can, subjectKeyOf } from '@hykr/policy';
@@ -54,7 +54,8 @@ async function before(svc: CreditsService, turn: TurnInfo): Promise<TurnGate | n
   const refusal = refusals.find((r) => r !== null) ?? null;
   // Settings that do not parse: the model policy refuses the turn itself (503), naming why.
   if (!refusal || refusal.rule === 'credits_unavailable') return null;
-  let say = labels('credits.paused');
+  // The operator's pause has its own sentence: adding credits does not lift it.
+  let say = labels(pausedSentenceKey(refusal.rule));
   if (!can(p, CreditsViewCapability) && turn.channel === 'whatsapp' && p.subject) {
     const contact = await contactOf(svc, p.tenantId, p.subject);
     if (contact) {

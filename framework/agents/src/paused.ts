@@ -4,6 +4,7 @@
 // further call and spends no further tokens. Every surface shares the assistant, so a chat turn,
 // a WhatsApp or voice turn, an agent's run and a resumed run all stop the same way.
 import type { LanguageModelV2, LanguageModelV2Content } from '@ai-sdk/provider';
+import { pausedSentenceKey } from '@hykr/contracts';
 import { isLang, type Lang, t } from '@hykr/i18n';
 import type { ProcessInputStepArgs, Processor } from '@mastra/core/processors';
 
@@ -26,17 +27,28 @@ function outputOf(part: unknown): unknown {
     : out;
 }
 
-/** Did a tool of the run so far come back refused because the business is paused? */
-export function pausedIn(steps: readonly unknown[]): boolean {
-  return steps.some((step) => {
+/**
+ * The first refusal of the run so far that came back because the business is paused: its rule
+ * (`credits_suspended`, the operator's pause, or the credits used or a limit reached). Null when
+ * none did.
+ */
+export function pausedRefusalIn(steps: readonly unknown[]): { rule?: unknown } | null {
+  for (const step of steps) {
     const s = step as { toolResults?: unknown[]; content?: { type?: string }[] } | null;
     const results = [
       ...(s?.toolResults ?? []),
       ...(s?.content ?? []).filter((c) => c?.type === 'tool-result'),
     ];
-    return results.some((r) => isPausedRefusal(outputOf(r)));
-  });
+    for (const r of results) {
+      const out = outputOf(r);
+      if (isPausedRefusal(out)) return { rule: (out as { error: { rule?: unknown } }).error.rule };
+    }
+  }
+  return null;
 }
+
+/** Did a tool of the run so far come back refused because the business is paused? */
+export const pausedIn = (steps: readonly unknown[]): boolean => pausedRefusalIn(steps) !== null;
 
 /** A model that only ever says these words, for nothing: the run's last step. */
 export function sayingModel(text: string): LanguageModelV2 {
@@ -67,9 +79,12 @@ export function sayingModel(text: string): LanguageModelV2 {
   };
 }
 
-/** The paused sentence in the turn's language (the one a refused turn says). */
-export const pausedText = (lang: unknown) =>
-  t((isLang(lang) ? lang : 'en') as Lang, 'credits.paused');
+/**
+ * The paused sentence in the turn's language (the one a refused turn says): the operator's
+ * pause (`rule` `credits_suspended`) has its own, as adding credits does not lift it.
+ */
+export const pausedText = (lang: unknown, rule?: unknown) =>
+  t((isLang(lang) ? lang : 'en') as Lang, pausedSentenceKey(rule));
 
 /**
  * Before each step of a run: once a tool has come back refused because the business is paused,
@@ -80,9 +95,10 @@ export class EndWhenPaused implements Processor {
   readonly name = 'End the run when the business is paused';
 
   processInputStep({ steps, requestContext }: ProcessInputStepArgs) {
-    if (!pausedIn(steps)) return undefined;
+    const refused = pausedRefusalIn(steps);
+    if (!refused) return undefined;
     return {
-      model: sayingModel(pausedText(requestContext?.get('lang'))),
+      model: sayingModel(pausedText(requestContext?.get('lang'), refused.rule)),
       tools: {},
       toolChoice: 'none' as const,
     };

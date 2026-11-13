@@ -92,6 +92,19 @@ describe('a run that reaches the cap in the middle', () => {
     expect(calls).toEqual(['first', 'second']);
   });
 
+  it("says the operator's pause apart: adding credits would not lift it", async () => {
+    const suspended = { ...paused, error: { ...paused.error, rule: 'credits_suspended' } };
+    const out = await agent(() => suspended).generate('first then second', {
+      requestContext: context('hi'),
+      maxSteps: 8,
+    });
+    expect(out.text).toBe(t('hi', 'credits.suspended'));
+    expect(pausedText('hi', 'credits_suspended')).toBe(t('hi', 'credits.suspended'));
+    expect(pausedText('en', 'credits_suspended')).not.toBe(pausedText('en'));
+    // Every other credits rule says the paused sentence.
+    expect(pausedText('en', 'usage_limit_reached')).toBe(pausedText('en'));
+  });
+
   it('leaves any other refusal to the model', async () => {
     const out = await agent(() => forbidden).generate('first then second', {
       requestContext: context(),

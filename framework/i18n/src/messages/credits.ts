@@ -6,6 +6,9 @@ export const creditsMessages = defineMessages({
   en: {
     'credits.paused':
       "The assistant is paused: this business has used its credits for now. Someone who manages the business's credits can add more.",
+    // The operator's pause: adding credits does not lift it.
+    'credits.suspended':
+      'The assistant is paused: this business is paused by its operator for now.',
     'credits.title': 'Credits',
     'credits.used': '{percent}% used this period',
     'credits.notEnforced': 'Usage is measured, with no cap.',
@@ -36,6 +39,7 @@ export const creditsMessages = defineMessages({
   hi: {
     'credits.paused':
       'असिस्टेंट रुका हुआ है: इस व्यवसाय के क्रेडिट अभी खत्म हो गए हैं। व्यवसाय के क्रेडिट संभालने वाला कोई व्यक्ति और जोड़ सकता है।',
+    'credits.suspended': 'असिस्टेंट रुका हुआ है: इस व्यवसाय को अभी उसके ऑपरेटर ने रोका है।',
     'credits.title': 'क्रेडिट',
     'credits.used': 'इस अवधि में {percent}% उपयोग हुआ',
     'credits.notEnforced': 'उपयोग मापा जाता है, कोई सीमा नहीं है।',
@@ -65,6 +69,7 @@ export const creditsMessages = defineMessages({
   te: {
     'credits.paused':
       'అసిస్టెంట్ ఆగిపోయింది: ఈ వ్యాపారం ప్రస్తుతానికి తన క్రెడిట్‌లను వాడేసింది. వ్యాపార క్రెడిట్‌లను నిర్వహించే వారు మరిన్ని జోడించవచ్చు.',
+    'credits.suspended': 'అసిస్టెంట్ ఆగిపోయింది: ఈ వ్యాపారాన్ని ప్రస్తుతానికి దాని ఆపరేటర్ ఆపారు.',
     'credits.title': 'క్రెడిట్‌లు',
     'credits.used': 'ఈ వ్యవధిలో {percent}% వాడారు',
     'credits.notEnforced': 'వినియోగం కొలవబడుతుంది, పరిమితి లేదు.',

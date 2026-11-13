@@ -120,6 +120,15 @@ export const UsageRefusalRule = z.enum([
 ]);
 export type UsageRefusalRule = z.infer<typeof UsageRefusalRule>;
 
+/**
+ * The sentence (an i18n key) people are told when a credits rule stops the assistant: the
+ * operator's pause has its own, since adding credits does not lift it; every other rule (the
+ * credits used, a limit reached) says the paused sentence. WhatsApp's paused turn, a run ended
+ * mid-way, the app's thread and its voice share it.
+ */
+export const pausedSentenceKey = (rule: unknown): 'credits.suspended' | 'credits.paused' =>
+  rule === 'credits_suspended' ? 'credits.suspended' : 'credits.paused';
+
 export interface UsageRefusal {
   rule: UsageRefusalRule;
   reason: string;

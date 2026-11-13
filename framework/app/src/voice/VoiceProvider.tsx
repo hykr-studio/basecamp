@@ -1,6 +1,7 @@
 import { useAISDKChat } from '@assistant-ui/ai-sdk';
 import {
   langOfVoice,
+  pausedSentenceKey,
   UI_PARTS_TOPIC,
   VOICE_HEARS_ATTRIBUTE,
   VOICE_LANG_TOPIC,
@@ -43,7 +44,13 @@ export type VoiceStatus = 'off' | 'connecting' | 'listening' | 'thinking' | 'spe
 type Voice = {
   status: VoiceStatus;
   /** Why voice is not working (no microphone, today's minutes used, …), as a catalog key. */
-  problem?: 'voice.noMic' | 'voice.budget' | 'voice.failed' | 'voice.noAnswer' | 'credits.paused';
+  problem?:
+    | 'voice.noMic'
+    | 'voice.budget'
+    | 'voice.failed'
+    | 'voice.noAnswer'
+    | 'credits.paused'
+    | 'credits.suspended';
   muted: boolean;
   /** The microphone is on and published: mute means something. */
   micReady: boolean;
@@ -337,9 +344,16 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       if (pinned) setSpoken(pinned);
     } catch (e) {
       if (stale()) return;
-      const code = (e as { status?: number }).status;
-      // 429: the person's voice minutes today; 402: the business's credits or voice limit.
-      setProblem(code === 429 ? 'voice.budget' : code === 402 ? 'credits.paused' : 'voice.failed');
+      const { status: code, body } = e as { status?: number; body?: { rule?: unknown } };
+      // 429: the person's voice minutes today; 402: the business's credits, its voice limit or
+      // its operator's pause (a sentence of its own).
+      setProblem(
+        code === 429
+          ? 'voice.budget'
+          : code === 402
+            ? pausedSentenceKey(body?.rule)
+            : 'voice.failed',
+      );
       roomRef.current = null;
       await room.disconnect().catch(() => {});
       await stopAudio().catch(() => {});
