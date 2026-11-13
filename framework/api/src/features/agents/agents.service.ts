@@ -449,10 +449,11 @@ export class AgentsService implements OnModuleInit, OnModuleDestroy {
       .from(agentTriggers)
       .where(and(eq(agentTriggers.agentId, agent.id), eq(agentTriggers.kind, 'mention')))
       .limit(1);
-    if (trigger && savedAfter(trigger.createdAt, event)) return null;
+    // No saved trigger row is no time to compare with: nothing starts (as for an event trigger).
+    if (!trigger || savedAfter(trigger.createdAt, event)) return null;
     return this.start({
       agent,
-      triggerId: trigger?.id ?? null,
+      triggerId: trigger.id,
       kind: 'mention',
       label: `on an @-mention by ${row.author?.name ?? 'someone'}`,
       input: {

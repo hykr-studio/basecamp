@@ -952,6 +952,37 @@ describe('triggers', () => {
     expect(detail.reply).toContain(t.id);
   });
 
+  it('an @-mention of an agent with no saved mention trigger starts no run', async () => {
+    const unsaved = await agent(ana, {
+      name: 'Unsaved helper',
+      instructions: 'Report what started this run.',
+      triggers: [{ kind: 'mention' }],
+    });
+    // Its trigger row is gone (out of step with its definition): no time to compare events with.
+    await pool.query('delete from app.agent_triggers where agent_id = $1', [unsaved.id]);
+    const t = await task(ana, 'Mention without a trigger');
+    const said = await ana.call(
+      'POST',
+      '/api/comments',
+      { entity: 'task', recordId: t.id, body: `@[Unsaved helper](agent:${unsaved.id}) look` },
+      inA(),
+    );
+    expect(said.status).toBe(200);
+    await eventually(
+      async () =>
+        (
+          await pool.query(
+            `select relayed_at from app.domain_events
+              where name = 'comment.mentioned' and row->'target'->>'id' = $1`,
+            [unsaved.id],
+          )
+        ).rows[0]?.relayed_at ?? undefined,
+      20_000,
+    );
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(await runsOf(unsaved.id)).toHaveLength(0);
+  });
+
   it('a WhatsApp message: the inbound hook starts the agent, and leaves the message to the assistant', async () => {
     expect(inboundHooks.has('agents')).toBe(true);
     const listener = await agent(ana, {

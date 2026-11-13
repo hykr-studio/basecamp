@@ -502,6 +502,26 @@ describe('uploading and reaching a file', () => {
     // Without the key, the file is gone.
     expect((await owner.call('DELETE', `/api/files/${id}`)).status).toBe(404);
   });
+
+  it('a presign repeated after its upload expired says so, with no upload URL', async () => {
+    const body = {
+      name: `late-${randomUUID()}.png`,
+      mime: 'image/png',
+      size: png().length,
+      for: { entity: 'card', field: 'photos' },
+    };
+    const key = { 'idempotency-key': randomUUID() };
+    const first = await owner.call('POST', '/api/files', body, key);
+    expect(first.status).toBe(201);
+    await pool.query(
+      "update app.files set upload_expires_at = now() - interval '1 minute' where id = $1",
+      [first.body.file.id],
+    );
+    const again = await owner.call('POST', '/api/files', body, key);
+    expect(again.status).toBe(409);
+    expect(again.body).toMatchObject({ error: 'upload_expired' });
+    expect(again.body.upload).toBeUndefined();
+  });
 });
 
 describe('the write path attaches and lets go', () => {

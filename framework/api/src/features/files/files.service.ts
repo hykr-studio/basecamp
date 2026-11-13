@@ -274,8 +274,16 @@ export class FilesService implements OnApplicationBootstrap {
           error: 'already_uploaded',
           message: 'This upload was finished already',
         });
-      const left = Math.floor(((again.uploadExpiresAt as Date).getTime() - Date.now()) / 1000);
-      return this.presigned(again, p, Math.max(1, left));
+      // Its time to upload ran out: start again with a new key, as `confirm` says.
+      const left = again.uploadExpiresAt
+        ? Math.floor((again.uploadExpiresAt.getTime() - Date.now()) / 1000)
+        : 0;
+      if (left < 1)
+        throw new ConflictException({
+          error: 'upload_expired',
+          message: 'The upload expired. Start again.',
+        });
+      return this.presigned(again, p, left);
     }
     const [{ n }] = await this.db
       .select({ n: count() })
