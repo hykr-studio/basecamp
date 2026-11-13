@@ -248,6 +248,7 @@ const onTeam = (p: Principal) => p.standing === 'member' && teamRoles(p.roles ??
  * `by` decides who; `channels` likewise; `minAssurance` is the strongest any of them asks.
  * Nobody says: a member of the team decides their own (assistant's) request, and anyone outside
  * it (a contact, a participant, a customer) asks the business, the holders of `approvals.decide`.
+ * One that says `'requester'` is read the same way: outside the team, the business decides.
  */
 async function decidersFor(
   tx: Tx,
@@ -274,7 +275,9 @@ async function decidersFor(
         ? business()
         : (named ?? business());
   }
-  if (who === 'requester' && !self) who = business();
+  // Their own to decide only while on the team: a requester outside it (a member holding only a
+  // contact's or a participant's roles) asks the business, as when nobody says.
+  if (who === 'requester' && !(self && onTeam(p))) who = business();
   if (typeof who === 'object' && 'userId' in who) {
     // A named person decides alone: never the requester, and only a member of this business's
     // team, by the roles it has (its own and its edits; a name it lacks counts for nothing).
@@ -575,11 +578,7 @@ export class ApprovalService {
           decidedBy: deciderKey,
           failureReason: failureReason ?? null,
         })
-        .where(
-          status === 'failed'
-            ? eq(approvals.id, found.id)
-            : and(eq(approvals.id, found.id), eq(approvals.status, 'pending')),
-        )
+        .where(and(eq(approvals.id, found.id), eq(approvals.status, 'pending')))
         .returning();
       if (!row) throw new ConflictException({ error: 'already_decided' });
       await writeAudit(tx, {
