@@ -85,17 +85,19 @@ export const jobsExport: ExportContributor = {
 };
 
 /**
- * A job's files (a business export's archive, an import's file and its error report) copy
- * other people's records: erasing one of them leaves the copies made before (decisions V8), so
- * they are on the register as kept, and this target erases them once the job is older than the
- * period the application or the business sets. Without a period they stay.
+ * A job's result files (a business export's archive, an import's error report) copy other
+ * people's records: erasing one of them leaves the copies made before (decisions V8), so they
+ * are on the register as kept, and this target erases them once the job finished longer ago
+ * than the period the application or the business sets (a record keeps the copy `complete` put
+ * on it). Without a period they stay. An import's own file is an upload on no record: the files
+ * sweeper deletes it.
  */
 export const jobsFilesRetention: RetentionTarget = {
   name: 'jobs.files',
   label: {
-    en: 'Files of finished jobs: exports, imported files and their error reports',
-    hi: 'पूरे हो चुके कामों की फ़ाइलें: एक्सपोर्ट, इम्पोर्ट की गई फ़ाइलें और उनकी गड़बड़ियों की रिपोर्ट',
-    te: 'పూర్తయిన పనుల ఫైల్‌లు: ఎగుమతులు, దిగుమతి చేసిన ఫైల్‌లు, వాటి లోపాల నివేదికలు',
+    en: 'Files of finished jobs: exports and import error reports',
+    hi: 'पूरे हो चुके कामों की फ़ाइलें: एक्सपोर्ट और इम्पोर्ट की गड़बड़ियों की रिपोर्ट',
+    te: 'పూర్తయిన పనుల ఫైల్‌లు: ఎగుమతులు, దిగుమతి లోపాల నివేదికలు',
   },
   scope: 'tenant',
   action: 'delete',

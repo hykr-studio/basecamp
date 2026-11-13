@@ -104,6 +104,37 @@ const finished = (p: Person, id: string) =>
     return ['completed', 'failed', 'refused'].includes(res.body?.status) ? res.body : undefined;
   }, 30_000);
 
+/**
+ * Mastra writes a run's spans and scores after it, in batches (decisions V3, Deferred): wait
+ * until every finished agent run of the business has its spans, and nothing more is landing.
+ */
+async function mastraSettled() {
+  const runs = (
+    await pool.query(`select run_id from app.agent_runs where tenant_id = $1 and status = 'done'`, [
+      tenantId,
+    ])
+  ).rows.map((r) => r.run_id as string);
+  let last = -1;
+  await eventually(async () => {
+    try {
+      const { rows } = await pool.query(
+        `select (select count(distinct "traceId") from mastra_obs.mastra_span_events
+                  where "traceId" = any($1))::int as traced,
+                (select count(*) from mastra_obs.mastra_span_events
+                  where "traceId" = any($1))::int
+                + (select count(*) from mastra.mastra_scorers where "runId" = any($1))::int as n`,
+        [runs],
+      );
+      const settled = rows[0].traced === runs.length && rows[0].n === last;
+      last = rows[0].n;
+      if (!settled) await new Promise((r) => setTimeout(r, 1000));
+      return settled ? true : undefined;
+    } catch {
+      return undefined; // Mastra has not made its tables yet
+    }
+  }, 30_000);
+}
+
 /** No job of any queue is waiting, delayed or running. */
 async function queuesIdle() {
   const { JobsService } = await import('../../dist/queues/jobs.service.js');
@@ -183,6 +214,27 @@ describe('erasing a member and a contact (decisions V8)', () => {
       body: `@[${sam.name}](user:${sam.id}) please look`,
     });
     expect(named.status, JSON.stringify(named.body)).toBeLessThan(300);
+
+    // Sam names Carol's agent in a comment: its run carries his name and words.
+    const mentioned = await call(carol, 'POST', '/api/agents', {
+      name: 'Mentioned',
+      instructions: 'Say what you were asked.',
+      triggers: [{ kind: 'mention' }],
+    });
+    expect(mentioned.status, JSON.stringify(mentioned.body)).toBeLessThan(300);
+    const asked = await call(sam, 'POST', '/api/comments', {
+      entity: 'task',
+      recordId: samTask.body.value.id,
+      body: `@[Mentioned](agent:${mentioned.body.value.id}) ${M1} have a look`,
+    });
+    expect(asked.status, JSON.stringify(asked.body)).toBeLessThan(300);
+    await eventually(async () => {
+      const { rows } = await pool.query(
+        `select status from app.agent_runs where agent_id = $1 and status in ('done', 'failed')`,
+        [mentioned.body.value.id],
+      );
+      return rows.length ? true : undefined;
+    }, 20_000);
 
     // 2. Ana puts Sam on a party by his email, and the contact on another by number.
     const party = await call(ana, 'POST', '/api/parties', { kind: 'organisation', name: KEEP });
@@ -324,14 +376,15 @@ describe('erasing a member and a contact (decisions V8)', () => {
     );
 
     await queuesIdle();
+    await mastraSettled();
     expect((await rowsHolding([M1, M2, M3, M4, M5])).length).toBeGreaterThan(5);
     expect((await rowsHolding([M6])).length).toBeGreaterThanOrEqual(3);
     expect((await keysHolding([MK, M1])).length).toBeGreaterThan(0);
 
     // Sam asks to be forgotten; Carol files the contact's erasure, and Ana approves it.
-    const asked = await call(sam, 'POST', '/api/privacy/requests', { kind: 'erase' });
-    expect(asked.status, JSON.stringify(asked.body)).toBeLessThan(300);
-    samOutcome = await finished(ana, asked.body.value.id);
+    const forget = await call(sam, 'POST', '/api/privacy/requests', { kind: 'erase' });
+    expect(forget.status, JSON.stringify(forget.body)).toBeLessThan(300);
+    samOutcome = await finished(ana, forget.body.value.id);
     expect(samOutcome.status, JSON.stringify(samOutcome)).toBe('completed');
     const filed = await call(carol, 'POST', '/api/privacy/requests', {
       kind: 'erase',

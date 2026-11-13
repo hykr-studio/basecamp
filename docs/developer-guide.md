@@ -2161,12 +2161,13 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
     recipient and their label, in the copies too.
   - Memory: their business memories go, with the text of their copies.
   - Jobs: a job about no record started for them loses its input and output, and its files are
-    erased with their names in the `file.*` audit rows. A job's files (a business export's
-    archive, an import's file and its error report) copy other people's records: they are on the
+    erased with their names in the `file.*` audit rows. A job's result files (a business
+    export's archive, an import's error report) copy other people's records: they are on the
     register as kept (`jobs.files`, `business_copy`) until the `jobs.files` retention period.
   - Agents: their agents go, with their runs and threads, and the copies lose the instructions
-    and what the runs said; a contact's message that started someone else's agent leaves the
-    run without the message and the reply, and its turns and Mastra rows go.
+    and what the runs said; a run of someone else's agent that carried them (a contact's
+    message, a person's @-mention, an event naming them) stays without its input, reply and
+    label, and its turns and Mastra rows go.
   - Inbox and push: other people's inbox items about an erased record are deleted, and push
     tickets lose its fields from `meta` (`recordCopies`).
   The later features (`docs/decisions/H4.md`) do the following:
@@ -3726,7 +3727,7 @@ These are not built. Each has a workaround for now.
 | Large data exports | An export is built in the worker's memory, one entity at a time, and fails `too_large` past `FILES_MAX_BYTES` (compressed): raise the limit, or export a few entities at a time (`only`). |
 | Telling someone an export is ready, export retention | Nothing notifies the person; the export screen polls. Archives stay until "delete my data" (B11). A person's copy of their own data (section 5.27) expires with `privacy.archives`. |
 | Correction, nomination, grievances, a breach log | Privacy requests are `export` and `erase` only. Record the rest outside the product. |
-| Copies erasure does not reach | A job still waiting or running when the person is erased keeps their data in Redis until it finishes and its keep bound passes (24 hours completed, 7 days failed by default); a finished job that names them only by their display name is not matched. Text already delivered to other people stays: other people's conversation messages that quoted the person, WhatsApp and email text, pushes sent, an inbox item about a record that stays. A business's export archives and imported files made before the erasure keep them until the `jobs.files` period (`docs/decisions/V8.md`). Backups are the deployment's. An approval of a parked create names no record (it did not exist yet), so erasing the record it made leaves the approval's input; a park's summary on another record stays unless the approval names the erased record by id (`docs/decisions/V3.md`). Mastra writes a turn's spans and scores after the turn: an erasure in the seconds after the person's last turn can miss them, until `assistant.traces` retention removes them. |
+| Copies erasure does not reach | A job still waiting or running when the person is erased keeps their data in Redis until it finishes and its keep bound passes (24 hours completed, 7 days failed by default); a finished job that names them only by their display name is not matched. Text already delivered to other people stays: other people's conversation messages that quoted the person, WhatsApp and email text, pushes sent, an inbox item about a record that stays. A business's export archives and import error reports made before the erasure keep them until the `jobs.files` period (`docs/decisions/V8.md`). Backups are the deployment's. An approval of a parked create names no record (it did not exist yet), so erasing the record it made leaves the approval's input; a park's summary on another record stays unless the approval names the erased record by id (`docs/decisions/V3.md`). Mastra writes a turn's spans and scores after the turn: an erasure in the seconds after the person's last turn can miss them, until `assistant.traces` retention removes them. |
 | Checking who asks before a copy is released | A signed-in person's own request runs as they are; there is no OTP step, and the copy is not sent on WhatsApp or by email. The team downloads it for a contact. |
 | A privacy tool for the assistant | Requests are filed by people (the app, the back office, WhatsApp's keyword). |
 | Retention of the later features' logs | Webhook deliveries, attempts and inbound events, the call log and calendar invites have no retention target: they stay until erasure, or until their endpoint or connection is deleted (`docs/decisions/H4.md`). |
