@@ -15,6 +15,13 @@ import { sharedDb } from './db.js';
 import { nativeAppOrigin } from './native-origin.js';
 import { authRateLimit } from './throttle.js';
 
+/**
+ * The caller's address as Express sees it (`req.ip`, which honours `trust proxy`), handed to
+ * Better Auth by `authMiddleware`: its rate limits then count per caller as the API's throttle
+ * does. A client's own value is always replaced.
+ */
+const CLIENT_ADDRESS_HEADER = 'x-hykr-client-address';
+
 /** The native app's scheme (and the Expo dev client's, outside production). */
 const appSchemes = () => [
   'agenticstack://',
@@ -77,8 +84,11 @@ function createAuth() {
       },
     }),
     emailAndPassword: { enabled: true, minPasswordLength: 8 },
-    // Better Auth's own limits on its routes, which the API's throttle never sees: in Redis.
+    // Better Auth's own limits on its routes, which the API's throttle never sees: in Redis,
+    // per address as Express sees it (authMiddleware), like the API's throttle; Better Auth's
+    // default (one x-forwarded-for entry, else one bucket for everyone) only for its own calls.
     rateLimit: authRateLimit(),
+    advanced: { ipAddress: { ipAddressHeaders: [CLIENT_ADDRESS_HEADER, 'x-forwarded-for'] } },
     // A new person gets their own business, as its creator: the template works for one person
     // as before, and their records are theirs alone. (The guard does the same if this ever
     // fails.) Unless the application gives none on sign-up (`signUp.createBusiness: false`): then
@@ -116,6 +126,8 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     res.status(refusal.status).json(refusal.body);
     return;
   }
+  if (req.ip) req.headers[CLIENT_ADDRESS_HEADER] = req.ip;
+  else delete req.headers[CLIENT_ADDRESS_HEADER];
   next();
 }
 

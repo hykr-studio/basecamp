@@ -485,6 +485,29 @@ describe('the consent screen: narrowing, and the person’s language', () => {
     expect((await authorizeAs(clientId, 'tasks:read')).searchParams.get('code')).toBeTruthy();
   });
 
+  it('keeps reading among the choices through sign-in', async () => {
+    const clientId = (await register('Signs in first')).body.client_id;
+    const anon = await get(
+      `/api/auth/oauth2/authorize?${authorizeQuery(clientId, pkce().challenge, 'tasks:write')}`,
+    );
+    const signIn = new URL(
+      anon.status === 302 ? (anon.headers.get('location') ?? '') : anon.body.url,
+    );
+    expect(signIn.pathname).toBe('/oauth/sign-in');
+    expect(signIn.searchParams.get('scope')).toBe('tasks:read tasks:write');
+    const fresh = new Person('Ana Mcp', ana.email);
+    const signedIn = await fresh.call(
+      'POST',
+      '/api/auth/sign-in/email',
+      { email: ana.email, password: 'password123', oauth_query: signIn.search.slice(1) },
+      { accept: 'application/json' },
+    );
+    expect(signedIn.status).toBe(200);
+    const consent = new URL(signedIn.body.url);
+    expect(consent.pathname).toBe('/oauth/consent');
+    expect(consent.searchParams.get('scope')).toBe('tasks:read tasks:write');
+  });
+
   it('offers reading alone for every module when the request names no scope', async () => {
     // A dynamic registration holds every scope, whatever it asks (the provider stores them all).
     const res = await fetch(`${server.base}/api/auth/oauth2/register`, {

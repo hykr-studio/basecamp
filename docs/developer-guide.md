@@ -3110,8 +3110,9 @@ the scopes and the tools. `MCP=off` turns it off for a deployment.
   the address: every tool call reaches the API from the API's own process. Better Auth's routes
   (`/api/auth/*`, sign-in and the OAuth endpoints) are outside that throttle: Better Auth's own
   limits apply there (3 sign-ins, sign-ups, password or email changes per 10 s per address, 100
-  calls elsewhere), counted in the same Redis, in production and with `THROTTLE=on`, never with
-  `THROTTLE=off` (`authRateLimit`, `infra/throttle.ts`).
+  calls elsewhere), counted in the same Redis and per address as Express sees it (`req.ip`), in
+  production and with `THROTTLE=on`, never with `THROTTLE=off` (`authRateLimit`,
+  `infra/throttle.ts`).
 - **Scopes** are `<module>:read` and `<module>:write` for each application module (`write` covers
   `read`), plus `offline_access`. `PrincipalGuard` enforces them for any scoped credential (any
   identity provider that returns `scopes`): it reaches only routes that declare a scope
@@ -3660,7 +3661,7 @@ These are not built. Each has a workaround for now.
 | Share pages on a business's domain | The URL a link answers is `APP_URL`'s; a verified domain (section 5.18) is not used for it, though the page shows the business's branding. |
 | An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
 | Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders can be cancelled when approved or accepted). |
-| The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set Express's `trust proxy` (not done by the framework). Better Auth's own rate limits (sign-in, sign-up, password and email changes) key on `x-forwarded-for`, its default: right behind a proxy, but a client reaching the API directly can vary it. |
+| The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set Express's `trust proxy` (not done by the framework). Better Auth's own rate limits (sign-in, sign-up, password and email changes) key on `req.ip` too, so without `trust proxy` every caller behind the balancer shares one bucket. |
 | Acceptance tools for the assistant | The assistant can neither ask for a code nor accept (on purpose), and has no tool to read acceptances yet. |
 | Retiring `channel.link_codes` | Linking codes now live in `channel.otp_challenges`; the old table stays, unused, until a migration may drop it. |
 | Agent tools for parties | `/api/parties` and `/api/participants` are people-only routes; the assistant cannot add someone to a record. |
