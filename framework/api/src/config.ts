@@ -59,6 +59,17 @@ export const config = {
   },
   /** Queue keys in Redis: tests run under their own prefix, alongside the dev server. */
   queuePrefix: env.BULL_PREFIX ?? 'bull',
+  /** Finished jobs in Redis: how long (seconds) and how many per queue (queues/define.ts). */
+  keepJobs: {
+    completed: {
+      age: Math.round(Number(env.JOBS_KEEP_COMPLETED_HOURS ?? 24) * 3600),
+      count: Number(env.JOBS_KEEP_COMPLETED ?? 1000),
+    },
+    failed: {
+      age: Math.round(Number(env.JOBS_KEEP_FAILED_DAYS ?? 7) * 86_400),
+      count: Number(env.JOBS_KEEP_FAILED ?? 5000),
+    },
+  },
   /** Run the queue workers inside this process (tests); otherwise worker.ts runs them. */
   workerInline: env.WORKER_INLINE === '1',
   /** Where links in messages point: the app (sign-in, a page, an approval). */

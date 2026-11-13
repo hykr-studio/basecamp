@@ -1490,6 +1490,10 @@ describe('the copies of what an erasure takes (decisions V3)', () => {
       )
     ).rows.map((r) => r.run_id as string);
     expect(runs.length).toBeGreaterThan(0);
+    // Mastra writes the scorers' spans and scores in batches after the turn: wait until they
+    // are there and nothing more has landed for a second, or a late batch would land after the
+    // erasure (decisions V3, Deferred; V8).
+    let last = '';
     await eventually(async () => {
       try {
         const scores = await n(
@@ -1502,11 +1506,16 @@ describe('the copies of what an erasure takes (decisions V3)', () => {
           [runs],
         );
         const held = await mastraHolding(CHAT);
-        return scores >= 2 && scorerSpans >= 1 && held.scorers && held.spans ? true : undefined;
+        const seen = JSON.stringify([scores, scorerSpans, held]);
+        const settled = seen === last;
+        last = seen;
+        const there = scores >= 2 && scorerSpans >= 1 && held.scorers && held.spans;
+        if (there && !settled) await new Promise((r) => setTimeout(r, 1000));
+        return there && settled ? true : undefined;
       } catch {
         return undefined; // Mastra has not made its tables yet
       }
-    }, 20_000);
+    }, 30_000);
 
     // Copies of the card, in the shapes the server writes them. An approval of Ana's on the
     // card, decided: its audit row and stored event carry the approval whole.
@@ -1681,6 +1690,62 @@ describe('the copies of what an erasure takes (decisions V3)', () => {
       (await pool.query('select id from mastra.mastra_scorers where id like $1', [`v3-%-${MK}`]))
         .rows,
     ).toEqual([{ id: `v3-new-${MK}` }]);
+  });
+
+  it('skip a Mastra table whose column an upgrade renamed, instead of failing (decisions V8)', async () => {
+    const { DB } = await import('../../dist/testing-internals.js');
+    const { eraseRunTraces, expireTraces } = await import('../../dist/features/privacy/mastra.js');
+    const { sql } = await import('drizzle-orm');
+    const db = server.app?.get(DB, { strict: false });
+    const undone = new Error('rolled back');
+    /** The step's outcome with the column renamed, in a transaction that is then rolled back. */
+    const renamed = async (
+      table: string,
+      column: string,
+      step: (tx: unknown) => Promise<number>,
+    ) => {
+      let outcome: Json = {};
+      await db
+        .transaction(async (tx: { execute: (q: unknown) => Promise<unknown> }) => {
+          await tx.execute(
+            sql.raw(`alter table ${table} rename column "${column}" to "v8_${column}"`),
+          );
+          outcome = await step(tx).then(
+            (count) => ({ count }),
+            (e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }),
+          );
+          throw undone;
+        })
+        .catch((e: unknown) => {
+          if (e !== undone) throw e;
+        });
+      return outcome;
+    };
+    // Each skipped step says so, once, as a process warning naming the table and the column.
+    const warnings: string[] = [];
+    const heard = (w: Error & { code?: string }) => {
+      if (w.code === 'HYKR_MASTRA_SCHEMA') warnings.push(w.message);
+    };
+    process.on('warning', heard);
+    try {
+      expect(
+        await renamed('mastra.mastra_scorers', 'createdAtZ', (tx) => expireTraces(tx, new Date())),
+      ).toEqual({ count: expect.any(Number) });
+      expect(
+        await renamed('mastra_obs.mastra_score_events', 'scoreTraceId', (tx) =>
+          eraseRunTraces(tx, runs),
+        ),
+      ).toEqual({ count: expect.any(Number) });
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      process.off('warning', heard);
+    }
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^mastra\.mastra_scorers has no column "createdAtZ"/),
+        expect.stringMatching(/^mastra_obs\.mastra_score_events has no column "scoreTraceId"/),
+      ]),
+    );
   });
 
   it('keep what only references the record, and what another business holds', async () => {

@@ -42,8 +42,10 @@ function processorFor(def: QueueDef): Type {
       super();
       this.ctx = serverContext(ref);
     }
-    process(job: Job) {
-      return run(job, this.ctx);
+    // What a job returns is not kept: BullMQ would store it in Redis with the finished job (an
+    // erasure's outcome names whom it told).
+    async process(job: Job) {
+      await run(job, this.ctx);
     }
   }
   Object.defineProperty(RegistryProcessor, 'name', { value: `${pascal(def.name)}Processor` });
@@ -85,7 +87,7 @@ export class QueuesModule {
     checkQueues();
     const all = queues.all();
     const registered = BullModule.registerQueue(
-      ...all.map((q) => ({ name: q.name, defaultJobOptions: jobDefaults(q) })),
+      ...all.map((q) => ({ name: q.name, defaultJobOptions: jobDefaults(q, config.keepJobs) })),
     );
     const processors: Provider[] = opts.processors
       ? [...all.filter((q) => q.process).map(processorFor), SchedulesService]
@@ -96,7 +98,10 @@ export class QueuesModule {
         BullModule.forRoot({
           connection: { url: config.redisUrl },
           prefix: config.queuePrefix,
-          defaultJobOptions: { removeOnComplete: 1000, removeOnFail: 5000 },
+          defaultJobOptions: {
+            removeOnComplete: config.keepJobs.completed,
+            removeOnFail: config.keepJobs.failed,
+          },
         }),
         registered,
       ],
