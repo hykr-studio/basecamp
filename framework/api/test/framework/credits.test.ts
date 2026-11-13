@@ -1,7 +1,12 @@
 // Credits arithmetic, without a server: CREDITS_CONFIG, the effective plan, prices, the budget
 // and limits, overrides and headroom.
 import { afterEach, describe, expect, it } from 'vitest';
-import { assess, headroomOf, refusalFor } from '../../dist/features/credits/budget.js';
+import {
+  assess,
+  headroomOf,
+  limitRefusal,
+  refusalFor,
+} from '../../dist/features/credits/budget.js';
 import {
   CreditsConfigError,
   creditsFor,
@@ -193,6 +198,28 @@ describe('what a pause refuses', () => {
       'tool_calls/alert',
       'tool_calls/pause',
     ]);
+  });
+
+  it('a messages limit reports a refusal only when the plan pauses some kind of message', () => {
+    const reached = (pauseMessages: string[]) =>
+      assess(
+        plan({ enforce: true, allowance: 1000, limits: { messages: 2 }, pauseMessages }),
+        [{ meter: 'messages', quantity: 2, cost: 8 }],
+        null,
+      );
+    // Nothing is paused when no kind is: the screen must not say messages are refused.
+    expect(limitRefusal(reached([]), FrameworkMeters.messages)).toBeNull();
+    expect(refusalFor(reached([]), FrameworkMeters.messages, 'utility')).toBeNull();
+    // Marketing is paused: the limit refuses it, and the meter says so; a code still goes.
+    const some = reached(['marketing']);
+    expect(limitRefusal(some, FrameworkMeters.messages)).toMatchObject({
+      rule: 'usage_limit_reached',
+      cap: 'messages',
+    });
+    expect(refusalFor(some, FrameworkMeters.messages, 'marketing')?.rule).toBe(
+      'usage_limit_reached',
+    );
+    expect(refusalFor(some, FrameworkMeters.messages, 'authentication')).toBeNull();
   });
 
   it('the override wins: run lets everything through, pause stops it', () => {

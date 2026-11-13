@@ -25,6 +25,11 @@ export interface MeterDef {
    */
   pausable?(variant: string | null | undefined, plan: CreditsPlanResolved): boolean;
   /**
+   * With `pausable`: whether this plan pauses any use of the meter at all. False, a reached limit
+   * or budget stops nothing of it, so its status reports no refusal. Default: true.
+   */
+  pausesSome?(plan: CreditsPlanResolved): boolean;
+  /**
    * The price per `per` units of a use neither the plan nor the deployment prices (by
    * '<meter>.<variant>' or '<meter>'): embedding tokens ask the model's own price. Undefined: the
    * use costs nothing.
@@ -79,6 +84,7 @@ export const FrameworkMeters = {
     name: 'messages',
     unit: 'message',
     pausable: (variant, plan) => !!variant && plan.pauseMessages.includes(variant),
+    pausesSome: (plan) => plan.pauseMessages.length > 0,
   }),
   /** Voice session seconds, priced per minute. */
   voiceSeconds: defineMeter({ name: 'voice_seconds', unit: 'second', per: 60 }),

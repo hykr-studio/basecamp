@@ -3023,7 +3023,8 @@ Every business's use of what costs money is metered, priced and, when its plan s
   agent guard apply (`turnRefusal`: the operator's pause, the budget, or a `tokens` or
   `tool_calls` limit), null while turns run. Each meter whose own limit refuses its use is
   `paused` with its `refusal` (rule and reason), so a voice or memory-search limit shows there
-  while turns still run. Amounts, `GET /api/credits/ledger`, `GET /api/credits/usage` and
+  while turns still run. For `messages`, only the kinds in `pauseMessages` stop, and with none
+  named a reached limit refuses nothing, so the meter is not `paused` (`MeterDef.pausesSome`). Amounts, `GET /api/credits/ledger`, `GET /api/credits/usage` and
   purchases need `credits.manage` (owner, admin). People only.
 - **Buying credits.** `POST /api/credits/purchases { amount, provider? }` goes through `runWrite`
   (a write hook may park it) and records the purchase; its `CreditPurchaseProvider` (contributed
@@ -3674,7 +3675,7 @@ These are not built. Each has a workaround for now.
 | Operators inviting a business's owner | `POST /api/platform/tenants` makes a business for someone who has an account. An owner without one signs up first. A business made at sign-up announces no `tenant.provisioned`. |
 | Routing rules, keeping unrouted requests | The framework asks the application's `inboundRouters`; it keeps what happened to a request (`app.platform_routed`), not what it said. An operator cannot assign an unrouted request by hand. |
 | Suspending a business, plans and prices | Operators make, rename and switch flags of a business, and set its credits (section 7.6). Nothing suspends or deletes one; billing is the application's. |
-| The paused sentence for a usage limit | A turn refused by a `tokens` or `tool_calls` limit still says the business has used its credits and someone can add more (`credits.paused`, also said by `EndWhenPaused`). Its `rule` (`usage_limit_reached`) and `GET /api/credits` say it is a limit: raise it in the operator's plan, or wait for the next period. |
+| The paused sentence for a usage limit | A turn refused by a `tokens` or `tool_calls` limit still says the business has used its credits and someone can add more (`credits.paused`, also said by `EndWhenPaused`). Its `rule` (`usage_limit_reached`) and `GET /api/credits` say it is a limit: raise it in the operator's plan, or wait for the next period. The credits screen shows a refusal's `reason` as the server wrote it, in English, inside its localized "Paused: …" line. |
 | Telling the approver that the marketing cap dropped a send | A marketing message past the contact's weekly cap (`general.marketingPerWeek`) is dropped and only logged, also after someone approved it. Check the contact's sends this week before approving. |
 | Bull Board in production | It is mounted outside production only, for operators holding `platform.queues`. |
 | Support in history and events | `audit.events.on_behalf_of` marks support and operator writes, but the history screen does not label them, and stored events carry only the actor. Read a grant's activity (`GET /api/support-access/:id/activity`) or the audit. |

@@ -135,7 +135,11 @@ export interface MeterStatus {
   limit?: number;
   /** Of the limit, when there is one. */
   usedPercent?: number;
-  /** Its limit is reached: what it meters is refused (not under the operator's `run`). */
+  /**
+   * Its limit is reached and refuses what it meters (not under the operator's `run`). For a meter
+   * that pauses only some kinds (messages: the plan's `pauseMessages`), only those kinds stop,
+   * and with none named nothing is refused, so it is not paused.
+   */
   paused: boolean;
   /** Why, when it is paused: its limit's rule and reason. */
   refusal?: UsageRefusal;

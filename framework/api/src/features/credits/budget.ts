@@ -138,10 +138,13 @@ export function refusalFor(
 
 /**
  * Whether this meter's own limit refuses its use now, whatever the budget: what the credits
- * screen shows beside the meter. The operator's `run` lets everything through.
+ * screen shows beside the meter. The operator's `run` lets everything through. A meter that
+ * pauses only some uses (messages: the plan's `pauseMessages`) reports a refusal only when the
+ * plan pauses some of them; then only those stop.
  */
 export function limitRefusal(a: Assessment, meter: MeterDef): UsageRefusal | null {
   if (a.plan.override?.mode === 'run') return null;
+  if (meter.pausable && meter.pausesSome && !meter.pausesSome(a.plan)) return null;
   const limit = a.limits.get(meter.name);
   if (!limit?.pause) return null;
   return {
