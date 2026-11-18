@@ -4,6 +4,7 @@ import {
   app,
   currencyColumn,
   customerColumn,
+  fileColumn,
   id,
   minorUnits,
   revisionColumns,
@@ -73,6 +74,8 @@ export const orders = app.table(
     total: minorUnits('total').notNull().default(0),
     taxLines: jsonb('tax_lines').$type<TaxLine[]>().notNull().default([]),
     lineCount: integer('line_count').notNull().default(0),
+    /** A picture shown on its PDF (a drawing, a product photo): a file the order holds. */
+    photo: fileColumn('photo'),
     ...provenance(),
   },
   (table) => [

@@ -52,6 +52,9 @@ import { type UploadTarget, uploadTargets } from './targets.js';
 
 export type FileRow = typeof files.$inferSelect;
 
+/** What an entity's rules see as `ctx.via` when an upload for one of its file fields is asked. */
+export const UPLOAD_VIA = 'file.upload';
+
 const log = new Logger('Files');
 
 /** Types a browser may show inline: raster images, audio, video and PDF. Never SVG or HTML. */
@@ -259,10 +262,11 @@ export class FilesService implements OnApplicationBootstrap {
       const row = await def.repo.find(this.db, p, input.for.id);
       if (!row)
         throw new NotFoundException({ error: 'not_found', message: `No such ${def.spec.label}` });
-      const decision = def.decide(p, 'update', row, {});
+      // Rules see 'file.upload': the record changes later, by the write that puts the file on it.
+      const decision = def.decide(p, 'update', row, {}, UPLOAD_VIA);
       if (decision.decision === 'deny') throw refused(403, decision.rule, decision.reason);
     } else {
-      const decision = def.decide(p, 'create', null, {});
+      const decision = def.decide(p, 'create', null, {}, UPLOAD_VIA);
       if (decision.decision === 'deny') throw refused(403, decision.rule, decision.reason);
     }
     // A retry with the same key is the same upload: a new URL for the file the first one made.

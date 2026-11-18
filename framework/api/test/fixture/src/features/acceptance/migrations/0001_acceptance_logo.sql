@@ -1,0 +1,1 @@
+ALTER TABLE "app"."fixture_agreements" ADD COLUMN "logo" text;
