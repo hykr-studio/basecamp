@@ -34,7 +34,6 @@ import { type Lang, localeOf, moneyText, pick } from '@hykr/i18n';
 import { can, subjectOf } from '@hykr/policy';
 import { NotFoundException } from '@nestjs/common';
 import { and, eq, max, sql } from 'drizzle-orm';
-import { config as apiConfig } from '../../config.js';
 import {
   DocumentEvent,
   type DocumentRow,
@@ -188,6 +187,8 @@ export const RenderDocument = defineCommand(RenderDocumentSpec, {
     const children = async (child: ChildEntityDef<any, any>, parentId = input.id) =>
       (await child.children.list(tx, p, parentId)).map((r) => toJson(child.toRead(r, p)) as Values);
     const limits = documentsConfig().images;
+    // Loaded here, not at import: the API's configuration reads the environment when it loads.
+    const { config: apiConfig } = await import('../../config.js');
     const picker = new ImagePicker(tx, p, limits);
     const loadedValue = await def.load({
       tx,
