@@ -562,10 +562,16 @@ describe('refusals', () => {
   it('at most 5 codes an hour per person', async () => {
     const id = await offered('Plan H');
     const doc = await pdf(id);
+    const before = new Set(await mails(buyer.email));
     for (let i = 0; i < 5; i++) expect((await challenge(buyer, doc.id)).status).toBe(200);
     const sixth = await challenge(buyer, doc.id);
     expect(sixth.status).toBe(429);
     expect(sixth.body.error).toBe('too_many_codes');
+    // Its five emails arrive before the next test looks for its own: a late one would be read
+    // as the next code (files run side by side, so the worker can be slow to send).
+    await eventually(async () =>
+      (await mails(buyer.email)).filter((m) => !before.has(m)).length >= 5 ? true : undefined,
+    );
   });
 
   it('a read projector on acceptances runs on every read', async () => {

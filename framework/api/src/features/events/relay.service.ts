@@ -169,11 +169,12 @@ export class EventFeedPoller implements OnModuleInit, OnApplicationShutdown {
           const events = await feed.pending({ limit: BATCH, prefix }, this.ctx);
           if (!events.length) continue;
           const out = await this.relay.relay(events);
-          if (out.relayed.length) await feed.relayed(out.relayed, { prefix }, this.ctx);
+          // Who missed an event is kept first, so a row is never seen relayed without it.
           if (out.skipped.length) {
             for (const f of out.skipped) log.error(`feed ${feed.name}: event ${f.id}: ${f.error}`);
             await feed.skipped?.(out.skipped, { prefix }, this.ctx);
           }
+          if (out.relayed.length) await feed.relayed(out.relayed, { prefix }, this.ctx);
           if (out.failed.length) {
             for (const f of out.failed) log.error(`feed ${feed.name}: event ${f.id}: ${f.error}`);
             await feed.failed?.(out.failed, { prefix }, this.ctx);
