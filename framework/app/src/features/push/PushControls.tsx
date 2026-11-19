@@ -3,10 +3,12 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Button } from '../../components/Button';
+import { useApprovals } from '../../framework/hooks';
 import { Icon } from '../../framework/Icon';
 import { useT } from '../../framework/lang';
 import { colors, space, styles } from '../../theme';
-import { disableWebPush, enableWebPush, usePushStatus } from './web';
+import { useInboxCount } from '../inbox/hooks';
+import { disableWebPush, enableWebPush, type PushStatus, usePushStatus } from './web';
 
 const DISMISSED_KEY = 'hykr.push.offerDismissed';
 const dismissedBefore = () => {
@@ -41,15 +43,36 @@ function useEnable() {
 }
 
 /**
- * Above the screen while notifications are off in this browser and the person has not said
- * "not now": one click turns them on. Draws nothing anywhere else (phones, unsupported).
+ * Whether the strip offers notifications: they are off in this browser, the person has not
+ * said "not now", and something is waiting for them that a notification would have told them
+ * of (a request to decide, an unread item in their inbox). Never on a page load alone.
+ */
+export function shouldOffer(
+  status: PushStatus | undefined,
+  dismissed: boolean,
+  waiting: number,
+): boolean {
+  return status === 'off' && !dismissed && waiting > 0;
+}
+
+/**
+ * Above the screen once something waits for the person while notifications are off in this
+ * browser: one click turns them on. Draws nothing anywhere else (phones, unsupported).
  */
 export function PushBanner() {
-  const { t } = useT();
   const status = usePushStatus();
   const [hidden, setHidden] = useState(dismissedBefore);
+  // What is waiting is only asked for when the strip could show.
+  if (!shouldOffer(status, hidden, 1)) return null;
+  return <WhenWaiting onDismiss={() => setHidden(true)} />;
+}
+
+function WhenWaiting({ onDismiss }: { onDismiss: () => void }) {
+  const { t } = useT();
+  const { approvals } = useApprovals();
+  const unread = useInboxCount();
   const { busy, error, run } = useEnable();
-  if (status !== 'off' || hidden) return null;
+  if (!shouldOffer('off', false, approvals.length + unread)) return null;
   return (
     <View style={s.banner} accessibilityRole="summary">
       <Icon name="bell" size={16} color={colors.text} />
@@ -67,7 +90,7 @@ export function PushBanner() {
         variant="subtle"
         onPress={() => {
           dismiss();
-          setHidden(true);
+          onDismiss();
         }}
       />
     </View>

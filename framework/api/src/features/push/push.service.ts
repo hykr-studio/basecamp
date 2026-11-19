@@ -111,25 +111,38 @@ export class PushService {
     return rows.map(deviceOf);
   }
 
+  /** The person is using the app on this device now (theirs, in this business; else nothing). */
+  async active(p: Principal, token: string) {
+    await this.db
+      .update(pushTokens)
+      .set({ activeAt: sql`now()` })
+      .where(
+        and(
+          eq(pushTokens.token, token),
+          eq(pushTokens.tenantId, p.tenantId ?? ''),
+          eq(pushTokens.userId, p.actor.id),
+        ),
+      );
+  }
+
   /** No more pushes to this device, for anyone, in any business. */
   async forget(token: string) {
     await this.db.delete(pushTokens).where(eq(pushTokens.token, token));
   }
 
   /**
-   * One notification to one person: a message to each of their devices in this business. Sent
-   * when the push service accepted at least one; unavailable without a device; failed for now
-   * when it could not be reached or refused for now; failed for good otherwise.
+   * One notification to these devices of one person (the one they are on: PushPlaces chooses).
+   * Sent when the push service accepted at least one; failed for now when it could not be
+   * reached or refused for now; failed for good otherwise.
    */
-  async send(req: DeliveryRequest): Promise<DeliveryOutcome> {
+  async sendTo(
+    req: DeliveryRequest,
+    devices: readonly { token: string }[],
+  ): Promise<DeliveryOutcome> {
     const content = req.notification.push;
     if (!content) return { status: 'unavailable', reason: 'the notification has no push text' };
     const userId = req.to.userId;
     if (!userId) return { status: 'unavailable', reason: 'the recipient has no account' };
-    const devices = await this.db
-      .select({ token: pushTokens.token })
-      .from(pushTokens)
-      .where(and(eq(pushTokens.tenantId, req.tenantId), eq(pushTokens.userId, userId)));
     if (!devices.length) return { status: 'unavailable', reason: 'no device registered' };
 
     const row = req.row as Row;

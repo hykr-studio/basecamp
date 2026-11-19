@@ -158,17 +158,34 @@ export class WebPushService {
     return rows.map(browserDeviceOf);
   }
 
+  /** The person is using the app in this browser now (theirs, in this business; else nothing). */
+  async active(p: Principal, endpoint: string) {
+    await this.db
+      .update(webPushSubscriptions)
+      .set({ activeAt: sql`now()` })
+      .where(
+        and(
+          eq(webPushSubscriptions.endpoint, endpoint),
+          eq(webPushSubscriptions.tenantId, p.tenantId ?? ''),
+          eq(webPushSubscriptions.userId, p.actor.id),
+        ),
+      );
+  }
+
   /** No more pushes to this browser, for anyone, in any business. */
   async forget(endpoint: string) {
     await this.db.delete(webPushSubscriptions).where(eq(webPushSubscriptions.endpoint, endpoint));
   }
 
   /**
-   * One notification to one person: a message to each of their browsers in this business. Sent
-   * when a push service accepted one; unavailable without a browser or without web push; failed
-   * for now when one could not be reached or was busy; failed for good otherwise.
+   * One notification to these browsers of one person (the one they are on: PushPlaces chooses).
+   * Sent when a push service accepted one; unavailable without web push; failed for now when
+   * one could not be reached or was busy; failed for good otherwise.
    */
-  async send(req: DeliveryRequest): Promise<DeliveryOutcome> {
+  async sendTo(
+    req: DeliveryRequest,
+    browsers: readonly (typeof webPushSubscriptions.$inferSelect)[],
+  ): Promise<DeliveryOutcome> {
     const content = req.notification.push;
     if (!content) return { status: 'unavailable', reason: 'the notification has no push text' };
     const keys = vapid();
@@ -177,15 +194,6 @@ export class WebPushService {
     if (!box) return { status: 'unavailable', reason: 'web push is not set up' };
     const userId = req.to.userId;
     if (!userId) return { status: 'unavailable', reason: 'the recipient has no account' };
-    const browsers = await this.db
-      .select()
-      .from(webPushSubscriptions)
-      .where(
-        and(
-          eq(webPushSubscriptions.tenantId, req.tenantId),
-          eq(webPushSubscriptions.userId, userId),
-        ),
-      );
     if (!browsers.length) return { status: 'unavailable', reason: 'no browser registered' };
 
     // The record as this recipient may read it (req.row, decisions H1): the same words as a

@@ -1,9 +1,10 @@
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { api } from '../../api';
 import type { AppPlugin } from '../../framework/app-domain';
+import { activityReporter } from './activity';
 import { appPathOf } from './links';
 import { PushBanner } from './PushControls';
 import { signOutWebPush, startWebPush } from './web';
@@ -93,16 +94,29 @@ export function pushPlugin(options: PushOptions = {}): AppPlugin {
         open(response.notification.request.content.data);
         void Notifications.clearLastNotificationResponseAsync();
       });
+      // Where the person is: a push goes to the one device they used last. Each time the app
+      // comes to the front, and every few minutes while it stays there.
+      const activity = activityReporter(() =>
+        token ? api.push.active(token) : Promise.resolve(null),
+      );
+      const onFront = () => {
+        if (token && AppState.currentState === 'active') activity.ping();
+      };
+      const fronted = AppState.addEventListener('change', onFront);
+      const every = setInterval(onFront, 5 * 60_000);
       void register(options).then(
         (t) => {
           token = t;
           if (stopped && t) forget(t);
+          else onFront();
         },
         (e) => console.warn('Push notifications are off: registering this device failed:', e),
       );
       return () => {
         stopped = true;
         taps.remove();
+        fronted.remove();
+        clearInterval(every);
         if (token) forget(token);
       };
     },

@@ -345,10 +345,12 @@ async function queueSend(
   channel: ShareSendChannel | undefined,
 ) {
   const box = requireSecretBox();
-  const recipient: Record<string, string> = link.contactId
-    ? { contactId: link.contactId }
-    : link.customerId
-      ? { customerId: link.customerId }
+  // A customer first: it brings its contact's number and its account's email, so a send that
+  // cannot go on WhatsApp still goes by email.
+  const recipient: Record<string, string> = link.customerId
+    ? { customerId: link.customerId }
+    : link.contactId
+      ? { contactId: link.contactId }
       : { email: link.email ?? '' };
   const subject = subjectOf(p);
   const [row] = await tx

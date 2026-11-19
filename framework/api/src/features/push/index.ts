@@ -9,6 +9,7 @@ import { defineQueue, defineSchedule } from '../../queues/define.js';
 import { defineFeature } from '../feature.js';
 import { copyTarget, scrubCopy } from '../privacy/redact.js';
 import type { RecordCopies } from '../privacy/registry.js';
+import { PushPlaces } from './place.js';
 import { PushChannel } from './push.channel.js';
 import { PushController, WebPushController } from './push.controller.js';
 import { maskToken, PushService } from './push.service.js';
@@ -120,7 +121,7 @@ export const PushExport: ExportContributor = {
 export const pushFeature = defineFeature({
   name: 'push',
   controllers: [PushController, WebPushController],
-  providers: [PushService, WebPushService, PushChannel, WebPushChannel],
+  providers: [PushService, WebPushService, PushPlaces, PushChannel, WebPushChannel],
   exports: [PushService, WebPushService],
   contributes: {
     queues: [PushReceiptsQueue],
