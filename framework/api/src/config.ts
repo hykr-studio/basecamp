@@ -1,5 +1,6 @@
 import { isTimeZone } from '@hykr/contracts';
 import { canListCurrencies, knownCurrency } from '@hykr/i18n';
+import { checkWebPushSettings } from './features/push/web.settings.js';
 
 const env = process.env;
 
@@ -137,6 +138,8 @@ export function assertConfig() {
     );
   if (!/^\d+(?:\.\d+)?(?:b|kb|mb)?$/i.test(config.jsonBodyLimit))
     throw new Error(`JSON_BODY_LIMIT must be a size such as 1mb, not "${config.jsonBodyLimit}"`);
+  // Web push's VAPID keys: none (web push is off) or a matching pair with a subject.
+  checkWebPushSettings();
   // LiveKit's dev-mode pair is fine on a laptop; in production it would let anyone mint tokens.
   const devLiveKit = config.livekit.apiKey === 'devkey' || config.livekit.apiSecret === 'secret';
   if (config.voiceAgentKey && process.env.NODE_ENV === 'production' && devLiveKit) {

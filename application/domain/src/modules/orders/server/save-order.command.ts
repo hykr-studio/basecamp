@@ -207,7 +207,12 @@ export const SaveOrder = defineCommand(SaveOrderSpec, {
         tx,
         principal,
         loaded.order,
-        { title: input.title, ...totals, ...(input.version ? { version: input.version } : {}) },
+        {
+          title: input.title,
+          ...totals,
+          ...(input.photo !== undefined ? { photo: input.photo } : {}),
+          ...(input.version ? { version: input.version } : {}),
+        },
         via,
       );
     } else {
@@ -215,7 +220,13 @@ export const SaveOrder = defineCommand(SaveOrderSpec, {
       order = await Order.repo.insert(
         tx,
         principal,
-        { number, title: input.title, currency, ...totals },
+        {
+          number,
+          title: input.title,
+          currency,
+          ...totals,
+          ...(input.photo ? { photo: input.photo } : {}),
+        },
         via,
       );
     }

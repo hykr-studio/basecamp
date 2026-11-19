@@ -1,7 +1,7 @@
 # Decisions and assumptions register
 
 The platform-gaps run built, on `feat/platform-gaps`, the 31 framework capabilities the gap analysis
-found missing (A1 to A11, B1 to B20), the foundation they stand on (F0 to F6), and the fixes the
+found missing (A1 to A11, B1 to B20, and B21 after it), the foundation they stand on (F0 to F6), and the fixes the
 completeness, boundary and security reviews asked for. Each unit wrote its decisions down in
 `docs/decisions/<unit>.md` before it wrote code. This page is the way in for the product owner:
 
@@ -54,6 +54,8 @@ change the sample application or a business's settings, not the framework.
 | [B18](B18.md) | B18 | Personal data: requests with a deadline, export, erasure over contributors, retention, audit redaction, the register. | `e00ab149` |
 | [B19](B19.md) | B19 | The platform-operator tier: named operators, consented and time-boxed support access, provisioning, inbound routing, a usage report. | `3c230097` |
 | [B20](B20.md) | B20 | `basecamp import`: CSV, JSON or NDJSON through the write path as a job, re-runs keyed by external id, dry runs, an error report. | `1c2d3e30` |
+| [B21](B21.md) | Documents (B2) | Images in documents: `image`, `images` and `qr` blocks and a header or footer image, picked by `load` as the requester (`ctx.image`), checked by SHA-256 in the worker, listed in acceptance evidence. | (this branch) |
+| [B22](B22.md) | B22 | Microsoft 365 / Outlook as a second calendar provider behind `CalendarProviderDef`; generic `:provider` routes; busy time merged across providers, one write target per person. | `feat/platform-gaps` |
 | [H1](H1.md) | A4, A5, A9 | Notification words read as each recipient may, approval requests on every channel, sends held by the undo window, the contact role named by the application. | `9952ca62` |
 | [H2](H2.md) | Settings (A4, A5, A8, B1, B3, B6, B7, B9) | One writer for every settings section that opts in (`PATCH /api/settings/sections/:section`), and the base settings. | `510f8033` |
 | [H3](H3.md) | A1, A3, A8, A11 | MCP tool hints and flag gating; embeddings and the guardrail metered; agent calls refused at 100%; purchases settled only in their own business. | `0bed14f6` |
@@ -85,6 +87,7 @@ change the sample application or a business's settings, not the framework.
 | [V13](V13.md) | Validation (acceptance) | A lookup before a write is not shown as the answer; a limit's refusal names the meter by its label; one alert per crossing. | `a0865ebd` |
 | [R1](R1.md) | Requirement (Interioring) | References on line items: a child spec declares `traits.references`, checked in bulk by its tree writes (one query per target), with the line's path; labels on read; a reference 404 audited as denied; the sample's order lines name a product. | this change |
 | [VALIDATION](VALIDATION.md) | Validation | The live validation at `23805b76`: 349 claims, 18 defects by root cause, the fixes V1 to V13 and their acceptance. | this change (after `f63bb019`) |
+| [W1](W1.md) | Web push (Interioring) | Push in a web browser: a `webpush` channel (VAPID, RFC 8291) beside Expo's, `push` as a shorthand for phones then browsers, sealed subscriptions, a service worker and manifest from `@hykr/app`'s config plugin, "Turn on notifications" in the app. | this change |
 
 Units are grouped as the run went: the foundation, the gaps (combined units such as `B3B5` built
 two gaps together, and `A11X` is A11's data export), then the fix units from the reviews: H for
@@ -92,7 +95,8 @@ completeness, S for security, X for the framework/application boundary, and `HLA
 `HCONS` for languages, documentation and the consumer job. After REPORT, the live validation
 ([VALIDATION](VALIDATION.md)) found 18 defects, and V1 to V13 fixed them: V1 to V9 one root cause
 each (the defect clusters `C<n>` in their Gaps column), V10 and V11 what the reviews of those
-units left, V12 and V13 what the acceptance runs found.
+units left, V12 and V13 what the acceptance runs found. W1 came later, from a customer's request
+(push in a web browser).
 
 ## Assumptions register
 
@@ -111,12 +115,13 @@ How to read it:
   the choice itself. "Settled by H1" (or another unit) means a later unit answered it; the row stays so the
   change is visible. "None" means the unit reported the choice without a question.
 
-The table has 563 rows: the 458 items of the units' "Assumptions to review" sections and
+The table has 576 rows: the 458 items of the units' "Assumptions to review" sections and
 70 assumptions the units reported to the run that their docs do not state, less duplicates merged
 and process notes left out (merging the integration branch into a unit, which test approach a fix
 took, where a demo lived before its module existed), plus 79 rows from the fix units V1 to V13
 (their "Assumptions to review" sections, an assumption a later V unit settled merged into one
-row, and the two B18 rows V8 handed to the integrator). Those stay in each unit's doc.
+row, and the two B18 rows V8 handed to the integrator), plus 8 rows from B21 and 5 from W1.
+Those stay in each unit's doc.
 
 | Unit | Gap | Topic | What we chose | Source | Question for the owner |
 |---|---|---|---|---|---|
@@ -534,6 +539,14 @@ row, and the two B18 rows V8 handed to the integrator). Those stay in each unit'
 | B20 | B20 | Write path, row by row | Every row goes through `runWrite` with the entity's own create or update; one audit row per record. A batch `insertMany` was rejected: level rules on `<entity>.create` would not see it. | Plan B20 row; CLAUDE.md rule 1 | Is one audit row per record acceptable for large imports? |
 | B20 | B20 | Dry run | Runs every batch as a real run, then rolls it back; refused writes stay audited as denied, like any refused write. | Gap list (`--dry-run`) | Should a dry run's refusals be left out of the audit? |
 | B20 | B20 | Imports and storage | `basecamp import` refuses `STORAGE_DRIVER=memory`, because the worker that runs the job could not read the file. | Default | None |
+| B21 | B2 | Shrinking photos | Pictures are embedded at full size; no image library in the worker. | Requirement open question 1 | Shrink photos to the size they are drawn at (an image library in the worker, such as `sharp`)? |
+| B21 | B2 | WebP and HEIC | Refused: `ctx.image` answers null, the reason logged. | Requirement open question 2 | Convert them to JPEG (with the same library as shrinking)? |
+| B21 | B2 | Files gone before drawing | No hold on image files; the document fails `image_unavailable` and is asked for again. | Requirement open question 3 | Confirm. |
+| B21 | B2 | Erased files in documents already made | A PDF already made keeps the picture, as it keeps a name. | Requirement open question 4; B18 (documents keep their snapshot) | Confirm. |
+| B21 | B2 | The business's logo | A file on one of the application's records; `branding.logoUrl` is not fetched. | Requirement open question 5 | Should the logo be stored as a file in branding and offered as `ctx.business.logo`? |
+| B21 | B2 | Hashing images | `ctx.image` reads and hashes the bytes inside the document's write transaction (uploads carry no stored SHA-256). | Default | Should confirm store each upload's SHA-256, so documents read none of it when asked? |
+| B21 | B2 | Limits over one image | A file over the bytes or pixels limit is not shown (null, logged `image_too_large`); the document's count and total answer 422. | Requirement (both "null" and "a named error" were asked) | Should a document fail instead when one of its pictures is too large? |
+| B21 | B1 | Uploads for a commands-only entity | Presign asks the entity's rules as `via: 'file.upload'`; the money plugin still refuses an upload for a new money record. | Found building the sample | Should the money plugin let an upload for a new record through? |
 | H1 | A5 | Inbox always, not a fallback step | The approval request always lands in the decider's inbox and reaches them by the first of push, WhatsApp and email that works (decision 6). | Task; PRD Platform & AI §7.1 (push, WhatsApp, email); A5 decision 25 | Should a pushed request skip the inbox, or should the inbox item go when the request is decided? |
 | H1 | A5 | WhatsApp without buttons | A request decided in the app only does not go to WhatsApp at all; the decider gets push or email (decision 7). | Task; default | Should it go to WhatsApp as a plain message with a link, which needs a new template? |
 | H1 | A4 | Recipients who cannot read the record | The words leave out what a recipient may not read, but the dispatcher does not check that a recipient may read the record at all: `to` decides who. | Default | Should a notification about a record skip a recipient who cannot open it? |
@@ -683,6 +696,11 @@ row, and the two B18 rows V8 handed to the integrator). Those stay in each unit'
 | V13 | Validation (A7) | Lookups are found by their place | A read before a write in the same turn is how the assistant found what to write, and is not shown: "Show order 12 and submit it" shows only the submit. A list before a refused write is hidden too (the reply says why); a list before a refused read stays. | V13 decisions 9 and 19 | Should a read the person asked for by name survive a later write? |
 | V13 | Validation (A7) | A list is a lookup when a later call shows one of its rows | "List my meetings and open the first" shows only the meeting. | V13 decision 19 | Is that right? |
 | V13 | Validation (A7) | A contributed write tool is known only by its result | A module's own write tool (`toolContributions`) is not in `writeToolIds`, so a list before its refused call still shows (section 14). | Default | None |
+| W1 | Web push | `push` reaching browsers | `push` tries the person's phones, then their browsers; a chain that also lists `webpush` orders them itself. | Request open question 1; owner's choice in W1 | Should some notifications stay on phones only (list `webpush` to make `push` phones-only)? |
+| W1 | Web push | Phones and browsers together | A person whose phone takes a push does not also get it in the browser. | Default | Should a desk worker get both at once? |
+| W1 | Web push | Known push services | Endpoints only on FCM, Mozilla, Apple and WNS (and `WEB_PUSH_ALLOWED_HOSTS`). | Request ("checked against a list") | Should the list be a deployment setting? |
+| W1 | Web push | Urgency | `high` for approvals only, `normal` otherwise. | Request | Should a client's reply be urgent too? |
+| W1 | Web push | When to offer | A dismissible strip and the person's card offer "Turn on notifications" on every page until the person answers; the browser asks only on the click. | Request open question 3; default | Should the offer wait for a moment that needs it (the first approval request)? |
 | V13 | Validation (A3) | The app's refused turn reads the generic paused sentence | Not the reason naming the meter, in every language; `GET /api/credits` and the credits screen name it. An agent's 402 is in English, since an agent's call carries no language. | V13 decision 21; default | Confirm. |
 | V13 | Validation (A3) | No numbers in a limit's reason | The status and the screen carry the quantities. | V13 decision 11 | Should the reason say "(2 of 1)" in the meter's display unit? |
 | V13 | Validation (A3) | One alert per crossing | A use that crosses both levels sends only the pause; no "low" after the pause, and none after the pause is lifted by a higher limit. | V13 decision 16 | Confirm. |
@@ -809,7 +827,7 @@ re-run": HCONS's full CI covers them). An item a later unit fixed says so. Devel
   - Fixed by S4: embedding calls are metered.
 - **A9B15**
   - There is no EAS project id or `eas.json`, so dev builds cannot get an Expo push token; push to a real device was not exercised.
-  - Web push (VAPID) is not supported; browser users get the next channel.
+  - Fixed by W1: web push (VAPID) for people working in a browser.
   - Live deletions reach only streams already told about the record and the person who deleted it.
   - The back office still polls its inbox and conversations; there is no `Last-Event-ID` replay.
   - Fixed by H1: push text is projected for the recipient.

@@ -1,5 +1,5 @@
 {
-  "id": "6317e423-ab4a-4f0a-a4ab-425a8cafe376",
+  "id": "451cc515-5c71-4299-aec8-b85f62973c68",
   "prevId": "08382c4d-0ed1-45b5-bfec-d7afbec4dea3",
   "version": "7",
   "dialect": "postgresql",
@@ -830,12 +830,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "product_id": {
-          "name": "product_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "quantity": {
           "name": "quantity",
           "type": "integer",
@@ -1123,6 +1117,12 @@
           "notNull": true,
           "default": 0
         },
+        "photo": {
+          "name": "photo",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_by": {
           "name": "created_by",
           "type": "text",
@@ -1223,150 +1223,6 @@
         },
         "orders_tenant_id_uq": {
           "name": "orders_tenant_id_uq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "app.orders_products": {
-      "name": "orders_products",
-      "schema": "app",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()::text"
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "owner_id": {
-          "name": "owner_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sku": {
-          "name": "sku",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_by": {
-          "name": "created_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'person'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "orders_products_tenant_name_idx": {
-          "name": "orders_products_tenant_name_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "name",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "orders_products_tenant_id_tenants_id_fk": {
-          "name": "orders_products_tenant_id_tenants_id_fk",
-          "tableFrom": "orders_products",
-          "tableTo": "tenants",
-          "schemaTo": "app",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "orders_products_owner_id_user_id_fk": {
-          "name": "orders_products_owner_id_user_id_fk",
-          "tableFrom": "orders_products",
-          "tableTo": "user",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "orders_products_customer_id_customers_id_fk": {
-          "name": "orders_products_customer_id_customers_id_fk",
-          "tableFrom": "orders_products",
-          "tableTo": "customers",
-          "schemaTo": "app",
-          "columnsFrom": [
-            "customer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "orders_products_tenant_id_uq": {
-          "name": "orders_products_tenant_id_uq",
           "nullsNotDistinct": false,
           "columns": [
             "tenant_id",

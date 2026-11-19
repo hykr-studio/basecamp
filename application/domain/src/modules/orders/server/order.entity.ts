@@ -25,6 +25,8 @@ export const Order = defineEntity(OrderSpec, {
     (_p, _action, _row, input, ctx) => {
       if (ctx.via === 'order.save' && input?.status === undefined) return null;
       if (ctx.via === 'order.transition' || ctx.via === 'order.revise') return null;
+      // An upload for its photo: the order itself changes only when order.save puts it on.
+      if (ctx.via === 'file.upload') return null;
       return deny(
         'orders_saved_whole',
         'An order changes only by saving it whole, by its transitions, or by a revision',

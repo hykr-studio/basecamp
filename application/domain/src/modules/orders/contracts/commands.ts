@@ -1,4 +1,4 @@
-import { CurrencyCode, commandSpec, MoneyInput } from '@hykr/contracts';
+import { CurrencyCode, commandSpec, FileRef, MoneyInput } from '@hykr/contracts';
 import { z } from 'zod';
 import { OrderItemView, OrderView } from './order.js';
 
@@ -42,6 +42,9 @@ export const SaveOrderInput = z.object({
     .describe('The version of the order you read: a save over a newer one is refused'),
   title: z.string().min(1).max(200),
   currency: CurrencyCode.optional().describe("A new order's currency; default the business's"),
+  photo: FileRef.nullable()
+    .optional()
+    .describe('An image file id shown on its PDF (a drawing, a product photo); null removes it'),
   items: z.array(SaveOrderItem).max(1000),
 });
 export type SaveOrderInput = z.infer<typeof SaveOrderInput>;

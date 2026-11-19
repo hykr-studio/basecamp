@@ -1,4 +1,4 @@
-import { defineDocument } from '@hykr/api';
+import { defineDocument, type ImageRef } from '@hykr/api';
 import { buildTree, type Money, stateLabel, type TaxLine, type TreeNode } from '@hykr/contracts';
 import { type Labels, moneyText, pick } from '@hykr/i18n';
 import { ORDER_STATES, type OrderStatus } from '../contracts/index.js';
@@ -18,6 +18,10 @@ export interface OrderDocumentData {
     taxLines: TaxLine[];
     createdAt: string;
   };
+  /** The order's picture, when it has one the requester may see (PNG or JPEG). */
+  photo?: ImageRef | null;
+  /** Where the order opens in the app: its PDF's QR code. */
+  link?: string;
   items: {
     id: string;
     parentItemId: string | null;
@@ -50,6 +54,11 @@ const L = {
     te: 'ఈ ఆర్డర్ రద్దు చేయబడింది. దీని నంబర్ వేరే దానికి ఇవ్వబడదు.',
   },
   subject: { en: 'Order', hi: 'ऑर्डर', te: 'ఆర్డర్' },
+  scan: {
+    en: 'Scan to open this order',
+    hi: 'यह ऑर्डर खोलने के लिए स्कैन करें',
+    te: 'ఈ ఆర్డర్‌ను తెరవడానికి స్కాన్ చేయండి',
+  },
   attached: {
     en: 'Your order {number}, for {total}, is attached.',
     hi: 'आपका ऑर्डर {number}, {total} का, संलग्न है।',
@@ -61,9 +70,10 @@ const words = (text: string, vars: Record<string, string>) =>
   text.replace(/\{(\w+)\}/g, (_, k: string) => vars[k] ?? '');
 
 /**
- * An order as a PDF, in English, Hindi or Telugu: its number, date and status, its groups and
- * lines (indented under their groups), its tax lines and totals. It shows nothing restricted
- * (never cost), so every colleague who reads the order opens every copy (`capabilities: []`).
+ * An order as a PDF, in English, Hindi or Telugu: its number, date and status, its picture, its
+ * groups and lines (indented under their groups), its tax lines and totals, and a QR code that
+ * opens it in the app. It shows nothing restricted (never cost), so every colleague who reads the
+ * order opens every copy (`capabilities: []`).
  * Sent on WhatsApp as order_document_v1, or by email.
  */
 export const OrderDocument = defineDocument<OrderDocumentData>({
@@ -71,7 +81,7 @@ export const OrderDocument = defineDocument<OrderDocumentData>({
   label: L.order,
   entity: 'order',
   capabilities: [],
-  load: async ({ record, children }) => {
+  load: async ({ id, record, children, image, appUrl }) => {
     const items = await children(OrderItem);
     const o = record as unknown as OrderDocumentData['order'];
     return {
@@ -86,6 +96,9 @@ export const OrderDocument = defineDocument<OrderDocumentData>({
         taxLines: o.taxLines,
         createdAt: o.createdAt,
       },
+      // Its picture, as the requester may see it (null otherwise), and a link to it in the app.
+      photo: record.photo ? await image(String(record.photo)) : null,
+      link: `${appUrl}/orders/${id}`,
       // Only what a customer may see: an item's cost never leaves for a document.
       items: items.map((i) => ({
         id: String(i.id),
@@ -99,7 +112,7 @@ export const OrderDocument = defineDocument<OrderDocumentData>({
       })),
     };
   },
-  render: ({ order, items }, ctx) => {
+  render: ({ order, items, photo, link }, ctx) => {
     type Item = OrderDocumentData['items'][number];
     const rows: { cells: string[]; kind: 'group' | 'line'; indent: number }[] = [];
     const walk = (nodes: TreeNode<Item>[], depth: number) => {
@@ -142,6 +155,7 @@ export const OrderDocument = defineDocument<OrderDocumentData>({
         ...(order.status === 'cancelled'
           ? [{ type: 'text' as const, text: ctx.label(L.void), bold: true }]
           : []),
+        ...(photo ? [{ type: 'image' as const, image: photo, height: 180, alt: order.title }] : []),
         { type: 'spacer', size: 6 },
         {
           type: 'table',
@@ -167,6 +181,17 @@ export const OrderDocument = defineDocument<OrderDocumentData>({
             { label: ctx.label(L.total), value: ctx.money(order.total), strong: true },
           ],
         },
+        ...(link
+          ? [
+              {
+                type: 'qr' as const,
+                data: link,
+                size: 90,
+                align: 'right' as const,
+                caption: ctx.label(L.scan),
+              },
+            ]
+          : []),
       ],
     };
   },
