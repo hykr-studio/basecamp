@@ -125,7 +125,7 @@ describe('the scripted vision model', () => {
   ];
 
   it('sees what follows the marker, in bytes or text', () => {
-    expect(visionReply(prompt(file('Total ₹1,250')))).toBe('Total ₹1,250');
+    expect(visionReply(prompt(file('Total 1,250 ✓')))).toBe('Total 1,250 ✓');
     expect(
       visionReply(prompt({ type: 'text', text: 'Page 2, its text layer: FAKE-VISION:Two' })),
     ).toBe('Two');
