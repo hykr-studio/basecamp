@@ -1,6 +1,6 @@
 // The deployment's model registry as configured: MODEL_PROVIDERS (JSON), plus OpenRouter in
 // development. Parsed and checked here; registry.ts builds the providers.
-import { ModelKind, ModelPrice, ModelRef, ModelRegion } from '@hykr/contracts';
+import { ModelCapability, ModelKind, ModelPrice, ModelRef, ModelRegion } from '@hykr/contracts';
 import { z } from 'zod';
 
 /** The in-process provider of fake mode: the scripted model and a word-hashing embedding. */
@@ -18,8 +18,14 @@ const ModelConfig = z
     kind: ModelKind.default('chat'),
     label: z.string().min(1).max(80).optional(),
     price: ModelPrice.optional(),
+    /** What a chat model takes besides text: 'vision' (images), 'pdf' (PDF files as they are). */
+    capabilities: z.array(ModelCapability).max(5).optional(),
   })
-  .strict();
+  .strict()
+  .refine((m) => m.kind === 'chat' || !m.capabilities?.length, {
+    message: 'only chat models have capabilities',
+    path: ['capabilities'],
+  });
 
 const ProviderConfig = z
   .object({
@@ -127,7 +133,12 @@ export function providersFrom(env: ModelEnv): ProviderConfig[] {
       id: FAKE_PROVIDER,
       baseUrl: 'http://localhost/fake',
       models: [
-        { id: 'scripted', kind: 'chat', label: 'Scripted model' },
+        {
+          id: 'scripted',
+          kind: 'chat',
+          label: 'Scripted model',
+          capabilities: ['vision', 'pdf'],
+        },
         { id: 'embedding', kind: 'embedding', label: 'Word-hashing embedding' },
       ],
     });

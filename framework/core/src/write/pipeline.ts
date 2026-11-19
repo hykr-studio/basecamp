@@ -30,6 +30,7 @@ import type { Tx } from '../tokens.js';
 import { parkForApproval } from './approvals.js';
 import { strongerDecision } from './decisions.js';
 import { recordEvents } from './events.js';
+import { inWriteTransaction } from './in-transaction.js';
 import { applyLevels, settingsIn } from './levels.js';
 import { openUndoWindow, undoWindowMs } from './undo.js';
 
@@ -502,7 +503,8 @@ export async function runWrite<I, L, V>(
   };
 
   try {
-    return ctx.outer ? await work(ctx.outer.tx) : await db.transaction(work);
+    const marked = (tx: Tx) => inWriteTransaction(op.name, () => work(tx));
+    return ctx.outer ? await marked(ctx.outer.tx) : await db.transaction(marked);
   } catch (e) {
     if (e instanceof RuleDenied) {
       // The refusal is evidence. Its own transaction rolled back: record it on its own. In the

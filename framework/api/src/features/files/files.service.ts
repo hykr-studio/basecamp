@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  hasCapability,
+  type ModelChoice,
+  readAsText,
+  readAsValue,
+  type VisionPart,
+  VisionUnreadable,
+  type VisionUsage,
+} from '@hykr/agents';
+import {
   acceptsMime,
   baseMime,
   type FileFieldPolicy,
@@ -9,10 +18,13 @@ import {
   type PresignFileInput,
   type PresignFileResult,
   type Principal,
+  type ReadFileInput,
+  type ReadFileResult,
   type Subject,
 } from '@hykr/contracts';
 import {
   type AnyEntityDef,
+  assertNoWriteTransaction,
   auditCtx,
   CORE_OPTIONS,
   type Conn,
@@ -23,9 +35,11 @@ import {
   oneAtATime,
   projectRead,
   saveReply,
+  TenantConfigService,
 } from '@hykr/core';
 import { type Database, type DbOrTx, files, writeAudit } from '@hykr/db';
-import { subjectOf } from '@hykr/policy';
+import type { Lang } from '@hykr/i18n';
+import { subjectKeyOf, subjectOf } from '@hykr/policy';
 import {
   BadRequestException,
   ConflictException,
@@ -41,16 +55,31 @@ import {
   UnprocessableEntityException,
   UnsupportedMediaTypeException,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { and, count, eq, gt, inArray, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
+import type { z } from 'zod';
+import { metering } from '../../metering.js';
+import { isAgentRun, mayRead } from '../agents/scope.js';
+import { creditsPaused } from '../credits/agent-guard.js';
+import { FrameworkMeters } from '../credits/meters.js';
+import { ModelPolicyService, ModelRefused } from '../models/model-policy.service.js';
 import { assertFilesConfig, type FilesConfig, filesConfig } from './config.js';
 import { fileFieldOf, fileFieldProblems, maxBytesOf } from './fields.js';
 import { fileHolders } from './holders.js';
+import { prepare, readableProblem } from './read/prepare.js';
 import { bytesFit, SNIFF_BYTES, sniff } from './sniff.js';
 import { SPEECH, type Speech } from './speech.js';
 import { STORAGE, type StorageDriver } from './storage/index.js';
 import { type UploadTarget, uploadTargets } from './targets.js';
 
 export type FileRow = typeof files.$inferSelect;
+
+/** readWithModel's reply did not match its schema after the retry (what it used, to meter). */
+class ReadUnreadable extends Error {
+  constructor(readonly usage: VisionUsage) {
+    super('unreadable');
+  }
+}
 
 const log = new Logger('Files');
 
@@ -133,6 +162,7 @@ export class FilesService implements OnApplicationBootstrap {
     @Inject(CORE_OPTIONS) core: CoreOptions,
     @Inject(STORAGE) readonly storage: StorageDriver,
     @Inject(SPEECH) private readonly stt: Speech,
+    @Inject(ModuleRef) private readonly moduleRef: ModuleRef,
   ) {
     assertFilesConfig(this.config);
     this.db = core.db;
@@ -453,7 +483,9 @@ export class FilesService implements OnApplicationBootstrap {
   ): Promise<boolean> {
     if (!p.tenantId || row.tenantId !== p.tenantId) return false;
     if (row.status !== 'ready' && row.status !== 'pending') return false;
-    if (!row.resourceType || !row.resourceId || !row.field) return uploadedBy(row, p);
+    // An agent's run (A6) reaches only files on records of entities its scope reads.
+    const run = isAgentRun(p);
+    if (!row.resourceType || !row.resourceId || !row.field) return !run && uploadedBy(row, p);
     if (row.status !== 'ready') return false;
     const def = entityDef(row.resourceType);
     // Not an entity: a holder that keeps files (a job's results) answers, or nobody reaches it.
@@ -468,6 +500,7 @@ export class FilesService implements OnApplicationBootstrap {
         })) ?? false
       );
     if (p.actor.kind === 'agent' && def.spec.expose.get !== 'all') return false;
+    if (run && !mayRead(p, def.name)) return false;
     const key = `${def.name}:${row.resourceId}`;
     if (!seen.has(key)) {
       const record = await def.repo.find(conn, p, row.resourceId);
@@ -599,6 +632,223 @@ export class FilesService implements OnApplicationBootstrap {
       await this.audit(tx, p, requestId, 'file.transcribe', updated, { lang });
     });
     return { text: heard.text, lang };
+  }
+
+  /* ── Reading with a model ────────────────────────────────────────────────── */
+
+  /**
+   * What the business's vision model reads in an image or a PDF p reaches: `read-file` and
+   * `POST /api/files/:id/read`. A read: it parks nothing, and what the model says is returned,
+   * never kept or audited (the audit row names the file, the model and the pages).
+   */
+  async readText(
+    p: Principal,
+    id: string,
+    input: ReadFileInput,
+    requestId: string,
+  ): Promise<ReadFileResult> {
+    return this.read(p, id, { pages: input.pages, requestId }, async (choice, parts) => {
+      const made = await readAsText({
+        ref: choice.ref,
+        parts,
+        ...(input.question ? { question: input.question } : {}),
+        signal: AbortSignal.timeout(this.config.read.timeoutMs),
+      });
+      return { value: made, usage: made.usage };
+    }).then(({ value, model, pages }) => ({
+      text: value.text,
+      pages,
+      model,
+      ...(value.truncated ? { truncated: true } : {}),
+    }));
+  }
+
+  /**
+   * The fields `schema` asks for, read from an image or a PDF p reaches by the business's
+   * vision model: for an application's command (in its load step, before the write), a job's
+   * submit or a subscriber. Under the model policy (409 `no_vision_model`), the credits (402)
+   * and the limits (422, 429), metered and audited like `read-file`. The model's reply is
+   * checked against the schema and asked for once more when it does not match; then 422
+   * `unreadable` (its text is logged, never returned). Never inside a write's transaction: it
+   * throws at once there (a model call must not hold rows locked).
+   */
+  async readWithModel<T>(
+    p: Principal,
+    fileId: string,
+    o: {
+      /** What to read, in the application's words. */
+      instructions: string;
+      /** The fields wanted. */
+      schema: z.ZodType<T>;
+      pages?: number[];
+      /** The language the instructions are in, and the one to answer in. */
+      lang?: Lang;
+      requestId?: string;
+    },
+  ): Promise<{ value: T; model: string; pages: number }> {
+    assertNoWriteTransaction('FilesService.readWithModel');
+    const instructions = o.lang
+      ? `${o.instructions}\n(Write any words you read in the file as they are; other text in the language "${o.lang}".)`
+      : o.instructions;
+    return this.read(
+      p,
+      fileId,
+      { pages: o.pages, requestId: o.requestId ?? randomUUID() },
+      async (choice, parts) => {
+        try {
+          return await readAsValue({
+            ref: choice.ref,
+            parts,
+            instructions,
+            schema: o.schema,
+            signal: AbortSignal.timeout(this.config.read.timeoutMs),
+          });
+        } catch (e) {
+          if (e instanceof VisionUnreadable) {
+            log.warn(
+              `readWithModel: ${fileId} did not read as the schema asks (${e.issues}): ${e.reply.slice(0, 2000)}`,
+            );
+            throw new ReadUnreadable(e.usage);
+          }
+          throw e;
+        }
+      },
+    );
+  }
+
+  /** Reads p made with a model in the last hour. */
+  private async readsThisHour(p: Principal, who: string): Promise<number> {
+    const { rows } = await this.db.execute<{ n: number }>(sql`
+      select count(*)::int as n from audit.events
+      where tenant_id = ${p.tenantId} and action = 'file.read_by_model'
+        and after->>'who' = ${who} and at > now() - interval '1 hour'`);
+    return rows[0]?.n ?? 0;
+  }
+
+  /**
+   * One read: reach, type and limits, the business's vision model, its credits, the hourly
+   * limit, the file drawn as model parts, the call, then the tokens and pages metered and one
+   * audit row. Refusals come before any model call.
+   */
+  private async read<V>(
+    p: Principal,
+    id: string,
+    o: { pages?: readonly number[]; requestId: string },
+    call: (choice: ModelChoice, parts: VisionPart[]) => Promise<{ value: V; usage: VisionUsage }>,
+  ): Promise<{ value: V; model: string; pages: number }> {
+    assertNoWriteTransaction('Reading a file with a model');
+    const row = await this.reachable(p, id);
+    if (row.status !== 'ready') throw notFound();
+    const limits = this.config.read;
+    const problem = readableProblem(row, limits);
+    if (problem) throw problem;
+    const tenantId = p.tenantId as string;
+    const { settings } = await this.tenantConfig().get(tenantId);
+    if (row.source === 'whatsapp' && !row.resourceId && !settings.files.readInbound)
+      throw refused(
+        403,
+        'read_inbound_off',
+        'This business does not let the assistant read files sent on WhatsApp before they are on a record',
+      );
+
+    let choice: ModelChoice;
+    try {
+      choice = await this.moduleRef.get(ModelPolicyService, { strict: false }).visionFor(tenantId);
+    } catch (e) {
+      if (e instanceof ModelRefused)
+        throw new ConflictException({
+          error: 'no_vision_model',
+          rule: 'no_vision_model',
+          reason: `Files can't be read here: ${e.refusal.reason}`,
+        });
+      throw e;
+    }
+
+    const meter = metering();
+    if (meter) {
+      for (const use of [
+        { meter: FrameworkMeters.tokens.name, variant: choice.ref },
+        { meter: FrameworkMeters.filePages.name, variant: choice.ref },
+      ]) {
+        const paused = await meter.check({ tenantId, ...use });
+        if (paused) throw creditsPaused(paused);
+      }
+    }
+
+    const who = subjectKeyOf(p) ?? `${p.actor.kind}:${p.actor.id}`;
+    if ((await this.readsThisHour(p, who)) >= limits.perHour)
+      throw new HttpException(
+        {
+          error: 'too_many_reads',
+          message: `At most ${limits.perHour} files can be read in an hour. Try again later.`,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+
+    const bytes = await this.store(() => this.storage.read(row.key));
+    const prepared = await prepare(bytes, row.mime, {
+      ...(o.pages?.length ? { pages: o.pages } : {}),
+      takesPdf: hasCapability(choice.entry, 'pdf'),
+      limits,
+    });
+
+    const record = async (usage: VisionUsage) => {
+      const common = {
+        tenantId,
+        variant: choice.ref,
+        subject: subjectKeyOf(p),
+        runId: p.runId ?? null,
+        channel: p.channel ?? null,
+        source: 'file_read',
+      };
+      await meter?.record([
+        {
+          ...common,
+          meter: FrameworkMeters.tokens.name,
+          quantity: usage.inputTokens + usage.outputTokens,
+          tokens: usage,
+          ref: `file_read:${o.requestId}`,
+        },
+        {
+          ...common,
+          meter: FrameworkMeters.filePages.name,
+          quantity: prepared.pages,
+          ref: `file_read:${o.requestId}`,
+        },
+      ]);
+      await this.audit(this.db, p, o.requestId, 'file.read_by_model', row, {
+        model: choice.ref,
+        provider: choice.entry.provider,
+        region: choice.entry.region ?? null,
+        pages: prepared.pages,
+        who,
+      });
+    };
+
+    let made: { value: V; usage: VisionUsage };
+    try {
+      made = await call(choice, prepared.parts);
+    } catch (e) {
+      if (e instanceof ReadUnreadable) {
+        await record(e.usage);
+        throw new UnprocessableEntityException({
+          error: 'unreadable',
+          message: 'The file could not be read as the fields asked for',
+        });
+      }
+      if (e instanceof HttpException) throw e;
+      log.warn(`read ${row.id} with ${choice.ref}: ${e instanceof Error ? e.message : e}`);
+      throw new ServiceUnavailableException({
+        error: 'not_read',
+        message: 'The file could not be read just now. Try again later.',
+      });
+    }
+    await record(made.usage);
+    return { value: made.value, model: choice.ref, pages: prepared.pages };
+  }
+
+  private tenantConfig(): TenantConfigService {
+    return this.moduleRef.get(TenantConfigService, { strict: false });
   }
 
   /* ── Server-side files ───────────────────────────────────────────────────── */

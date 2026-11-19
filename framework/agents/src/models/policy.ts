@@ -3,7 +3,7 @@
 // not allowed or in the wrong region is refused, and nothing falls back to another model.
 import type { ModelKind, ModelPolicy } from '@hykr/contracts';
 import { FAKE_PROVIDER } from './config.js';
-import type { ModelEntry, ModelRegistry } from './registry.js';
+import { hasCapability, type ModelEntry, type ModelRegistry } from './registry.js';
 
 /** The model to use. */
 export interface ModelChoice {
@@ -15,7 +15,12 @@ export interface ModelChoice {
 /** Why no model may run: a stable rule, a plain reason and the HTTP status the caller gets. */
 export interface ModelRefusal {
   ok: false;
-  rule: 'model_not_configured' | 'model_unknown' | 'model_not_allowed' | 'model_policy_invalid';
+  rule:
+    | 'model_not_configured'
+    | 'model_unknown'
+    | 'model_not_allowed'
+    | 'model_policy_invalid'
+    | 'no_vision_model';
   reason: string;
   status: number;
 }
@@ -87,6 +92,35 @@ export function chooseModel(
 }
 
 /**
+ * The model that reads files (images, PDFs) for this business: its `vision` model, else the
+ * model its turns use, if that one has vision. It must be registered, allowed and in the
+ * business's regions like any model, and have the 'vision' capability. No fallback to another
+ * model: without one, reading is refused (`no_vision_model`, 409).
+ */
+export function chooseVision(
+  registry: ModelRegistry,
+  policy: ModelPolicy,
+): ModelChoice | ModelRefusal {
+  const named = policy.vision;
+  const choice = chooseModel(registry, policy, { kind: 'chat', requested: named });
+  if (!choice.ok)
+    return refuse(
+      'no_vision_model',
+      named ? `The vision model ${named}: ${choice.reason}` : choice.reason,
+      409,
+    );
+  if (!hasCapability(choice.entry, 'vision'))
+    return refuse(
+      'no_vision_model',
+      named
+        ? `The model ${named} cannot read images`
+        : `This business has no model that reads images (its chat model ${choice.ref} cannot)`,
+      409,
+    );
+  return choice;
+}
+
+/**
  * What is wrong with a policy before it is saved, as plain sentences: models the deployment
  * does not have, allowed models outside the regions, a chat or embedding model it names that is
  * of the wrong kind or not allowed, and a policy that would refuse every turn (no chat model of
@@ -106,6 +140,10 @@ export function policyProblems(registry: ModelRegistry, policy: ModelPolicy): st
     const choice = chooseModel(registry, policy, { kind });
     if (choice.ok) continue;
     problems.push(`${kind}${policy[kind] ? '' : " (the deployment's default)"}: ${choice.reason}`);
+  }
+  if (policy.vision) {
+    const choice = chooseVision(registry, policy);
+    if (!choice.ok) problems.push(`vision: ${choice.reason}`);
   }
   return [...new Set(problems)];
 }

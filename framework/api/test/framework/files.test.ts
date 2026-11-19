@@ -161,6 +161,9 @@ describe('what bytes say they are', () => {
       'A file came with this message: "a.png" (image/png, 900 B), file id f1. ' +
         "To keep it on a record, put this id in one of that record's file fields.",
     );
+    expect(fileLine({ id: 'f2', name: 'b.pdf', mime: 'application/pdf', size: 900 }, true)).toMatch(
+      / To see what it shows, read it with read-file\.$/,
+    );
   });
 });
 

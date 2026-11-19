@@ -103,6 +103,8 @@ import {
   type PublicBranding,
   type PushDevice,
   pathParams,
+  type ReadFileInput,
+  type ReadFileResult,
   type RecallQuery,
   type RecallResult,
   type RecordGrant,
@@ -478,6 +480,9 @@ export function createApiClient(opts: ApiClientOptions) {
     remove: (id: string) => call<null>('DELETE', fileUrl(id)),
     /** An audio file's words (kept once heard). */
     transcribe: (id: string) => call<FileTranscript>('POST', fileUrl(id, '/transcribe')),
+    /** What the business's vision model reads in an image or a PDF (its chosen pages). */
+    read: (id: string, body: ReadFileInput = {}) =>
+      call<ReadFileResult>('POST', fileUrl(id, '/read'), body),
     /**
      * Presign, PUT the bytes, confirm: a ready file for one entity's file field, whose id the
      * record's create or update then carries.

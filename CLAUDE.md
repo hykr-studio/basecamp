@@ -283,6 +283,12 @@ audited `on_behalf_of`), never through a role.
   file on a record by writing its id into the record's file field (`FileRef`, `fileRefs()`, the `files`
   trait); never write `app.files` yourself. `STORAGE_DRIVER=s3` with MinIO in development (`.env.example`);
   unset means memory, which loses the worker's files to the API.
+- A model reads a file only through `read-file` / `POST /api/files/:id/read` or
+  `FilesService.readWithModel` (`docs/decisions/A12.md`, developer guide 5.12): the business's
+  `vision` model (a chat model with `capabilities: ['vision']`), metered on `tokens` and
+  `file_pages`, one `file.read_by_model` audit row. `readWithModel` throws inside a write's
+  transaction (`assertNoWriteTransaction`). Limits: `FILES_READ_*`. The scripted model "sees"
+  what follows `FAKE-VISION:` in a file's bytes.
 
 A framework change needs its own tests: e2e tests in `framework/api/test/framework` against the fixture
 app in `framework/api/test/fixture`. Framework tests must not depend on the sample domain.

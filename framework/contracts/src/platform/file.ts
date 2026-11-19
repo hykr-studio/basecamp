@@ -73,3 +73,24 @@ export type PresignFileResult = z.infer<typeof PresignFileResult>;
 /** An audio file's words. */
 export const FileTranscript = z.object({ text: z.string(), lang: z.string().nullable() });
 export type FileTranscript = z.infer<typeof FileTranscript>;
+
+/** `POST /api/files/:id/read`: what to ask of an image or PDF, and which PDF pages. */
+export const ReadFileInput = z
+  .object({
+    /** What to look for, in the asker's words. Default: everything the file shows. */
+    question: z.string().trim().max(2000).optional(),
+    /** A PDF's pages to read, from 1. Default: every page, up to the deployment's limit. */
+    pages: z.array(z.number().int().min(1).max(10_000)).min(1).max(100).optional(),
+  })
+  .strict();
+export type ReadFileInput = z.infer<typeof ReadFileInput>;
+
+/** What a vision model read in a file: its words, the images or pages it saw, and the model. */
+export const ReadFileResult = z.object({
+  text: z.string(),
+  pages: z.number().int(),
+  model: z.string(),
+  /** The reading was longer than the limit and was cut. */
+  truncated: z.boolean().optional(),
+});
+export type ReadFileResult = z.infer<typeof ReadFileResult>;

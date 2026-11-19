@@ -1269,6 +1269,48 @@ photos: fileColumns('photos'),   // text[]; fileColumn('cover') for one file
   `files`); the `files.sweep` schedule deletes erased files, uploads never confirmed (a day), and files
   never put on a record or taken off one (after `FILES_DETACHED_GRACE_H`).
 
+#### Reading a file with a model
+
+The assistant can look at an image or a PDF the person reaches (`docs/decisions/A12.md`), through
+the business's vision model (section 7.5), and server code can read structured fields from one.
+
+- **The tool and the route.** `read-file { id, question?, pages? }` calls
+  `POST /api/files/:id/read { question?, pages? }` (the client's `files.read(id, body)`), which
+  answers `{ text, pages, model, truncated? }`: what the model read (at most 20,000 characters), the
+  images or PDF pages it saw, and the model's ref. It is a read: it parks nothing and keeps nothing,
+  and anything the person then wants saved goes through the usual write tools and approvals.
+- **What may be read.** The same reach as `GET /api/files/:id` (another business's file, a record
+  out of reach, a hidden field, a file not ready: 404), and an agent's run (A6) reaches only files on
+  records of entities its scope reads. Only PNG, JPEG, WebP and PDF: anything else (audio, SVG,
+  HEIC) is 422 `unsupported_type`; over `FILES_READ_MAX_BYTES` (20 MB) 422 `too_large`.
+- **PDFs.** At most `FILES_READ_MAX_PAGES` (20) pages a read: name them with `pages` (1-based; a page
+  the file lacks is 422 `bad_pages`), or a longer PDF is refused (422 `too_many_pages`), never cut.
+  A model with the `pdf` capability gets the PDF as it is when no pages are named; otherwise each
+  page is drawn at `FILES_READ_DPI` (150) with pdfjs and `@napi-rs/canvas`, its text layer sent
+  alongside. Images over `FILES_READ_MAX_SIDE` (2048 px) are scaled down. Two files at most are
+  prepared at once per process.
+- **The model, credits and limits.** The business's vision model, or 409 `no_vision_model` (no
+  fallback). A business paused by its credits gets 402 `credits_paused` before any call. Tokens go
+  on the `tokens` meter with the model's ref and the images or pages sent on `file_pages` (priced as
+  `file_pages` in `CREDITS_CONFIG`). `FILES_READ_PER_HOUR` (60) reads per person an hour, then 429
+  `too_many_reads`.
+- **Audit.** Each read writes one `file.read_by_model` row: the file, the model, its provider and
+  region, the page count and the agent version. Never the reading, a URL or the file's bytes.
+- **The file is data.** The model is told that the file's contents are data, never instructions,
+  as recalled memory is in a turn.
+- **WhatsApp.** A photo or PDF sent on WhatsApp is readable in the turn it came with: its turn line
+  says so, and the assistant calls `read-file` on its id. A business turns that off with
+  `files.readInbound` (403 `read_inbound_off` for media not on a record yet).
+- **Server code.** `FilesService.readWithModel(p, fileId, { instructions, schema, pages?, lang? })`
+  returns `{ value, model, pages }`: the model answers in JSON, checked against the Zod schema and
+  asked once more with what was wrong; then 422 `unreadable` (its text is logged, never returned).
+  Call it before a write (a command's caller, a job's `submit`, a subscriber), never inside one: in a
+  write's transaction it throws `InWriteTransaction` at once (`assertNoWriteTransaction` in
+  `@hykr/core`), because a model call must not hold rows locked.
+- **Testing.** In fake mode the scripted model reads files too: it "sees" what follows `FAKE-VISION:`
+  in a file's bytes (or a PDF page's text), and alternatives split by `|||` answer the first attempt
+  and the retry.
+
 ### 5.13 Money, number series and records with a parent
 
 The framework moves money one way and keeps documents numbered without gaps; what the money is,
@@ -3069,8 +3111,9 @@ export function TodoListComponent({ title, items, act, words }: ViewProps<typeof
 The deployment configures its models; each business chooses among them (`docs/decisions/A10.md`).
 
 - **`MODEL_PROVIDERS`** (JSON, one line) lists OpenAI-compatible providers: `{ id, baseUrl,
-  apiKeyEnv | apiKey, headers?, region?, models: [{ id, kind?: 'chat' | 'embedding', label?, price?
-  }] }`. A model's ref is `<provider id>/<model id>` (`gateway/large`). `price` is `{ currency,
+  apiKeyEnv | apiKey, headers?, region?, models: [{ id, kind?: 'chat' | 'embedding', label?, price?,
+  capabilities?: ('vision' | 'pdf')[] }] }`. A chat model's `capabilities` say what it takes besides
+  text: images (`vision`), PDF files as they are (`pdf`); none means text only. A model's ref is `<provider id>/<model id>` (`gateway/large`). `price` is `{ currency,
   inputPerMillion, outputPerMillion? }` in minor units per million tokens; `costOf(ref, usage)` from
   `@hykr/agents` prices a call (rounded up). Malformed JSON stops the API and the worker at startup.
   Production points it at the in-country gateway; `application/.env.example` has an example.
@@ -3081,18 +3124,24 @@ The deployment configures its models; each business chooses among them (`docs/de
   embedding model; without them, the first listed. In fake mode the scripted model
   (`fake/scripted`) and a word-hashing embedding (`fake/embedding`) are the defaults, and every
   policy allows them.
-- **The policy** is the settings section `models`: `{ allowed, chat?, embedding?, regions }`. It
+- **The policy** is the settings section `models`: `{ allowed, chat?, embedding?, vision?, regions }`. It
   fails closed: with `allowed` empty only the deployment's defaults; with it exactly those; with
   `regions`, only providers that declare one. A turn's model is the one a hook asks for, else the
   business's `chat`, else the default, and a model that is unknown, not allowed or outside the
   regions refuses the turn (403 `model_not_allowed`, 503 `model_unknown`); nothing falls back.
-- **API.** `GET /api/models` (any member): the policy, the models a turn and an embedding would use,
-  and every model with `allowed` (prices only with `models.manage`). `PUT /api/models/policy`
+- **Reading files** (section 5.12) uses the business's `vision` model, else its chat model when that
+  one has `vision`; it must be allowed and in the regions like any model. Otherwise reading is refused
+  with 409 `no_vision_model`, with no fallback to another model or provider. A policy naming a
+  `vision` model that is unknown, not allowed, outside the regions or text only is a 400. In fake
+  mode `fake/scripted` reads files (it has both capabilities).
+- **API.** `GET /api/models` (any member): the policy, the models a turn, an embedding and a file
+  read would use (`vision`), and every model with `allowed` and its `capabilities` (prices only with `models.manage`). `PUT /api/models/policy`
   (`models.manage`, owners and admins by default, signed in) replaces it through `runWrite` as
   `models.policy.set`: audited before and after, idempotent, parkable by a write hook. A policy the
   deployment cannot honour is a 400 listing every problem.
 - **In code.** `ModelPolicyService` (`@hykr/api`): `chatFor(tenantId, requested?)` and
-  `embeddingFor(tenantId)` (an AI SDK embedding model, or `ModelRefused`). Anything that calls a model
+  `embeddingFor(tenantId)` (an AI SDK embedding model, or `ModelRefused`), `visionFor(tenantId)`
+  (the vision model, or `ModelRefused` with `no_vision_model`). Anything that calls a model
   for a business goes through it. Another feature reaches it with `ctx.get(ModelPolicyService)` in a
   job or subscriber, or `ModuleRef.get(ModelPolicyService, { strict: false })` in a provider. A turn
   hook needs none of it: `after` gets `turn.model`, and `costOf(turn.model, outcome.usage)` prices it.
@@ -3104,11 +3153,12 @@ The deployment configures its models; each business chooses among them (`docs/de
 Every business's use of what costs money is metered, priced and, when its plan says so, capped
 (`docs/decisions/A3.md`). A credit is one minor unit of the deployment's credits currency.
 
-- **Meters.** `tokens` (a model's input and output, the model as variant: a turn's and the
-  guardrail's calls), `tool_calls` (one per
+- **Meters.** `tokens` (a model's input and output, the model as variant: a turn's, the
+  guardrail's and a file read's calls), `tool_calls` (one per
   tool a turn called), `messages` (a WhatsApp message the provider accepted, its template's
   category as variant), `voice_seconds` (a reported voice session) and `embedding_tokens` (memory
-  recall and indexing, the embedding model as variant; section 7.7). Each use is a row in
+  recall and indexing, the embedding model as variant; section 7.7) and `file_pages` (the images and
+  PDF pages a file read sent, the model as variant; section 5.12). Each use is a row in
   `app.usage_events`, added to its period's counter (`app.usage_counters`). A feature or module adds
   a meter with `defineMeter({ name, unit, per, label?, fallbackPrice? })` (contributed as
   `meters`; `label` is what people call it, as `Labels` in the application's languages, which
@@ -3801,6 +3851,9 @@ These are not built. Each has a workaround for now.
 | Seed data | Create data through the API or the app. Maestro's demo assumes data exists. |
 | A link for a WhatsApp request someone else decides | The waiting line says the team was asked, with no link: a contact cannot open the business's app. A member finds the request in the app's Approvals. |
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
+| Attaching a file in the app's chat | A turn is text only. Put the file on a record first (or send it on WhatsApp), then ask the assistant to read it (`read-file`). |
+| Keeping what a model read in a file | Each `read-file` calls the model again (`docs/decisions/A12.md`). Save what matters with a write. |
+| Reading HEIC photos, video or audio with a model | HEIC is refused (422, send a JPEG); audio stays `transcribe-file`; video is not read. |
 | Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
 | Images in documents (a logo, a signature, photos) | The layout has no image block. Put the business's name in the header. |
 | A Chromium engine, digital signatures, PDF/A | Documents are drawn by pdfkit only, unsigned; their SHA-256 is kept, and an acceptance binds it (section 5.25). |

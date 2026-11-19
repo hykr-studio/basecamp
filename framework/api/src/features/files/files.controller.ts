@@ -1,4 +1,4 @@
-import { type FileInfo, PresignFileInput, type Principal } from '@hykr/contracts';
+import { type FileInfo, PresignFileInput, type Principal, ReadFileInput } from '@hykr/contracts';
 import {
   CurrentPrincipal,
   HumanOnlyGuard,
@@ -25,15 +25,17 @@ import { z } from 'zod';
 import { FilesService } from './files.service.js';
 
 class PresignDto extends createZodDto(PresignFileInput) {}
+class ReadDto extends createZodDto(ReadFileInput) {}
 
 const Ids = z.array(z.uuid()).max(100);
 
 /**
  * Files over HTTP. Uploads are people's: presign (`POST /api/files`, for one entity's file
  * field), PUT the bytes to the URL it gives, then confirm; an unused upload can be discarded.
- * Reading (`GET /api/files/:id`, `GET /api/files?ids=`) and transcribing are open to the
- * assistant too, through the same reach: a file is reached only through the record it is on, or
- * as the caller's own upload. Everything else is 404.
+ * Reading (`GET /api/files/:id`, `GET /api/files?ids=`), transcribing and reading with a
+ * model (`POST /api/files/:id/read`) are open to the assistant too, through the same reach: a
+ * file is reached only through the record it is on, or as the caller's own upload. Everything
+ * else is 404.
  */
 @Controller('api/files')
 @OptionalAuth()
@@ -104,5 +106,17 @@ export class FilesController {
     @RequestMeta() meta: RequestMetaValue,
   ) {
     return this.files.transcribe(p, id, meta.requestId);
+  }
+
+  /** What the business's vision model reads in an image or a PDF: a read, it parks nothing. */
+  @Post(':id/read')
+  @HttpCode(200)
+  read(
+    @CurrentPrincipal() p: Principal,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: ReadDto,
+    @RequestMeta() meta: RequestMetaValue,
+  ) {
+    return this.files.readText(p, id, (body ?? {}) as ReadFileInput, meta.requestId);
   }
 }

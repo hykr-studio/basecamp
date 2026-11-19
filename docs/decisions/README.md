@@ -36,6 +36,7 @@ change the sample application or a business's settings, not the framework.
 | [A8](A8.md) | A8 | Business and record memory and conversation recall by meaning, re-checked for access, embedded through the model gateway. | `e75c7c72` |
 | [A9B15](A9B15.md) | A9, B15 | Push notifications through Expo, falling back to the next channel (A9); live updates over SSE, filtered per connection (B15). | `de1f6184` |
 | [A10](A10.md) | A10 | A deployment registry of OpenAI-compatible model gateways and a per-business model policy that fails closed. | `08e1fbce` |
+| [A12](A12.md) | A12 (Interioring) | The assistant reads images and PDFs: a `vision` model capability and policy pick, `read-file` and `readWithModel`, PDF pages drawn, `file_pages` metering, one audit row per read. | this change |
 | [A11](A11.md) | A11 | Feature flags, custom fields, white label and verified domains, platform-shared records, a business's own wording. | `fd6e0109` |
 | [A11X](A11X.md) | A11 (export) | Exporting a business's data as the person who asks: a job that writes a zip of JSON and CSV per entity as a file. | `a8dd0445` |
 | [B1](B1.md) | B1 | Files on records: presign, upload, confirm, reached only through the owning record; WhatsApp media kept; erasure. | `ccd38800` |
@@ -110,7 +111,7 @@ How to read it:
   the choice itself. "Settled by H1" (or another unit) means a later unit answered it; the row stays so the
   change is visible. "None" means the unit reported the choice without a question.
 
-The table has 563 rows: the 458 items of the units' "Assumptions to review" sections and
+The table has 568 rows (the five A12 rows included): the 458 items of the units' "Assumptions to review" sections and
 70 assumptions the units reported to the run that their docs do not state, less duplicates merged
 and process notes left out (merging the integration branch into a unit, which test approach a fix
 took, where a demo lived before its module existed), plus 79 rows from the fix units V1 to V13
@@ -292,6 +293,11 @@ row, and the two B18 rows V8 handed to the integrator). Those stay in each unit'
 | A9B15 | B15 | Back office | It still polls its inbox every 10 s and an open conversation every 5 s. | Task note 'where easy'; hot-file table | Should inbound messages and handoffs publish live events too? |
 | A9B15, H1, H6 | A9, A5 | Order of channels | Each notification's `channels` list is its fallback order; the framework has none of its own. The sample's to-do reminder and the framework's approval request go by push, then WhatsApp, then email (H1); an application changes the approval request with `overrideNotification`. | PRD Platform & AI §7.1 (channels); plan boundary section | Does every notification follow push, WhatsApp, email, or does each choose? Should a business be able to change the order per approval level? |
 | A9B15 | A9 | A9 forget without a session | POST /api/push/tokens/forget needs no session: holding the token is the proof, it can only stop pushes, and it always answers 204. | Default (the shell signs out before plugins' cleanups run, F2 decision 13) | Acceptable, or should the app keep a per-device secret? |
+| A12 | A12 | Drawing in the API process | PDF pages are drawn and images resized in the API process, two files at a time, not on a worker queue. | Default | Is the API process acceptable, or should reads move to a queue for large PDFs? |
+| A12 | A12 | HEIC refused | HEIC photos get 422 `unsupported_type`, asking for a JPEG. | Open question (HEIC) | Convert HEIC once the image library is chosen? |
+| A12 | A12 | A long PDF refused | A PDF over `FILES_READ_MAX_PAGES` without `pages` is refused, not cut to its first pages. | Request acceptance | Should it read the first pages instead, saying so? |
+| A12 | A12 | Readings not kept | Every read calls the model again; nothing of the reading is stored on the file. | Open question (keep the reading) | Keep the reading on the file, as a transcript is? |
+| A12 | A12 | Agent runs and unattached files | A run (A6) reaches only files on records of entities its scope reads, and none on no record. | Request acceptance; default | Confirm. |
 | A10 | A10 | No policy means the defaults only | A business that never set a policy may use the deployment's default chat and embedding models, nothing else. | Default, fail closed (gap A10 "fails closed"; gap map risk on silent fallback) | Should a business without a policy instead get every model the deployment offers? |
 | A10 | A10 | The business sets its own policy | Owners and admins (`models.manage`) choose among the deployment's models. | Gap map ownerQuestions (operator vs studio); default | Should residency be set only by the platform operator (B19), or be a plan option the business cannot change? |
 | A10 | A10 | A model the business does not allow | A turn whose hook asks for a model the business does not allow is refused (403 `model_not_allowed`), not given the business's default model. | Default, fail closed | Is a refusal right, or should the policy quietly use the business's own model instead? |

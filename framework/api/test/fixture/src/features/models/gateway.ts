@@ -3,6 +3,7 @@
 // see which model and key reached it. Its replies follow the last message:
 // - a tool result: "Done on <model>.";
 // - "add <title>": a call to create-task with that title;
+// - images or a PDF (a file read): "Read <n> images and <m> PDFs on <model>.";
 // - a structured-output request (the prompt-injection guardrail): no detection;
 // - anything else: "Hello from <model>.".
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -37,7 +38,12 @@ function replyTo(body: { model: string; messages: Message[]; response_format?: u
   if (body.response_format) return { text: JSON.stringify({ categories: null, reason: null }) };
   const last = body.messages.at(-1);
   if (last?.role === 'tool') return { text: `Done on ${body.model}.` };
-  const said = textOf([...body.messages].reverse().find((m) => m.role === 'user')?.content);
+  const user = [...body.messages].reverse().find((m) => m.role === 'user')?.content;
+  const parts = Array.isArray(user) ? (user as { type?: string }[]) : [];
+  const images = parts.filter((p) => p?.type === 'image_url').length;
+  const pdfs = parts.filter((p) => p?.type === 'file').length;
+  if (images || pdfs) return { text: `Read ${images} images and ${pdfs} PDFs on ${body.model}.` };
+  const said = textOf(user);
   const add = /^add (.+)$/i.exec(said.trim());
   if (add) return { tool: { name: 'create-task', args: { title: add[1] } } };
   return { text: `Hello from ${body.model}.` };

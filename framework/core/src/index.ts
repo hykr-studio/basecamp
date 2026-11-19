@@ -180,6 +180,12 @@ export {
 export { strongerDecision } from './write/decisions.js';
 export { eventFor, eventQueues, recordEvents, toEnvelope } from './write/events.js';
 export {
+  assertNoWriteTransaction,
+  InWriteTransaction,
+  inWriteTransaction,
+  openWrite,
+} from './write/in-transaction.js';
+export {
   defineLevelRule,
   type EffectiveLevel,
   effectiveLevel,

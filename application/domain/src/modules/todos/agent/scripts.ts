@@ -2,6 +2,7 @@ import {
   call,
   dayWords,
   defineScript,
+  fileLineId,
   items,
   plural,
   sameTitle,
@@ -20,6 +21,7 @@ import { pick } from '@hykr/i18n';
  *   delete <title>                  list-todos → delete-todo (parked for approval)
  *   what's due this week            list-todos due within 7 days → one line (the view shows them)
  *   clear done to-dos               clear-done-todos (when the business has todos.clear-done on)
+ *   add this bill + a photo         read-file → create-todo "Pay <vendor>" with its cost (waits)
  *
  * Add, list, done and delete also take Hindi and Telugu verbs, before or after the title
  * ("జోడించు Call the plumber", "Order tiles हटाओ"), and answer in the turn's language.
@@ -58,7 +60,59 @@ const startsWith = (verb: Verb, text: string) =>
 const command = (verb: Verb, text: string) => endsWith(verb, text) ?? startsWith(verb, text);
 const quoted = (title: string) => `"${title}"`;
 
+/** A bill as the scripted vision model reads it: "Amount: 1250 Vendor: Sharma Hardware". */
+export function billOf(text: string): { amount: number; vendor: string } | undefined {
+  const amount = /Amount:\s*(?:Rs\.?|₹|INR)?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/i.exec(text)?.[1];
+  const vendor = /Vendor:\s*(.+?)\s*(?:$|\n|Date:)/i.exec(text)?.[1];
+  if (!amount || !vendor) return undefined;
+  return { amount: Number(amount.replace(/,/g, '')), vendor };
+}
+
 export const todosScripts = [
+  // A photo of a bill with "add this bill": read it, then add a to-do to pay it, with its cost.
+  // The assistant's to-do with a cost waits for the person (todo.ts).
+  defineScript({
+    name: 'bill',
+    match: (text) =>
+      /^(add|log|save) (this|the) bill\b/iu.test(first(text)) ? fileLineId(text) : undefined,
+    step: (id, turn) => {
+      const read = turn.result('read-file');
+      if (!read)
+        return [call('read-file', { id, question: 'The amount to pay, and who it is to' })];
+      const bill = billOf((read.result as { text: string }).text);
+      if (!bill)
+        return [
+          say(
+            pick(
+              {
+                en: "I couldn't find an amount and a shop on that bill.",
+                hi: 'इस बिल पर रकम और दुकान नहीं मिली।',
+                te: 'ఈ బిల్లులో మొత్తం, దుకాణం కనిపించలేదు.',
+              },
+              turn.lang,
+            ),
+          ),
+        ];
+      const r = turn.result('create-todo');
+      if (!r)
+        return [
+          call('create-todo', {
+            title: `Pay ${bill.vendor}`,
+            cost: Math.round(bill.amount * 100),
+          }),
+        ];
+      const added = (t: { title: string }) =>
+        pick(
+          {
+            en: `Added ${quoted(t.title)}.`,
+            hi: `${quoted(t.title)} जोड़ दिया।`,
+            te: `${quoted(t.title)} జోడించాను.`,
+          },
+          turn.lang,
+        );
+      return [say(written(r, added, turn))];
+    },
+  }),
   defineScript({
     name: 'add',
     match: (text) => command(VERBS.add, text),

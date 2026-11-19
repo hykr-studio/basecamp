@@ -209,7 +209,10 @@ describe('who may change them', () => {
     expect(own.body).toMatchObject({ status: 'done', value: { key: 'files' } });
     expect((await stored(otherTenant)).files).toEqual({ keepInboundMedia: false });
     expect(await stored()).toEqual(before);
-    expect((await read(owner, 'files')).body.value).toEqual({ keepInboundMedia: true });
+    expect((await read(owner, 'files')).body.value).toEqual({
+      keepInboundMedia: true,
+      readInbound: true,
+    });
   });
 
   it("a module's own section is changed by its own capability, and checked by its own check", async () => {

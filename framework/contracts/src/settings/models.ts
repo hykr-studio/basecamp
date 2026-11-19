@@ -23,6 +23,10 @@ export const ModelRegion = z
 export const ModelKind = z.enum(['chat', 'embedding']);
 export type ModelKind = z.infer<typeof ModelKind>;
 
+/** What a chat model takes besides text: images ('vision'), PDF files as they are ('pdf'). */
+export const ModelCapability = z.enum(['vision', 'pdf']);
+export type ModelCapability = z.infer<typeof ModelCapability>;
+
 /**
  * What a model costs the deployment: minor units of `currency` (ISO 4217) per million tokens.
  * Rates may be fractional: a gateway charges fractions of a minor unit per token.
@@ -44,6 +48,8 @@ export const ModelPolicyFields = z.object({
   chat: ModelRef.optional(),
   /** The embedding model (memory recall). Default: the deployment's. */
   embedding: ModelRef.optional(),
+  /** The model that reads files (images, PDFs). Default: the chat model, if it has vision. */
+  vision: ModelRef.optional(),
   /** Only providers in these regions. Empty: any region. */
   regions: z.array(ModelRegion).max(20).default([]),
 });
@@ -87,6 +93,8 @@ export interface ModelInfo {
   region?: string;
   /** This business's policy lets it use the model. */
   allowed: boolean;
+  /** What it takes besides text. */
+  capabilities: ModelCapability[];
   /** Only for people with `models.manage`. */
   price?: ModelPrice;
 }
@@ -97,5 +105,7 @@ export interface ModelsOverview {
   chat: ModelUse;
   /** Null when the deployment configures no embedding model. */
   embedding: ModelUse | null;
+  /** The model that reads files for this business, or why none may. */
+  vision: ModelUse;
   models: ModelInfo[];
 }

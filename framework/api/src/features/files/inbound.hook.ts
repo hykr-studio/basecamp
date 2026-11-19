@@ -6,7 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import { WHATSAPP } from '../../channels/whatsapp/adapter.provider.js';
 import { type InboundHook, type InboundInfo, inboundHooks } from '../../hooks.js';
 import { FilesService } from './files.service.js';
-import { fileLine } from './lines.js';
+import { fileLine, READABLE_TYPES } from './lines.js';
 
 const log = new Logger('FilesInbound');
 
@@ -90,6 +90,7 @@ export class FilesInboundHook implements InboundHook, OnModuleInit {
           eq(messages.providerMessageId, message.providerMessageId),
         ),
       );
-    return { context: [fileLine(row)] };
+    const readable = settings.files.readInbound && READABLE_TYPES.has(row.mime);
+    return { context: [fileLine(row, readable)] };
   }
 }

@@ -37,6 +37,21 @@ export interface FilesConfig {
   detachedGraceH: number;
   /** Unconfirmed uploads one person may have in a day. */
   maxPending: number;
+  /** Reading a file with a vision model (read-file, readWithModel). */
+  read: {
+    /** The largest file read. */
+    maxBytes: number;
+    /** Images or PDF pages one read sends. */
+    maxPages: number;
+    /** The longest side, in pixels, of an image sent (larger ones are scaled down). */
+    maxSide: number;
+    /** How finely PDF pages are drawn. */
+    dpi: number;
+    /** Reads one person (or contact) may make in an hour. */
+    perHour: number;
+    /** How long the model may take to answer one read. */
+    timeoutMs: number;
+  };
 }
 
 /**
@@ -50,6 +65,9 @@ export interface FilesConfig {
  * - `STORAGE_SECRET` signs the local drivers' URLs; derived from BETTER_AUTH_SECRET when unset.
  * - `FILES_MAX_BYTES` (25 MiB), `FILES_URL_TTL_S` (300), `FILES_UPLOAD_TTL_S` (900),
  *   `FILES_DETACHED_GRACE_H` (168), `FILES_MAX_PENDING` (50).
+ * - Reading files with a model: `FILES_READ_MAX_BYTES` (20 MB), `FILES_READ_MAX_PAGES` (20),
+ *   `FILES_READ_MAX_SIDE` (2048 px), `FILES_READ_DPI` (150), `FILES_READ_PER_HOUR` (60),
+ *   `FILES_READ_TIMEOUT_MS` (120000).
  */
 export function filesConfig(env: NodeJS.ProcessEnv = process.env): FilesConfig {
   const raw = (env.STORAGE_DRIVER ?? '').trim().toLowerCase();
@@ -79,6 +97,14 @@ export function filesConfig(env: NodeJS.ProcessEnv = process.env): FilesConfig {
     uploadTtlS: num(env.FILES_UPLOAD_TTL_S, 900),
     detachedGraceH: num(env.FILES_DETACHED_GRACE_H, 168),
     maxPending: num(env.FILES_MAX_PENDING, 50),
+    read: {
+      maxBytes: num(env.FILES_READ_MAX_BYTES, 20 * 1000 * 1000),
+      maxPages: num(env.FILES_READ_MAX_PAGES, 20),
+      maxSide: num(env.FILES_READ_MAX_SIDE, 2048),
+      dpi: num(env.FILES_READ_DPI, 150),
+      perHour: num(env.FILES_READ_PER_HOUR, 60),
+      timeoutMs: num(env.FILES_READ_TIMEOUT_MS, 120_000),
+    },
   };
 }
 
