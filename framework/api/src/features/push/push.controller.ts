@@ -1,6 +1,7 @@
 import {
   ForgetPushToken,
   type Principal,
+  PushActive,
   type PushDevice,
   RegisterPushToken,
   type WebPushKey,
@@ -58,6 +59,20 @@ export class PushController {
   @UseGuards(PrincipalGuard, HumanOnlyGuard)
   async devices(@CurrentPrincipal() p: Principal): Promise<PushDevice[]> {
     return [...(await this.push.devices(p)), ...(await this.web.list(p))];
+  }
+
+  /**
+   * The person is using the app on this device or in this browser now: the next push goes here.
+   * Only their own device in this business moves; anything else changes nothing. 204 either way.
+   */
+  @Post('active')
+  @OptionalAuth()
+  @UseGuards(PrincipalGuard, HumanOnlyGuard)
+  @HttpCode(204)
+  async active(@CurrentPrincipal() p: Principal, @Body() body: unknown): Promise<void> {
+    const input = parse(PushActive, body);
+    if ('endpoint' in input) await this.web.active(p, input.endpoint);
+    else await this.push.active(p, input.token);
   }
 
   /**

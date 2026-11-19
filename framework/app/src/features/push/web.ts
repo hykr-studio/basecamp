@@ -6,6 +6,7 @@ import { router } from 'expo-router';
 import { useSyncExternalStore } from 'react';
 import { api } from '../../api';
 import { onBusinessChange } from '../../framework/business';
+import { activityReporter } from './activity';
 import { appPathOf } from './links';
 
 /**
@@ -163,7 +164,20 @@ export async function startWebPush(): Promise<() => void> {
   const stopSwitch = onBusinessChange(() => {
     if (status === 'on') void sync().catch((e) => console.warn('Web push:', e));
   });
+  // Where the person is: a push goes to the one device they used last. A click or a key in a
+  // visible tab, or the tab coming back into view, says it is this browser.
+  const activity = activityReporter(async () => {
+    const sub = await registration.pushManager.getSubscription();
+    if (sub) await api.push.active({ endpoint: sub.endpoint });
+  });
+  const onUse = () => {
+    if (status === 'on' && document.visibilityState === 'visible') activity.ping();
+  };
+  const events = ['pointerdown', 'keydown', 'visibilitychange'] as const;
+  for (const e of events) document.addEventListener(e, onUse, { passive: true });
+  onUse();
   return () => {
+    for (const e of events) document.removeEventListener(e, onUse);
     stopSwitch();
     navigator.serviceWorker.removeEventListener('message', onWorkerMessage);
     session = undefined;
@@ -191,8 +205,10 @@ export async function enableWebPush(): Promise<PushStatus> {
     return 'off';
   }
   remember(false);
-  await subscribeHere(s);
+  const sub = await subscribeHere(s);
   setStatus('on');
+  // Turned on by a click here: this is where the person is.
+  await api.push.active({ endpoint: sub.endpoint }).catch(() => undefined);
   return 'on';
 }
 

@@ -52,6 +52,13 @@ export const ForgetPushToken = z.union([
 ]);
 export type ForgetPushToken = z.infer<typeof ForgetPushToken>;
 
+/**
+ * POST /api/push/active: the person is using the app on this device (its token) or in this
+ * browser (its endpoint) now. A push goes to the one device they used last.
+ */
+export const PushActive = ForgetPushToken;
+export type PushActive = z.infer<typeof PushActive>;
+
 /** One registered device or browser, as its owner sees it: the token or endpoint shortened. */
 export const PushDevice = z.object({
   id: z.string(),

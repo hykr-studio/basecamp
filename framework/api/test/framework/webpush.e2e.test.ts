@@ -5,6 +5,7 @@
 // takes the email fallback; the real queues run inline.
 import { createECDH, randomBytes } from 'node:crypto';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+import { gunzipSync } from 'node:zlib';
 import { getQueueToken } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 // @ts-expect-error: http_ece has no types.
@@ -25,6 +26,10 @@ import {
 import { webPushApp } from '../fixture/dist/features/webpush/index.js';
 
 process.env.SECRETS_KEY ||= 'test-secrets-key-0123456789abcdef0123456789';
+
+/** What the stand-in Expo push service received: one message per phone. */
+const toPhones: { to: string; title: string; data: Record<string, string> }[] = [];
+let expo: Server;
 
 /** What the stand-in push service received: one POST per browser. */
 type Received = { path: string; headers: IncomingHttpHeaders; body: Buffer };
@@ -76,6 +81,14 @@ const inTenant = () => ({ 'x-tenant-id': tenantId });
 
 const register = (who: Person, b: Browser, headers: Record<string, string> = {}) =>
   who.call('POST', '/api/push/tokens', { platform: 'web', subscription: b.subscription }, headers);
+/** The person is using the app in this browser (or on this phone) now. */
+const activeIn = (who: Person, device: Browser | string, headers: Record<string, string> = {}) =>
+  who.call(
+    'POST',
+    '/api/push/tokens/active',
+    typeof device === 'string' ? { token: device } : { endpoint: device.subscription.endpoint },
+    headers,
+  );
 const chore = async (who: Person, body: object, headers: Record<string, string> = {}) =>
   (await who.call('POST', '/api/chores', body, headers)).body as {
     value: { id: string };
@@ -117,6 +130,24 @@ beforeAll(async () => {
   });
   await new Promise<void>((r) => stub.listen(0, r));
   base = `http://localhost:${(stub.address() as { port: number }).port}`;
+  // Phones, for the one-place cases: every message accepted, every receipt fine.
+  expo = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    const raw = Buffer.concat(chunks);
+    const body = JSON.parse(
+      (req.headers['content-encoding'] === 'gzip' ? gunzipSync(raw) : raw).toString('utf8'),
+    );
+    const reply = (v: unknown) =>
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(v));
+    if (req.url?.endsWith('/push/send')) {
+      toPhones.push(...body);
+      return reply({ data: body.map((_: unknown, i: number) => ({ status: 'ok', id: `r${i}` })) });
+    }
+    reply({ data: {} });
+  });
+  await new Promise<void>((r) => expo.listen(0, r));
+  process.env.EXPO_BASE_URL = `http://localhost:${(expo.address() as { port: number }).port}`;
   // The deployment's VAPID pair, read when used.
   const vapid = createECDH('prime256v1');
   vapid.generateKeys();
@@ -138,6 +169,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   stub.close();
+  expo.close();
   await shutdown();
 });
 
@@ -208,15 +240,16 @@ describe('keys and browsers', () => {
 });
 
 describe('the webpush channel', () => {
-  it("reaches each of the person's browsers once, encrypted, with the push words", async () => {
+  it('reaches the one browser the person is on, encrypted, with the push words', async () => {
     const one = browser('sam-chrome');
     const two = browser('sam-firefox');
     expect((await register(staff, one, inTenant())).status).toBe(201);
     expect((await register(staff, two, inTenant())).status).toBe(201);
+    // Sam works in Chrome; Firefox signed in later but is not where Sam is.
+    expect((await activeIn(staff, one, inTenant())).status).toBe(204);
     const made = await chore(staff, { title: 'Web tiles', dueOn: '2030-05-06' }, inTenant());
-    await eventually(() => (to(one).length && to(two).length ? true : undefined));
+    await eventually(() => (to(one).length ? true : undefined));
     expect(to(one)).toHaveLength(1);
-    expect(to(two)).toHaveLength(1);
     const [m] = to(one);
     // Encrypted for the browser: the push service reads none of it.
     expect(m.headers['content-encoding']).toBe('aes128gcm');
@@ -226,19 +259,19 @@ describe('the webpush channel', () => {
     expect(String(m.headers.authorization)).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=/);
     // Without the browser's keys it does not open.
     expect(() => open(browser('other'), m)).toThrow();
-    const payload = open(one, m);
-    expect(payload).toEqual({
+    expect(open(one, m)).toEqual({
       title: 'Chore: Web tiles',
       // The due date is hidden from staff: their push never names it.
       body: 'Web tiles is due some day.',
       url: `/chores/${made.value.id}`,
       notification: 'chore.webpushed',
     });
-    expect(open(two, to(two)[0])).toEqual(payload);
     expect(await ticketsOf(staff.id)).toEqual([
       { platform: 'web', status: 'ok', error: null, notification: 'chore.webpushed' },
-      { platform: 'web', status: 'ok', error: null, notification: 'chore.webpushed' },
     ]);
+    // One place: the other browser stays quiet.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(to(two)).toEqual([]);
     expect(await mailTo(staff.email)).not.toContain('Chore: Web tiles');
   });
 
@@ -257,20 +290,22 @@ describe('the webpush channel', () => {
     );
   });
 
-  it('a 410 forgets the subscription; the next send skips it', async () => {
-    const gone = browser('gil-gone');
+  it('the browser it chose is gone (410): forgotten, and the next browser gets it at once', async () => {
     const fine = browser('gil-fine');
-    await register(gil, gone);
+    const gone = browser('gil-gone');
     await register(gil, fine);
+    // Signed in last: where Gil was seen most recently, so tried first.
+    await register(gil, gone);
     await chore(gil, { title: 'Web first' });
     await eventually(() => (to(fine).length ? true : undefined));
     expect(to(gone)).toHaveLength(1);
-    await eventually(async () => ((await subscriptions(gil.id)).length === 1 ? true : undefined));
-    expect((await subscriptions(gil.id))[0].endpoint).toBe(fine.subscription.endpoint);
+    expect((await subscriptions(gil.id)).map((r) => r.endpoint)).toEqual([
+      fine.subscription.endpoint,
+    ]);
     await chore(gil, { title: 'Web second' });
     await eventually(() => (to(fine).length === 2 ? true : undefined));
     expect(to(gone)).toHaveLength(1);
-    // One browser took each: no email.
+    // A browser took each: no email.
     expect(await mailTo(gil.email)).not.toContain('Chore: Web first');
   });
 
@@ -406,6 +441,66 @@ describe('the dispatcher’s rules hold', () => {
   });
 });
 
+describe('one place: the device the person is on', () => {
+  const phone = (name: string) => `ExponentPushToken[${name}-${stamp}]`;
+  const onPhone = (t: string) => toPhones.filter((m) => m.to === t);
+
+  it('push goes to the phone or the browser, whichever the person used last; never both', async () => {
+    const p = new Person('Lea Webpush');
+    await p.signUp();
+    await setTenantSettings((await me(p)).tenantId, { quietHours: { from: '00:00', to: '00:00' } });
+    const laptop = browser('lea-laptop');
+    const mobile = phone('lea');
+    expect((await register(p, laptop)).status).toBe(201);
+    expect(
+      (await p.call('POST', '/api/push/tokens', { token: mobile, platform: 'ios' })).status,
+    ).toBe(201);
+
+    // Nobody said where: the device seen last (the phone, signed in after the laptop).
+    await chore(p, { title: 'Both first' });
+    await eventually(() => (onPhone(mobile).length ? true : undefined));
+    expect(to(laptop)).toEqual([]);
+
+    // Lea works at the laptop now.
+    expect((await activeIn(p, laptop)).status).toBe(204);
+    await chore(p, { title: 'Both second' });
+    await eventually(() => (to(laptop).length ? true : undefined));
+    expect(open(laptop, to(laptop)[0]).title).toBe('Chore: Both second');
+    expect(onPhone(mobile)).toHaveLength(1);
+
+    // And picks up the phone again.
+    expect((await activeIn(p, mobile)).status).toBe(204);
+    await chore(p, { title: 'Both third' });
+    await eventually(() => (onPhone(mobile).length === 2 ? true : undefined));
+    expect(onPhone(mobile)[1].title).toBe('Chore: Both third');
+    await new Promise((r) => setTimeout(r, 500));
+    expect(to(laptop)).toHaveLength(1);
+  });
+
+  it("saying where only moves one's own device; it needs a session", async () => {
+    const p = new Person('Max Webpush');
+    await p.signUp();
+    const b = browser('max');
+    await register(p, b);
+    // Someone else naming Max's browser changes nothing, and learns nothing.
+    expect((await activeIn(cara, b)).status).toBe(204);
+    const row = async () =>
+      (
+        await pool.query(
+          'select active_at from channel.web_push_subscriptions where endpoint = $1',
+          [b.subscription.endpoint],
+        )
+      ).rows[0] as { active_at: Date | null };
+    expect((await row()).active_at).toBeNull();
+    expect((await activeIn(p, b)).status).toBe(204);
+    expect((await row()).active_at).not.toBeNull();
+    const anon = await new Person('Nobody').call('POST', '/api/push/tokens/active', {
+      endpoint: b.subscription.endpoint,
+    });
+    expect(anon.status).toBe(401);
+  });
+});
+
 describe('personal data', () => {
   it('erasing a person deletes their browsers; export lists them, the endpoint masked', async () => {
     const { DB } = await import('../../dist/infra/db.module.js');
@@ -418,8 +513,8 @@ describe('personal data', () => {
     expect(browsers[0].endpoint).toMatch(/^localhost:\d+\/sam-..…$/);
     expect(JSON.stringify(exported)).not.toContain(`sam-chrome-${stamp}`);
     const { count } = await db.transaction((tx: never) => PushErasure.erase({ subject, tx }));
-    // Two browsers and the two sends to them.
-    expect(count).toBe(4);
+    // Two browsers and the one send (to the browser Sam was on).
+    expect(count).toBe(3);
     expect(await subscriptions(staff.id)).toEqual([]);
     expect(await ticketsOf(staff.id)).toEqual([]);
   });

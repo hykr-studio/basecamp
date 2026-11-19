@@ -1294,7 +1294,9 @@ unset for the framework's neutral ones (no currency, UTC, no contact). Rename th
   orders notifications.
 
 The browser is asked for permission only when the person clicks **Turn on notifications**.
-That button is on the strip the plugin shows, and in the person's card (`<PushToggle />`).
+That button is on the strip the plugin shows once something waits for the person (a request to
+decide, an unread inbox item), and in the person's card (`<PushToggle />`). Each push goes to one
+place: the phone or browser the person used last.
 Browsers block a permission prompt that no click led to. On an iPhone or iPad, Safari shows web
 push only for a site added to the Home Screen (Share, then Add to Home Screen); the manifest is
 what makes that possible.

@@ -999,6 +999,13 @@ export function createApiClient(opts: ApiClientOptions) {
           '/api/push/tokens/forget',
           typeof device === 'string' ? { token: device } : { endpoint: device.endpoint },
         ),
+      /** The person is using the app on this device (its token) or in this browser now. */
+      active: (device: string | { endpoint: string }) =>
+        call<null>(
+          'POST',
+          '/api/push/tokens/active',
+          typeof device === 'string' ? { token: device } : { endpoint: device.endpoint },
+        ),
       /** The server's VAPID public key; null when web push is off. */
       webKey: () => call<WebPushKey>('GET', '/api/push/web/key'),
     },

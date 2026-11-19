@@ -1097,9 +1097,12 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   `push.receipts` schedule) moves on later through `NotifyService.fallback`. A gone device is forgotten.
 - **Web push.** `webpush` is the browser's channel (Web Push with VAPID, `features/push`, decisions in
   `docs/decisions/W1.md`). It says what `push` says (the notification's `push` content), so a
-  declaration does not change. `push` is a shorthand: it tries the person's phones, then their
-  browsers when no phone takes it. A notification that lists both (`['webpush', 'push', 'email']`)
-  orders them itself, and there `push` means phones only. The server needs `WEB_PUSH_PUBLIC_KEY`,
+  declaration does not change. `push` reaches the person's phones and browsers; a notification that
+  lists both (`['webpush', 'push', 'email']`) orders them itself, and there `push` means phones
+  only. Every push goes to one place: the device the person used within `PUSH_ACTIVE_MS` (10
+  minutes), else the one used or signed in to last, and the next device only when that one cannot
+  take it. The app says where the person is with `POST /api/push/tokens/active` (a click or key in a
+  visible tab, the phone app coming to the front; at most once a minute). The server needs `WEB_PUSH_PUBLIC_KEY`,
   `WEB_PUSH_PRIVATE_KEY` and `WEB_PUSH_SUBJECT` (`basecamp webpush keys` prints a pair; `assertConfig`
   refuses a partial set or a pair that does not match) and `SECRETS_KEY`, which seals each browser's
   keys. Without them `webpush` is unavailable and the next channel is tried. A browser registers its
@@ -1107,12 +1110,13 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   `GET /api/push/web/key`); its endpoint must be https on a known push service (FCM, Mozilla, Apple,
   WNS) or on a host in `WEB_PUSH_ALLOWED_HOSTS`, else 400 `bad_endpoint`, and sends go out under the
   egress guard. Each send is encrypted for the browser (RFC 8291), kept 24 hours by the push service,
-  and urgent for approvals. A 201 or 202 from any browser is sent (Web Push has no receipts, so it
+  and urgent for approvals. A 201 or 202 from the browser is sent (Web Push has no receipts, so it
   is final and logged in `channel.push_tickets` with `platform: 'web'`); a 404 or 410 forgets that
   browser; a 429 or 5xx is a failure for now (retried, then the next channel). In the app,
   `pushPlugin()` registers the service worker at `/push-sw.js` after sign-in and asks for
-  permission only when the person clicks "Turn on notifications" (the strip it draws, or
-  `<PushToggle />` in the person's card; `usePushStatus()` says `on`, `off`, `blocked` or
+  permission only when the person clicks "Turn on notifications" (the strip it draws once something
+  waits for them, a request to decide or an unread inbox item, or `<PushToggle />` in the person's
+  card; `usePushStatus()` says `on`, `off`, `blocked` or
   `unsupported`). The service worker and a web manifest come from `@hykr/app`'s config plugin
   (`"plugins": ["@hykr/app"]` in app.json), which writes them into the app's `public/` folder each
   time Expo reads its config. A click on a notification focuses the app's tab on its link, or opens
