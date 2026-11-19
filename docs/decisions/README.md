@@ -115,12 +115,12 @@ How to read it:
   the choice itself. "Settled by H1" (or another unit) means a later unit answered it; the row stays so the
   change is visible. "None" means the unit reported the choice without a question.
 
-The table has 576 rows: the 458 items of the units' "Assumptions to review" sections and
+The table has 581 rows: the 458 items of the units' "Assumptions to review" sections and
 70 assumptions the units reported to the run that their docs do not state, less duplicates merged
 and process notes left out (merging the integration branch into a unit, which test approach a fix
 took, where a demo lived before its module existed), plus 79 rows from the fix units V1 to V13
 (their "Assumptions to review" sections, an assumption a later V unit settled merged into one
-row, and the two B18 rows V8 handed to the integrator), plus 8 rows from B21 and 5 from W1.
+row, and the two B18 rows V8 handed to the integrator), plus 8 rows from B21, 5 from R1 and 5 from W1.
 Those stay in each unit's doc.
 
 | Unit | Gap | Topic | What we chose | Source | Question for the owner |
