@@ -37,6 +37,8 @@ describe('script sets', () => {
       'document-status',
       'job-status',
       'jobs-running',
+      'share-send-link',
+      'share-send-again',
       'free-time',
       'calendar-invite',
       'log-call',
