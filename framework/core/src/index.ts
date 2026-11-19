@@ -19,6 +19,7 @@ export {
   childLinksOf,
   defineChildEntity,
   insertMany,
+  type TreeAt,
 } from './entity/children.js';
 export {
   EntityCommand,
@@ -42,7 +43,11 @@ export {
 export { entityHandlers, entityOp, ifMatchFor } from './entity/handlers.js';
 export {
   checkReferences,
+  checkReferencesMany,
   isForeignKeyViolation,
+  MAX_REFERENCES,
+  type ReferencingItem,
+  readReferences,
   referenceRefusal,
   refusedReference,
 } from './entity/references.js';
@@ -179,6 +184,12 @@ export {
 } from './write/approvals.js';
 export { strongerDecision } from './write/decisions.js';
 export { eventFor, eventQueues, recordEvents, toEnvelope } from './write/events.js';
+export {
+  assertNoWriteTransaction,
+  InWriteTransaction,
+  inWriteTransaction,
+  openWrite,
+} from './write/in-transaction.js';
 export {
   defineLevelRule,
   type EffectiveLevel,

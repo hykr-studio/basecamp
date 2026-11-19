@@ -72,8 +72,11 @@ export function price(input: SaveOrderInput, currency: string): Priced | Authori
         lines.push({ amount, taxRateBp });
         return {
           ...(n.id ? { id: n.id } : {}),
+          ref: n.ref,
           kind: 'line',
           title: n.title,
+          // A save sends each line whole: a kept line sent without its product loses it.
+          productId: n.productId ?? null,
           quantity,
           unitPrice,
           taxRateBp,
@@ -85,8 +88,11 @@ export function price(input: SaveOrderInput, currency: string): Priced | Authori
       if (n.unitPrice !== undefined || n.quantity !== undefined)
         throw new Invalid(`"${n.title}" is a group: its lines carry the prices`);
       const children = n.children.map(toNode);
+      if (n.productId !== undefined)
+        throw new Invalid(`"${n.title}" is a group: its lines name the products`);
       return {
         ...(n.id ? { id: n.id } : {}),
+        ref: n.ref,
         kind: 'group',
         title: n.title,
         quantity: null,
@@ -157,6 +163,12 @@ export const SaveOrder = defineCommand(SaveOrderSpec, {
         error: 'stale',
         message: `This order changed since it was read (version ${input.version} then, ${order.version} now). Load it again.`,
       });
+    // A line naming a product the person cannot read is refused here, before a save that would
+    // wait for approval asks anyone (R1). The tree write checks again when it runs.
+    await OrderItem.children.checkReferences(tx, p, input.items, {
+      at: ['items'],
+      ...(order ? { parent: order } : {}),
+    });
     return { order, money: await tenantMoney(tx, tenantOf(p)) };
   },
   pin: (loaded) => (loaded.order ? [{ def: Order, row: loaded.order }] : []),
@@ -195,7 +207,12 @@ export const SaveOrder = defineCommand(SaveOrderSpec, {
         tx,
         principal,
         loaded.order,
-        { title: input.title, ...totals, ...(input.version ? { version: input.version } : {}) },
+        {
+          title: input.title,
+          ...totals,
+          ...(input.photo !== undefined ? { photo: input.photo } : {}),
+          ...(input.version ? { version: input.version } : {}),
+        },
         via,
       );
     } else {
@@ -203,11 +220,19 @@ export const SaveOrder = defineCommand(SaveOrderSpec, {
       order = await Order.repo.insert(
         tx,
         principal,
-        { number, title: input.title, currency, ...totals },
+        {
+          number,
+          title: input.title,
+          currency,
+          ...totals,
+          ...(input.photo ? { photo: input.photo } : {}),
+        },
         via,
       );
     }
-    const items = await OrderItem.children.replace(tx, principal, order, priced.nodes, via);
+    const items = await OrderItem.children.replace(tx, principal, order, priced.nodes, via, {
+      at: ['items'],
+    });
     return {
       value: { order, items: items.rows },
       touched: [

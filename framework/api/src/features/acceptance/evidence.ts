@@ -56,6 +56,12 @@ const HASHED = [
   'prevHash',
 ] as const satisfies readonly (keyof EvidenceRow)[];
 
+/**
+ * Fields added after rows were written: hashed after HASHED, and only when set, so a row written
+ * before them (null there) keeps the hash it was written with.
+ */
+const HASHED_WHEN_SET = ['documentImages'] as const satisfies readonly (keyof EvidenceRow)[];
+
 /** JSON with object keys sorted at every level and dates as ISO: the same bytes after jsonb. */
 function canonical(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();
@@ -72,6 +78,7 @@ function canonical(value: unknown): unknown {
 /** A row's hash: SHA-256 of its fields (and the previous row's hash) as canonical JSON. */
 export function hashOf(row: Omit<EvidenceRow, 'hash'>): string {
   const fields = HASHED.map((k) => [k, canonical(row[k])]);
+  for (const k of HASHED_WHEN_SET) if (row[k] != null) fields.push([k, canonical(row[k])]);
   return createHash('sha256').update(JSON.stringify(fields)).digest('hex');
 }
 
@@ -158,6 +165,7 @@ export function presentEvidence(
       version: row.documentVersion,
       sha256: row.documentSha256,
       fileName: row.documentFileName,
+      ...(row.documentImages?.length ? { images: row.documentImages } : {}),
     },
     statement: row.statement,
     lang: row.lang as AcceptanceInfo['lang'],

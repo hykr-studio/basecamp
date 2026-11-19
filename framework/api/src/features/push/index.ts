@@ -1,7 +1,7 @@
 // Push notifications (A9): a person's phones, the `push` delivery channel, and the receipt poll
-// that moves a notification to its next channel when every device's message failed.
-// docs/decisions/A9B15.md.
-import { pushTickets, pushTokens } from '@hykr/db';
+// that moves a notification to its next channel when every device's message failed; and their
+// browsers, the `webpush` channel (W1). docs/decisions/A9B15.md, docs/decisions/W1.md.
+import { pushTickets, pushTokens, webPushSubscriptions } from '@hykr/db';
 import { and, eq, type SQL, sql } from 'drizzle-orm';
 import { config } from '../../config.js';
 import type { DataSubject, ErasureContributor, ExportContributor } from '../../hooks.js';
@@ -10,8 +10,10 @@ import { defineFeature } from '../feature.js';
 import { copyTarget, scrubCopy } from '../privacy/redact.js';
 import type { RecordCopies } from '../privacy/registry.js';
 import { PushChannel } from './push.channel.js';
-import { PushController } from './push.controller.js';
+import { PushController, WebPushController } from './push.controller.js';
 import { maskToken, PushService } from './push.service.js';
+import { WebPushChannel } from './web.channel.js';
+import { maskEndpoint, WebPushService } from './web.service.js';
 
 /** Checks the receipts of sends old enough to have one (PushService.pollReceipts). */
 export const PushReceiptsQueue = defineQueue<unknown, { checked: number; fellBack: number }>({
@@ -26,8 +28,11 @@ export const PushReceiptsSchedule = defineSchedule({
   every: 60_000,
 });
 
-/** A person's devices and push log, in one business or all. Contacts have none. */
-const whose = (a: DataSubject, table: typeof pushTokens | typeof pushTickets): SQL | undefined =>
+/** A person's devices, browsers and push log, in one business or all. Contacts have none. */
+const whose = (
+  a: DataSubject,
+  table: typeof pushTokens | typeof pushTickets | typeof webPushSubscriptions,
+): SQL | undefined =>
   a.subject.kind === 'user'
     ? and(
         eq(table.userId, a.subject.userId),
@@ -35,16 +40,21 @@ const whose = (a: DataSubject, table: typeof pushTokens | typeof pushTickets): S
       )
     : undefined;
 
-/** Forgetting a person: their devices and what was pushed to them. */
+/** Forgetting a person: their devices, their browsers and what was pushed to them. */
 export const PushErasure: ErasureContributor = {
   name: 'push',
   erase: async (a) => {
     const tokens = whose(a, pushTokens);
     const tickets = whose(a, pushTickets);
-    if (!tokens || !tickets) return { count: 0 };
+    const browsers = whose(a, webPushSubscriptions);
+    if (!tokens || !tickets || !browsers) return { count: 0 };
     const gone = await a.tx.delete(pushTokens).where(tokens).returning({ id: pushTokens.id });
+    const subs = await a.tx
+      .delete(webPushSubscriptions)
+      .where(browsers)
+      .returning({ id: webPushSubscriptions.id });
     const sent = await a.tx.delete(pushTickets).where(tickets).returning({ id: pushTickets.id });
-    return { count: gone.length + sent.length };
+    return { count: gone.length + subs.length + sent.length };
   },
 };
 
@@ -81,14 +91,22 @@ export const pushCopies: RecordCopies = {
   },
 };
 
-/** A person's export: their devices, the token shortened. */
+/** A person's export: their devices and browsers, the token and the endpoint shortened. */
 export const PushExport: ExportContributor = {
   name: 'push',
   export: async (a): Promise<Record<string, readonly unknown[]>> => {
     const where = whose(a, pushTokens);
-    if (!where) return {};
+    const browsers = whose(a, webPushSubscriptions);
+    if (!where || !browsers) return {};
     const rows = await a.db.select().from(pushTokens).where(where);
+    const subs = await a.db.select().from(webPushSubscriptions).where(browsers);
     return {
+      pushBrowsers: subs.map((r) => ({
+        browser: r.userAgent,
+        endpoint: maskEndpoint(r.endpoint),
+        createdAt: r.createdAt.toISOString(),
+        lastSeenAt: r.lastSeenAt.toISOString(),
+      })),
       pushDevices: rows.map((r) => ({
         platform: r.platform,
         token: maskToken(r.token),
@@ -101,9 +119,9 @@ export const PushExport: ExportContributor = {
 
 export const pushFeature = defineFeature({
   name: 'push',
-  controllers: [PushController],
-  providers: [PushService, PushChannel],
-  exports: [PushService],
+  controllers: [PushController, WebPushController],
+  providers: [PushService, WebPushService, PushChannel, WebPushChannel],
+  exports: [PushService, WebPushService],
   contributes: {
     queues: [PushReceiptsQueue],
     schedules: [PushReceiptsSchedule],

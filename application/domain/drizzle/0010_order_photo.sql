@@ -1,0 +1,1 @@
+ALTER TABLE "app"."orders" ADD COLUMN "photo" text;

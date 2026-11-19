@@ -1,7 +1,7 @@
 // The deployment's models, from the environment: each provider an OpenAI-compatible API, each
 // model a ref '<provider>/<model>'. Closed: a model nobody configured cannot be built.
 import { createOpenAICompatible, type OpenAICompatibleProvider } from '@ai-sdk/openai-compatible';
-import type { ModelKind, ModelPrice, Money } from '@hykr/contracts';
+import type { ModelCapability, ModelKind, ModelPrice, Money } from '@hykr/contracts';
 import {
   FAKE_CHAT,
   FAKE_EMBEDDING,
@@ -27,7 +27,13 @@ export interface ModelEntry {
   /** Its provider's region, if it declares one. */
   region?: string;
   price?: ModelPrice;
+  /** What it takes besides text ('vision', 'pdf'). Empty: text only. */
+  capabilities: readonly ModelCapability[];
 }
+
+/** The model takes this kind of input (images for 'vision', PDF files for 'pdf'). */
+export const hasCapability = (m: ModelEntry | undefined, c: ModelCapability) =>
+  !!m?.capabilities.includes(c);
 
 /** A provider as callers may see it: never its key. */
 export interface ProviderEntry {
@@ -73,6 +79,7 @@ function build(env: ModelEnv, configs: ProviderConfig[]): ModelRegistry {
       ...(m.label ? { label: m.label } : {}),
       ...(p.region ? { region: p.region } : {}),
       ...(m.price ? { price: m.price } : {}),
+      capabilities: [...new Set(m.capabilities ?? [])],
     })),
   );
   const byRef = new Map(models.map((m) => [m.ref, m]));

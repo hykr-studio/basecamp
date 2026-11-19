@@ -3,12 +3,14 @@ import { contentHash, createNotificationCatalog, toTemplateSpec } from '@hykr/no
 import { describe, expect, it } from 'vitest';
 import { accountNotifications } from './account/notifications/index.js';
 import { meetingsNotifications } from './meetings/notifications/index.js';
+import { ordersNotifications } from './orders/notifications/index.js';
 import { todosNotifications } from './todos/notifications/index.js';
 
 const { notifications, templates } = createNotificationCatalog(
   todosNotifications,
   meetingsNotifications,
   accountNotifications,
+  ordersNotifications,
 );
 
 describe('the application’s templates and notifications', () => {
@@ -33,6 +35,15 @@ describe('the application’s templates and notifications', () => {
     expect(due?.push?.title(row, { lang: 'hi', timeZone: 'Asia/Kolkata' })).toBe('आज करना है');
     expect(due?.push?.body(row, { lang: 'en', timeZone: 'Asia/Kolkata' })).toBe('Order tiles');
     expect(due?.push?.url?.(row)).toBe('/todos');
+  });
+
+  it('order notifications reach a browser first: accounts staff work at a desk', () => {
+    for (const key of ['order.decision-overdue', 'orders.comment-mention'])
+      expect(notifications.find((n) => n.key === key)?.channels, key).toEqual([
+        'webpush',
+        'push',
+        'email',
+      ]);
   });
 
   it('notifications name only templates that exist', () => {

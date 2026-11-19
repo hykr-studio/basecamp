@@ -9,6 +9,19 @@ export function sizeText(bytes: number): string {
  * What the assistant reads about a file that came with a message, as data for the turn: its
  * name, type, size and id, and how to keep it (a record's file field).
  */
-export const fileLine = (f: { id: string; name: string; mime: string; size: number }) =>
+export const fileLine = (
+  f: { id: string; name: string; mime: string; size: number },
+  /** The assistant may read it in this turn (an image or a PDF, and the business allows it). */
+  readable = false,
+) =>
   `A file came with this message: "${f.name}" (${f.mime}, ${sizeText(f.size)}), file id ${f.id}. ` +
-  "To keep it on a record, put this id in one of that record's file fields.";
+  "To keep it on a record, put this id in one of that record's file fields." +
+  (readable ? ' To see what it shows, read it with read-file.' : '');
+
+/** Types read-file reads: photos and scans, and PDFs. */
+export const READABLE_TYPES: ReadonlySet<string> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'application/pdf',
+]);

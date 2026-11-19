@@ -11,7 +11,7 @@ import {
 import type { AnyEntityDef, ChildEntityDef, Tx } from '@hykr/core';
 import type { Labels, Lang } from '@hykr/i18n';
 import type { Reader, TemplateDef } from '@hykr/notifications';
-import type { DocumentLayout } from './layout.js';
+import type { DocumentLayout, ImageRef } from './layout.js';
 
 declare module '@hykr/contracts' {
   interface Contributions {
@@ -44,10 +44,20 @@ export interface DocumentLoadContext {
   /** The record in its read shape, projected for the principal. */
   record: Values;
   business: DocumentBusiness;
+  /** The app's address (APP_URL, no trailing slash): for a link a document shows, or its QR code. */
+  appUrl: string;
   /** Another record, read and projected the same way; null when the principal does not reach it. */
   read(def: AnyEntityDef, id: string): Promise<Values | null>;
   /** A child entity's rows under a parent (default: this record), in tree order, projected. */
   children(def: AnyChildEntityDef, parentId?: string): Promise<Values[]>;
+  /**
+   * An image file the principal may open, for the image blocks and the header or footer: on a
+   * record they reach, in a field they still see, ready, PNG or JPEG, within the limits. Null
+   * otherwise (as a file read answers 404). Return it in the data; the layout names only these.
+   */
+  image(fileId: string): Promise<ImageRef | null>;
+  /** The images of these files the principal may open, in their order; the others are left out. */
+  images(fileIds: readonly string[]): Promise<ImageRef[]>;
 }
 
 /** What `render` gets besides the data: the language and formatting in it. */

@@ -31,6 +31,8 @@ describe('script sets', () => {
       'request-human',
       'file-words',
       'file-about',
+      'file-read',
+      'file-read-sent',
       'file-only',
       'document-status',
       'job-status',

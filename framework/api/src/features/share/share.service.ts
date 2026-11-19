@@ -204,7 +204,7 @@ export class ShareService {
       const rows = await child.children.list(this.db, p, id);
       children.push({
         entity: child.name,
-        items: rows.slice(0, CHILD_ROWS).map((r) => child.toRead(r, p) as Values),
+        items: await child.readMany(this.db, rows.slice(0, CHILD_ROWS), p),
         truncated: rows.length > CHILD_ROWS,
       });
     }

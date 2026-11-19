@@ -29,6 +29,7 @@ pnpm install && cp application/.env.example .env   # .env lives at the repo ROOT
 # APPROVAL_SECRET, SECRETS_KEY (each >= 32 chars: openssl rand -hex 32). Offline: MODEL_MODE=fake VOICE_MODE=fake
 # Optional: CREDITS_CONFIG (prices and plans). Platform operators: `pnpm --dir application exec basecamp operator add <email>`
 # A business's defaults until it sets its own: DEFAULT_CURRENCY, DEFAULT_TIME_ZONE, DEFAULT_GRIEVANCE_CONTACT
+# Web push in a browser: WEB_PUSH_PUBLIC_KEY, WEB_PUSH_PRIVATE_KEY, WEB_PUSH_SUBJECT (`basecamp webpush keys`)
 pnpm build            # everything; the basecamp CLI, API and tests all run from dist/
 pnpm infra:up         # Postgres/PostGIS, Redis, MinIO, Mailpit, pgAdmin, LiveKit, whaloc (WhatsApp emulator)
 pnpm db:migrate       # framework migrations first, then the application's
@@ -283,6 +284,12 @@ audited `on_behalf_of`), never through a role.
   file on a record by writing its id into the record's file field (`FileRef`, `fileRefs()`, the `files`
   trait); never write `app.files` yourself. `STORAGE_DRIVER=s3` with MinIO in development (`.env.example`);
   unset means memory, which loses the worker's files to the API.
+- A model reads a file only through `read-file` / `POST /api/files/:id/read` or
+  `FilesService.readWithModel` (`docs/decisions/A12.md`, developer guide 5.12): the business's
+  `vision` model (a chat model with `capabilities: ['vision']`), metered on `tokens` and
+  `file_pages`, one `file.read_by_model` audit row. `readWithModel` throws inside a write's
+  transaction (`assertNoWriteTransaction`). Limits: `FILES_READ_*`. The scripted model "sees"
+  what follows `FAKE-VISION:` in a file's bytes.
 
 A framework change needs its own tests: e2e tests in `framework/api/test/framework` against the fixture
 app in `framework/api/test/fixture`. Framework tests must not depend on the sample domain.

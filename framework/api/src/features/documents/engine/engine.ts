@@ -7,6 +7,8 @@ export interface RenderMeta {
   /** The business, as the PDF's author. */
   author?: string;
   createdAt: Date;
+  /** The bytes of the images the layout shows, by file id (checked against their SHA-256). */
+  images?: ReadonlyMap<string, Buffer>;
 }
 
 /** A rendered document: its bytes and how many pages they hold. */

@@ -1,15 +1,10 @@
 // Records to connected calendars, and changes made there back to the application as events.
 // Each record is read as the person whose calendar it goes to, so access and hidden fields hold
-// in Google exactly as in the app (decisions B17, 10 to 12).
-import { randomUUID } from 'node:crypto';
-import {
-  type GoogleCalendarClient,
-  type GoogleEvent,
-  googleCalendarClient,
-  revokeToken,
-} from '@hykr/connectors/google-calendar';
+// in their calendar exactly as in the app (decisions B17, 10 to 12). Every provider is reached
+// through its `CalendarProviderDef` (decisions B22); a person with more than one connection has
+// records written to one of them, their target.
 import type { CalendarEventChange } from '@hykr/contracts';
-import { recordEvents, systemPrincipal, toJson } from '@hykr/core';
+import { recordEvents, settingsIn, systemPrincipal, tenantZone, toJson } from '@hykr/core';
 import { calendarConnections, calendarEventLinks, type Database } from '@hykr/db';
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
@@ -37,9 +32,14 @@ import { CalendarLocks, recordLock } from './lock.js';
 import { CalendarEvent } from './ops.js';
 import { memberPrincipal } from './principal.js';
 import {
+  type CalendarProviderDef,
+  enabledProviders,
+  type ProviderChange,
+  providerOf,
+} from './providers/index.js';
+import {
   checkSchedulables,
   contentOf,
-  type EventContent,
   googleEventId,
   hashOf,
   namesPerson,
@@ -48,7 +48,7 @@ import {
   schedulable,
   schedulables,
 } from './schedulable.js';
-import { type GoogleSettings, googleSettings, syncDays, watchAddress } from './settings.js';
+import { syncDays, watchAddress } from './settings.js';
 import { forgetOldSignIns } from './sign-in.js';
 import {
   accessTokenFor,
@@ -64,6 +64,7 @@ export const SYNC_QUEUE = 'calendar.sync';
 export type SyncJob =
   | { kind: 'record'; tenantId: string; entity: string; id: string }
   | { kind: 'connected'; connectionId: string }
+  | { kind: 'retarget'; tenantId: string; userId: string }
   | { kind: 'maintain' };
 
 type LinkRow = typeof calendarEventLinks.$inferSelect;
@@ -121,10 +122,92 @@ export class CalendarSyncService implements OnApplicationBootstrap {
     );
   }
 
+  /** A person's write target changed (chosen, or theirs was disconnected): move their events. */
+  queueRetarget(tenantId: string, userId: string, eventId: string) {
+    return this.jobs.add<SyncJob>(
+      SYNC_QUEUE,
+      { kind: 'retarget', tenantId, userId },
+      { name: 'retarget', jobId: `calendar-retarget--${eventId}` },
+    );
+  }
+
   run(job: SyncJob): Promise<string> {
     if (job.kind === 'record') return this.syncRecord(job.tenantId, job.entity, job.id);
     if (job.kind === 'connected') return this.afterConnect(job.connectionId);
+    if (job.kind === 'retarget') return this.retarget(job.tenantId, job.userId);
     return this.maintain();
+  }
+
+  /* ── Targets ──────────────────────────────────────────────────────────── */
+
+  /**
+   * Which of a person's connections their records are written to: the one they chose
+   * (`writeTo`), else the first connected, among the active ones of providers turned on here.
+   */
+  private targetOf(
+    connections: readonly ConnectionRow[],
+    userId: string,
+  ): ConnectionRow | undefined {
+    const mine = connections
+      .filter((c) => c.userId === userId && c.status === 'active' && providerOf(c.provider))
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+    return mine.find((c) => c.writeTo) ?? mine[0];
+  }
+
+  /** The person's active connections in a business. */
+  private activeOf(tenantId: string, userId: string): Promise<ConnectionRow[]> {
+    return this.db
+      .select()
+      .from(calendarConnections)
+      .where(
+        and(
+          eq(calendarConnections.tenantId, tenantId),
+          eq(calendarConnections.userId, userId),
+          eq(calendarConnections.status, 'active'),
+        ),
+      );
+  }
+
+  /** The person's target, read now. */
+  private async targetFor(tenantId: string, userId: string): Promise<ConnectionRow | undefined> {
+    return this.targetOf(await this.activeOf(tenantId, userId), userId);
+  }
+
+  /**
+   * After the person's target changed: their records out of every other calendar, and into
+   * the target.
+   */
+  async retarget(tenantId: string, userId: string): Promise<string> {
+    const rows = await this.activeOf(tenantId, userId);
+    const target = this.targetOf(rows, userId);
+    let moved = 0;
+    for (const conn of rows) {
+      if (conn.id === target?.id) continue;
+      const provider = providerOf(conn.provider);
+      if (!provider) continue;
+      const links = await this.db
+        .select()
+        .from(calendarEventLinks)
+        .where(eq(calendarEventLinks.connectionId, conn.id));
+      for (const l of links) {
+        const s = schedulable(l.resourceType);
+        if (!s) continue;
+        const done = await this.locks.run(
+          recordLock(l.tenantId, s.def.name, l.resourceId),
+          async () => {
+            const [link] = await this.db
+              .select()
+              .from(calendarEventLinks)
+              .where(eq(calendarEventLinks.id, l.id));
+            return link ? this.syncOne(provider, s, conn, l.resourceId, false, link) : false;
+          },
+        );
+        if (done) moved++;
+      }
+    }
+    const provider = target ? providerOf(target.provider) : null;
+    const filled = target && provider ? await this.backfill(provider, target) : 0;
+    return `${moved} taken out, ${filled} written`;
   }
 
   /* ── Records → calendars ──────────────────────────────────────────────── */
@@ -136,11 +219,15 @@ export class CalendarSyncService implements OnApplicationBootstrap {
    */
   syncRecord(tenantId: string, entity: string, id: string): Promise<string> {
     const s = schedulable(entity);
-    const google = googleSettings();
-    if (!s || !google) return Promise.resolve('nothing to do');
+    if (!s || !this.anyProvider()) return Promise.resolve('nothing to do');
     return this.locks.run(recordLock(tenantId, s.def.name, id), () =>
-      this.syncLocked(google, s, tenantId, id),
+      this.syncLocked(s, tenantId, id),
     );
+  }
+
+  /** Is any provider offered here? */
+  private anyProvider(): boolean {
+    return enabledProviders().some((name) => providerOf(name) !== null);
   }
 
   /** The record's row in its business, or undefined when it is gone. */
@@ -153,12 +240,7 @@ export class CalendarSyncService implements OnApplicationBootstrap {
     return row;
   }
 
-  private async syncLocked(
-    google: GoogleSettings,
-    s: Schedulable,
-    tenantId: string,
-    id: string,
-  ): Promise<string> {
+  private async syncLocked(s: Schedulable, tenantId: string, id: string): Promise<string> {
     const entity = s.def.name;
     const row = await this.rowOf(s, tenantId, id);
     const people = row ? peopleOf(s, row) : [];
@@ -188,12 +270,20 @@ export class CalendarSyncService implements OnApplicationBootstrap {
         ),
       );
     let done = 0;
+    let looked = 0;
     for (const conn of connections) {
+      const provider = providerOf(conn.provider);
+      if (!provider) continue;
+      looked++;
       const link = links.find((l) => l.connectionId === conn.id);
-      const belongs = !!row && people.includes(conn.userId);
-      if (await this.syncOne(google, s, conn, id, belongs, link)) done++;
+      // Each person's record goes to one calendar of theirs: their target.
+      const belongs =
+        !!row &&
+        people.includes(conn.userId) &&
+        this.targetOf(connections, conn.userId)?.id === conn.id;
+      if (await this.syncOne(provider, s, conn, id, belongs, link)) done++;
     }
-    return `${done} of ${connections.length} calendars changed`;
+    return `${done} of ${looked} calendars changed`;
   }
 
   /** What a person's calendar should show of a record now, or null for nothing. */
@@ -205,9 +295,14 @@ export class CalendarSyncService implements OnApplicationBootstrap {
     return contentOf(s.trait, toJson(s.def.toRead(found, p)) as Values);
   }
 
+  /** The zone a business's events are written in. */
+  private async zoneOf(tenantId: string): Promise<string> {
+    return tenantZone(await settingsIn(this.db, tenantId));
+  }
+
   /** One record in one calendar. True when something was sent. */
   private async syncOne(
-    google: GoogleSettings,
+    provider: CalendarProviderDef,
     s: Schedulable,
     conn: ConnectionRow,
     id: string,
@@ -220,14 +315,21 @@ export class CalendarSyncService implements OnApplicationBootstrap {
       // Unchanged: nothing to send. A person who deleted it in their calendar keeps it deleted
       // until the record changes.
       if (link?.hash === hash) return false;
-      const api = await this.client(google, conn);
-      if (!api) return false;
-      const externalId = googleEventId(conn.tenantId, s.def.name, id);
+      const token = await this.token(provider, conn);
+      if (!token) return false;
+      let externalId: string;
       try {
-        await api.upsertEvent(
-          conn.calendarId,
-          googleEventOf(content, conn.tenantId, s, id, externalId),
-        );
+        ({ providerId: externalId } = await provider.upsertEvent(token, conn.calendarId, {
+          key: googleEventId(conn.tenantId, s.def.name, id),
+          ...(link?.externalId ? { providerId: link.externalId } : {}),
+          title: content.title,
+          ...(content.description ? { description: content.description } : {}),
+          ...(content.location ? { location: content.location } : {}),
+          startsAt: content.startsAt,
+          endsAt: content.endsAt,
+          timeZone: await this.zoneOf(conn.tenantId),
+          mark: { tenant: conn.tenantId, entity: s.def.name, record: id },
+        }));
       } catch (e) {
         await this.failed(conn, e);
         throw e;
@@ -263,9 +365,9 @@ export class CalendarSyncService implements OnApplicationBootstrap {
           });
       } catch (e) {
         if (!isForeignKeyViolation(e)) throw e;
-        // Disconnected while Google answered: take the event back out, as the disconnect does.
-        await api
-          .deleteEvent(conn.calendarId, externalId)
+        // Disconnected while the provider answered: take the event back out, as the disconnect does.
+        await provider
+          .deleteEvent(token, conn.calendarId, externalId)
           .catch((err) => log.warn(`removing event ${externalId}: ${messageOf(err)}`));
         return false;
       }
@@ -274,10 +376,10 @@ export class CalendarSyncService implements OnApplicationBootstrap {
     }
     if (!link) return false;
     if (link.status === 'synced') {
-      const api = await this.client(google, conn);
-      if (!api) return false;
+      const token = await this.token(provider, conn);
+      if (!token) return false;
       try {
-        await api.deleteEvent(conn.calendarId, link.externalId);
+        await provider.deleteEvent(token, conn.calendarId, link.externalId);
       } catch (e) {
         await this.failed(conn, e);
         throw e;
@@ -288,14 +390,10 @@ export class CalendarSyncService implements OnApplicationBootstrap {
     return true;
   }
 
-  /** A client with a working token, or null when the grant is gone (the connection is marked). */
-  private async client(
-    google: GoogleSettings,
-    conn: ConnectionRow,
-  ): Promise<GoogleCalendarClient | null> {
+  /** A working access token, or null when the grant is gone (the connection is marked). */
+  private async token(provider: CalendarProviderDef, conn: ConnectionRow): Promise<string | null> {
     try {
-      const accessToken = await accessTokenFor(this.db, google, conn);
-      return googleCalendarClient(google.transport, { accessToken, endpoints: google.endpoints });
+      return await accessTokenFor(this.db, provider, conn);
     } catch (e) {
       if (e instanceof GrantRevoked) return null;
       await this.failed(conn, e);
@@ -328,19 +426,23 @@ export class CalendarSyncService implements OnApplicationBootstrap {
 
   /* ── A new connection ─────────────────────────────────────────────────── */
 
-  /** Open its push channel, fill it with the person's coming records, and read where it stands. */
+  /**
+   * Open its push channel, fill it with the person's coming records (when it is the calendar
+   * their records go to), and read where it stands.
+   */
   async afterConnect(connectionId: string): Promise<string> {
-    const google = googleSettings();
     const conn = await this.connection(connectionId);
-    if (!google || conn?.status !== 'active') return 'not active';
-    await this.openChannel(google, conn);
-    const filled = await this.backfill(google, conn);
+    const provider = conn ? providerOf(conn.provider) : null;
+    if (!provider || conn?.status !== 'active') return 'not active';
+    await this.openChannel(provider, conn);
+    const target = await this.targetFor(conn.tenantId, conn.userId);
+    const filled = target?.id === conn.id ? await this.backfill(provider, conn) : 0;
     await this.pullChanges(conn.id);
     return `${filled} records`;
   }
 
   /** The person's records from yesterday to `CALENDAR_SYNC_DAYS` ahead, into their calendar. */
-  private async backfill(google: GoogleSettings, conn: ConnectionRow): Promise<number> {
+  private async backfill(provider: CalendarProviderDef, conn: ConnectionRow): Promise<number> {
     const from = new Date(Date.now() - DAY);
     const to = new Date(Date.now() + syncDays() * DAY);
     let n = 0;
@@ -374,7 +476,7 @@ export class CalendarSyncService implements OnApplicationBootstrap {
               ),
             );
           const belongs = !!row && peopleOf(s, row).includes(conn.userId);
-          return this.syncOne(google, s, conn, id, belongs, link);
+          return this.syncOne(provider, s, conn, id, belongs, link);
         });
         if (sent) n++;
       }
@@ -384,39 +486,40 @@ export class CalendarSyncService implements OnApplicationBootstrap {
 
   /* ── Push channels ────────────────────────────────────────────────────── */
 
-  /** A new channel (the old one closed after), when the server has a public https address. */
-  private async openChannel(google: GoogleSettings, conn: ConnectionRow): Promise<boolean> {
-    if (!conn.inboundConnectionId) return false;
+  /**
+   * A new channel (the old one closed after), when the server has a public https address: a
+   * Google push channel or a Graph subscription (whose address Graph checks first).
+   */
+  private async openChannel(provider: CalendarProviderDef, conn: ConnectionRow): Promise<boolean> {
+    if (!conn.inboundConnectionId || !provider.watch) return false;
     const address = watchAddress(
-      `/webhooks/google-calendar/${conn.inboundConnectionId}`,
-      google.mode,
+      `/webhooks/${provider.inboundConnector}/${conn.inboundConnectionId}`,
+      provider.mode,
     );
     if (!address) return false;
-    const inbound = await openConnection<{ channelToken: string }>(
-      this.db,
-      conn.tenantId,
-      conn.inboundConnectionId,
-    );
+    const inbound = await openConnection<unknown>(this.db, conn.tenantId, conn.inboundConnectionId);
     if (!inbound) return false;
-    const api = await this.client(google, conn);
-    if (!api) return false;
-    const channel = await api.watch(conn.calendarId, {
-      id: randomUUID(),
-      token: inbound.credentials.channelToken,
+    const secret = provider.watchSecret(inbound.credentials);
+    if (!secret) return false;
+    const token = await this.token(provider, conn);
+    if (!token) return false;
+    const channel = await provider.watch(token, {
+      calendarId: conn.calendarId,
       address,
+      secret,
       ttlSeconds: CHANNEL_TTL_S,
     });
     await this.db
       .update(calendarConnections)
       .set({
-        channelId: channel.id,
+        channelId: channel.channelId,
         channelResourceId: channel.resourceId,
-        channelExpiresAt: new Date(channel.expiration),
+        channelExpiresAt: channel.expiresAt,
       })
       .where(eq(calendarConnections.id, conn.id));
-    if (conn.channelId && conn.channelResourceId)
-      await api
-        .stopChannel({ id: conn.channelId, resourceId: conn.channelResourceId })
+    if (conn.channelId && provider.stopWatch)
+      await provider
+        .stopWatch(token, { channelId: conn.channelId, resourceId: conn.channelResourceId })
         .catch((e) => log.warn(`closing channel ${conn.channelId}: ${messageOf(e)}`));
     return true;
   }
@@ -427,8 +530,7 @@ export class CalendarSyncService implements OnApplicationBootstrap {
    */
   async maintain(): Promise<string> {
     await forgetOldSignIns(this.db);
-    const google = googleSettings();
-    if (!google) return 'no provider';
+    if (!this.anyProvider()) return 'no provider';
     const soon = new Date(Date.now() + RENEW_BEFORE_MS);
     const due = await this.db
       .select()
@@ -446,8 +548,10 @@ export class CalendarSyncService implements OnApplicationBootstrap {
       .limit(200);
     let pulled = 0;
     for (const conn of due) {
+      const provider = providerOf(conn.provider);
+      if (!provider) continue;
       try {
-        const live = await this.openChannel(google, conn);
+        const live = await this.openChannel(provider, conn);
         if (!live) {
           await this.pullChanges(conn.id);
           pulled++;
@@ -467,41 +571,48 @@ export class CalendarSyncService implements OnApplicationBootstrap {
    * system principal; the application decides what they mean.
    */
   async pullChanges(connectionId: string, from?: { tenantId?: string; channelId?: string }) {
-    const google = googleSettings();
     const conn = await this.connection(connectionId);
-    if (!google || !conn || conn.status !== 'active') return 'not active';
+    const provider = conn ? providerOf(conn.provider) : null;
+    if (!provider || !conn || conn.status !== 'active') return 'not active';
     if (from?.tenantId && from.tenantId !== conn.tenantId) return 'not this business';
     // A notification from a channel we replaced says nothing new.
     if (from?.channelId && conn.channelId && from.channelId !== conn.channelId)
       return 'old channel';
-    const api = await this.client(google, conn);
-    if (!api) return 'needs reauth';
-    let changes: Awaited<ReturnType<GoogleCalendarClient['changes']>>;
+    const token = await this.token(provider, conn);
+    if (!token) return 'needs reauth';
+    let changes: Awaited<ReturnType<CalendarProviderDef['changes']>>;
     try {
-      changes = await api.changes(conn.calendarId, conn.syncToken);
+      changes = await provider.changes(token, {
+        calendarId: conn.calendarId,
+        cursor: conn.syncToken,
+        tenantId: conn.tenantId,
+      });
     } catch (e) {
       await this.failed(conn, e);
       throw e;
     }
     let noted = 0;
-    // A first look, or a token Google dropped, lists everything: our events in it changed
+    // A first look, or a cursor the provider dropped, lists everything: our events in it changed
     // nothing we know of.
     if (conn.syncToken && !changes.reset)
-      for (const item of changes.items) if (await this.noteChange(conn, item)) noted++;
+      for (const item of changes.items) if (await this.noteChange(provider, conn, item)) noted++;
     await this.db
       .update(calendarConnections)
-      .set({ syncToken: changes.nextSyncToken, lastSyncedAt: new Date(), lastError: null })
+      .set({ syncToken: changes.cursor, lastSyncedAt: new Date(), lastError: null })
       .where(eq(calendarConnections.id, conn.id));
     return `${noted} changes noted`;
   }
 
   /**
    * One changed event: ours, moved or deleted by the person? Stored as an event if so. In turn
-   * with the record's sync jobs, so our own change that Google reports is never taken for theirs.
+   * with the record's sync jobs, so our own change that the provider reports is never taken for
+   * theirs.
    */
-  private async noteChange(conn: ConnectionRow, item: GoogleEvent): Promise<boolean> {
-    const mark = item.extendedProperties?.private;
-    if (mark?.basecamp !== '1' || mark.tenant !== conn.tenantId) return false;
+  private async noteChange(
+    provider: CalendarProviderDef,
+    conn: ConnectionRow,
+    item: ProviderChange,
+  ): Promise<boolean> {
     const linkOf = async () => {
       const [found] = await this.db
         .select()
@@ -509,7 +620,7 @@ export class CalendarSyncService implements OnApplicationBootstrap {
         .where(
           and(
             eq(calendarEventLinks.connectionId, conn.id),
-            eq(calendarEventLinks.externalId, item.id),
+            eq(calendarEventLinks.externalId, item.providerId),
           ),
         );
       return found;
@@ -520,14 +631,15 @@ export class CalendarSyncService implements OnApplicationBootstrap {
       recordLock(first.tenantId, first.resourceType, first.resourceId),
       async () => {
         const link = await linkOf();
-        return link?.status === 'synced' ? this.noteLinked(conn, item, link) : false;
+        return link?.status === 'synced' ? this.noteLinked(provider, conn, item, link) : false;
       },
     );
   }
 
   private async noteLinked(
+    provider: CalendarProviderDef,
     conn: ConnectionRow,
-    item: GoogleEvent,
+    item: ProviderChange,
     link: LinkRow,
   ): Promise<boolean> {
     const change = (extra: Partial<CalendarEventChange>): CalendarEventChange => ({
@@ -536,13 +648,13 @@ export class CalendarSyncService implements OnApplicationBootstrap {
       entity: link.resourceType,
       recordId: link.resourceId,
       userId: conn.userId,
-      provider: 'google',
+      provider: provider.name,
       sentStartsAt: link.sentStartsAt?.toISOString() ?? null,
       sentEndsAt: link.sentEndsAt?.toISOString() ?? null,
       ...extra,
     });
-    const principal = systemPrincipal({ tenantId: conn.tenantId, job: 'calendar.google' });
-    if (item.status === 'cancelled') {
+    const principal = systemPrincipal({ tenantId: conn.tenantId, job: provider.jobName });
+    if (item.removed) {
       await this.db.transaction(async (tx) => {
         await tx
           .update(calendarEventLinks)
@@ -555,9 +667,7 @@ export class CalendarSyncService implements OnApplicationBootstrap {
       });
       return true;
     }
-    const startsAt = timeOf(item.start);
-    const endsAt = timeOf(item.end);
-    if (!startsAt || !endsAt) return false;
+    const { startsAt, endsAt } = item;
     const same = (a: Date | null, b: string) => !!a && a.getTime() === Date.parse(b);
     // Where we put it, or where it already was: nothing new.
     if (same(link.sentStartsAt, startsAt) && same(link.sentEndsAt, endsAt)) {
@@ -603,32 +713,40 @@ export class CalendarSyncService implements OnApplicationBootstrap {
 
   /**
    * After a disconnect: our events out of the person's calendar, the channel closed, the grant
-   * revoked. Best effort: what fails is logged.
+   * revoked where the provider can (Microsoft cannot: its tokens are only deleted). Best effort:
+   * what fails is logged.
    */
   async cleanUp(left: Leftovers): Promise<void> {
-    const google = googleSettings();
-    if (!google || !left.tokens) return;
-    const api = googleCalendarClient(google.transport, {
-      accessToken: left.tokens.accessToken,
-      endpoints: google.endpoints,
-    });
+    const provider = providerOf(left.row.provider);
+    if (!provider || !left.tokens) return;
     const quietly = (what: string) => (e: unknown) => log.warn(`${what}: ${messageOf(e)}`);
+    let accessToken = left.tokens.accessToken;
+    // The row is gone, so a token that has run out is refreshed here, not stored.
+    if (left.tokens.expiresAt <= Date.now() + 60_000)
+      accessToken = await provider.oauth
+        .refresh(left.tokens.refreshToken)
+        .then((t) => t.accessToken)
+        .catch((e) => {
+          quietly('refreshing to clean up')(e);
+          return accessToken;
+        });
     for (const link of left.links)
       if (link.status === 'synced')
         // After any sync of the record still running: it may have just sent the event again.
         await this.locks
           .run(recordLock(link.tenantId, link.resourceType, link.resourceId), () =>
-            api.deleteEvent(left.row.calendarId, link.externalId),
+            provider.deleteEvent(accessToken, left.row.calendarId, link.externalId),
           )
           .catch(quietly(`removing event ${link.externalId}`));
-    if (left.row.channelId && left.row.channelResourceId)
-      await api
-        .stopChannel({ id: left.row.channelId, resourceId: left.row.channelResourceId })
+    if (left.row.channelId && provider.stopWatch)
+      await provider
+        .stopWatch(accessToken, {
+          channelId: left.row.channelId,
+          resourceId: left.row.channelResourceId,
+        })
         .catch(quietly('closing the channel'));
-    await revokeToken(google.transport, {
-      token: left.tokens.refreshToken,
-      endpoints: google.endpoints,
-    }).catch(quietly('revoking the grant'));
+    if (provider.oauth.revoke)
+      await provider.oauth.revoke(left.tokens.refreshToken).catch(quietly('revoking the grant'));
   }
 }
 
@@ -637,32 +755,3 @@ const isForeignKeyViolation = (e: unknown) => {
   const cause = (e as { cause?: { code?: string }; code?: string }) ?? {};
   return cause.code === '23503' || cause.cause?.code === '23503';
 };
-
-/** A Google time as an ISO instant, or null for an all-day date. */
-function timeOf(t: GoogleEvent['start']): string | null {
-  if (!t?.dateTime) return null;
-  const ms = Date.parse(t.dateTime);
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
-}
-
-/** The event Google keeps for a record. */
-function googleEventOf(
-  content: EventContent,
-  tenantId: string,
-  s: Schedulable,
-  id: string,
-  externalId: string,
-): GoogleEvent {
-  return {
-    id: externalId,
-    status: 'confirmed',
-    summary: content.title,
-    ...(content.description ? { description: content.description } : {}),
-    ...(content.location ? { location: content.location } : {}),
-    start: { dateTime: content.startsAt },
-    end: { dateTime: content.endsAt },
-    extendedProperties: {
-      private: { basecamp: '1', tenant: tenantId, entity: s.def.name, record: id },
-    },
-  };
-}

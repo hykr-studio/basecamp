@@ -4,6 +4,12 @@
 //   GOOGLE_CALENDAR_REDIRECT_URL             default <BETTER_AUTH_URL>/api/calendar/google/callback
 //   GOOGLE_CALENDAR_TRANSPORT                live (default) or fake (the in-memory Google)
 //   GOOGLE_OAUTH_URL, GOOGLE_TOKEN_URL, GOOGLE_REVOKE_URL, GOOGLE_CALENDAR_API_URL   overrides
+//   CALENDAR_PROVIDERS                       the providers turned on: google (default), microsoft
+//   MICROSOFT_CALENDAR_CLIENT_ID, MICROSOFT_CALENDAR_CLIENT_SECRET   unset: Microsoft is not offered
+//   MICROSOFT_CALENDAR_TENANT                common (default: work and personal accounts), or an id
+//   MICROSOFT_CALENDAR_REDIRECT_URL          default <BETTER_AUTH_URL>/api/calendar/microsoft/callback
+//   MICROSOFT_CALENDAR_TRANSPORT             live (default) or fake (the in-memory Microsoft)
+//   MICROSOFT_LOGIN_URL, MICROSOFT_GRAPH_URL overrides (the only hosts the live transport calls)
 //   CALENDAR_PUBLIC_URL                      where Google posts and feeds are read (default BETTER_AUTH_URL)
 //   CALENDAR_RETURN_URL                      where the browser goes after connecting (default <APP_URL>/calendar)
 //   CALENDAR_APP_RETURN_URL                  the same for a native app (its deep link); unset: the web's
@@ -15,7 +21,14 @@ import {
   type GoogleEndpoints,
   type GoogleTransport,
 } from '@hykr/connectors/google-calendar';
-import { ServiceUnavailableException } from '@nestjs/common';
+import {
+  fakeMicrosoft,
+  guardedTransport,
+  hostsOf,
+  MICROSOFT_ENDPOINTS,
+  type MicrosoftEndpoints,
+  type MicrosoftTransport,
+} from '@hykr/connectors/microsoft-calendar';
 
 export type GoogleMode = 'live' | 'fake';
 
@@ -73,16 +86,65 @@ export function googleSettings(env: NodeJS.ProcessEnv = process.env): GoogleSett
   };
 }
 
-/** Google, or 503 `calendar_provider_unavailable`. */
-export function requireGoogle(): GoogleSettings {
-  const g = googleSettings();
-  if (!g)
-    throw new ServiceUnavailableException({
-      error: 'unavailable',
-      rule: 'calendar_provider_unavailable',
-      reason: 'This server is not set up to connect Google calendars',
-    });
-  return g;
+export type MicrosoftMode = 'live' | 'fake';
+
+export interface MicrosoftSettings {
+  clientId: string;
+  clientSecret: string;
+  /** The directory sign-ins go to: 'common' (work and personal accounts) or a tenant id. */
+  tenant: string;
+  redirectUri: string;
+  mode: MicrosoftMode;
+  endpoints: MicrosoftEndpoints;
+  transport: MicrosoftTransport;
+}
+
+/** Microsoft's transport mode, checked: production never runs on the fake. */
+export function microsoftMode(env: NodeJS.ProcessEnv = process.env): MicrosoftMode {
+  const raw = trimmed(env.MICROSOFT_CALENDAR_TRANSPORT).toLowerCase();
+  if (raw && raw !== 'live' && raw !== 'fake')
+    throw new Error(`MICROSOFT_CALENDAR_TRANSPORT must be live or fake (got "${raw}")`);
+  if (raw === 'fake' && env.NODE_ENV === 'production')
+    throw new Error(
+      'MICROSOFT_CALENDAR_TRANSPORT=fake is for tests: production talks to Microsoft',
+    );
+  return (raw || 'live') as MicrosoftMode;
+}
+
+const TENANT = /^[A-Za-z0-9.-]{1,100}$/;
+
+/** Microsoft, as this deployment reaches it; null when it has no OAuth client (not offered). */
+export function microsoftSettings(env: NodeJS.ProcessEnv = process.env): MicrosoftSettings | null {
+  const mode = microsoftMode(env);
+  const clientId =
+    trimmed(env.MICROSOFT_CALENDAR_CLIENT_ID) || (mode === 'fake' ? 'fake-ms-client' : '');
+  const clientSecret =
+    trimmed(env.MICROSOFT_CALENDAR_CLIENT_SECRET) || (mode === 'fake' ? 'fake-ms-secret' : '');
+  if (!clientId || !clientSecret) return null;
+  const tenant = trimmed(env.MICROSOFT_CALENDAR_TENANT) || 'common';
+  if (!TENANT.test(tenant))
+    throw new Error(
+      `MICROSOFT_CALENDAR_TENANT must be common, organizations, consumers or a tenant id (got "${tenant}")`,
+    );
+  const endpoints: MicrosoftEndpoints =
+    mode === 'fake'
+      ? fakeMicrosoft().endpoints
+      : {
+          login: noSlash(trimmed(env.MICROSOFT_LOGIN_URL) || MICROSOFT_ENDPOINTS.login),
+          graph: noSlash(trimmed(env.MICROSOFT_GRAPH_URL) || MICROSOFT_ENDPOINTS.graph),
+        };
+  return {
+    clientId,
+    clientSecret,
+    tenant,
+    redirectUri:
+      trimmed(env.MICROSOFT_CALENDAR_REDIRECT_URL) ||
+      `${authUrl(env)}/api/calendar/microsoft/callback`,
+    mode,
+    endpoints,
+    transport:
+      mode === 'fake' ? fakeMicrosoft().transport : guardedTransport({ hosts: hostsOf(endpoints) }),
+  };
 }
 
 /** This server's public address: where Google posts and where feeds are read. */
@@ -106,6 +168,14 @@ export function syncDays(env: NodeJS.ProcessEnv = process.env): number {
 /** At start: a bad transport mode or return address stops the API and the worker. */
 export function checkCalendarSettings() {
   googleMode();
+  microsoftMode();
+  for (const [name, url] of [
+    ['MICROSOFT_LOGIN_URL', trimmed(process.env.MICROSOFT_LOGIN_URL)],
+    ['MICROSOFT_GRAPH_URL', trimmed(process.env.MICROSOFT_GRAPH_URL)],
+  ]) {
+    if (url && !url.startsWith('https://'))
+      throw new Error(`${name} must be an https address (got "${url}")`);
+  }
   for (const [name, url] of [
     ['CALENDAR_RETURN_URL', returnUrl()],
     ['CALENDAR_APP_RETURN_URL', appReturnUrl()],
@@ -126,8 +196,8 @@ export function uidHost(): string {
 /** Where a person's feed is read (the token is the last segment). */
 export const feedUrl = (token: string) => `${publicUrl()}/api/calendar/feed/${token}.ics`;
 
-/** Google posts to a public https address only; elsewhere the poll does the work. */
-export function watchAddress(inboundPath: string, mode: GoogleMode): string | null {
+/** Providers post to a public https address only; elsewhere the poll does the work. */
+export function watchAddress(inboundPath: string, mode: GoogleMode | MicrosoftMode): string | null {
   const base = publicUrl();
   if (mode === 'fake' || base.startsWith('https://')) return `${base}${inboundPath}`;
   return null;

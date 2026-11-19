@@ -52,6 +52,13 @@ export interface ConnectorInbound<C> {
   parse(req: InboundRequest, credentials: C): readonly InboundEvent[];
   /** A subscription check by GET: the text to answer with, or null to refuse it (403). */
   challenge?(req: InboundRequest, credentials: C): string | null;
+  /**
+   * A subscription check by POST (Microsoft Graph's `?validationToken=`): the text to answer
+   * with, as text/plain, or null when the request is not one (it is then verified as usual).
+   * Nothing is stored for it. Such a check carries no proof, so the answer must only echo what
+   * the sender sent.
+   */
+  handshake?(req: InboundRequest, credentials: C): string | null;
 }
 
 /** One kind of outside system. Register it with the server's `connectors` contribution. */

@@ -5,15 +5,15 @@ import { defineCapability } from '../roles.js';
 
 /**
  * Calendars, as `/api/calendar/*` shows them: a person's connections to their own calendars
- * (Google), where schedulable records appear and follow every change; invites to a record by
+ * (Google, Microsoft 365 / Outlook.com), where schedulable records appear and follow every change; invites to a record by
  * email (iCalendar); private feeds a calendar app subscribes to; and busy and free time.
  */
 
-/** The calendar services a person can connect. */
-export const CalendarProvider = z.enum(['google']);
+/** The calendar services a person can connect (each at most once, both at the same time). */
+export const CalendarProvider = z.enum(['google', 'microsoft']);
 export type CalendarProvider = z.infer<typeof CalendarProvider>;
 
-/** Working, waiting for the person to connect again (Google refused the grant), or stopped. */
+/** Working, waiting for the person to connect again (the provider refused the grant), or stopped. */
 export const CalendarConnectionStatus = z.enum(['active', 'needs_reauth', 'stopped']);
 export type CalendarConnectionStatus = z.infer<typeof CalendarConnectionStatus>;
 
@@ -23,8 +23,13 @@ export const CalendarConnectionInfo = z.object({
   /** The account connected: its email. */
   account: z.string(),
   status: CalendarConnectionStatus,
-  /** Google tells us about changes (a push channel is open); else they are looked for every few minutes. */
+  /** The provider tells us about changes (a channel is open); else they are looked for every few minutes. */
   push: z.boolean(),
+  /**
+   * The person's records are written to this calendar. With several connected, one is: the one
+   * chosen, else the first connected. Busy times are read from all of them.
+   */
+  writeTo: z.boolean(),
   lastSyncedAt: z.iso.datetime().nullable(),
   lastError: z.string().nullable(),
   createdAt: z.iso.datetime(),
@@ -57,6 +62,10 @@ export const CompleteCalendarInput = z.object({
   state: z.string().min(1).max(200),
 });
 export type CompleteCalendarInput = z.infer<typeof CompleteCalendarInput>;
+
+/** PATCH /api/calendar/connections/:id: write the person's records to this calendar. */
+export const SetCalendarTargetInput = z.object({ writeTo: z.literal(true) });
+export type SetCalendarTargetInput = z.infer<typeof SetCalendarTargetInput>;
 
 /** A private feed: its URL is shown once, when it is made. */
 export const CalendarFeedInfo = z.object({

@@ -4,7 +4,7 @@ import { type Database, pushTickets, pushTokens } from '@hykr/db';
 import type { Row } from '@hykr/notifications';
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { and, eq, inArray, lte, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
 import type { ExpoPushMessage, ExpoPushTicket } from 'expo-server-sdk';
 import { NotifyService } from '../../channels/notify/notify.service.js';
 import { config } from '../../config.js';
@@ -75,7 +75,10 @@ export class PushService {
    * This device, for this person, in the business they work in. A device belongs to one person:
    * the same token anywhere else (another person, in any business) is removed first.
    */
-  async register(p: Principal, input: RegisterPushToken): Promise<PushDevice> {
+  async register(
+    p: Principal,
+    input: Extract<RegisterPushToken, { token: string }>,
+  ): Promise<PushDevice> {
     const { Expo } = await loadSdk();
     if (!Expo.isExpoPushToken(input.token))
       throw new BadRequestException({ error: 'bad_token', message: 'Not an Expo push token' });
@@ -197,6 +200,8 @@ export class PushService {
         and(
           eq(pushTickets.queues, prefix),
           eq(pushTickets.status, 'pending'),
+          // A browser's send is final when it is made (Web Push has no receipts).
+          isNull(pushTickets.platform),
           lte(
             pushTickets.createdAt,
             sql`now() - make_interval(secs => ${pushSettings.receiptDelayMs() / 1000})`,

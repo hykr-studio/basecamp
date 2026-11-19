@@ -1,0 +1,1 @@
+ALTER TABLE "audit"."acceptances" ADD COLUMN "document_images" jsonb;

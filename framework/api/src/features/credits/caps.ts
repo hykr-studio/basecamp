@@ -10,6 +10,7 @@ const FRAMEWORK_LABELS: Readonly<Record<string, MessageKey>> = {
   messages: 'credits.meter.messages',
   voice_seconds: 'credits.meter.voice_seconds',
   embedding_tokens: 'credits.meter.embedding_tokens',
+  file_pages: 'credits.meter.file_pages',
 };
 
 /**

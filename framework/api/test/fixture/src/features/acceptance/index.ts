@@ -10,6 +10,7 @@ import {
   defineModule,
   defineServer,
   type ESignStart,
+  type ImageRef,
 } from '@hykr/api';
 import {
   type Contributions,
@@ -17,6 +18,7 @@ import {
   defineCapability,
   defineRole,
   entitySpec,
+  FileRef,
   moduleSpec,
 } from '@hykr/contracts';
 import { defineEntity, entityController, entityHandlers, type ReadProjector } from '@hykr/core';
@@ -36,6 +38,7 @@ export const Agreement = z.object({
   terms: z.string(),
   /** Only with fixture.agreements.margin. */
   margin: z.string().nullable().optional(),
+  logo: FileRef.nullable(),
   status: z.enum(STATUS),
   version: z.number().int(),
   createdBy: CreatedBy,
@@ -52,11 +55,13 @@ export const AgreementSpec = entitySpec({
       title,
       terms: z.string().max(2000).default(''),
       margin: z.string().max(50).optional(),
+      logo: FileRef.optional(),
     }),
     update: z.object({
       title: title.optional(),
       terms: z.string().max(2000).optional(),
       margin: z.string().max(50).nullable().optional(),
+      logo: FileRef.nullable().optional(),
       status: z.enum(STATUS).optional(),
       version: z.number().int().optional(),
     }),
@@ -86,6 +91,7 @@ export const AgreementSpec = entitySpec({
       ],
     },
     versioned: { frozenWhen: { status: ['offered', 'accepted', 'withdrawn'] } },
+    files: { logo: { accept: ['image/*'] } },
   },
 });
 
@@ -150,11 +156,18 @@ export const statementHidden: ReadProjector = {
 })
 export class AgreementsModule {}
 
-type AgreementData = { title: string; terms: string };
+type AgreementData = { title: string; terms: string; logo?: ImageRef | null };
 
-const agreementData = ({ record }: { record: Record<string, unknown> }): AgreementData => ({
+const agreementData = async ({
+  record,
+  image,
+}: {
+  record: Record<string, unknown>;
+  image(fileId: string): Promise<ImageRef | null>;
+}): Promise<AgreementData> => ({
   title: String(record.title),
   terms: String(record.terms ?? ''),
+  logo: record.logo ? await image(String(record.logo)) : null,
 });
 
 /** The agreement as a PDF: its title and terms, never its margin. */
@@ -166,6 +179,8 @@ export const AgreementDocument = defineDocument<AgreementData>({
   load: agreementData,
   render: (d) => ({
     title: `Agreement ${d.title}`,
+    // The logo on every page: an acceptance of the PDF covers it, and its evidence names it.
+    ...(d.logo ? { header: { image: { image: d.logo, height: 24 } } } : {}),
     blocks: [
       { type: 'heading', text: d.title },
       { type: 'text', text: d.terms || 'No terms.' },

@@ -72,7 +72,7 @@ export function modelInputPrice(
   return own.inputPerMillion * (1 + plan.markupPercent / 100);
 }
 
-/** Every meter, by name: the framework's five and any contributed. */
+/** Every meter, by name: the framework's own and any contributed. */
 export const meters = createHookRegistry<MeterDef>('meter', (m) => defineMeter(m).name, {
   collects: 'meters',
 });
@@ -105,6 +105,11 @@ export const FrameworkMeters = {
     per: 1_000_000,
     fallbackPrice: modelInputPrice,
   }),
+  /**
+   * Images and PDF pages sent to a vision model to read a file (`read-file`, `readWithModel`);
+   * the variant is the model's ref. Its tokens are on `tokens` too.
+   */
+  filePages: defineMeter({ name: 'file_pages', unit: 'page' }),
 } as const;
 
 /** What a purchase provider is asked to start. */

@@ -471,8 +471,19 @@ An unknown id, another business's record and one the writer cannot read all get 
 so does an update (or a revision) that keeps the stored id. A CRUD write and a public form's
 answer check before they can park. Undo checks the row it restores as it was: one whose target
 the person can no longer read stays deleted (docs/decisions/V10.md).
-`defineServer` refuses a reference to an entity that does not exist, from a field no write sets,
-or on a record with a parent (check a line's references in the parent's command).
+`defineServer` refuses a reference to an entity that does not exist, or from a field no write
+sets. A record with a parent (a line item) declares references the same way; its tree writes
+check them in bulk (5.13, `docs/decisions/R1.md`). Every refusal is audited as denied, with the
+rule `unknown_reference`.
+
+**A label on read.** Name a field of the target to read with each record:
+`references: { productId: { entity: 'product', label: 'name' } }`. Lists and gets then carry
+`references: { productId: { id, label } }`, one query per target for the whole page, read as
+the reader may see the target: one they cannot read, or a label field hidden from them (field
+policy), reads `label: null`, never its value. A null link has no entry. Webhooks, live events,
+summaries and a write's own result carry the id only. `defineServer` refuses a label its target's
+read schema has not. To read many records by id under the target's scope yourself,
+`Target.repo.findMany(conn, p, ids)` returns the ones the principal reaches, in one query.
 
 Back it in the database with a key that keeps the business: `(tenant_id, meeting_id)` →
 `meetings (tenant_id, id)`, with a unique `(tenant_id, id)` on the target. A plain
@@ -1084,6 +1095,29 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   business. Push reaches only devices registered in the notification's business. No device, or Expo
   refusing every device, moves on at once; a receipt error on every device (polled each minute by the
   `push.receipts` schedule) moves on later through `NotifyService.fallback`. A gone device is forgotten.
+- **Web push.** `webpush` is the browser's channel (Web Push with VAPID, `features/push`, decisions in
+  `docs/decisions/W1.md`). It says what `push` says (the notification's `push` content), so a
+  declaration does not change. `push` is a shorthand: it tries the person's phones, then their
+  browsers when no phone takes it. A notification that lists both (`['webpush', 'push', 'email']`)
+  orders them itself, and there `push` means phones only. The server needs `WEB_PUSH_PUBLIC_KEY`,
+  `WEB_PUSH_PRIVATE_KEY` and `WEB_PUSH_SUBJECT` (`basecamp webpush keys` prints a pair; `assertConfig`
+  refuses a partial set or a pair that does not match) and `SECRETS_KEY`, which seals each browser's
+  keys. Without them `webpush` is unavailable and the next channel is tried. A browser registers its
+  subscription with `POST /api/push/tokens` `{ platform: 'web', subscription }` (the key is
+  `GET /api/push/web/key`); its endpoint must be https on a known push service (FCM, Mozilla, Apple,
+  WNS) or on a host in `WEB_PUSH_ALLOWED_HOSTS`, else 400 `bad_endpoint`, and sends go out under the
+  egress guard. Each send is encrypted for the browser (RFC 8291), kept 24 hours by the push service,
+  and urgent for approvals. A 201 or 202 from any browser is sent (Web Push has no receipts, so it
+  is final and logged in `channel.push_tickets` with `platform: 'web'`); a 404 or 410 forgets that
+  browser; a 429 or 5xx is a failure for now (retried, then the next channel). In the app,
+  `pushPlugin()` registers the service worker at `/push-sw.js` after sign-in and asks for
+  permission only when the person clicks "Turn on notifications" (the strip it draws, or
+  `<PushToggle />` in the person's card; `usePushStatus()` says `on`, `off`, `blocked` or
+  `unsupported`). The service worker and a web manifest come from `@hykr/app`'s config plugin
+  (`"plugins": ["@hykr/app"]` in app.json), which writes them into the app's `public/` folder each
+  time Expo reads its config. A click on a notification focuses the app's tab on its link, or opens
+  one. Sign-out forgets the browser. A subscription belongs to the origin it was made on: a person on
+  two of a business's domains has two.
 - **In-app inbox.** `inapp` is the framework's in-app delivery channel (`features/inbox`, decisions in
   `docs/decisions/B16.md`). A notification that lists it needs `inapp: { title, body, url?, record? }`.
   It keeps one item per person and dedupe key in `channel.inbox_items`, in the reader's language, and
@@ -1235,8 +1269,10 @@ photos: fileColumns('photos'),   // text[]; fileColumn('cover') for one file
 - **Uploading** is three steps: `POST /api/files { name, mime, size, for: { entity, field, id? } }`
   (people only), a `PUT` of exactly those bytes to the URL it returns (with its headers), then
   `POST /api/files/:id/confirm`. Presign checks the field's `accept` (`image/*` never matches SVG) and
-  size, then the person's reach: they may update that record now, or create one. Confirm checks the
-  size, and that an image or a PDF starts like one. `api.files.upload(blob, { name, mime, for })` in
+  size, then the person's reach: they may update that record now, or create one. The entity's
+  rules see that check as `ctx.via === 'file.upload'`, so an entity changed only by its commands
+  (the sample's orders) can let it through: the record changes when the command puts the file on
+  it. Confirm checks the size, and that an image or a PDF starts like one. `api.files.upload(blob, { name, mime, for })` in
   `@hykr/api-client` does all three; `<FileField entity field value onChange />` in `@hykr/app` picks
   from the library, the camera or the file picker, and `<FileThumbs ids />` shows a record's files.
 - **Attaching is the record's write.** Put the new id in the field with the entity's create or update
@@ -1268,6 +1304,48 @@ photos: fileColumns('photos'),   // text[]; fileColumn('cover') for one file
 - **Personal data and sweeping.** "Delete my data" erases every file the person sent (contributor
   `files`); the `files.sweep` schedule deletes erased files, uploads never confirmed (a day), and files
   never put on a record or taken off one (after `FILES_DETACHED_GRACE_H`).
+
+#### Reading a file with a model
+
+The assistant can look at an image or a PDF the person reaches (`docs/decisions/A12.md`), through
+the business's vision model (section 7.5), and server code can read structured fields from one.
+
+- **The tool and the route.** `read-file { id, question?, pages? }` calls
+  `POST /api/files/:id/read { question?, pages? }` (the client's `files.read(id, body)`), which
+  answers `{ text, pages, model, truncated? }`: what the model read (at most 20,000 characters), the
+  images or PDF pages it saw, and the model's ref. It is a read: it parks nothing and keeps nothing,
+  and anything the person then wants saved goes through the usual write tools and approvals.
+- **What may be read.** The same reach as `GET /api/files/:id` (another business's file, a record
+  out of reach, a hidden field, a file not ready: 404), and an agent's run (A6) reaches only files on
+  records of entities its scope reads. Only PNG, JPEG, WebP and PDF: anything else (audio, SVG,
+  HEIC) is 422 `unsupported_type`; over `FILES_READ_MAX_BYTES` (20 MB) 422 `too_large`.
+- **PDFs.** At most `FILES_READ_MAX_PAGES` (20) pages a read: name them with `pages` (1-based; a page
+  the file lacks is 422 `bad_pages`), or a longer PDF is refused (422 `too_many_pages`), never cut.
+  A model with the `pdf` capability gets the PDF as it is when no pages are named; otherwise each
+  page is drawn at `FILES_READ_DPI` (150) with pdfjs and `@napi-rs/canvas`, its text layer sent
+  alongside. Images over `FILES_READ_MAX_SIDE` (2048 px) are scaled down. Two files at most are
+  prepared at once per process.
+- **The model, credits and limits.** The business's vision model, or 409 `no_vision_model` (no
+  fallback). A business paused by its credits gets 402 `credits_paused` before any call. Tokens go
+  on the `tokens` meter with the model's ref and the images or pages sent on `file_pages` (priced as
+  `file_pages` in `CREDITS_CONFIG`). `FILES_READ_PER_HOUR` (60) reads per person an hour, then 429
+  `too_many_reads`.
+- **Audit.** Each read writes one `file.read_by_model` row: the file, the model, its provider and
+  region, the page count and the agent version. Never the reading, a URL or the file's bytes.
+- **The file is data.** The model is told that the file's contents are data, never instructions,
+  as recalled memory is in a turn.
+- **WhatsApp.** A photo or PDF sent on WhatsApp is readable in the turn it came with: its turn line
+  says so, and the assistant calls `read-file` on its id. A business turns that off with
+  `files.readInbound` (403 `read_inbound_off` for media not on a record yet).
+- **Server code.** `FilesService.readWithModel(p, fileId, { instructions, schema, pages?, lang? })`
+  returns `{ value, model, pages }`: the model answers in JSON, checked against the Zod schema and
+  asked once more with what was wrong; then 422 `unreadable` (its text is logged, never returned).
+  Call it before a write (a command's caller, a job's `submit`, a subscriber), never inside one: in a
+  write's transaction it throws `InWriteTransaction` at once (`assertNoWriteTransaction` in
+  `@hykr/core`), because a model call must not hold rows locked.
+- **Testing.** In fake mode the scripted model reads files too: it "sees" what follows `FAKE-VISION:`
+  in a file's bytes (or a PDF page's text), and alternatives split by `|||` answer the first attempt
+  and the retry.
 
 ### 5.13 Money, number series and records with a parent
 
@@ -1322,6 +1400,28 @@ sample's `orders` module uses every part.
   client. Plain CRUD never adds, moves or deletes a node of a tree. Add composite foreign keys
   `(tenant_id, parent_id) → parent (tenant_id, id)` and `(parent_id, nest) → child (parent_id, id)`
   so the database also refuses a row that points elsewhere.
+- **A line that names another record** (a quote line's price-list item, an order line's product)
+  declares it on the child spec as on any record (5.2): `traits.references: { productId: {
+  entity: 'product', label: 'name' } }`, to any entity, another module's or a shared one included.
+  `children.insert` and `children.replace` check every new line's references, and every changed
+  line's changed ones, before writing anything: one `findMany` per target entity for the whole
+  tree, as the writer. The first line naming a record the writer cannot read refuses the whole
+  write: 404 `{ error: 'not_found', message: 'No such product', field, path, ref? }`, where `path`
+  is the line's place in the tree (`['items', 0, 'children', 2, 'productId']`, after the prefix
+  the command passes as `{ at: ['items'] }`) and `ref` its own key when the node carries one. A
+  kept line whose reference did not change is not checked again. More than 1,000 different ids of
+  one target in one write is 400 `too_many_references`. So every path that writes the tree is
+  checked with no code of the command's own: the app, the assistant and MCP, offline replays,
+  approved replays (checked again when they run), and undo putting removed lines back. A revision
+  copies its lines as they are (a kept link, decision 4 of V2); the lines a command then writes
+  are checked. To refuse before a write that would park reaches an approver, call
+  `Child.children.checkReferences(tx, p, nodes, { at: ['items'], parent })` in the command's
+  `load` (its `authorize` is synchronous); the sample's `order.save` does. Key the column with its
+  business like any reference: `(tenant_id, product_id) → products (tenant_id, id)` in
+  `schema.ts` for NO ACTION, RESTRICT or CASCADE (`tableRef(name)` down the graph), or a SQL post
+  hook for `ON DELETE SET NULL (product_id)` (the sample's `sql/post/order-products.sql`). Read
+  through `GET /api/<plural>?<parent>=` or `Child.readMany(conn, rows, p)` after `children.list`,
+  each line carries its labels (5.2). `docs/decisions/R1.md`.
 - **Large writes.** `runWrite` audits a write's rows in one statement, the JSON body limit is
   `JSON_BODY_LIMIT` (1 MB), and a tree holds at most 1000 nodes and 8 levels (`maxNodes`,
   `maxDepth` on the trait). The approval card sums up long lists.
@@ -1704,10 +1804,55 @@ export const OrderDocument = defineDocument<Data>({
   Nothing re-reads live rows: version N shows what was true when it was asked for.
 - **The layout** `render` returns: `heading`, `text`, `fields` (label and value, one or two
   columns), `table` (weighted columns, rows of kind `line`, `group` or `subtotal` with an
-  indent; its header repeats on each page), `totals`, `spacer`, `rule`, `pageBreak`, plus a
-  header and footer on every page (`{page}`, `{pages}`). `ctx.label`, `ctx.money` and `ctx.date`
-  (the business's time zone) write in the document's language. It is checked when asked, so a
-  template's mistake fails the request.
+  indent; its header repeats on each page), `totals`, `spacer`, `rule`, `pageBreak`, `image`,
+  `images` and `qr` (below), plus a header and footer on every page (`{page}`, `{pages}`), each
+  with an optional image. `ctx.label`, `ctx.money` and `ctx.date` (the business's time zone)
+  write in the document's language. It is checked when asked, so a template's mistake fails the
+  request: 422 `bad_layout` with the issues and their paths.
+- **Images** (`docs/decisions/B21.md`). `load` picks them with `ctx.image(fileId)` (an
+  `ImageRef`, or null) and `ctx.images(fileIds)` (in order, the refused left out), returns them
+  in its data, and `render` names them:
+
+  ```ts
+  load: async ({ record, image, images, appUrl }) => ({
+    ...,
+    logo: await image(String(record.logo)),          // null: not shown
+    photos: await images(record.photos as string[]),
+    link: `${appUrl}/quotes/${record.id}`,
+  }),
+  render: (d, ctx) => ({
+    title, header: d.logo ? { image: { image: d.logo, height: 32 }, right: d.number } : undefined,
+    blocks: [
+      { type: 'image', image: d.photos[0], width: 240, align: 'left', alt: 'Kitchen', caption: '…' },
+      { type: 'images', items: d.photos.map((image) => ({ image, alt: '…' })), columns: 3 },
+      { type: 'qr', data: d.link, size: 96, caption: '…' },
+    ],
+  }),
+  ```
+
+  `image` fits one picture into `width` × `height` points at its own proportions (neither: the
+  content width; one: the other follows; both: inside), never stretched, never wider than the
+  content, scaled to one page when taller; `align`, `caption`, `alt` (required: the PDF's
+  alternate text). `images`: 1 to 60 `items` in 1 to 4 `columns`, each cell `height` high
+  (default 3/4 of its width); a row never splits across pages. `qr`: `data` (up to 1 000
+  characters) as vector squares, `size` 72 to 288 points (default 108), `errorCorrection` L, M
+  (default), Q or H; text too long for its level is 422 `qr_too_long`. A header or footer
+  `image: { image, height: 12–48, side }` is drawn on every page, the text on its side left out,
+  and the margin grows so the content never runs under it. A JPEG is turned by its EXIF
+  orientation.
+  `ctx.image` gives a file only if the requester reaches it as `GET /api/files/:id` would (on a
+  record they reach, in a field they still see), it is `ready`, PNG or JPEG (SVG, WebP, HEIC are
+  refused), and within the limits; it reads and hashes its bytes. The snapshot keeps each
+  picture's file and SHA-256 (`data.images`); a layout naming any other image is 422
+  `image_not_loaded`. The worker reads the bytes from storage (never a web address) and checks
+  the SHA-256: a file erased or changed since fails the document at once, `image_unavailable`.
+  Limits per deployment: `DOCUMENTS_IMAGES_MAX` (200 images; 422 `too_many_images`),
+  `DOCUMENTS_IMAGE_MAX_BYTES` (10 MB) and `DOCUMENTS_IMAGE_MAX_PIXELS` (40 M) per image (over
+  them, `ctx.image` answers null and logs `image_too_large`), `DOCUMENTS_IMAGES_MAX_BYTES`
+  (60 MB per document; 422 `images_too_large`). An acceptance's evidence lists the pictures
+  (`document.images`). The fake engine writes `[Image: <alt>]`, `[QR: <data>]` and
+  `[Image: header]` lines. `ctx.appUrl` is the app's address (APP_URL), for a link a document
+  shows.
 - **The engine** (`DOCUMENTS_ENGINE`): `pdf` is pdfkit with HarfBuzz shaping and the Noto fonts
   (Latin, Devanagari, Telugu; regular and bold). A line may mix scripts: each run is set in its
   own font. `fake` writes the layout's lines as plain text in a small PDF: both Vitest configs
@@ -1958,7 +2103,7 @@ pnpm exec basecamp import todo domain/src/modules/todos/import/todos.csv \
 ### 5.24 Calendars and calls
 
 Records with a time reach people's calendars, and calls are logged on records
-(`docs/decisions/B17.md`). Which entities are events, whose calendars they go on and what a
+(`docs/decisions/B17.md`; Microsoft 365 in `docs/decisions/B22.md`). Which entities are events, whose calendars they go on and what a
 move in a calendar means are the application's. The sample's `meetings` module uses them.
 
 - **The trait.** `traits.schedulable: { title, startsAt, endsAt, location?, description?,
@@ -1966,36 +2111,66 @@ move in a calendar means are the application's. The sample's `meetings` module u
   `people` the table's columns holding user ids (one or a list; default the owner column), and
   `hiddenWhen: { field, in }` the values that take a record off every calendar. The server
   checks it at start: a field or column that does not exist stops it.
-- **Google Calendar** (`@hykr/connectors/google-calendar`, transport only). Each person
-  connects their own account: `POST /api/calendar/connections { provider: 'google', returnTo? }`
-  returns the authorization URL (PKCE, offline access, scopes `calendar.events` and
-  `calendar.freebusy`). The `state` is a random token; the server keeps who started the sign-in,
-  in which business, and the PKCE verifier (sealed), for ten minutes. Google returns to
-  `GET /api/calendar/google/callback`, which exchanges nothing: it sends the browser on to the
-  app (`CALENDAR_RETURN_URL`, or `CALENDAR_APP_RETURN_URL` for `returnTo: 'app'`) with `code`
-  and `state`, and the app calls `POST /api/calendar/google/complete { code, state }` under its
-  session. Only the person who started it, in that business, finishes it; anyone else's try is
-  403 (`calendar_sign_in_not_yours`, `calendar_sign_in_other_business`) and uses the sign-in up,
-  so a consent link sent to someone else connects nothing. Tokens are stored sealed; a refused
-  refresh marks the connection `needs_reauth`. People only (the assistant cannot connect).
-  `connectGoogleCalendar(person)` (`@hykr/api/testing`) does the round trip on the fake.
-  `GET /api/calendar/connections`
-  lists yours; `DELETE /api/calendar/connections/:id` takes our events out of Google and revokes
-  the grant.
-- **Sync** is one way, records to Google. The subscriber `calendar.records` queues
+- **Providers.** Google (`@hykr/connectors/google-calendar`) and Microsoft 365 / Outlook.com
+  (`@hykr/connectors/microsoft-calendar`, Microsoft Graph), both transport only, behind one
+  `CalendarProviderDef` (`features/calendar/providers/`: sign-in, `freeBusy`, `upsertEvent`,
+  `deleteEvent`, `changes`, `watch`, `stopWatch`). `CALENDAR_PROVIDERS` turns them on
+  (`google,microsoft`; default `google`); one is offered once its OAuth client is set, and
+  `GET /api/calendar/providers` says which. Tokens, sign-in states, `needs_reauth`, feeds and
+  invites are shared. A person connects each provider at most once, and both at the same time.
+- **Connecting.** `POST /api/calendar/:provider/start { returnTo? }` returns the authorization
+  URL (PKCE S256, offline access). Google asks for `calendar.events` and `calendar.freebusy`;
+  Microsoft for `openid email profile offline_access Calendars.ReadWrite` on
+  `login.microsoftonline.com/<MICROSOFT_CALENDAR_TENANT>` (`common`: work and personal
+  accounts). The `state` is a random token; the server keeps who started the sign-in, in which
+  business, for which provider, and the PKCE verifier (sealed), for ten minutes. The provider
+  returns to `GET /api/calendar/:provider/callback`, which exchanges nothing: it sends the
+  browser on to the app (`CALENDAR_RETURN_URL`, or `CALENDAR_APP_RETURN_URL` for `returnTo:
+  'app'`) with `code`, `state` and `provider`, and the app calls `POST
+  /api/calendar/:provider/complete { code, state }` under its session. Only the person who
+  started it, in that business, at that provider, finishes it; anyone else's try is 403
+  (`calendar_sign_in_not_yours`, `calendar_sign_in_other_business`) and uses the sign-in up, so
+  a consent link sent to someone else connects nothing. A work organisation that requires an
+  admin's consent is refused as `admin_consent_required` (on the landing's `error`, or the
+  complete's `rule`), with a plain message. Tokens are stored sealed; a refused refresh marks
+  the connection `needs_reauth`. People only (the assistant cannot connect).
+  `connectCalendar(person, provider)` (`@hykr/api/testing`; also `connectGoogleCalendar`)
+  does the round trip on the fakes. The older `POST /api/calendar/connections { provider }`
+  stays for one release; `google/callback` and `google/complete` are the generic routes with
+  `google`.
+- **Connections.** `GET /api/calendar/connections` lists yours, each with `writeTo`: records
+  are written to one calendar per person, the one chosen with `PATCH
+  /api/calendar/connections/:id { writeTo: true }` (`calendar.connection.target`), else the
+  first connected. Changing it, or disconnecting the one written to, moves the events
+  (`calendar.target_changed`, `calendar.disconnected`, job `retarget`). Busy times are read
+  from all of them. `DELETE /api/calendar/connections/:id` takes our events out and closes the
+  channel; Google's grant is revoked, while Microsoft has no revoke for this flow: its tokens are
+  deleted, and the person removes the app at myapps.microsoft.com (work) or
+  account.live.com/consent/Manage (personal).
+- **Sync** is one way, records to the person's calendar. The subscriber `calendar.records` queues
   `calendar.sync` for every stored event about a schedulable record; the job reads the record
   **as each person** it belongs on (scoped repository, `toRead`): reachable and not hidden →
   upsert, otherwise → delete. A field hidden from them never reaches their calendar, and someone
-  who loses access loses the event. Google reports changes through a watch channel that posts
-  to the B10 inbound webhook (`/webhooks/google-calendar/:connection`; it needs an https
-  `CALENDAR_PUBLIC_URL`, elsewhere `calendar.maintain` polls every 10 minutes). A change to one
+  who loses access loses the event. Google's event id is derived from the record; Microsoft
+  makes its own, and our event carries the same derived key in an extended property, so a retry
+  whose answer was lost finds the event instead of making a second. Microsoft events are written
+  in the business's time zone. Google reports changes through a watch channel that posts to the
+  B10 inbound webhook (`/webhooks/google-calendar/:connection`), Microsoft through a Graph
+  subscription (`/webhooks/microsoft-calendar/:connection`: Graph's `?validationToken=`
+  handshake is answered by the connector's `handshake`, and each notification's `clientState`
+  is checked); both need an https `CALENDAR_PUBLIC_URL`, elsewhere `calendar.maintain` polls
+  every 10 minutes. The same schedule renews channels and subscriptions with less than a day
+  left (Graph keeps one about 70 hours). Microsoft's changes are read with a calendarView delta
+  query whose window runs from a day back to a year ahead of when its cursor was made: an event
+  moved out of it reads as removed, and a cursor Graph drops starts again. A change to one
   of our events stores `calendar.event_moved` or `calendar.event_removed`
-  (`CalendarEventChange`: the entity, record, person and times); the framework writes nothing
+  (`CalendarEventChange`: the entity, record, person, provider and times); the framework writes nothing
   back. A module that wants the move subscribes and writes as the person: the sample's
   `meetings.calendar-moved` runs `meeting.reschedule` with `writeAs(ctx, { principal, requestId,
   idempotencyKey }, op, input)`, the principal from `memberPrincipal(ctx.get, { userId,
   tenantId })` (both from `@hykr/api`).
-- **Free time.** `GET /api/calendar/busy?from&to[&userId]` (busy intervals, no titles) and
+- **Free time.** `GET /api/calendar/busy?from&to[&userId]` (busy intervals, no titles, merged
+  across every calendar the person connected: Microsoft's from `getSchedule`, never a subject) and
   `GET /api/calendar/free?from&to&minutes[&step&hoursFrom&hoursTo&userId]` (slots, in the
   business's time zone; `freeSlots` in `@hykr/contracts` is the pure version). With
   `hoursFrom`/`hoursTo`, slots keep inside those local hours. Without them, slots keep to the
@@ -2036,18 +2211,24 @@ move in a calendar means are the application's. The sample's `meetings` module u
   credentials. None ships: without one, `call.dial` is refused with `no_telephony_provider`.
   The provider's status webhook is a B10 connector handler that calls
   `ctx.write(callProviderUpdate(), { provider, externalId, status, … })`.
-- **In the app** `calendarPlugin()` adds `/calendar` (connect or disconnect Google; make, copy
+- **In the app** `calendarPlugin()` adds `/calendar` (connect each offered provider, pick the
+  one written to, disconnect; make, copy
   and revoke feeds), `<RecordInvites entity id />` a record's invites and `<RecordCalls entity
   id />` its calls (log one; "Call" when the business has a provider). The hooks are
-  `useCalendarConnections`, `useConnectCalendar`, `useCompleteCalendar` (the `/calendar` screen
-  finishes a sign-in it is handed), `useDisconnectCalendar`, `useCalendarFeeds`,
+  `useCalendarConnections`, `useConnectCalendar(provider)`, `useCompleteCalendar` (the
+  `/calendar` screen finishes a sign-in it is handed), `useSetCalendarTarget`, `useDisconnectCalendar`, `useCalendarFeeds`,
   `useCreateFeed`, `useRevokeFeed`, `useInvites`, `useSendInvite`, `useCalls`,
   `useCallProvider`, `useLogCall` and `useDialCall`.
 - **Configuration**: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (unset: Google is not
   offered), `GOOGLE_CALENDAR_TRANSPORT=fake` (the in-memory Google, `fakeGoogle()` in
   `@hykr/api/testing`; production refuses it), `CALENDAR_PUBLIC_URL`, `CALENDAR_RETURN_URL`,
   `CALENDAR_APP_RETURN_URL` (a native app's link, such as `agenticstack://calendar`) and
-  `CALENDAR_SYNC_DAYS` (`application/.env.example`).
+  `CALENDAR_SYNC_DAYS` (`application/.env.example`). Microsoft: `CALENDAR_PROVIDERS` naming
+  `microsoft`, `MICROSOFT_CALENDAR_CLIENT_ID` and `_CLIENT_SECRET`, `_TENANT` (default
+  `common`), `_REDIRECT_URL` (default `<BETTER_AUTH_URL>/api/calendar/microsoft/callback`),
+  `MICROSOFT_CALENDAR_TRANSPORT=fake` (`fakeMicrosoft()`; production refuses it) and the
+  overrides `MICROSOFT_LOGIN_URL` and `MICROSOFT_GRAPH_URL`. Live calls to Microsoft go through
+  the egress guard, to those two hosts only.
 
 ### 5.25 Acceptance: one-time codes and evidence
 
@@ -2301,6 +2482,10 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
     (`members.invites` on the register).
   - Files: what they sent is erased, and the `file.*` audit rows lose its name, those of a file
     they sent that is gone already (thrown away, swept) too.
+    A document already made that shows one of those files as a picture keeps it, as it keeps a
+    name it shows: its stored PDF and snapshot stay as they were. A version asked for after does
+    not reach the erased file (`ctx.image` answers null; one waiting to be drawn fails
+    `image_unavailable`). See `docs/decisions/B21.md` for the open question.
   - Calls: a contact's number, the call's notes and its error leave each call with them; a member
     is unlinked from their calls and loses their own number on them.
   - The integration bus: stored webhook bodies and inbound payloads lose values that are the
@@ -3122,8 +3307,9 @@ export function TodoListComponent({ title, items, act, words }: ViewProps<typeof
 The deployment configures its models; each business chooses among them (`docs/decisions/A10.md`).
 
 - **`MODEL_PROVIDERS`** (JSON, one line) lists OpenAI-compatible providers: `{ id, baseUrl,
-  apiKeyEnv | apiKey, headers?, region?, models: [{ id, kind?: 'chat' | 'embedding', label?, price?
-  }] }`. A model's ref is `<provider id>/<model id>` (`gateway/large`). `price` is `{ currency,
+  apiKeyEnv | apiKey, headers?, region?, models: [{ id, kind?: 'chat' | 'embedding', label?, price?,
+  capabilities?: ('vision' | 'pdf')[] }] }`. A chat model's `capabilities` say what it takes besides
+  text: images (`vision`), PDF files as they are (`pdf`); none means text only. A model's ref is `<provider id>/<model id>` (`gateway/large`). `price` is `{ currency,
   inputPerMillion, outputPerMillion? }` in minor units per million tokens; `costOf(ref, usage)` from
   `@hykr/agents` prices a call (rounded up). Malformed JSON stops the API and the worker at startup.
   Production points it at the in-country gateway; `application/.env.example` has an example.
@@ -3134,18 +3320,24 @@ The deployment configures its models; each business chooses among them (`docs/de
   embedding model; without them, the first listed. In fake mode the scripted model
   (`fake/scripted`) and a word-hashing embedding (`fake/embedding`) are the defaults, and every
   policy allows them.
-- **The policy** is the settings section `models`: `{ allowed, chat?, embedding?, regions }`. It
+- **The policy** is the settings section `models`: `{ allowed, chat?, embedding?, vision?, regions }`. It
   fails closed: with `allowed` empty only the deployment's defaults; with it exactly those; with
   `regions`, only providers that declare one. A turn's model is the one a hook asks for, else the
   business's `chat`, else the default, and a model that is unknown, not allowed or outside the
   regions refuses the turn (403 `model_not_allowed`, 503 `model_unknown`); nothing falls back.
-- **API.** `GET /api/models` (any member): the policy, the models a turn and an embedding would use,
-  and every model with `allowed` (prices only with `models.manage`). `PUT /api/models/policy`
+- **Reading files** (section 5.12) uses the business's `vision` model, else its chat model when that
+  one has `vision`; it must be allowed and in the regions like any model. Otherwise reading is refused
+  with 409 `no_vision_model`, with no fallback to another model or provider. A policy naming a
+  `vision` model that is unknown, not allowed, outside the regions or text only is a 400. In fake
+  mode `fake/scripted` reads files (it has both capabilities).
+- **API.** `GET /api/models` (any member): the policy, the models a turn, an embedding and a file
+  read would use (`vision`), and every model with `allowed` and its `capabilities` (prices only with `models.manage`). `PUT /api/models/policy`
   (`models.manage`, owners and admins by default, signed in) replaces it through `runWrite` as
   `models.policy.set`: audited before and after, idempotent, parkable by a write hook. A policy the
   deployment cannot honour is a 400 listing every problem.
 - **In code.** `ModelPolicyService` (`@hykr/api`): `chatFor(tenantId, requested?)` and
-  `embeddingFor(tenantId)` (an AI SDK embedding model, or `ModelRefused`). Anything that calls a model
+  `embeddingFor(tenantId)` (an AI SDK embedding model, or `ModelRefused`), `visionFor(tenantId)`
+  (the vision model, or `ModelRefused` with `no_vision_model`). Anything that calls a model
   for a business goes through it. Another feature reaches it with `ctx.get(ModelPolicyService)` in a
   job or subscriber, or `ModuleRef.get(ModelPolicyService, { strict: false })` in a provider. A turn
   hook needs none of it: `after` gets `turn.model`, and `costOf(turn.model, outcome.usage)` prices it.
@@ -3157,11 +3349,12 @@ The deployment configures its models; each business chooses among them (`docs/de
 Every business's use of what costs money is metered, priced and, when its plan says so, capped
 (`docs/decisions/A3.md`). A credit is one minor unit of the deployment's credits currency.
 
-- **Meters.** `tokens` (a model's input and output, the model as variant: a turn's and the
-  guardrail's calls), `tool_calls` (one per
+- **Meters.** `tokens` (a model's input and output, the model as variant: a turn's, the
+  guardrail's and a file read's calls), `tool_calls` (one per
   tool a turn called), `messages` (a WhatsApp message the provider accepted, its template's
   category as variant), `voice_seconds` (a reported voice session) and `embedding_tokens` (memory
-  recall and indexing, the embedding model as variant; section 7.7). Each use is a row in
+  recall and indexing, the embedding model as variant; section 7.7) and `file_pages` (the images and
+  PDF pages a file read sent, the model as variant; section 5.12). Each use is a row in
   `app.usage_events`, added to its period's counter (`app.usage_counters`). A feature or module adds
   a meter with `defineMeter({ name, unit, per, label?, fallbackPrice? })` (contributed as
   `meters`; `label` is what people call it, as `Labels` in the application's languages, which
@@ -3456,12 +3649,12 @@ export const MeetingReminder = defineTemplate({
 | `send` | `{ on: [events] }`: send now |
 | `when` | `(row) => boolean`: checked at send time |
 | `to` | `(row) => [{ userId } \| { customerId } \| { contactId } \| { capability, except? } \| { partyId } \| { participantsOf, as? }]` |
-| `channels` | Fallback order, e.g. `['push', 'whatsapp', 'email']`; also any registered delivery channel (section 5.10) |
+| `channels` | Fallback order, e.g. `['push', 'whatsapp', 'email']`; `webpush` reaches browsers only (`push` alone tries phones, then browsers); also any registered delivery channel (section 5.10) |
 | `also` | Channels it goes to as well, whatever the fallback order does, e.g. `['inapp']` (the in-app inbox keeps it however it reached the person) |
 | `channelWhen` | `{ [channel]: (row) => boolean }`: a channel used only when it holds for the row, else the next one |
 | `whatsapp` | `{ template, params(row, reader) }`. Required when `'whatsapp'` is a channel (and for `onButton`, `approval`). |
 | `email` | `{ subject, body }`. Required when `'email'` is in `channels`. |
-| `push` | `{ title(row, reader), body(row, reader), url?(row) }`: what the phone shows, and the app path a tap opens. Required when `'push'` is in `channels`. |
+| `push` | `{ title(row, reader), body(row, reader), url?(row) }`: what the phone or browser shows, and the app path a tap or click opens. Required when `'push'` or `'webpush'` is in `channels`. |
 | `inapp` | `{ title(row, reader), body(row, reader), url?(row), record?(row) }`: what the person's in-app inbox keeps, and what it opens. Required when `'inapp'` is in `channels`. |
 | `onButton` | `{ [buttonId]: (row) => { reschedule?: Date; reply?: Labels } \| undefined }` |
 | `approval` | `(row) => approvalId`: the quick replies `approve` and `reject` decide that approval |
@@ -3469,7 +3662,7 @@ export const MeetingReminder = defineTemplate({
 
 Event names are `<entity>.created|updated|deleted`, your commands' `NamedEvent`s, `approval.requested` / `approval.decided`, and `comment.mentioned` (section 5.21). They come from the stored events (`app.domain_events`), so a notification is scheduled only once its write committed, still after a crash, and only once an undoable write's window closed.
 
-Who receives a notification (`to`, `when`, `dedupe`, `approval`, `schedule.at`, `channelWhen`) reads the row as stored. What it says (`whatsapp.params`, `email`, `push`, `inapp`) reads the row as each recipient may: the dispatcher resolves the recipient in the business (a person who left gets nothing) and passes the record through its read schema, field policy and read projectors, as `eventFor` does. A field the recipient may not read is not there, and neither are the record's columns its read schema does not show (its owner, its customer); keys that are the event's own (the SLA on `<entity>.sla.breached`) stay, and so do `id` and `tenantId`.
+Who receives a notification (`to`, `when`, `dedupe`, `approval`, `schedule.at`, `channelWhen`) reads the row as stored. What it says (`whatsapp.params`, `email`, `push` (web push too), `inapp`) reads the row as each recipient may: the dispatcher resolves the recipient in the business (a person who left gets nothing) and passes the record through its read schema, field policy and read projectors, as `eventFor` does. A field the recipient may not read is not there, and neither are the record's columns its read schema does not show (its owner, its customer); keys that are the event's own (the SLA on `<entity>.sla.breached`) stay, and so do `id` and `tenantId`.
 
 The framework's `approval.request` asks a request's deciders (never its requester) by push, else on WhatsApp with Approve and Reject (only where the request may be decided there: its channels allow WhatsApp and it asks for no more than a number), else by email, and always keeps it in their in-app inbox. Each opens `/approvals/<id>`; `Reader.appUrl` (the deployment's `APP_URL`) gives an email its link. Change its order with `overrideNotification('approval.request', { channels, also })`.
 
@@ -3699,7 +3892,7 @@ The `customFields` trait with a `customFieldsColumn()` (`<CustomFieldInputs>` in
 Out: the business adds an endpoint (`POST /api/integrations/endpoints`) and nothing is declared. In: contribute a connector (`defineConnector`, `hmacConnector`) and a `defineConnectorHandler` whose `ctx.write` goes through the write path. Section 5.14.
 
 **…put records in people's calendars?**
-`traits.schedulable` on the spec and `calendarPlugin()` in the app; a move in Google is an event your module may subscribe to. Section 5.24.
+`traits.schedulable` on the spec and `calendarPlugin()` in the app; a move in Google or Outlook is an event your module may subscribe to. Section 5.24.
 
 **…run work that takes minutes, elsewhere?**
 `defineJob` (contributed as `jobs`) and `startJob(tx, p, Job, input)` in a command's `run`; `<JobProgress job />` in the app. Section 5.17.
@@ -3717,6 +3910,9 @@ Nothing to declare: the modules give the MCP scopes and tools. Set `MCP_URL` and
 
 **…push a notification to a phone first?**
 `channels: ['push', 'whatsapp', 'email']` with `push: { title, body, url? }` on the notification, and `pushPlugin()` in the app. Sections 5.10 and 8.2.
+
+**…push a notification to someone working in a browser?**
+`push` already tries browsers after phones. To put the browser first, list `['webpush', 'push', 'email']`. Set the `WEB_PUSH_*` keys (`basecamp webpush keys`) and add `"@hykr/app"` to app.json's plugins. Section 5.10.
 
 **…offer ready-made agents?**
 `defineAgentTemplate` (contributed as `agentTemplates`), with scripted-model scripts for their runs (`runData(text)`). Section 5.26.
@@ -3854,8 +4050,11 @@ These are not built. Each has a workaround for now.
 | Seed data | Create data through the API or the app. Maestro's demo assumes data exists. |
 | A link for a WhatsApp request someone else decides | The waiting line says the team was asked, with no link: a contact cannot open the business's app. A member finds the request in the app's Approvals. |
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
+| Attaching a file in the app's chat | A turn is text only. Put the file on a record first (or send it on WhatsApp), then ask the assistant to read it (`read-file`). |
+| Keeping what a model read in a file | Each `read-file` calls the model again (`docs/decisions/A12.md`). Save what matters with a write. |
+| Reading HEIC photos, video or audio with a model | HEIC is refused (422, send a JPEG); audio stays `transcribe-file`; video is not read. |
 | Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
-| Images in documents (a logo, a signature, photos) | The layout has no image block. Put the business's name in the header. |
+| Images in documents: in table cells, WebP and HEIC, photos shrunk to the size drawn, a logo from branding | `image`, `images`, `qr` and a header or footer image draw PNG and JPEG files from records (5.19). A picture in a table cell, a WebP or HEIC photo, or a logo at `branding.logoUrl` is not drawn; phone photos are embedded at full size, so a pack of many can outgrow an attachment. |
 | A Chromium engine, digital signatures, PDF/A | Documents are drawn by pdfkit only, unsigned; their SHA-256 is kept, and an acceptance binds it (section 5.25). |
 | Notifications that carry a document | The dispatcher sends no files. Send a document with `document.send` (a subscriber can call it as the person). |
 | A WhatsApp document's later failure | A send is `sent` once WhatsApp has it; its message's own status shows a later failure, and no email follows. |
@@ -3865,7 +4064,6 @@ These are not built. Each has a workaround for now.
 | A document send left `sending` for good | A send's job claims it before delivering, so it leaves at most once. If every try of that job stopped part way (the worker died each time), the row stays `sending`; nothing sweeps it. Send the document again. |
 | A file on two records, versioned files | One file belongs to one record field. Upload the file again for a second record. |
 | Storage quotas, malware scanning | Not built. Keep `FILES_MAX_BYTES` and each field's `maxBytes` small. |
-| References on records with a parent (a line naming a product) | `defineServer` refuses `traits.references` on a child: `children.replace` inserts in bulk. Load each id in the parent's command (`Target.repo.get(tx, p, id)`) before saving the lines, and key the column with `tenant_id`. |
 | An audited unlink when a referenced record is deleted | The sample's `ON DELETE SET NULL (meeting_id)` clears the links in the transaction of the meeting's audited delete; the to-dos and notes it changes get no audit row and no new version, and a phone learns of it on its next read. To audit each one, unlink them through their repository in a command before the delete. |
 | Files of a deleted business or of rows deleted outside the write path | Their rows go with the business (cascade) or stay attached; their objects stay in the bucket. |
 | Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |
@@ -3904,8 +4102,8 @@ These are not built. Each has a workaround for now.
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. A retention period for inbound events would also have to keep their keys: a sender that signs no timestamp can have an old request posted again, and only its stored key drops it (decisions S2). |
 | Inbound senders without signed ids | Their events are keyed by the body, so two events with byte-identical bodies are one, and a batch regrouped on retry stores its events again. Sign the ids (`signedContent`, `signedIds`) to avoid both (decisions S2). |
 | The sample's supplier reports | `orders-supplier` takes only `order.fulfilled`, for an accepted order its party supplies; a supplier's acknowledgement or dispatch has no state, and nothing answers the supplier's system. An order is placed (`order.placed`) only when its customer accepts it. |
-| OAuth connectors | Business connections store credentials as given; only the calendar's per-person Google connection has an OAuth flow and token refresh (section 5.24). |
-| Other calendars (Microsoft 365, CalDAV), a calendar other than the primary one | Only Google, into each person's primary calendar. Others subscribe to their ICS feed. |
+| OAuth connectors | Business connections store credentials as given; only the calendar's per-person connections (Google, Microsoft) have an OAuth flow and token refresh (section 5.24). |
+| Other calendars (CalDAV, Apple iCloud), a calendar other than the primary one | Google and Microsoft 365, into each person's primary calendar. CalDAV and iCloud users subscribe to their ICS feed. Invite replies are not read. |
 | Changes made in Google written back | Sync is one way; a move or deletion in Google is stored as `calendar.event_moved` / `calendar.event_removed` for a module's subscriber to act on (the sample's meetings do). |
 | Invite replies | Attendees' accept or decline is not read (no inbound mail); invites go out with `RSVP=FALSE`. |
 | Confirming invite updates | A change to an invited record emails every recipient an update at once; nobody confirms it first. |
@@ -3989,7 +4187,6 @@ These are not built. Each has a workaround for now.
 | SQL hooks per module | `application/domain/sql/{pre,post}` holds every module's hooks in one folder, and nothing ties a hook to its module: one that names a removed module's table fails the next migrate. Name each file after its module, and remove it with the module. |
 | Guides checked in CI | The tutorials (`tutorial.md`, `new-application.md`) were replayed against the code by hand (`docs/decisions/HDOCS.md`); nothing in CI builds them, so they drift when an API changes. Replay a tutorial when you change what it uses. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
-| Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
 | Live deletions for everyone | A deleted record reaches only streams already told about it and the person who deleted it; others see it go at their next refetch (focus, reconnect, their own write). |
 | Agents beyond the basics | No 80% alert per agent (the business's credit alerts exist), no taking over another person's agent, no agents shared across businesses, no agent that answers a customer itself on WhatsApp. Agents take webhooks only from `agent-webhooks` connections unless the application contributes `agentWebhookHandler` for its connector. Deleting an agent deletes its run log (the audit trail keeps its writes). Conditions are polled (5 minutes at least). An event about a deleted record starts no agent (its owner can no longer read it). The back office edits triggers and the budget as JSON. An agent's saved triggers (`app.agent_triggers`) follow its definition only on `agent.create` and `agent.update`: another write that changes `agents.triggers` (an undo of an update) leaves them out of step, and a mention of that agent then starts nothing, with a warning in the log. |

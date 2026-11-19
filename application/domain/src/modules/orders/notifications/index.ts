@@ -78,7 +78,8 @@ const total = (o: BreachedOrder, lang: Parameters<typeof moneyText>[1]) => money
 
 /**
  * A submitted order nobody decided within its `orders.decision` SLA (24 business hours): to the
- * people the SLA escalates to (whoever may approve orders), on their phone, else by email.
+ * people the SLA escalates to (whoever may approve orders): in their browser first (accounts
+ * staff work at a desk), then on their phone, else by email.
  */
 export const OrderDecisionOverdue = defineNotification<BreachedOrder>({
   key: 'order.decision-overdue',
@@ -86,7 +87,7 @@ export const OrderDecisionOverdue = defineNotification<BreachedOrder>({
   send: { on: ['order.sla.breached'] },
   when: (o) => o.sla?.name === 'orders.decision',
   to: (o) => (o.sla.escalate?.notify ?? ['orders.approve']).map((capability) => ({ capability })),
-  channels: ['push', 'email'],
+  channels: ['webpush', 'push', 'email'],
   push: {
     title: (o, r) => `${o.number} ${pick(WAITING, r.lang)}`,
     body: (o, r) => `${o.title}: ${total(o, r.lang)}`,
@@ -110,8 +111,9 @@ const said = (m: CommentMentionRow, lang: Lang) =>
   pick(MENTIONED, lang).replace('{name}', m.author.name ?? pick(SOMEONE, lang));
 
 /**
- * Someone named in a comment on an order hears of it on their phone, else by email, with a
- * link to the order. (The framework's own notification also keeps it in their in-app inbox.)
+ * Someone named in a comment on an order hears of it in their browser, then on their phone,
+ * else by email, with a link to the order. (The framework's own notification also keeps it in
+ * their in-app inbox.)
  */
 export const OrderMentionNotification = defineNotification<CommentMentionRow>({
   key: 'orders.comment-mention',
@@ -119,7 +121,7 @@ export const OrderMentionNotification = defineNotification<CommentMentionRow>({
   send: { on: ['comment.mentioned'] },
   when: (m) => m.on.entity === 'order' && m.target.kind === 'user',
   to: (m) => [{ userId: m.target.id }],
-  channels: ['push', 'email'],
+  channels: ['webpush', 'push', 'email'],
   push: {
     title: (m, r) => said(m, r.lang),
     body: (m) => m.excerpt,

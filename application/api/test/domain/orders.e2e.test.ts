@@ -3,6 +3,7 @@
 // by level and limit, cost hidden by capability, cancel instead of delete; its state machine
 // (draft → submitted → approved → fulfilled), SLAs on submitted, versions, and revisions.
 
+import { randomUUID } from 'node:crypto';
 import { SlaService } from '@hykr/api';
 import {
   addMember,
@@ -749,5 +750,87 @@ describe('money in summaries (lead V4-L17)', () => {
       expect(res.status, JSON.stringify(res.body)).toBe(400);
       expect(JSON.stringify(res.body)).not.toMatch(/"minor"/);
     }
+  });
+});
+
+describe("a line's product (R1)", () => {
+  const product = async (person: Person, name: string, headers: Record<string, string> = {}) => {
+    const res = await person.call('POST', '/api/products', { name, sku: name }, headers);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    return res.body.value.id as string;
+  };
+  const line = (productId?: string) => ({
+    ref: 'l1',
+    title: 'Ply',
+    quantity: 2,
+    unitPrice: '100.00',
+    ...(productId ? { productId } : {}),
+  });
+
+  it('a line names a product of its business, and reads its name back', async () => {
+    const ply = await product(owner, '18 mm BWP ply');
+    const saved = await save(owner, { title: 'With a product', items: [line(ply)] });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const orderId = saved.body.value.order.id;
+    const items = await owner.call('GET', `/api/orderItems?orderId=${orderId}`);
+    expect(items.body.items[0]).toMatchObject({
+      productId: ply,
+      references: { productId: { id: ply, label: '18 mm BWP ply' } },
+    });
+    // The whole team reads the business's products: staff name the owner's in their own order.
+    const theirs = await save(staff, { title: 'Staff product', items: [line(ply)] }, inTenant());
+    expect(theirs.status, JSON.stringify(theirs.body)).toBe(200);
+    const one = await staff.call(
+      'GET',
+      `/api/orderItems/${theirs.body.value.items[0].id}`,
+      undefined,
+      inTenant(),
+    );
+    expect(one.body.references).toEqual({ productId: { id: ply, label: '18 mm BWP ply' } });
+  });
+
+  it("another business's product, or none, is refused: the whole save, with the line's ref", async () => {
+    const theirs = await product(stranger, 'Their ply');
+    for (const productId of [theirs, randomUUID()]) {
+      const res = await save(owner, { title: 'Refused product', items: [line(productId)] });
+      expect(res.status, JSON.stringify(res.body)).toBe(404);
+      expect(res.body).toEqual({
+        error: 'not_found',
+        message: 'No such product',
+        field: 'productId',
+        path: ['items', 0, 'productId'],
+        ref: 'l1',
+      });
+    }
+    const made = await pool.query(
+      `select count(*)::int n from app.orders where title = 'Refused product'`,
+    );
+    expect(made.rows[0].n).toBe(0);
+    // The assistant's save would wait: it is refused before it does.
+    const ask = asAssistant(`user:${owner.id}`, inTenant());
+    const parked = await ask('POST', '/api/orders/save', {
+      title: 'Refused product',
+      items: [line(theirs)],
+    });
+    expect(parked.status).toBe(404);
+  });
+
+  it("deleting a product clears its lines' link in the same write, in its business only", async () => {
+    const gone = await product(owner, 'Discontinued');
+    const saved = await save(owner, { title: 'Losing a product', items: [line(gone)] });
+    const orderId = saved.body.value.order.id;
+    expect((await owner.call('DELETE', `/api/products/${gone}`)).status).toBe(200);
+    const rows = await pool.query('select product_id from app.orders_items where order_id = $1', [
+      orderId,
+    ]);
+    expect(rows.rows).toEqual([{ product_id: null }]);
+    // A row naming another business's product cannot be stored, even by SQL.
+    const theirs = await product(stranger, 'Theirs again');
+    await expect(
+      pool.query('update app.orders_items set product_id = $1 where order_id = $2', [
+        theirs,
+        orderId,
+      ]),
+    ).rejects.toThrow(/foreign key/);
   });
 });

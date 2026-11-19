@@ -15,6 +15,7 @@ export { embedText } from './fake-embedding.js';
 export {
   allows,
   chooseModel,
+  chooseVision,
   type ModelChoice,
   type ModelRefusal,
   policyProblems,
@@ -22,6 +23,7 @@ export {
 export {
   costOf,
   type EmbeddingModel,
+  hasCapability,
   type LanguageModel,
   type ModelEntry,
   type ModelRegistry,
