@@ -88,7 +88,7 @@ describe('patching a section', () => {
     expect(next).toEqual({
       ok: true,
       stored: { maxDays: 30, defaultDays: 3 },
-      value: { defaultDays: 3, maxDays: 30, sessionHours: 12 },
+      value: { defaultDays: 3, maxDays: 30, sessionHours: 12, allowLasting: false },
     });
   });
 
