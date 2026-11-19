@@ -381,6 +381,7 @@ describe('personal data contributors', () => {
       invites: [],
       jobs: [],
       parties: [],
+      pushBrowsers: [],
       pushDevices: [],
       shareLinks: [],
       fixtureNotes: [{ about: subject }],
