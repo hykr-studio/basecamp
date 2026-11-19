@@ -163,7 +163,7 @@ export class SharesController {
 }
 
 /**
- * The assistant's drafts (decisions B21): a link and its send to a named recipient
+ * The assistant's drafts (decisions B23): a link and its send to a named recipient
  * (`create-share-link`), or a reissue that sends a new one (`send-share-link`). The assistant's
  * draft waits for its person's approval; a person may use these too. The answer never holds the
  * token or the address, so a stored answer (idempotency) keeps neither.

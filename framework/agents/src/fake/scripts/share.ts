@@ -1,4 +1,4 @@
-// Share links (decisions B21):
+// Share links (decisions B23):
 //   send the <entity> <id> link to its customer     create-share-link (waits for approval)
 //   send link <id> again                            send-share-link (a new link in its place)
 // The assistant never sees a link's token or address: it says what will be sent, to whom.

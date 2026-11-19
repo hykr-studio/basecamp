@@ -8,7 +8,7 @@ import { OrderDocument } from './document.js';
  * field policy hide it from anyone without `orders.cost.read`), opens its PDF and, as the order's
  * customer reached on WhatsApp, accepts it with a code (OrderAcceptance). An order's link may
  * have no end date, where the business allows it (a job runs for months, then its warranty),
- * and is sent to its customer on WhatsApp (OrderLinkTemplate), else by email (decisions B21).
+ * and is sent to its customer on WhatsApp (OrderLinkTemplate), else by email (decisions B23).
  */
 export const OrderShare = defineShareable({
   entity: 'order',

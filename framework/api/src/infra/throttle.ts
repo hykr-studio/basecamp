@@ -53,7 +53,7 @@ export const authRateLimit = () => ({
 
 /**
  * One more hit on a counter that resets an hour after its first (a lasting form link's answers,
- * decisions B21): whether this hit is within `limit`. Under the deployment's queue prefix, so a
+ * decisions B23): whether this hit is within `limit`. Under the deployment's queue prefix, so a
  * test run's counters are its own. Not switched off by THROTTLE=off: it is the form's own limit.
  */
 export async function hitHourly(key: string, limit: number): Promise<boolean> {

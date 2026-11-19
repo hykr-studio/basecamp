@@ -257,7 +257,7 @@ export class SharedController {
     const answers = ShareSubmitInput.safeParse(body ?? {});
     if (!answers.success)
       throw new BadRequestException({ error: 'invalid', issues: answers.error.issues });
-    // A link with no end lives for years on a website (decisions B21): its trap field must come
+    // A link with no end lives for years on a website (decisions B23): its trap field must come
     // back empty, and it takes so many answers an hour, from the link and from one address.
     if (!link.expiresAt) {
       if (answers.data[SHARE_HONEYPOT] !== '')

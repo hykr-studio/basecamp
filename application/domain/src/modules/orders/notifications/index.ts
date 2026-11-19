@@ -29,7 +29,7 @@ export const OrderDocumentTemplate = defineTemplate({
 });
 
 /**
- * An order's page, sent by link to its customer (decisions B21): the business, the order's
+ * An order's page, sent by link to its customer (decisions B23): the business, the order's
  * number in the body, and a button that opens the page (`/share/{{1}}`, the token filled when
  * it is sent). Never the token in the body.
  */

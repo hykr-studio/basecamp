@@ -72,7 +72,7 @@ const SENDING_LEASE_MS = 5 * 60_000;
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 500);
 
 /**
- * Sends share links, in the worker (the share.send queue), at most once (decisions B21): by
+ * Sends share links, in the worker (the share.send queue), at most once (decisions B23): by
  * WhatsApp (the declaration's approved template, its URL button carrying the token; else a plain
  * message inside the 24-hour window) or by email, through the channel's own services: consent,
  * template approval, the outbound queue, the mailer. The token waits sealed on the send and is

@@ -278,7 +278,7 @@ describe('an order shared with its customer', () => {
   });
 });
 
-describe('an order’s page that lasts and is sent (B21)', () => {
+describe('an order’s page that lasts and is sent (B23)', () => {
   it('has no end where the business allows it, and goes to the order’s customer once', async () => {
     // The customer's own order: the order's customer is who a lasting page is for.
     const saved = await customer.call(

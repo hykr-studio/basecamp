@@ -1,4 +1,4 @@
-// Share links that last and are sent (B21): a link with no end where the declaration says
+// Share links that last and are sent (B23): a link with no end where the declaration says
 // `lasting` and the business allows it (still open a year on, ended at once by revoke); renew
 // keeps the address; reissue makes a new one like it; a lasting form link's hourly limits and
 // trap field; the framework sends a link to its recipient on WhatsApp (the template's URL button
@@ -264,7 +264,7 @@ describe('a lasting form link', () => {
     const link = await made({ target: { form: 'inquiries.busy' }, expiresInDays: null });
     for (let n = 1; n <= 20; n++)
       expect((await submit(link.token, { name: `B${n}` })).status).toBe(201);
-    expect((await submit(link.token, { name: 'B21' })).status).toBe(429);
+    expect((await submit(link.token, { name: 'B23' })).status).toBe(429);
   });
 
   it('a form link that ends asks for no trap (as before)', async () => {

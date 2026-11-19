@@ -97,7 +97,7 @@ describe('a public form', () => {
   });
 });
 
-describe('B21: lasting links, their limits and how they are sent', () => {
+describe('B23: lasting links, their limits and how they are sent', () => {
   const form = (extra: object) =>
     definePublicForm({
       name: 'unit.lasting',

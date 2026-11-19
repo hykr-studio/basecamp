@@ -24,7 +24,7 @@ async function naming(conn: Conn, subject: Subject, tenantId?: string): Promise<
 /**
  * "Delete my data": every link made for the subject is revoked and forgets whom it was for
  * (the contact or email, where its code went, and its label, which the maker wrote for them), in
- * the erasure's transaction, and its sends forget where they went (B21: the recipient and the
+ * the erasure's transaction, and its sends forget where they went (B23: the recipient and the
  * address; a send still waiting fails, its sealed token wiped). The rows stay (the audit names
  * them), without the person; their copies (audit rows, replies) lose the same.
  */

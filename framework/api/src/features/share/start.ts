@@ -16,7 +16,7 @@ const OWNER = {};
 
 /**
  * A declaration's WhatsApp template is one of the application's, and has a URL button that opens
- * the link: its path is `/share/{{1}}` (decisions B21), the token filling `{{1}}` when sent.
+ * the link: its path is `/share/{{1}}` (decisions B23), the token filling `{{1}}` when sent.
  */
 function templateProblems(send: ShareSendDef | undefined, names: Set<string>): string[] {
   const template = send?.whatsapp?.template;
@@ -37,7 +37,7 @@ function templateProblems(send: ShareSendDef | undefined, names: Set<string>): s
  * children, its documents are declared for it, its view is registered; every public form names a
  * served entity and asks only fields a form can ask, every required one asked or fixed. A
  * declaration that sends links names one of the application's templates, with a URL button to
- * the link (decisions B21). The share operations an approval replays are registered here.
+ * the link (decisions B23). The share operations an approval replays are registered here.
  */
 @Injectable()
 export class ShareStart implements OnModuleInit {

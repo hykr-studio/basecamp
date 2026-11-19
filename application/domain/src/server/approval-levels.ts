@@ -49,7 +49,7 @@ export const Levels = {
 
 /**
  * A template sent to a customer by hand, or a share link the assistant drafts for one (decisions
- * B21: only the assistant's draft is not the framework's own operation), reaches someone outside
+ * B23: only the assistant's draft is not the framework's own operation), reaches someone outside
  * the business.
  */
 export const SendsGoOutside = defineLevelRule({

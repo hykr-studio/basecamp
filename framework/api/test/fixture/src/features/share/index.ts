@@ -151,7 +151,7 @@ export const InquiryListView = defineView({
     ),
 });
 
-/** An inquiry's link on WhatsApp (decisions B21): a URL button that opens it, the token its {{1}}. */
+/** An inquiry's link on WhatsApp (decisions B23): a URL button that opens it, the token its {{1}}. */
 export const InquiryLinkTemplate = defineTemplate({
   name: 'fixture_inquiry_link_v1',
   category: 'utility',
@@ -189,7 +189,7 @@ export const InquiryForm = definePublicForm({
   fixed: { source: 'form' },
 });
 
-/** A form posted on a website (B21): its link may have no end, under the default hourly limits. */
+/** A form posted on a website (B23): its link may have no end, under the default hourly limits. */
 export const WebsiteForm = definePublicForm({
   name: 'inquiries.website',
   entity: 'inquiry',
@@ -226,7 +226,7 @@ export const shareContributions = {
   capabilities: [...(acceptanceContributions.capabilities ?? []), ScoreRead, CostRead],
   readProjectors: [...(acceptanceContributions.readProjectors ?? []), guestCostHidden],
   shareables: [
-    // A lasting record, sent on WhatsApp in its template, else by email (decisions B21).
+    // A lasting record, sent on WhatsApp in its template, else by email (decisions B23).
     defineShareable({
       entity: 'inquiry',
       lasting: true,

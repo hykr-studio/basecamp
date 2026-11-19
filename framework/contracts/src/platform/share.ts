@@ -77,7 +77,7 @@ export interface ShareableDef {
    * (`shares.allowLasting`). A customer's page for a long job, say. Default false.
    */
   lasting?: boolean;
-  /** How the framework sends a link to it to its recipient (decisions B21). */
+  /** How the framework sends a link to it to its recipient (decisions B23). */
   send?: ShareSendDef;
 }
 
@@ -408,7 +408,7 @@ export const CreateShareInput = z.object({
   /** A form link: at most this many answers. */
   maxUses: z.number().int().min(1).max(100_000).optional(),
   label: z.string().trim().min(1).max(120).optional(),
-  /** Send it to its recipient (decisions B21): only now, since its token is kept nowhere. */
+  /** Send it to its recipient (decisions B23): only now, since its token is kept nowhere. */
   send: ShareSendRequest.optional(),
 });
 export type CreateShareInput = z.input<typeof CreateShareInput>;

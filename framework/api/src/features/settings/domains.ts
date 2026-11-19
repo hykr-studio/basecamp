@@ -97,7 +97,7 @@ export const verifiedTenantOf = (origin: string) => verified.tenantOf(origin);
 export const forgetDomains = () => verified.forget();
 
 /**
- * A business's own address for links it sends (decisions B21): its first verified origin, or
+ * A business's own address for links it sends (decisions B23): its first verified origin, or
  * null. A share link's URL and the messages that carry it use it; a WhatsApp template's URL
  * button cannot (its base is fixed per template), so it keeps APP_URL.
  */

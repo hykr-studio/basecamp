@@ -25,7 +25,7 @@ export const SharesSettings = z
       .default(12),
     /**
      * Links may have no end date where the application's declaration says `lasting` (decisions
-     * B21): the business decides. Off unless it says so.
+     * B23): the business decides. Off unless it says so.
      */
     allowLasting: z.boolean().default(false),
   })

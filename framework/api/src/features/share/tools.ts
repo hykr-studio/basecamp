@@ -30,7 +30,7 @@ const WAITS =
   ' It waits for the user to approve it: then the run pauses, and goes on once it is decided. You never see the link or its address: say what will be sent, to whom, once approved.';
 
 /**
- * The assistant's share tools (decisions B21). Like every tool they call the API as the agent,
+ * The assistant's share tools (decisions B23). Like every tool they call the API as the agent,
  * acting for the person: a draft of a link and its send to a named recipient, or of a new link
  * sent in place of an old one. Each waits for the person's approval, and neither answer holds
  * the link's token or address.

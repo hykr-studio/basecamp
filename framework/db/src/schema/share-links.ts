@@ -8,7 +8,7 @@ import { customers, tenants } from './tenancy.js';
 /**
  * Share links (docs/decisions/B9.md): one record, saved page or public form a business shows to
  * someone without an account. Only the token's SHA-256 is kept. A link ends at `expiresAt`, or,
- * with none (a lasting link, decisions B21), only when it is revoked. Any link can be revoked, may count its uses (a form's answers), and may ask its recipient for a one-time
+ * with none (a lasting link, decisions B23), only when it is revoked. Any link can be revoked, may count its uses (a form's answers), and may ask its recipient for a one-time
  * code (`otpChannel`) before it shows anything. Rows stay after revocation, for the audit.
  */
 export const shareLinks = app.table(
@@ -92,7 +92,7 @@ export const shareSessions = app.table(
 );
 
 /**
- * A link sent to its recipient by the framework (decisions B21): by WhatsApp or email, once. The
+ * A link sent to its recipient by the framework (decisions B23): by WhatsApp or email, once. The
  * token is kept nowhere in clear: it waits here sealed with SECRETS_KEY (`tokenSealed`, opened
  * only for this business and row) until the send finishes, then it is wiped. A send is claimed
  * by one job (`claimedBy`), and a send found mid-way is finished from what is recorded, never

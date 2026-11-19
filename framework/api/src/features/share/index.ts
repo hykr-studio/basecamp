@@ -13,7 +13,7 @@ import { ShareDraftsController, SharesController } from './shares.controller.js'
 import { ShareStart } from './start.js';
 import { shareTools } from './tools.js';
 
-/** The queue a link's send is delivered on (decisions B21). */
+/** The queue a link's send is delivered on (decisions B23). */
 export const SHARE_SEND_QUEUE = 'share.send';
 
 const lastTry = (job: { attemptsMade: number; opts: { attempts?: number } }) =>
@@ -59,7 +59,7 @@ export const ShareCodeRequested = defineSubscriber({
  * Share links and public surfaces (docs/decisions/B9.md): a record, a saved page or a public
  * form shown to someone without an account, by an expiring, revocable link, optionally behind a
  * one-time code, or with no end where the application and the business allow it; sent to its
- * recipient by WhatsApp or email when asked (decisions B21). A guest reads by the `share` grant (what its link names, while it is live) and
+ * recipient by WhatsApp or email when asked (decisions B23). A guest reads by the `share` grant (what its link names, while it is live) and
  * writes only a form's answer, through the entity's own create. The application declares what is
  * shareable (`shareables`) and its forms (`publicForms`).
  */

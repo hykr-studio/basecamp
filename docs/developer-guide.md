@@ -2405,8 +2405,8 @@ export const OrderShare = defineShareable({
   // view: 'order.card',            // default: the spec's item view
   // pages: false,                  // keep its lists off shared pages
   // otp: 'required', maxDays: 30,  // every link asks for a code; a shorter limit
-  lasting: true,                    // a link may have no end, where the business allows it (B21)
-  send: {                           // how the framework sends a link to its recipient (B21)
+  lasting: true,                    // a link may have no end, where the business allows it (B23)
+  send: {                           // how the framework sends a link to its recipient (B23)
     whatsapp: {
       template: OrderLinkTemplate,  // a URL button whose path is '/share/{{1}}'
       params: (target) => ({ business: target.business.name, number: String(target.record?.number) }),
@@ -2441,7 +2441,7 @@ export const BriefForm = definePublicForm({
   (`onBehalfOf`, `support:<grantId>`). It never outlives that support access: it ends with it at
   the latest, it is revoked when the access is, and it opens nothing (410 `link_revoked`) while
   that standing is not in force (section 6.6).
-- **Links that last** (`docs/decisions/B21.md`). `expiresInDays: null` makes a link with no end
+- **Links that last** (`docs/decisions/B23.md`). `expiresInDays: null` makes a link with no end
   date (`expiresAt: null`). It is allowed only where the declaration says `lasting: true` and the
   business's `shares.allowLasting` is on; anything else is refused `too_long`. Revoking it ends it
   at once. A link made under support access still ends with that access.

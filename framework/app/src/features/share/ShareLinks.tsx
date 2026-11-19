@@ -164,7 +164,7 @@ function Made({ made }: { made: ShareCreated }) {
 }
 
 /**
- * A record's, a page's or a form's share links (decisions B9, B21), for people who may share
+ * A record's, a page's or a form's share links (decisions B9, B23), for people who may share
  * (`shares.create`): make one (for how many days, or with no end where allowed; with a code to
  * the recipient or not), copy it once or have it sent to its recipient, see how often each was
  * opened and how its send went, renew one, send a new one in its place, and revoke one. `to` is who a link is for (the record's

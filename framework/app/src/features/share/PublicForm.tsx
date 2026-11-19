@@ -79,7 +79,7 @@ export function PublicForm({ client, form }: { client: Client; form: SharedForm 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
-  // The trap a person never sees (decisions B21): a bot that fills every field fills it too.
+  // The trap a person never sees (decisions B23): a bot that fills every field fills it too.
   const [trap, setTrap] = useState('');
   const set = (key: string, v: unknown) => setAnswers((a) => ({ ...a, [key]: v }));
   if (sent) return <Text style={styles.heading}>{t('share.form.sent')}</Text>;
