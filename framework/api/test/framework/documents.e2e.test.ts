@@ -247,6 +247,7 @@ describe('making a document', () => {
       ['memos.memo', ['whatsapp', 'email']],
       ['memos.sheet', []],
       ['memos.card', ['email']],
+      ['memos.photos', []],
     ]);
     expect((await owner.call('GET', '/api/documents')).status).toBe(400);
   });

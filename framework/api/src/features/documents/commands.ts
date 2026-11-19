@@ -44,6 +44,7 @@ import {
   seenAsOf,
   sendInfoOf,
 } from './access.js';
+import { documentsConfig } from './config.js';
 import {
   channelsOf,
   type DocumentBusiness,
@@ -52,7 +53,8 @@ import {
   documents as documentDefs,
   pdfName,
 } from './define.js';
-import { type CheckedLayout, DocumentLayout } from './layout.js';
+import { checkLayoutImages, ImagePicker, unprocessable } from './images.js';
+import { type CheckedLayout, DocumentLayout, type ImageRef } from './layout.js';
 
 type Values = Record<string, unknown>;
 
@@ -60,6 +62,8 @@ type Values = Record<string, unknown>;
 export interface Snapshot {
   business: DocumentBusiness;
   value: unknown;
+  /** The images the layout shows, as `load` was given them (file and SHA-256). */
+  images?: ImageRef[];
 }
 
 /** The business's name and time zone (`tenantZone`: its own, else the deployment's). */
@@ -98,6 +102,27 @@ export function layoutOf(
   if (!parsed.success)
     throw new Error(`Document ${def.name} laid out a page wrong: ${parsed.error.message}`);
   return parsed.data;
+}
+
+/**
+ * The layout, checked when a document is asked for: a template's mistake is a named 422 with the
+ * field's path (a QR code too long for its level: qr_too_long), never a 500.
+ */
+function layoutWhenAsked(
+  def: DocumentDef,
+  value: unknown,
+  lang: Lang,
+  business: DocumentBusiness,
+): CheckedLayout {
+  const parsed = DocumentLayout.safeParse(def.render(value, renderContextOf(lang, business)));
+  if (parsed.success) return parsed.data;
+  const issues = parsed.error.issues.map((i) => ({ path: i.path, message: i.message }));
+  const qr = issues.find((i) => i.message.startsWith('qr_too_long'));
+  throw unprocessable(
+    qr ? 'qr_too_long' : 'bad_layout',
+    qr ? qr.message : `Document ${def.name} laid out a page wrong: ${parsed.error.message}`,
+    { issues },
+  );
 }
 
 const notReached = (label: string) =>
@@ -161,6 +186,10 @@ export const RenderDocument = defineCommand(RenderDocumentSpec, {
     // biome-ignore lint/suspicious/noExplicitAny: any child entity
     const children = async (child: ChildEntityDef<any, any>, parentId = input.id) =>
       (await child.children.list(tx, p, parentId)).map((r) => toJson(child.toRead(r, p)) as Values);
+    const limits = documentsConfig().images;
+    // Loaded here, not at import: the API's configuration reads the environment when it loads.
+    const { config: apiConfig } = await import('../../config.js');
+    const picker = new ImagePicker(tx, p, limits);
     const loadedValue = await def.load({
       tx,
       principal: p,
@@ -168,13 +197,17 @@ export const RenderDocument = defineCommand(RenderDocumentSpec, {
       lang,
       record,
       business,
+      appUrl: apiConfig.appUrl,
       read,
       children,
+      image: (fileId) => picker.image(fileId),
+      images: (fileIds) => picker.images(fileIds),
     });
     // JSON only: what is stored is exactly what the worker draws from.
     const value = JSON.parse(JSON.stringify(loadedValue ?? null)) as unknown;
-    layoutOf(def, value, lang, business);
-    const snapshot: Snapshot = { business, value };
+    const layout = layoutWhenAsked(def, value, lang, business);
+    const images = checkLayoutImages(layout, picker.given, limits);
+    const snapshot: Snapshot = { business, value, ...(images.length ? { images } : {}) };
 
     const subject = subjectOf(p);
     // One version number per record and document, even when two ask at once.

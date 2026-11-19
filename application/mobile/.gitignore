@@ -9,6 +9,11 @@ dist/
 web-build/
 expo-env.d.ts
 
+# Written by @hykr/app's config plugin each time Expo reads the config (web push)
+public/push-sw.js
+public/manifest.webmanifest
+public/pwa-icon.png
+
 # Native
 .kotlin/
 *.orig.*

@@ -15,11 +15,15 @@
       "default": "./dist/ui.js"
     },
     "./theme.css": "./theme.css",
+    "./push-sw.js": "./push-sw.js",
+    "./app.plugin.js": "./app.plugin.js",
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
-    "theme.css"
+    "theme.css",
+    "push-sw.js",
+    "app.plugin.js"
   ],
   "publishConfig": {
     "access": "public"

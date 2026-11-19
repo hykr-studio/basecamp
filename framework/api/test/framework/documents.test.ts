@@ -6,7 +6,11 @@ import { inflateSync } from 'node:zlib';
 import { defineTemplate } from '@hykr/notifications';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { assertDocumentsConfig, documentsConfig } from '../../dist/features/documents/config.js';
+import {
+  assertDocumentsConfig,
+  documentsConfig,
+  IMAGE_LIMITS,
+} from '../../dist/features/documents/config.js';
 import { defineDocument, pdfName } from '../../dist/features/documents/define.js';
 import {
   createFakeEngine,
@@ -247,8 +251,8 @@ describe('the PDF engine', () => {
 
 describe('configuration and definitions', () => {
   it('DOCUMENTS_ENGINE: pdf by default, fake for tests, nothing else; production refuses fake', () => {
-    expect(documentsConfig({})).toEqual({ engine: 'pdf' });
-    expect(documentsConfig({ DOCUMENTS_ENGINE: 'FAKE' })).toEqual({ engine: 'fake' });
+    expect(documentsConfig({})).toEqual({ engine: 'pdf', images: IMAGE_LIMITS });
+    expect(documentsConfig({ DOCUMENTS_ENGINE: 'FAKE' }).engine).toBe('fake');
     expect(() => documentsConfig({ DOCUMENTS_ENGINE: 'chrome' })).toThrow(/pdf or fake/);
     expect(() => assertDocumentsConfig({ engine: 'fake' }, { NODE_ENV: 'production' })).toThrow(
       /production/,

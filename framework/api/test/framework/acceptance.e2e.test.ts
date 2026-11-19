@@ -5,7 +5,8 @@
 // guess, are used once, expire, and are limited per person. Another business gets 404, colleagues
 // who reach the record cannot sign and see the evidence without the address or the request, the
 // assistant cannot ask or accept, and refusals are audited. A summary is signed at the fixture's
-// e-sign provider instead. The fixture's `agreements` (fixture/src/features/acceptance).
+// e-sign provider instead, and a PDF with a logo names the image in its evidence. The fixture's
+// `agreements` (fixture/src/features/acceptance).
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 // The API's entry is loaded in beforeAll, after boot sets the runtime.
@@ -674,6 +675,62 @@ describe('signing at an e-sign provider', () => {
     await expect(
       service().completeESign({ provider: 'fixture-esign', ref: late, status: 'signed' }),
     ).rejects.toThrow();
+    expect(await service().verifyChain(tenantId)).toMatchObject({ ok: true });
+  });
+});
+
+describe('a PDF with images', () => {
+  /** A PNG's signature and header (what sniffing reads). */
+  const png = () => {
+    const u32 = (n: number) => {
+      const b = Buffer.alloc(4);
+      b.writeUInt32BE(n);
+      return b;
+    };
+    return Buffer.concat([
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+      u32(13),
+      Buffer.from('IHDR'),
+      u32(60),
+      u32(20),
+      Buffer.from([8, 2, 0, 0, 0, 0, 0, 0, 0]),
+      Buffer.alloc(64, 5),
+    ]);
+  };
+
+  it('the acceptance binds the hash of a PDF with the logo in it, and its evidence names the image', async () => {
+    const id = await offered('Plan L', { offer: false });
+    const bytes = png();
+    const pre = await owner.call('POST', '/api/files', {
+      name: 'logo.png',
+      mime: 'image/png',
+      size: bytes.length,
+      for: { entity: 'agreement', field: 'logo', id },
+    });
+    expect(pre.status).toBe(201);
+    await fetch(`${server.base}${pre.body.upload.url}`, {
+      method: 'PUT',
+      headers: pre.body.upload.headers,
+      body: new Uint8Array(bytes),
+    });
+    expect((await owner.call('POST', `/api/files/${pre.body.file.id}/confirm`)).status).toBe(200);
+    const logo = pre.body.file.id as string;
+    expect((await owner.call('PATCH', `/api/agreements/${id}`, { logo })).status).toBe(200);
+    await move(owner, id, 'offer');
+    const doc = await pdf(id);
+    const { rows } = await pool.query('select data from app.documents where id = $1', [doc.id]);
+    const images = rows[0].data.images as { fileId: string; sha256: string }[];
+    expect(images).toEqual([{ ...images[0], fileId: logo }]);
+
+    const { asked, code } = await emailedAfter(buyer.email, () => challenge(buyer, doc.id));
+    const right = await accept(buyer, asked.body.value.id, code ?? '');
+    expect(right.status).toBe(200);
+    expect(right.body.value.document).toMatchObject({
+      id: doc.id,
+      sha256: doc.sha256,
+      images: [{ fileId: logo, sha256: images[0].sha256 }],
+    });
+    // The row's hash covers the images; the chain still verifies with rows written before them.
     expect(await service().verifyChain(tenantId)).toMatchObject({ ok: true });
   });
 });

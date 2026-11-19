@@ -25,9 +25,11 @@ export type Reader = { lang: Lang; timeZone: string; appUrl?: string };
 export type Row = Record<string, unknown> & { id: string; tenantId: string };
 
 /**
- * The channels a notification can name. WhatsApp and email are built in to the dispatcher; push
- * and the in-app inbox (`inapp`) are the framework's push and inbox features (@hykr/api,
- * registered delivery channels). Another feature
+ * The channels a notification can name. WhatsApp and email are built in to the dispatcher; push,
+ * web push and the in-app inbox (`inapp`) are the framework's push and inbox features (@hykr/api,
+ * registered delivery channels). `push` reaches the person's phones, then their browsers when no
+ * phone takes it; `webpush` reaches their browsers only, and when a notification lists both,
+ * `push` means phones only (so a chain can order them). Another feature
  * that registers a delivery channel (@hykr/api's `deliveryChannels`) adds its name here, and any
  * content of its own on `NotificationDef`, by declaration merging:
  *
@@ -40,6 +42,7 @@ export interface NotificationChannels {
   whatsapp: true;
   email: true;
   push: true;
+  webpush: true;
   inapp: true;
 }
 export type NotificationChannel = keyof NotificationChannels & string;
@@ -97,8 +100,9 @@ export interface NotificationDef<R extends Row = Row> {
     body: (row: R, reader: Reader) => string;
   };
   /**
-   * What a push notification to the person's phone says. Required when `'push'` is a channel.
-   * Push text shows on a lock screen: keep it to what the recipient may read anywhere.
+   * What a push notification to the person's phone or browser says. Required when `'push'` or
+   * `'webpush'` is a channel. Push text shows on a lock screen: keep it to what the recipient may
+   * read anywhere.
    */
   push?: {
     title: (row: R, reader: Reader) => string;
@@ -148,6 +152,8 @@ export function defineNotification<R extends Row>(def: NotificationDef<R>): Noti
     throw new Error(`Notification ${def.key}: email is a channel but has no subject and body`);
   if (all.includes('push') && !def.push)
     throw new Error(`Notification ${def.key}: push is a channel but has no title and body`);
+  if (all.includes('webpush') && !def.push)
+    throw new Error(`Notification ${def.key}: webpush is a channel but has no push title and body`);
   if (all.includes('inapp') && !def.inapp)
     throw new Error(`Notification ${def.key}: inapp is a channel but has no title and body`);
   if ((def.onButton || def.approval) && !def.whatsapp)

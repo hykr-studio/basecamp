@@ -21,11 +21,12 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import { AllowAnonymous, OptionalAuth } from '@thallesp/nestjs-better-auth';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { InboundService } from './inbound.service.js';
 import { IntegrationsService } from './manage.service.js';
 
@@ -191,8 +192,15 @@ export class WebhooksController {
     @Param('connector') connector: string,
     @Param('connection') connection: string,
     @Req() req: Request & { rawBody?: Buffer },
+    @Res({ passthrough: true }) res: Response,
   ) {
-    await this.inbound.receive(connector, connection, toInbound(req));
+    const out = await this.inbound.receive(connector, connection, toInbound(req));
+    if ('handshake' in out) {
+      // The sender's own token, echoed as plain text (never as HTML).
+      res.setHeader('content-type', 'text/plain; charset=utf-8');
+      res.setHeader('x-content-type-options', 'nosniff');
+      return out.handshake;
+    }
     return 'ok';
   }
 

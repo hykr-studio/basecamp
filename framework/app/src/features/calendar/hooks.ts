@@ -1,4 +1,4 @@
-import type { InviteRecipient } from '@hykr/contracts';
+import type { CalendarProvider, InviteRecipient } from '@hykr/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Platform } from 'react-native';
 import { api } from '../../api';
@@ -21,21 +21,37 @@ export function useCalendarConnections() {
 }
 
 /**
- * Start connecting: the consent screen's URL, to open in the browser. Google comes back to this
- * app: the web app's `/calendar`, or on a phone the app's own link (`CALENDAR_APP_RETURN_URL`).
+ * Start connecting: the consent screen's URL, to open in the browser. The provider comes back
+ * to this app: the web app's `/calendar`, or on a phone the app's own link
+ * (`CALENDAR_APP_RETURN_URL`).
  */
-export function useConnectCalendar() {
+export function useConnectCalendar(provider: CalendarProvider = 'google') {
   return useMutation({
-    mutationFn: () => api.calendar.connect('google', Platform.OS === 'web' ? 'web' : 'app'),
+    mutationFn: (chosen?: CalendarProvider) =>
+      api.calendar.connect(chosen ?? provider, Platform.OS === 'web' ? 'web' : 'app'),
   });
 }
 
-/** Finish connecting with what Google sent back: only as the person who started it. */
+/** Finish connecting with what the provider sent back: only as the person who started it. */
 export function useCompleteCalendar() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (input: { code: string; state: string }) => api.calendar.complete(input),
+    mutationFn: (input: { code: string; state: string; provider?: CalendarProvider }) =>
+      api.calendar.complete(
+        { code: input.code, state: input.state },
+        undefined,
+        input.provider ?? 'google',
+      ),
     onSettled: () => void client.invalidateQueries({ queryKey: ['calendar', 'connections'] }),
+  });
+}
+
+/** Write the person's records to this calendar of theirs (one of several connected). */
+export function useSetCalendarTarget() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.calendar.setWriteTo(id),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['calendar', 'connections'] }),
   });
 }
 

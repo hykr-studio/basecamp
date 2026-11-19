@@ -37,6 +37,7 @@ import {
 import { layoutOf, type Snapshot } from './commands.js';
 import { channelsOf, documents as documentDefs } from './define.js';
 import { DOCUMENT_ENGINE, type DocumentEngine } from './engine/index.js';
+import { ImageUnavailable, imageBytes, setDocumentFiles } from './images.js';
 
 const log = new Logger('Documents');
 
@@ -84,6 +85,7 @@ export class DocumentsService implements OnApplicationBootstrap {
    * the capabilities it names exist, and its WhatsApp template is one of the application's.
    */
   onApplicationBootstrap() {
+    setDocumentFiles(() => this.service(FilesService));
     const problems: string[] = [];
     const templates = new Set(runtime().notifications.templates);
     for (const def of documentDefs.all()) {
@@ -193,13 +195,15 @@ export class DocumentsService implements OnApplicationBootstrap {
     const def = documentDefs.get(doc.name);
     try {
       if (!def) throw new Error(`No document "${doc.name}" is declared`);
-      const { business, value } = doc.data as Snapshot;
+      const { business, value, images = [] } = doc.data as Snapshot;
       const lang = langOf(doc.lang);
       const layout = layoutOf(def, value, lang, business);
+      // The images' bytes as they were when asked for (by SHA-256), from storage, never the web.
       const out = await this.engine.render(layout, {
         lang,
         author: business.name,
         createdAt: doc.createdAt,
+        images: await imageBytes(this.db, doc.tenantId, images),
       });
       const file = await this.service(FilesService).storeBytes({
         tenantId: doc.tenantId,
@@ -242,6 +246,7 @@ export class DocumentsService implements OnApplicationBootstrap {
           size: ready.size,
           pages: ready.pages,
           sha256,
+          ...(images.length ? { images: images.length } : {}),
         });
         await recordEvents(tx, {
           principal: systemPrincipal({ tenantId: doc.tenantId, job: 'documents.render' }),
@@ -256,7 +261,8 @@ export class DocumentsService implements OnApplicationBootstrap {
       for (const s of queued) await this.queueSend(s.id, 'made');
       return 'ready';
     } catch (e) {
-      if (!lastTry) throw e;
+      // An image gone or changed does not come back: the document fails now, not after retries.
+      if (!lastTry && !(e instanceof ImageUnavailable)) throw e;
       log.error(`${doc.name} ${doc.id} could not be made: ${messageOf(e)}`);
       await this.db.transaction(async (tx) => {
         const [failed] = await tx

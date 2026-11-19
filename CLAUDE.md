@@ -29,6 +29,7 @@ pnpm install && cp application/.env.example .env   # .env lives at the repo ROOT
 # APPROVAL_SECRET, SECRETS_KEY (each >= 32 chars: openssl rand -hex 32). Offline: MODEL_MODE=fake VOICE_MODE=fake
 # Optional: CREDITS_CONFIG (prices and plans). Platform operators: `pnpm --dir application exec basecamp operator add <email>`
 # A business's defaults until it sets its own: DEFAULT_CURRENCY, DEFAULT_TIME_ZONE, DEFAULT_GRIEVANCE_CONTACT
+# Web push in a browser: WEB_PUSH_PUBLIC_KEY, WEB_PUSH_PRIVATE_KEY, WEB_PUSH_SUBJECT (`basecamp webpush keys`)
 pnpm build            # everything; the basecamp CLI, API and tests all run from dist/
 pnpm infra:up         # Postgres/PostGIS, Redis, MinIO, Mailpit, pgAdmin, LiveKit, whaloc (WhatsApp emulator)
 pnpm db:migrate       # framework migrations first, then the application's

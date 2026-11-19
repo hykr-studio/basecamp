@@ -5,6 +5,8 @@ import { Platform } from 'react-native';
 import { api } from '../../api';
 import type { AppPlugin } from '../../framework/app-domain';
 import { appPathOf } from './links';
+import { PushBanner } from './PushControls';
+import { signOutWebPush, startWebPush } from './web';
 
 export type PushOptions = {
   /** The EAS project id. Default: the app config's `extra.eas.projectId`. */
@@ -47,15 +49,28 @@ async function register(options: PushOptions): Promise<string | undefined> {
 }
 
 /**
- * Push notifications on iOS and Android: after sign-in the device is registered for the
+ * Push notifications. On iOS and Android: after sign-in the device is registered for the
  * person (the server sends what notifications list `push` for), a tap opens the notification's
  * link, and sign-out forgets the device. Needs the `expo-notifications` config plugin in the
  * app's app.json and an EAS project id.
+ *
+ * In a browser (web push): after sign-in the service worker (`/push-sw.js`) is registered, and
+ * when the person allowed notifications here before, the browser is registered again; otherwise
+ * a strip and the person's card offer "Turn on notifications", which asks the browser only on
+ * that click. A click on a notification focuses the app's tab (or opens one) on its link, and
+ * sign-out forgets the browser. Needs `@hykr/app` in the app's app.json plugins (it copies the
+ * service worker and a manifest into public/) and WEB_PUSH_* keys on the server.
  */
 export function pushPlugin(options: PushOptions = {}): AppPlugin {
+  const web = Platform.OS === 'web';
   return {
     name: 'push',
+    ...(web ? { Banner: PushBanner } : {}),
+    onSignOut: async () => {
+      if (web) await signOutWebPush();
+    },
     onSignedIn: () => {
+      if (web) return startWebPush();
       if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
       // In the foreground too: a banner and the list, no badge.
       Notifications.setNotificationHandler({

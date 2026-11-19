@@ -1,12 +1,17 @@
-// Calendars (decisions B17): schedulable records in people's own Google calendars (per-person
-// OAuth, push channels through the integration bus), invites by email with an .ics, private
-// feeds, and busy and free time.
+// Calendars (decisions B17, B22): schedulable records in people's own Google and Microsoft 365
+// calendars (per-person OAuth, push channels and Graph subscriptions through the integration
+// bus), invites by email with an .ics, private feeds, and busy and free time.
 
 import {
   CHANGED_EVENT,
   GOOGLE_CALENDAR_CONNECTOR,
   googleCalendarConnector,
 } from '@hykr/connectors/google-calendar';
+import {
+  MICROSOFT_CALENDAR_CONNECTOR,
+  MICROSOFT_CHANGED_EVENT,
+  microsoftCalendarConnector,
+} from '@hykr/connectors/microsoft-calendar';
 import { CalendarCapabilities } from '@hykr/contracts';
 import { commandController, commandHandler } from '@hykr/core';
 import { defineQueue, defineSchedule } from '../../queues/define.js';
@@ -76,6 +81,17 @@ export const CalendarConnected = defineSubscriber({
   },
 });
 
+/** A person's write target changed, or one of their calendars went: their events follow. */
+export const CalendarRetarget = defineSubscriber({
+  name: 'calendar.retarget',
+  on: ['calendar.target_changed', 'calendar.disconnected'],
+  handle: async (event, ctx) => {
+    const row = (event.row ?? {}) as { userId?: unknown };
+    if (typeof row.userId === 'string')
+      await ctx.get(CalendarSyncService).queueRetarget(event.tenantId, row.userId, event.id);
+  },
+});
+
 /** An invite asked for: send it. */
 export const CalendarInviteRequested = defineSubscriber({
   name: 'calendar.invites',
@@ -101,6 +117,22 @@ export const GoogleCalendarChanges = defineConnectorHandler({
   },
 });
 
+/** Microsoft's notice that a connected calendar changed: read the delta, as the system. */
+export const MicrosoftCalendarChanges = defineConnectorHandler({
+  name: 'calendar.microsoft-changes',
+  connector: MICROSOFT_CALENDAR_CONNECTOR,
+  on: [MICROSOFT_CHANGED_EVENT],
+  handle: async (event, ctx) => {
+    const connectionId = ctx.connection.public.calendarConnectionId;
+    if (typeof connectionId !== 'string') return;
+    const data = (event.data ?? {}) as { subscriptionId?: string };
+    await ctx.get(CalendarSyncService).pullChanges(connectionId, {
+      tenantId: event.tenantId,
+      channelId: data.subscriptionId,
+    });
+  },
+});
+
 export const calendarFeature = defineFeature({
   name: 'calendar',
   controllers: [CalendarController, CalendarPublicController, commandController(SendInvite)],
@@ -114,11 +146,11 @@ export const calendarFeature = defineFeature({
   exports: [CalendarService, CalendarSyncService, InvitesService],
   contributes: {
     capabilities: [CalendarCapabilities.availability],
-    connectors: [googleCalendarConnector],
-    connectorHandlers: [GoogleCalendarChanges],
+    connectors: [googleCalendarConnector, microsoftCalendarConnector],
+    connectorHandlers: [GoogleCalendarChanges, MicrosoftCalendarChanges],
     queues: [CalendarSyncQueue, CalendarInvitesQueue],
     schedules: [CalendarMaintain],
-    subscribers: [CalendarRecords, CalendarConnected, CalendarInviteRequested],
+    subscribers: [CalendarRecords, CalendarConnected, CalendarRetarget, CalendarInviteRequested],
     toolContributions: [calendarTools],
     erasureContributors: [calendarErasure],
     exportContributors: [calendarExport],

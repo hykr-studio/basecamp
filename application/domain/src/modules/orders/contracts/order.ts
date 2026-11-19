@@ -2,6 +2,7 @@ import {
   CreatedBy,
   CurrencyCode,
   entitySpec,
+  FileRef,
   Money,
   MoneyInput,
   type StatesTrait,
@@ -68,6 +69,8 @@ export const OrderView = z.object({
   taxLines: z.array(TaxLine),
   /** How many priced lines it has (groups not counted). */
   lineCount: z.number().int(),
+  /** A picture shown on its PDF (a drawing, a product photo): an image file's id. */
+  photo: FileRef.nullable(),
   /**
    * Its groups and lines, in tree order: only on its `order.placed` event, so an outside system
    * gets the whole order in one delivery (each line's cost hidden without orders.cost.read).
@@ -94,6 +97,7 @@ export const CreateOrderInput = z.object({
   title,
   currency: CurrencyCode,
   ...totals,
+  photo: FileRef.optional(),
 });
 export const UpdateOrderInput = z.object({
   title: title.optional(),
@@ -105,6 +109,7 @@ export const UpdateOrderInput = z.object({
   total: MoneyInput.optional(),
   taxLines: z.array(TaxLine).optional(),
   lineCount: z.number().int().min(0).optional(),
+  photo: FileRef.nullable().optional(),
 });
 
 const label = (en: string, hi: string, te: string) => ({ en, hi, te });
@@ -228,6 +233,7 @@ export const OrderSpec = entitySpec({
     status: { en: 'Status', hi: 'स्थिति', te: 'స్థితి' },
     cancelReason: { en: 'Why it was cancelled', hi: 'रद्द करने का कारण', te: 'రద్దు చేసిన కారణం' },
     revision: { en: 'Revision', hi: 'संशोधन', te: 'సవరణ' },
+    photo: { en: 'Photo', hi: 'फ़ोटो', te: 'ఫోటో' },
   },
   list: {
     filterable: { status: 'enum', total: 'money', number: 'text', createdAt: 'date' },
@@ -243,6 +249,8 @@ export const OrderSpec = entitySpec({
     money: { fields: ['subtotal', 'taxTotal', 'total'] },
     states: ORDER_STATES,
     versioned: ORDER_VERSIONS,
+    // Drawn on its PDF: PNG or JPEG only.
+    files: { photo: { accept: ['image/png', 'image/jpeg'], maxBytes: 10 * 1024 * 1024 } },
   },
   views: { list: 'order.list', item: 'order.card' },
 });

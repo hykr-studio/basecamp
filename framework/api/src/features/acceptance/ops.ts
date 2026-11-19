@@ -187,7 +187,14 @@ const documentPart = (r: Resolved, binding: Binding) => ({
   documentVersion: r.doc.version,
   documentSha256: r.doc.sha256 ?? binding.sha256,
   documentFileName: r.doc.fileName,
+  documentImages: imagesShown(r.doc.data),
 });
+
+/** The images a document's PDF shows (its snapshot's), as file and SHA-256; null when none. */
+function imagesShown(data: unknown): { fileId: string; sha256: string }[] | null {
+  const images = (data as { images?: { fileId: string; sha256: string }[] } | null)?.images;
+  return images?.length ? images.map(({ fileId, sha256 }) => ({ fileId, sha256 })) : null;
+}
 
 /** The decision once a challenge's binding is compared with what is stored now. */
 function stillBound(l: { binding: Binding; r: Resolved }) {
