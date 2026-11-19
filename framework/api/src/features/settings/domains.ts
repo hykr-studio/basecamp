@@ -2,9 +2,9 @@
 // only after it proves it controls them with a DNS TXT record. One origin belongs to one business.
 import { resolveTxt } from 'node:dns/promises';
 import { DomainOrigin } from '@hykr/contracts';
-import { schema } from '@hykr/db';
+import { type Database, schema } from '@hykr/db';
 import type { BetterAuthPlugin } from 'better-auth';
-import { isNotNull } from 'drizzle-orm';
+import { and, asc, eq, isNotNull } from 'drizzle-orm';
 import type { AuthPlugin } from '../../hooks.js';
 
 /** Looks up a host's TXT records: DNS, or a test's fake. */
@@ -95,6 +95,22 @@ export const verifiedTenantOf = (origin: string) => verified.tenantOf(origin);
 
 /** Forget what this process knows of verified origins (one was verified or removed). */
 export const forgetDomains = () => verified.forget();
+
+/**
+ * A business's own address for links it sends (decisions B21): its first verified origin, or
+ * null. A share link's URL and the messages that carry it use it; a WhatsApp template's URL
+ * button cannot (its base is fixed per template), so it keeps APP_URL.
+ */
+export async function verifiedOriginOf(db: Database, tenantId: string): Promise<string | null> {
+  const d = schema.tenantDomains;
+  const [row] = await db
+    .select({ origin: d.origin })
+    .from(d)
+    .where(and(eq(d.tenantId, tenantId), isNotNull(d.verifiedAt)))
+    .orderBy(asc(d.createdAt))
+    .limit(1);
+  return row?.origin ?? null;
+}
 
 /** Is this a business's verified origin? Only exact https origins ever are. */
 export async function originAllowed(origin: string): Promise<boolean> {

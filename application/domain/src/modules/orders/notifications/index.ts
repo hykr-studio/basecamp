@@ -29,6 +29,30 @@ export const OrderDocumentTemplate = defineTemplate({
 });
 
 /**
+ * An order's page, sent by link to its customer (decisions B21): the business, the order's
+ * number in the body, and a button that opens the page (`/share/{{1}}`, the token filled when
+ * it is sent). Never the token in the body.
+ */
+export const OrderLinkTemplate = defineTemplate({
+  name: 'order_link_v1',
+  category: 'utility',
+  params: z.object({ business: z.string().max(60), number: z.string().max(40) }),
+  body: {
+    en: '{{business}} shared your order {{number}} with you. Tap below to see it, any time.',
+    hi: '{{business}} ने आपका ऑर्डर {{number}} आपके साथ साझा किया। इसे कभी भी देखने के लिए नीचे टैप करें।',
+    te: '{{business}} మీ ఆర్డర్ {{number}}ను మీతో పంచుకున్నారు. ఎప్పుడైనా చూడటానికి క్రింద నొక్కండి.',
+  },
+  buttons: [
+    {
+      type: 'url',
+      text: { en: 'See the order', hi: 'ऑर्डर देखें', te: 'ఆర్డర్ చూడండి' },
+      path: '/share/{{1}}',
+    },
+  ],
+  example: { business: 'Studio Rao', number: 'ORD/2026-27/0001' },
+});
+
+/**
  * The breach event's row: the order with the SLA that ran out. Who hears it reads `sla` as
  * stored; the words read the order as each recipient may (its read shape: `total` is money).
  */
@@ -109,6 +133,6 @@ export const OrderMentionNotification = defineNotification<CommentMentionRow>({
 });
 
 export const ordersNotifications: NotificationsDomain = {
-  templates: [OrderDocumentTemplate],
+  templates: [OrderDocumentTemplate, OrderLinkTemplate],
   notifications: [OrderDecisionOverdue, OrderMentionNotification],
 };

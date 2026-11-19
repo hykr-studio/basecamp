@@ -66,7 +66,9 @@ export class ShareGuard implements CanActivate {
     const link = /^[A-Za-z0-9_-]{20,100}$/.test(token) ? await this.linkOf(token) : undefined;
     if (!link) throw new NotFoundException({ error: 'not_found', message: 'No such link' });
     if (link.revokedAt) throw gone('link_revoked', 'This link was withdrawn');
-    if (link.expiresAt <= new Date()) throw gone('link_expired', 'This link has ended');
+    // No end date (a lasting link, decisions B21): it ends only when revoked.
+    if (link.expiresAt && link.expiresAt <= new Date())
+      throw gone('link_expired', 'This link has ended');
     const verified = link.otpChannel ? await this.verified(link, req) : false;
     const open = this.reflector.getAllAndOverride<boolean>(GATE_OPEN, [
       context.getHandler(),

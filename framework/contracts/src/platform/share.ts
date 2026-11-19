@@ -72,7 +72,84 @@ export interface ShareableDef {
   otp?: ShareOtpPolicy;
   /** A link to it lasts at most this many days (below the business's `shares.maxDays`). */
   maxDays?: number;
+  /**
+   * A link to it may have no end date (`expiresInDays: null`), when the business allows it
+   * (`shares.allowLasting`). A customer's page for a long job, say. Default false.
+   */
+  lasting?: boolean;
+  /** How the framework sends a link to it to its recipient (decisions B21). */
+  send?: ShareSendDef;
 }
+
+/* ── Sending a link ────────────────────────────────────────────────────────── */
+
+/** How a link is sent: a WhatsApp template (or a plain message in the window), or an email. */
+export type ShareSendChannel = 'whatsapp' | 'email';
+export const ShareSendChannel = z.enum(['whatsapp', 'email']);
+
+/** Who reads a sent link, and how. */
+export interface ShareReader {
+  lang: Lang;
+  timeZone: string;
+}
+
+/** What a sent link's words are about: never its token or address. */
+export interface ShareSendTarget {
+  kind: 'record' | 'page' | 'form';
+  /** The link's own label, else the record's title or the form's label, in the reader's words. */
+  label: string;
+  /** The shared record as stored (a record link). */
+  record?: Readonly<Record<string, unknown>>;
+  /** The form's name (a form link). */
+  form?: string;
+  business: { name: string };
+}
+
+/**
+ * A WhatsApp template a link goes out in (`defineTemplate` in `@hykr/notifications`): a URL
+ * button whose path is `/share/{{1}}`, filled with the link's token when it is sent.
+ */
+export interface ShareTemplateRef {
+  name: string;
+  category: string;
+  body: Labels;
+  buttons?: readonly ({ type: 'quick_reply' } | { type: 'url'; path: string })[];
+}
+
+/**
+ * The wording a link is sent in. Without it, the framework's own words: a plain WhatsApp message
+ * inside the 24-hour window, and an email. `params` and the email's words get the target and the
+ * reader; the link's address is the framework's (the token never reaches them for the template:
+ * the button carries it).
+ */
+export interface ShareSendDef {
+  whatsapp?: {
+    template: ShareTemplateRef;
+    params(target: ShareSendTarget, reader: ShareReader): Record<string, string>;
+  };
+  email?: {
+    subject(target: ShareSendTarget, reader: ShareReader): string;
+    /** `url` is the link's address: put it in the body. */
+    body(target: ShareSendTarget, reader: ShareReader, url: string): string;
+  };
+  /** The channels tried, in order. Default WhatsApp, then email. */
+  order?: readonly ShareSendChannel[];
+}
+
+/** A send declaration is sound: its order names known channels, once each. */
+function sendProblem(send: ShareSendDef | undefined): string | null {
+  if (!send?.order) return null;
+  if (!send.order.length) return 'send.order names no channel';
+  for (const c of send.order)
+    if (c !== 'whatsapp' && c !== 'email') return `send.order: ${String(c)} is not a channel`;
+  if (new Set(send.order).size !== send.order.length) return 'send.order names a channel twice';
+  return null;
+}
+
+/** The channels a declaration sends by, in order. */
+export const sendOrderOf = (send: ShareSendDef | undefined): ShareSendChannel[] => [
+  ...(send?.order ?? (['whatsapp', 'email'] as const)),
+];
 
 /** Every shareable entity, by entity name. Collects `contributes.shareables`. */
 export const shareables = createHookRegistry<ShareableDef>('shareable', (s) => s.entity, {
@@ -85,6 +162,8 @@ export function defineShareable(def: ShareableDef): ShareableDef {
     throw new Error(`Shareable "${def.entity}": name the entity ('order')`);
   if (def.maxDays !== undefined && !(Number.isInteger(def.maxDays) && def.maxDays > 0))
     throw new Error(`Shareable "${def.entity}": maxDays is a whole number of days`);
+  const send = sendProblem(def.send);
+  if (send) throw new Error(`Shareable "${def.entity}": ${send}`);
   return def;
 }
 
@@ -118,6 +197,24 @@ export interface PublicFormDef {
   otp?: ShareOtpPolicy;
   /** A link to it lasts at most this many days (below the business's `shares.maxDays`). */
   maxDays?: number;
+  /**
+   * A link to it may have no end date, when the business allows it: a form posted on a website.
+   * Such a link takes answers under `rateLimit` and asks for the honeypot field.
+   */
+  lasting?: boolean;
+  /**
+   * Answers a link without an end takes per hour: from the link, and from one address. Default
+   * 20 and 5; `false` for none (a form behind a code, say).
+   */
+  rateLimit?: { perLink?: number; perIp?: number } | false;
+  /** How the framework sends a link to it to its recipient. */
+  send?: ShareSendDef;
+}
+
+/** A lasting form link's hourly limits, the declaration's or the defaults. */
+export function formRateLimit(form: PublicFormDef): { perLink: number; perIp: number } | null {
+  if (form.rateLimit === false) return null;
+  return { perLink: form.rateLimit?.perLink ?? 20, perIp: form.rateLimit?.perIp ?? 5 };
 }
 
 /** Every public form, by name. Collects `contributes.publicForms`. */
@@ -133,6 +230,12 @@ export function definePublicForm(def: PublicFormDef): PublicFormDef {
     throw new Error(`Public form "${def.name}": it asks nothing`);
   if (def.maxDays !== undefined && !(Number.isInteger(def.maxDays) && def.maxDays > 0))
     throw new Error(`Public form "${def.name}": maxDays is a whole number of days`);
+  if (def.rateLimit)
+    for (const [k, v] of Object.entries(def.rateLimit))
+      if (v !== undefined && !(Number.isInteger(v) && v > 0))
+        throw new Error(`Public form "${def.name}": rateLimit.${k} is a whole number of answers`);
+  const send = sendProblem(def.send);
+  if (send) throw new Error(`Public form "${def.name}": ${send}`);
   return def;
 }
 
@@ -288,18 +391,78 @@ export const ShareRecipient = z.union([
 ]);
 export type ShareRecipient = z.infer<typeof ShareRecipient>;
 
+/** Days until a link ends; `null`: no end (a lasting declaration, in a business that allows it). */
+export const ShareDays = z.number().int().min(1).max(3650).nullable();
+
+/** Send the link to its recipient once it is made: by this channel, or the declaration's order. */
+export const ShareSendRequest = z.object({ channel: ShareSendChannel.optional() }).strict();
+export type ShareSendRequest = z.infer<typeof ShareSendRequest>;
+
 export const CreateShareInput = z.object({
   target: ShareTarget,
-  /** Days until it ends. Default: the business's `shares.defaultDays`. */
-  expiresInDays: z.number().int().min(1).max(3650).optional(),
+  /** Days until it ends. Default: the business's `shares.defaultDays`. `null`: no end. */
+  expiresInDays: ShareDays.optional(),
   /** Ask the recipient for a one-time code before anything is shown. */
   otp: OtpChannel.nullable().optional(),
   to: ShareRecipient.optional(),
   /** A form link: at most this many answers. */
   maxUses: z.number().int().min(1).max(100_000).optional(),
   label: z.string().trim().min(1).max(120).optional(),
+  /** Send it to its recipient (decisions B21): only now, since its token is kept nowhere. */
+  send: ShareSendRequest.optional(),
 });
 export type CreateShareInput = z.input<typeof CreateShareInput>;
+
+/** Move a link's end date, keeping its address. */
+export const RenewShareInput = z.object({ expiresInDays: ShareDays }).strict();
+export type RenewShareInput = z.infer<typeof RenewShareInput>;
+
+/** Revoke a link and make a new one like it (a new token), sending it when asked. */
+export const ReissueShareInput = z.object({ send: ShareSendRequest.optional() }).strict();
+export type ReissueShareInput = z.infer<typeof ReissueShareInput>;
+
+/**
+ * The assistant's draft (`create-share-link`): a link and its send to a named recipient, made
+ * once a person approves. The assistant never sees the token or the address.
+ */
+export const DraftShareInput = z
+  .object({
+    target: ShareTarget,
+    to: ShareRecipient,
+    channel: ShareSendChannel.optional(),
+    expiresInDays: ShareDays.optional(),
+    otp: OtpChannel.nullable().optional(),
+    label: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+export type DraftShareInput = z.infer<typeof DraftShareInput>;
+
+/** The assistant's draft of a reissue (`send-share-link`): the old link stops, a new one goes. */
+export const DraftReissueInput = z.object({ channel: ShareSendChannel.optional() }).strict();
+export type DraftReissueInput = z.infer<typeof DraftReissueInput>;
+
+/** One send of a link, as the team sees it: never the token or the address in full. */
+export const ShareSendStatus = z.enum(['waiting', 'queued', 'sending', 'sent', 'failed']);
+export type ShareSendStatus = z.infer<typeof ShareSendStatus>;
+export const ShareSendInfo = z.object({
+  id: z.string(),
+  channel: ShareSendChannel.nullable(),
+  /** Where it went, masked. */
+  sentTo: z.string().nullable(),
+  status: ShareSendStatus,
+  error: z.string().nullable(),
+  sentAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+});
+export type ShareSendInfo = z.infer<typeof ShareSendInfo>;
+
+/** What the assistant's draft answers: never the token or the address. */
+export type ShareDrafted = {
+  id: string;
+  status: 'queued';
+  send: ShareSendInfo | null;
+  message: string;
+};
 
 export const ShareStatus = z.enum(['active', 'expired', 'revoked', 'used']);
 export type ShareStatus = z.infer<typeof ShareStatus>;
@@ -325,12 +488,15 @@ export const ShareLinkInfo = z.object({
   maxUses: z.number().int().nullable(),
   views: z.number().int(),
   lastViewedAt: z.iso.datetime().nullable(),
-  expiresAt: z.iso.datetime(),
+  /** Null: it has no end (it ends when revoked). */
+  expiresAt: z.iso.datetime().nullable(),
   revokedAt: z.iso.datetime().nullable(),
   createdBy: z.string(),
   /** Made through the platform (`support:<grantId>`): it ends with that support access. */
   onBehalfOf: z.string().nullable(),
   createdAt: z.iso.datetime(),
+  /** Its sends, newest first (a few). */
+  sends: z.array(ShareSendInfo).optional(),
 });
 export type ShareLinkInfo = z.infer<typeof ShareLinkInfo>;
 
@@ -351,6 +517,8 @@ export const ShareableInfo = z.object({
   acceptances: z.boolean(),
   pages: z.boolean(),
   otp: ShareOtpPolicy,
+  /** A link may have no end date (when the business allows it too). */
+  lasting: z.boolean(),
 });
 export type ShareableInfo = z.infer<typeof ShareableInfo>;
 
@@ -360,10 +528,16 @@ export const PublicFormInfo = z.object({
   entity: z.string(),
   label: LabelsShape,
   otp: ShareOtpPolicy,
+  lasting: z.boolean(),
 });
 export type PublicFormInfo = z.infer<typeof PublicFormInfo>;
 
-export type ShareKinds = { entities: ShareableInfo[]; forms: PublicFormInfo[] };
+export type ShareKinds = {
+  entities: ShareableInfo[];
+  forms: PublicFormInfo[];
+  /** The business lets links have no end date (`shares.allowLasting`). */
+  allowLasting?: boolean;
+};
 
 /* ── /api/share/:token: what a guest sees ──────────────────────────────────── */
 
@@ -439,7 +613,7 @@ export const Shared = z.object({
     id: z.string(),
     kind: z.enum(['record', 'page', 'form']),
     label: z.string().nullable(),
-    expiresAt: z.iso.datetime(),
+    expiresAt: z.iso.datetime().nullable(),
   }),
   business: z.object({
     name: z.string(),
@@ -469,6 +643,12 @@ export type ShareCodeSent = {
 /** The session a right code opened: send it as `x-share-session`. */
 export type ShareSession = { session: string; expiresAt: string };
 
+/**
+ * The form's trap: a field a person never sees and the page always sends empty. A link without
+ * an end refuses an answer that leaves it out or fills it (`spam_suspected`).
+ */
+export const SHARE_HONEYPOT = 'hp';
+
 /** A form's answers: its own fields under `values`, the business's under `custom`. */
 export const ShareSubmitInput = z
   .object({
@@ -476,6 +656,7 @@ export const ShareSubmitInput = z
     custom: z
       .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
       .optional(),
+    [SHARE_HONEYPOT]: z.string().max(500).optional(),
   })
   .strict();
 export type ShareSubmitInput = z.infer<typeof ShareSubmitInput>;

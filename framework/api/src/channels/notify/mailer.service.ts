@@ -1,3 +1,4 @@
+import { scrubSensitive } from '@hykr/channels';
 import { type Database, schema } from '@hykr/db';
 import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import nodemailer from 'nodemailer';
@@ -44,7 +45,12 @@ export class MailerService implements OnApplicationShutdown {
       attachments?: MailAttachment[];
       icalEvent?: MailCalendarEvent;
     },
-    meta: { notification?: string; extra?: Record<string, unknown> } = {},
+    meta: {
+      notification?: string;
+      extra?: Record<string, unknown>;
+      /** Text in the mail the log must not keep (a share link's token): `[link]` there. */
+      sensitive?: readonly string[];
+    } = {},
   ): Promise<string> {
     const attachments = mail.attachments ?? [];
     await this.transport.sendMail({
@@ -64,7 +70,7 @@ export class MailerService implements OnApplicationShutdown {
         direction: 'out',
         kind: attachments.length ? 'media' : 'text',
         body: {
-          subject: mail.subject,
+          subject: scrubSensitive({ text: mail.subject, sensitive: meta.sensitive }).text,
           ...(attachments.length
             ? {
                 attachments: attachments.map((a) => ({ name: a.filename, size: a.content.length })),

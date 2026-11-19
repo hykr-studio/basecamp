@@ -67,7 +67,11 @@ function Header({ shared }: { shared: Shared }) {
         </Text>
       </View>
       {shared.link.label ? <Text style={styles.heading}>{shared.link.label}</Text> : null}
-      <Text style={styles.muted}>{t('share.until', { date: when(shared.link.expiresAt) })}</Text>
+      <Text style={styles.muted}>
+        {shared.link.expiresAt
+          ? t('share.until', { date: when(shared.link.expiresAt) })
+          : t('share.until.none')}
+      </Text>
     </View>
   );
 }

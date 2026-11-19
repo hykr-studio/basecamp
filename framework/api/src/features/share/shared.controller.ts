@@ -3,9 +3,11 @@ import {
   AcceptInput,
   customForCreate,
   type DocumentInfo,
+  formRateLimit,
   Lang,
   type Principal,
   publicForms,
+  SHARE_HONEYPOT,
   type Shared,
   ShareSubmitInput,
   ShareVerifyInput,
@@ -32,6 +34,8 @@ import {
   Controller,
   Get,
   HttpCode,
+  HttpException,
+  HttpStatus,
   Inject,
   NotFoundException,
   Param,
@@ -45,6 +49,7 @@ import { ModuleRef } from '@nestjs/core';
 import { EventBus } from '@nestjs/cqrs';
 import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 import { OtpService } from '../../channels/otp/otp.service.js';
+import { hitHourly } from '../../infra/throttle.js';
 import { AcceptanceService } from '../acceptance/acceptance.service.js';
 import type { Binding } from '../acceptance/checks.js';
 import { ACCEPTANCE_PURPOSE } from '../acceptance/checks.js';
@@ -252,6 +257,26 @@ export class SharedController {
     const answers = ShareSubmitInput.safeParse(body ?? {});
     if (!answers.success)
       throw new BadRequestException({ error: 'invalid', issues: answers.error.issues });
+    // A link with no end lives for years on a website (decisions B21): its trap field must come
+    // back empty, and it takes so many answers an hour, from the link and from one address.
+    if (!link.expiresAt) {
+      if (answers.data[SHARE_HONEYPOT] !== '')
+        throw new BadRequestException({
+          error: 'spam_suspected',
+          message: 'This answer looks automated: it was not sent',
+        });
+      const limits = formRateLimit(form);
+      if (limits) {
+        const ip = req.ip ?? 'unknown';
+        const byLink = await hitHourly(`share-form:link:${link.id}`, limits.perLink);
+        const byIp = await hitHourly(`share-form:ip:${link.id}:${ip}`, limits.perIp);
+        if (!byLink || !byIp)
+          throw new HttpException(
+            { error: 'too_many_answers', message: 'Too many answers just now: try again later' },
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
+      }
+    }
     // Only what the form asks, then what the server sets: nothing else of the request.
     const values: Values = {};
     for (const key of form.fields)

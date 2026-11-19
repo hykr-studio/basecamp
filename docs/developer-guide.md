@@ -2405,6 +2405,15 @@ export const OrderShare = defineShareable({
   // view: 'order.card',            // default: the spec's item view
   // pages: false,                  // keep its lists off shared pages
   // otp: 'required', maxDays: 30,  // every link asks for a code; a shorter limit
+  lasting: true,                    // a link may have no end, where the business allows it (B21)
+  send: {                           // how the framework sends a link to its recipient (B21)
+    whatsapp: {
+      template: OrderLinkTemplate,  // a URL button whose path is '/share/{{1}}'
+      params: (target) => ({ business: target.business.name, number: String(target.record?.number) }),
+    },
+    // email: { subject: (target, reader) => …, body: (target, reader, url) => … },
+    // order: ['whatsapp', 'email'], // the default
+  },
 });
 
 export const BriefForm = definePublicForm({
@@ -2415,21 +2424,62 @@ export const BriefForm = definePublicForm({
   customerName: 'name',             // names the customer an anonymous answer creates
   fixed: { source: 'form' },        // set by the server, never asked
   // custom: false,                 // default: also ask the business's custom fields
+  lasting: true,                    // posted on a website: its link may have no end
+  // rateLimit: { perLink: 20, perIp: 5 }, // a lasting link's answers an hour (default); false: none
 });
 ```
 
 - **Links** (`app.share_links`): `POST /api/shares { target: { entity, id } | { page } | { form },
   expiresInDays?, otp?: 'whatsapp' | 'email', to?, maxUses?, label? }` answers the token, the
-  path `/share/<token>` and the URL (`APP_URL`) once; only the token's SHA-256 is kept (no
+  path `/share/<token>` and the URL (`APP_URL`, or the business's verified domain) once; only the token's SHA-256 is kept (no
   idempotency key, so no stored answer holds it). People only, with `shares.create` (owner,
   admin, ops, staff), for a target they reach. `GET /api/shares?entity&id | page | form` lists a
-  target's links; `POST /api/shares/:id/revoke` (its maker, or `shares.manage`). A link always
-  ends: `shares.defaultDays` (7) unless asked, at most `shares.maxDays` (90) or the declaration's
-  `maxDays`. Deleting a record revokes its links in the same write. Every write is audited
-  (`share.create`, `share.revoke`). A link made through the platform keeps its standing
+  target's links; `POST /api/shares/:id/revoke` (its maker, or `shares.manage`). A link ends
+  after `shares.defaultDays` (7) unless asked, at most `shares.maxDays` (90) or the declaration's
+  `maxDays`, unless it is lasting (below). Deleting a record revokes its links in the same write.
+  Every write is audited (`share.create`, `share.revoke`, `share.renew`, `share.reissue`). A link made through the platform keeps its standing
   (`onBehalfOf`, `support:<grantId>`). It never outlives that support access: it ends with it at
   the latest, it is revoked when the access is, and it opens nothing (410 `link_revoked`) while
   that standing is not in force (section 6.6).
+- **Links that last** (`docs/decisions/B21.md`). `expiresInDays: null` makes a link with no end
+  date (`expiresAt: null`). It is allowed only where the declaration says `lasting: true` and the
+  business's `shares.allowLasting` is on; anything else is refused `too_long`. Revoking it ends it
+  at once. A link made under support access still ends with that access.
+  `POST /api/shares/:id/renew { expiresInDays: number | null }` (`share.renew`) moves the end
+  date under the same rules and keeps the token, so the address the recipient holds keeps
+  working. It is for the maker or `shares.manage`, audited, and refused on a revoked link
+  (`link_revoked`). `POST /api/shares/:id/reissue { send? }` (`share.reissue`) revokes the link
+  and makes a new one with the same settings and a new token, answered once.
+- **Sending a link.** `POST /api/shares { …, send: { channel? } }` makes the link and queues its
+  send in the same write. A link's token is kept nowhere, so a link is sent only when it is made
+  or reissued, never later. The send goes to the link's own recipient (no recipient: 400
+  `no_recipient`). On WhatsApp it goes in the declaration's approved template, its URL button
+  carrying the token, else as a plain message inside the 24-hour window; else by email (the
+  declaration's words, or the framework's). The order is the requested channel, else
+  `send.order`, else WhatsApp then email. A link's maker may send it; anyone else needs
+  `customers.message`; the assistant's send waits for approval (`agent_sends_share`).
+  `app.share_sends` keeps each send (`waiting`, `queued`, `sending`, `sent`, `failed`, with the
+  error), and `GET /api/shares` lists each link's latest sends, the address masked. A send goes at
+  most once: a worker stopped mid-send leaves it failed `interrupted`, never sent twice. Until it
+  finishes, the token waits on the send, sealed with `SECRETS_KEY`, and is wiped after. Events
+  (`share.send_requested`, `share.sent`, `share.send_failed`) and audit rows carry ids and states,
+  and the message log keeps `[link]` in the token's place (`OutboundMessage.sensitive`). A
+  declaration's template is checked at start: one of the application's, with a URL button whose
+  path is `/share/{{1}}`.
+- **The assistant's links.** `create-share-link` (`POST /api/shares/drafts { target, to, channel?,
+  expiresInDays? }`) drafts a link and its send, and `send-share-link` (`POST
+  /api/shares/drafts/reissue/:id`) drafts a reissue that sends. Each waits for the person's
+  approval ("Send a link to order "ORD/…" to Asha Rao on WhatsApp"). The application's level
+  rules apply to these drafts, not to a person's own links. Approved, the link is made and sent.
+  The assistant is told what will be sent and to whom, never the token or the address. Plain
+  `POST /api/shares` stays people only.
+- **The business's domain.** With a verified domain (section 5.18), a link's URL, an email's link
+  and a plain WhatsApp message's link are on that domain (its first verified one). A template's
+  URL button keeps `APP_URL`: its base is fixed per template when it is synced.
+- **A lasting form link** takes 20 answers an hour from the link and 5 from one address (429
+  `too_many_answers`; `PublicFormDef.rateLimit`), and refuses an answer whose trap field `hp` is
+  missing or filled (400 `spam_suspected`). `<PublicForm>` sends it empty from a hidden input; a
+  client of your own sends `hp: ''`. A form link that ends asks neither.
 - **Recipients.** `to: { contactId } | { customerId } | { email } | { recordCustomer: true }`
   (the record's own customer, when it has one). It is where the link's code goes, and who the
   guest is: a contact recipient is the guest's subject, and its customer record the guest's.
@@ -2474,7 +2524,10 @@ export const BriefForm = definePublicForm({
   `InlineView` through `dataKey`; actions off), a record's children as labelled lines, its PDFs,
   and `AcceptDocument` bound to the share routes (`AcceptanceClientProvider`); a page through
   `PageHost`; a form through `<PublicForm>`. `<ShareLinks target to? maxUses? />` (hooks
-  `useShares`, `useCreateShare`, `useRevokeShare`, `useCanShare`) is the team's side. A guest's
+  `useShares`, `useCreateShare`, `useRevokeShare`, `useRenewShare`, `useReissueShare`,
+  `useSendShare`, `useCanShare`) is the team's side: it offers "No end date" for a lasting kind
+  where the business allows it, "Send it to them" when the link has a recipient, each link's send
+  state, Renew and a new link in its place. A guest's
   client: `createShareClient({ baseUrl, token, session })` (`@hykr/api-client`).
 - **Privacy.** A contact's "delete my data" revokes the links made for them and forgets where
   their code went; their data export lists those links.
@@ -3867,12 +3920,12 @@ These are not built. Each has a workaround for now.
 | MCP: screens | The app's `connectionsPlugin` lists and disconnects a person's clients; the back office has no view of every client in a business. The consent screen shows the application's name, not a business's branding. MCP Apps cards, resources and prompts are not served. |
 | MCP: framework features' tools | The MCP tools cover each module's entities, commands and state transitions. The framework features' own assistant tools (files, documents, jobs, memory recall, comments, handoff) are not offered, and their routes declare no scope, so a token gets 403 `out_of_scope` there. |
 | SSR, SEO, link previews | Share pages are the single-page web app (`web.output: 'single'`): not indexed, no Open Graph preview. A public site or marketplace stays outside the framework. |
-| Sending a share link | `POST /api/shares` answers the link once; the person copies it. Nothing sends it on WhatsApp or by email, and the assistant has no tool to make one. |
 | Signing through an email-only link | A guest signs only as the link's WhatsApp contact (`to: { contactId }`, a customer with a contact, or the record's customer). An email recipient can open a gated link but not accept (`people_only`). |
-| Several recipients, links without an end | A link has one recipient, and every link ends (at most `shares.maxDays`): a form posted on a website is linked again when its link ends. |
+| Several recipients on one link | A link has one recipient (its code's destination and its signer). Share a record with each person on their own link. |
 | A guest's comments and files | A guest cannot comment, and a form asks no file. |
 | WhatsApp turns with share links | `RenderTurn.pages` is still not filled: links to a customer still point at the app (`APP_URL`), which needs an account. |
-| Share pages on a business's domain | The URL a link answers is `APP_URL`'s; a verified domain (section 5.18) is not used for it, though the page shows the business's branding. |
+| Share pages on a business's domain | A link's URL, emails and plain WhatsApp messages use the business's verified domain, but a WhatsApp template's URL button keeps `APP_URL` (its base is fixed per template), and a business with several verified domains gets its first. |
+| Remembered sessions for gated links | A gated link's session lasts `shares.sessionHours` (12 by default): a client opening their page every few days enters a code each time unless the business raises it. |
 | An e-sign provider | `ESignProvider` and `completeESign` exist; no provider ships. Register one from a connector and call `completeESign` from its verified webhook. |
 | Several signers, withdrawing an acceptance | One acceptance per PDF per signer; with a transition the first one moves the record. Nothing withdraws an acceptance: the business cancels the record (the sample's orders can be cancelled when approved or accepted). |
 | The IP behind a proxy | Evidence keeps Express's `req.ip` and `x-forwarded-for` as sent. Behind a load balancer, set `TRUST_PROXY` (section 4): unset, no proxy is trusted, so the API's throttle and Better Auth's own rate limits (sign-in, sign-up, password and email changes), which both key on `req.ip`, put every caller behind the balancer in one bucket. Nothing checks at start that the setting matches the deployment, nor that a balancer in front of `TRUST_PROXY=true` overwrites `X-Forwarded-For` rather than appending to it. |
@@ -4031,7 +4084,7 @@ An earlier outline described an API that was never built. Map it like this:
 | **Contact** | A WhatsApp number known to a business (`channel.contacts`) |
 | **Grant** | `own`, `customer`, `tenant`, `granted` or `participant`: which rows a role or capability reaches (`share` is a guest's, never written in a map) |
 | **Record grant** | One person's access to one record (`app.record_grants`), for the `granted` reach |
-| **Share link** | An expiring, revocable link to a record, a saved page or a public form (`app.share_links`); its holder is a `guest` |
+| **Share link** | A revocable link to a record, a saved page or a public form (`app.share_links`), ending at its date or, when lasting, only when revoked; its holder is a `guest` |
 | **Public form** | A form whose link creates one record of an entity (`definePublicForm`) |
 | **Field policy** | Fields only the holders of a capability read: `traits.fieldPolicy` |
 | **Reference** | A field holding another record's id, declared with `traits.references`: its writer must be able to read that record in their business (section 5.2) |

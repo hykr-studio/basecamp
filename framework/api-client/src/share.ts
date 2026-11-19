@@ -6,10 +6,15 @@ import {
   type AcceptanceStatus,
   type CreateShareInput,
   type DocumentInfo,
+  type DraftReissueInput,
+  type DraftShareInput,
   type Lang,
+  type ReissueShareInput,
+  type RenewShareInput,
   SHARE_SESSION_HEADER,
   type ShareCodeSent,
   type ShareCreated,
+  type ShareDrafted,
   type Shared,
   type ShareKinds,
   type ShareLinkInfo,
@@ -45,6 +50,18 @@ export function sharesMethods(call: Call, newKey: () => string) {
       call<WriteResult<ShareCreated>>('POST', '/api/shares', input),
     revoke: (id: string, key = newKey()) =>
       call<WriteResult<ShareLinkInfo>>('POST', `/api/shares/${q(id)}/revoke`, {}, key),
+    /** A new end date (or `null`: none), the same address. */
+    renew: (id: string, input: RenewShareInput, key = newKey()) =>
+      call<WriteResult<ShareLinkInfo>>('POST', `/api/shares/${q(id)}/renew`, input, key),
+    /** The link revoked and a new one like it made: its new token and URL in this answer only. */
+    reissue: (id: string, input: ReissueShareInput = {}) =>
+      call<WriteResult<ShareCreated>>('POST', `/api/shares/${q(id)}/reissue`, input),
+    /** A link and its send to a named recipient, drafted (the assistant's waits for approval). */
+    draft: (input: DraftShareInput, key = newKey()) =>
+      call<WriteResult<ShareDrafted>>('POST', '/api/shares/drafts', input, key),
+    /** A reissue that sends the new link, drafted (the old link stops working). */
+    draftReissue: (id: string, input: DraftReissueInput = {}, key = newKey()) =>
+      call<WriteResult<ShareDrafted>>('POST', `/api/shares/drafts/reissue/${q(id)}`, input, key),
   };
 }
 

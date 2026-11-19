@@ -46,3 +46,33 @@ export function useRevokeShare() {
     onSuccess: () => client.invalidateQueries({ queryKey: ['shares'] }),
   });
 }
+
+/** A link's new end date (or `null`: none): its address stays the same. */
+export function useRenewShare() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, expiresInDays }: { id: string; expiresInDays: number | null }) =>
+      api.shares.renew(id, { expiresInDays }),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['shares'] }),
+  });
+}
+
+/** Revoke a link and make a new one like it: sent to its recipient when `send` is set. */
+export function useReissueShare() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, send }: { id: string; send?: boolean }) =>
+      api.shares.reissue(id, send ? { send: {} } : {}),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['shares'] }),
+  });
+}
+
+/** Make a link and send it to its recipient (WhatsApp or email): a shortcut for `send: {}`. */
+export function useSendShare() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: Omit<CreateShareInput, 'send'>) =>
+      api.shares.create({ ...input, send: {} }),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['shares'] }),
+  });
+}

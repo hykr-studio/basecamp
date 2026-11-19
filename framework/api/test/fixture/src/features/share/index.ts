@@ -15,6 +15,7 @@ import {
 } from '@hykr/contracts';
 import { defineEntity, entityController, entityHandlers, type ReadProjector } from '@hykr/core';
 import { pick } from '@hykr/i18n';
+import { defineTemplate } from '@hykr/notifications';
 import { type Access, can } from '@hykr/policy';
 import { defineView, spokenList, type ViewDef, type ViewLabels } from '@hykr/ui-registry';
 import { Module } from '@nestjs/common';
@@ -150,10 +151,21 @@ export const InquiryListView = defineView({
     ),
 });
 
+/** An inquiry's link on WhatsApp (decisions B21): a URL button that opens it, the token its {{1}}. */
+export const InquiryLinkTemplate = defineTemplate({
+  name: 'fixture_inquiry_link_v1',
+  category: 'utility',
+  params: z.object({ name: z.string().max(80) }),
+  body: same('Your inquiry {{name}} is ready to see.'),
+  buttons: [{ type: 'url', text: same('Open it'), path: '/share/{{1}}' }],
+  example: { name: 'Asha' },
+});
+
 export const inquiriesModule = defineModule({
   ...moduleSpec({ name: 'inquiries', entities: { inquiries: InquirySpec }, commands: [] }),
   server: InquiriesModule,
   views: [InquiryListView] as unknown as readonly ViewDef[],
+  templates: [InquiryLinkTemplate],
   tables: { inquiries },
 });
 
@@ -177,6 +189,27 @@ export const InquiryForm = definePublicForm({
   fixed: { source: 'form' },
 });
 
+/** A form posted on a website (B21): its link may have no end, under the default hourly limits. */
+export const WebsiteForm = definePublicForm({
+  name: 'inquiries.website',
+  entity: 'inquiry',
+  label: same('Write to us'),
+  fields: ['name', 'notes'],
+  custom: false,
+  lasting: true,
+});
+
+/** The same, with a high limit per address: what the link's own limit is tested with. */
+export const BusyForm = definePublicForm({
+  name: 'inquiries.busy',
+  entity: 'inquiry',
+  label: same('Write to us often'),
+  fields: ['name'],
+  custom: false,
+  lasting: true,
+  rateLimit: { perIp: 100 },
+});
+
 /** A form that must be gated, and lasts at most 3 days. */
 export const GatedForm = definePublicForm({
   name: 'inquiries.private',
@@ -193,7 +226,17 @@ export const shareContributions = {
   capabilities: [...(acceptanceContributions.capabilities ?? []), ScoreRead, CostRead],
   readProjectors: [...(acceptanceContributions.readProjectors ?? []), guestCostHidden],
   shareables: [
-    defineShareable({ entity: 'inquiry' }),
+    // A lasting record, sent on WhatsApp in its template, else by email (decisions B21).
+    defineShareable({
+      entity: 'inquiry',
+      lasting: true,
+      send: {
+        whatsapp: {
+          template: InquiryLinkTemplate,
+          params: (target) => ({ name: String(target.record?.name ?? '').slice(0, 80) }),
+        },
+      },
+    }),
     defineShareable({ entity: 'basket', children: ['basketItem'], pages: false }),
     defineShareable({
       entity: 'agreement',
@@ -202,7 +245,7 @@ export const shareContributions = {
       maxDays: 30,
     }),
   ],
-  publicForms: [InquiryForm, GatedForm],
+  publicForms: [InquiryForm, GatedForm, WebsiteForm, BusyForm],
 };
 
 /** The fixture plus agreements, baskets and inquiries, and what may be shared of them. */

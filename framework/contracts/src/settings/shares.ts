@@ -10,7 +10,8 @@ declare module './sections.js' {
 /**
  * How long a business's share links last (docs/decisions/B9.md): `defaultDays` when the person
  * making one says nothing, at most `maxDays`; and how long a device sees a gated link after its
- * code (`sessionHours`, never past the link's end).
+ * code (`sessionHours`, never past the link's end); and whether a link may have no end at all
+ * (`allowLasting`, for declarations that allow it).
  */
 export const SharesSettings = z
   .object({
@@ -22,8 +23,13 @@ export const SharesSettings = z
       .min(1)
       .max(24 * 90)
       .default(12),
+    /**
+     * Links may have no end date where the application's declaration says `lasting` (decisions
+     * B21): the business decides. Off unless it says so.
+     */
+    allowLasting: z.boolean().default(false),
   })
-  .default({ defaultDays: 7, maxDays: 90, sessionHours: 12 });
+  .default({ defaultDays: 7, maxDays: 90, sessionHours: 12, allowLasting: false });
 export type SharesSettings = z.infer<typeof SharesSettings>;
 
 export const SharesSection = defineSettingsSection('shares', SharesSettings, { editable: true });

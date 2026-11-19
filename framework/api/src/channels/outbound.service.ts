@@ -1,4 +1,4 @@
-import type { OutboundMessage, StatusUpdate } from '@hykr/channels';
+import { type OutboundMessage, type StatusUpdate, scrubSensitive } from '@hykr/channels';
 import { type Database, schema } from '@hykr/db';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Inject, Injectable } from '@nestjs/common';
@@ -72,7 +72,8 @@ export class OutboundService {
           channel: 'whatsapp' as const,
           direction: 'out' as const,
           kind: kindOf(m),
-          body: m,
+          // Never sent: nothing it must not keep stays in the log.
+          body: refused ? scrubSensitive(m) : m,
           template: m.kind === 'template' ? m.name : null,
           category: meta.category ?? null,
           status: refused ? ('failed' as const) : ('queued' as const),
@@ -137,6 +138,23 @@ export class OutboundService {
     });
   }
 
+  /**
+   * A message that has gone (or never will): the log keeps `[link]` where it carried something
+   * it must not keep (`sensitive`, a share link's token).
+   */
+  private async scrub(id: string) {
+    const [row] = await this.db
+      .select({ body: messages.body })
+      .from(messages)
+      .where(eq(messages.id, id));
+    const body = row?.body as { sensitive?: readonly string[] } | null | undefined;
+    if (!body?.sensitive?.length) return;
+    await this.db
+      .update(messages)
+      .set({ body: scrubSensitive(body) })
+      .where(eq(messages.id, id));
+  }
+
   /** The provider accepted it: from here it counts against the business's messages (once). */
   async markSent(id: string, providerMessageId: string) {
     const [row] = await this.db
@@ -149,6 +167,7 @@ export class OutboundService {
         category: messages.category,
         runId: messages.runId,
       });
+    await this.scrub(id);
     if (row)
       await metering()?.record({
         tenantId: row.tenantId,
@@ -168,6 +187,7 @@ export class OutboundService {
       .update(messages)
       .set({ status: 'failed', statusAt: sql`now()`, errorCode: errorCode ?? null })
       .where(eq(messages.id, id));
+    await this.scrub(id);
   }
 
   /** A message we sent, by the provider's id (a button tapped on it names it). */
