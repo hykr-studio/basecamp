@@ -34,6 +34,8 @@ export const OrderItemView = z.object({
   position: z.number().int(),
   kind: z.enum(['group', 'line']),
   title,
+  /** The product it is, when it names one (its name reads in `references.productId.label`). */
+  productId: z.string().nullable(),
   quantity: z.number().int().nullable(),
   unitPrice: Money.nullable(),
   /** The line's tax rate in basis points (1800 is 18%). */
@@ -258,6 +260,7 @@ export const OrderSpec = entitySpec({
 const itemFields = {
   kind: z.enum(['group', 'line']),
   title,
+  productId: z.uuid().nullable().optional(),
   quantity: z.number().int().min(1).nullable().optional(),
   unitPrice: MoneyInput.nullable().optional(),
   taxRateBp: z.number().int().min(0).max(10_000).nullable().optional(),
@@ -283,6 +286,7 @@ export const OrderItemSpec = entitySpec({
   },
   fieldLabels: {
     title: { en: 'Item', hi: 'आइटम', te: 'ఐటమ్' },
+    productId: { en: 'Product', hi: 'उत्पाद', te: 'ఉత్పత్తి' },
     quantity: { en: 'Quantity', hi: 'मात्रा', te: 'పరిమాణం' },
     unitPrice: { en: 'Unit price', hi: 'इकाई मूल्य', te: 'యూనిట్ ధర' },
     amount: { en: 'Amount', hi: 'राशि', te: 'మొత్తం' },
@@ -297,5 +301,8 @@ export const OrderItemSpec = entitySpec({
   traits: {
     money: { fields: ['unitPrice', 'amount', 'cost'] },
     parent: { entity: 'order', field: 'orderId', nest: 'parentItemId', position: 'position' },
+    // Each new or changed line's product is checked in bulk by the tree write (R1), and read
+    // back with its name.
+    references: { productId: { entity: 'product', label: 'name' } },
   },
 });

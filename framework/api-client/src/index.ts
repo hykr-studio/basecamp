@@ -24,6 +24,7 @@ import {
   type BusyTimes,
   type CalendarConnectionInfo,
   type CalendarFeedInfo,
+  type CalendarProvider,
   type CalendarProviderInfo,
   type CallInfo,
   type CallProviderInfo,
@@ -1045,21 +1046,34 @@ export function createApiClient(opts: ApiClientOptions) {
     calendar: {
       providers: () => call<CalendarProviderInfo[]>('GET', '/api/calendar/providers'),
       /**
-       * The consent screen's URL: open it. Google sends the browser back to the API, which sends
-       * it on to the app (`returnTo`: the web app, or the native app's link) with a code and a
-       * state for `complete`.
+       * The consent screen's URL: open it. The provider sends the browser back to the API,
+       * which sends it on to the app (`returnTo`: the web app, or the native app's link) with a
+       * code, a state and the provider for `complete`.
        */
-      connect: (provider: 'google' = 'google', returnTo?: 'web' | 'app') =>
-        call<{ url: string }>('POST', '/api/calendar/connections', {
-          provider,
-          ...(returnTo ? { returnTo } : {}),
-        }),
+      connect: (provider: CalendarProvider = 'google', returnTo?: 'web' | 'app') =>
+        call<{ url: string }>(
+          'POST',
+          `/api/calendar/${encodeURIComponent(provider)}/start`,
+          returnTo ? { returnTo } : {},
+        ),
       /** Finish connecting, as the person who started it, in the business they started it in. */
-      complete: (input: { code: string; state: string }, key = newKey()) =>
+      complete: (
+        input: { code: string; state: string },
+        key = newKey(),
+        provider: CalendarProvider = 'google',
+      ) =>
         call<WriteResult<CalendarConnectionInfo>>(
           'POST',
-          '/api/calendar/google/complete',
+          `/api/calendar/${encodeURIComponent(provider)}/complete`,
           input,
+          key,
+        ),
+      /** Write the person's records to this calendar of theirs (when they connected several). */
+      setWriteTo: (id: string, key = newKey()) =>
+        call<WriteResult<CalendarConnectionInfo>>(
+          'PATCH',
+          `/api/calendar/connections/${encodeURIComponent(id)}`,
+          { writeTo: true },
           key,
         ),
       connections: () => call<CalendarConnectionInfo[]>('GET', '/api/calendar/connections'),

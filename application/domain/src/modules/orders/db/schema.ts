@@ -102,6 +102,11 @@ export const orderItems = app.table(
     customerId: customerColumn(),
     kind: text('kind', { enum: ['group', 'line'] }).notNull(),
     title: text('title').notNull(),
+    /**
+     * The product it is (declared on the spec, `traits.references`): keyed to a product of the
+     * same business by sql/post/order-products.sql, which nulls it when the product is deleted.
+     */
+    productId: text('product_id'),
     quantity: integer('quantity'),
     currency: currencyColumn(),
     unitPrice: minorUnits('unit_price'),
@@ -123,5 +128,26 @@ export const orderItems = app.table(
       foreignColumns: [table.orderId, table.id] as [AnyPgColumn, AnyPgColumn],
     }).onDelete('cascade'),
     index('orders_items_order_idx').on(table.orderId, table.position),
+  ],
+);
+
+/** The business's products: what an order's line may name. */
+export const products = app.table(
+  'orders_products',
+  {
+    id: id(),
+    tenantId: tenantColumn(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => user.id),
+    customerId: customerColumn(),
+    name: text('name').notNull(),
+    sku: text('sku'),
+    ...provenance(),
+  },
+  (table) => [
+    // What a line's (tenant_id, product_id) points at: a product of its own business.
+    unique('orders_products_tenant_id_uq').on(table.tenantId, table.id),
+    index('orders_products_tenant_name_idx').on(table.tenantId, table.name),
   ],
 );

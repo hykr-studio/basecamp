@@ -16,6 +16,10 @@ export const SaveOrderItem = z.object({
   id: z.uuid().optional().describe('The id of an item the order already has, to keep it'),
   kind: z.enum(['group', 'line']).default('line'),
   title: z.string().min(1).max(200),
+  productId: z
+    .uuid()
+    .optional()
+    .describe('A line only: the id of the product it is, from list-products'),
   quantity: z.number().int().min(1).max(1_000_000).optional().describe('A line only; default 1'),
   unitPrice: MoneyInput.optional().describe('A line only: a decimal string such as "1500.00"'),
   taxRateBp: z

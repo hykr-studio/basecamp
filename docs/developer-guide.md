@@ -471,8 +471,19 @@ An unknown id, another business's record and one the writer cannot read all get 
 so does an update (or a revision) that keeps the stored id. A CRUD write and a public form's
 answer check before they can park. Undo checks the row it restores as it was: one whose target
 the person can no longer read stays deleted (docs/decisions/V10.md).
-`defineServer` refuses a reference to an entity that does not exist, from a field no write sets,
-or on a record with a parent (check a line's references in the parent's command).
+`defineServer` refuses a reference to an entity that does not exist, or from a field no write
+sets. A record with a parent (a line item) declares references the same way; its tree writes
+check them in bulk (5.13, `docs/decisions/R1.md`). Every refusal is audited as denied, with the
+rule `unknown_reference`.
+
+**A label on read.** Name a field of the target to read with each record:
+`references: { productId: { entity: 'product', label: 'name' } }`. Lists and gets then carry
+`references: { productId: { id, label } }`, one query per target for the whole page, read as
+the reader may see the target: one they cannot read, or a label field hidden from them (field
+policy), reads `label: null`, never its value. A null link has no entry. Webhooks, live events,
+summaries and a write's own result carry the id only. `defineServer` refuses a label its target's
+read schema has not. To read many records by id under the target's scope yourself,
+`Target.repo.findMany(conn, p, ids)` returns the ones the principal reaches, in one query.
 
 Back it in the database with a key that keeps the business: `(tenant_id, meeting_id)` →
 `meetings (tenant_id, id)`, with a unique `(tenant_id, id)` on the target. A plain
@@ -1347,6 +1358,28 @@ sample's `orders` module uses every part.
   client. Plain CRUD never adds, moves or deletes a node of a tree. Add composite foreign keys
   `(tenant_id, parent_id) → parent (tenant_id, id)` and `(parent_id, nest) → child (parent_id, id)`
   so the database also refuses a row that points elsewhere.
+- **A line that names another record** (a quote line's price-list item, an order line's product)
+  declares it on the child spec as on any record (5.2): `traits.references: { productId: {
+  entity: 'product', label: 'name' } }`, to any entity, another module's or a shared one included.
+  `children.insert` and `children.replace` check every new line's references, and every changed
+  line's changed ones, before writing anything: one `findMany` per target entity for the whole
+  tree, as the writer. The first line naming a record the writer cannot read refuses the whole
+  write: 404 `{ error: 'not_found', message: 'No such product', field, path, ref? }`, where `path`
+  is the line's place in the tree (`['items', 0, 'children', 2, 'productId']`, after the prefix
+  the command passes as `{ at: ['items'] }`) and `ref` its own key when the node carries one. A
+  kept line whose reference did not change is not checked again. More than 1,000 different ids of
+  one target in one write is 400 `too_many_references`. So every path that writes the tree is
+  checked with no code of the command's own: the app, the assistant and MCP, offline replays,
+  approved replays (checked again when they run), and undo putting removed lines back. A revision
+  copies its lines as they are (a kept link, decision 4 of V2); the lines a command then writes
+  are checked. To refuse before a write that would park reaches an approver, call
+  `Child.children.checkReferences(tx, p, nodes, { at: ['items'], parent })` in the command's
+  `load` (its `authorize` is synchronous); the sample's `order.save` does. Key the column with its
+  business like any reference: `(tenant_id, product_id) → products (tenant_id, id)` in
+  `schema.ts` for NO ACTION, RESTRICT or CASCADE (`tableRef(name)` down the graph), or a SQL post
+  hook for `ON DELETE SET NULL (product_id)` (the sample's `sql/post/order-products.sql`). Read
+  through `GET /api/<plural>?<parent>=` or `Child.readMany(conn, rows, p)` after `children.list`,
+  each line carries its labels (5.2). `docs/decisions/R1.md`.
 - **Large writes.** `runWrite` audits a write's rows in one statement, the JSON body limit is
   `JSON_BODY_LIMIT` (1 MB), and a tree holds at most 1000 nodes and 8 levels (`maxNodes`,
   `maxDepth` on the trait). The approval card sums up long lists.
@@ -2028,7 +2061,7 @@ pnpm exec basecamp import todo domain/src/modules/todos/import/todos.csv \
 ### 5.24 Calendars and calls
 
 Records with a time reach people's calendars, and calls are logged on records
-(`docs/decisions/B17.md`). Which entities are events, whose calendars they go on and what a
+(`docs/decisions/B17.md`; Microsoft 365 in `docs/decisions/B22.md`). Which entities are events, whose calendars they go on and what a
 move in a calendar means are the application's. The sample's `meetings` module uses them.
 
 - **The trait.** `traits.schedulable: { title, startsAt, endsAt, location?, description?,
@@ -2036,36 +2069,66 @@ move in a calendar means are the application's. The sample's `meetings` module u
   `people` the table's columns holding user ids (one or a list; default the owner column), and
   `hiddenWhen: { field, in }` the values that take a record off every calendar. The server
   checks it at start: a field or column that does not exist stops it.
-- **Google Calendar** (`@hykr/connectors/google-calendar`, transport only). Each person
-  connects their own account: `POST /api/calendar/connections { provider: 'google', returnTo? }`
-  returns the authorization URL (PKCE, offline access, scopes `calendar.events` and
-  `calendar.freebusy`). The `state` is a random token; the server keeps who started the sign-in,
-  in which business, and the PKCE verifier (sealed), for ten minutes. Google returns to
-  `GET /api/calendar/google/callback`, which exchanges nothing: it sends the browser on to the
-  app (`CALENDAR_RETURN_URL`, or `CALENDAR_APP_RETURN_URL` for `returnTo: 'app'`) with `code`
-  and `state`, and the app calls `POST /api/calendar/google/complete { code, state }` under its
-  session. Only the person who started it, in that business, finishes it; anyone else's try is
-  403 (`calendar_sign_in_not_yours`, `calendar_sign_in_other_business`) and uses the sign-in up,
-  so a consent link sent to someone else connects nothing. Tokens are stored sealed; a refused
-  refresh marks the connection `needs_reauth`. People only (the assistant cannot connect).
-  `connectGoogleCalendar(person)` (`@hykr/api/testing`) does the round trip on the fake.
-  `GET /api/calendar/connections`
-  lists yours; `DELETE /api/calendar/connections/:id` takes our events out of Google and revokes
-  the grant.
-- **Sync** is one way, records to Google. The subscriber `calendar.records` queues
+- **Providers.** Google (`@hykr/connectors/google-calendar`) and Microsoft 365 / Outlook.com
+  (`@hykr/connectors/microsoft-calendar`, Microsoft Graph), both transport only, behind one
+  `CalendarProviderDef` (`features/calendar/providers/`: sign-in, `freeBusy`, `upsertEvent`,
+  `deleteEvent`, `changes`, `watch`, `stopWatch`). `CALENDAR_PROVIDERS` turns them on
+  (`google,microsoft`; default `google`); one is offered once its OAuth client is set, and
+  `GET /api/calendar/providers` says which. Tokens, sign-in states, `needs_reauth`, feeds and
+  invites are shared. A person connects each provider at most once, and both at the same time.
+- **Connecting.** `POST /api/calendar/:provider/start { returnTo? }` returns the authorization
+  URL (PKCE S256, offline access). Google asks for `calendar.events` and `calendar.freebusy`;
+  Microsoft for `openid email profile offline_access Calendars.ReadWrite` on
+  `login.microsoftonline.com/<MICROSOFT_CALENDAR_TENANT>` (`common`: work and personal
+  accounts). The `state` is a random token; the server keeps who started the sign-in, in which
+  business, for which provider, and the PKCE verifier (sealed), for ten minutes. The provider
+  returns to `GET /api/calendar/:provider/callback`, which exchanges nothing: it sends the
+  browser on to the app (`CALENDAR_RETURN_URL`, or `CALENDAR_APP_RETURN_URL` for `returnTo:
+  'app'`) with `code`, `state` and `provider`, and the app calls `POST
+  /api/calendar/:provider/complete { code, state }` under its session. Only the person who
+  started it, in that business, at that provider, finishes it; anyone else's try is 403
+  (`calendar_sign_in_not_yours`, `calendar_sign_in_other_business`) and uses the sign-in up, so
+  a consent link sent to someone else connects nothing. A work organisation that requires an
+  admin's consent is refused as `admin_consent_required` (on the landing's `error`, or the
+  complete's `rule`), with a plain message. Tokens are stored sealed; a refused refresh marks
+  the connection `needs_reauth`. People only (the assistant cannot connect).
+  `connectCalendar(person, provider)` (`@hykr/api/testing`; also `connectGoogleCalendar`)
+  does the round trip on the fakes. The older `POST /api/calendar/connections { provider }`
+  stays for one release; `google/callback` and `google/complete` are the generic routes with
+  `google`.
+- **Connections.** `GET /api/calendar/connections` lists yours, each with `writeTo`: records
+  are written to one calendar per person, the one chosen with `PATCH
+  /api/calendar/connections/:id { writeTo: true }` (`calendar.connection.target`), else the
+  first connected. Changing it, or disconnecting the one written to, moves the events
+  (`calendar.target_changed`, `calendar.disconnected`, job `retarget`). Busy times are read
+  from all of them. `DELETE /api/calendar/connections/:id` takes our events out and closes the
+  channel; Google's grant is revoked, while Microsoft has no revoke for this flow: its tokens are
+  deleted, and the person removes the app at myapps.microsoft.com (work) or
+  account.live.com/consent/Manage (personal).
+- **Sync** is one way, records to the person's calendar. The subscriber `calendar.records` queues
   `calendar.sync` for every stored event about a schedulable record; the job reads the record
   **as each person** it belongs on (scoped repository, `toRead`): reachable and not hidden →
   upsert, otherwise → delete. A field hidden from them never reaches their calendar, and someone
-  who loses access loses the event. Google reports changes through a watch channel that posts
-  to the B10 inbound webhook (`/webhooks/google-calendar/:connection`; it needs an https
-  `CALENDAR_PUBLIC_URL`, elsewhere `calendar.maintain` polls every 10 minutes). A change to one
+  who loses access loses the event. Google's event id is derived from the record; Microsoft
+  makes its own, and our event carries the same derived key in an extended property, so a retry
+  whose answer was lost finds the event instead of making a second. Microsoft events are written
+  in the business's time zone. Google reports changes through a watch channel that posts to the
+  B10 inbound webhook (`/webhooks/google-calendar/:connection`), Microsoft through a Graph
+  subscription (`/webhooks/microsoft-calendar/:connection`: Graph's `?validationToken=`
+  handshake is answered by the connector's `handshake`, and each notification's `clientState`
+  is checked); both need an https `CALENDAR_PUBLIC_URL`, elsewhere `calendar.maintain` polls
+  every 10 minutes. The same schedule renews channels and subscriptions with less than a day
+  left (Graph keeps one about 70 hours). Microsoft's changes are read with a calendarView delta
+  query whose window runs from a day back to a year ahead of when its cursor was made: an event
+  moved out of it reads as removed, and a cursor Graph drops starts again. A change to one
   of our events stores `calendar.event_moved` or `calendar.event_removed`
-  (`CalendarEventChange`: the entity, record, person and times); the framework writes nothing
+  (`CalendarEventChange`: the entity, record, person, provider and times); the framework writes nothing
   back. A module that wants the move subscribes and writes as the person: the sample's
   `meetings.calendar-moved` runs `meeting.reschedule` with `writeAs(ctx, { principal, requestId,
   idempotencyKey }, op, input)`, the principal from `memberPrincipal(ctx.get, { userId,
   tenantId })` (both from `@hykr/api`).
-- **Free time.** `GET /api/calendar/busy?from&to[&userId]` (busy intervals, no titles) and
+- **Free time.** `GET /api/calendar/busy?from&to[&userId]` (busy intervals, no titles, merged
+  across every calendar the person connected: Microsoft's from `getSchedule`, never a subject) and
   `GET /api/calendar/free?from&to&minutes[&step&hoursFrom&hoursTo&userId]` (slots, in the
   business's time zone; `freeSlots` in `@hykr/contracts` is the pure version). With
   `hoursFrom`/`hoursTo`, slots keep inside those local hours. Without them, slots keep to the
@@ -2106,18 +2169,24 @@ move in a calendar means are the application's. The sample's `meetings` module u
   credentials. None ships: without one, `call.dial` is refused with `no_telephony_provider`.
   The provider's status webhook is a B10 connector handler that calls
   `ctx.write(callProviderUpdate(), { provider, externalId, status, … })`.
-- **In the app** `calendarPlugin()` adds `/calendar` (connect or disconnect Google; make, copy
+- **In the app** `calendarPlugin()` adds `/calendar` (connect each offered provider, pick the
+  one written to, disconnect; make, copy
   and revoke feeds), `<RecordInvites entity id />` a record's invites and `<RecordCalls entity
   id />` its calls (log one; "Call" when the business has a provider). The hooks are
-  `useCalendarConnections`, `useConnectCalendar`, `useCompleteCalendar` (the `/calendar` screen
-  finishes a sign-in it is handed), `useDisconnectCalendar`, `useCalendarFeeds`,
+  `useCalendarConnections`, `useConnectCalendar(provider)`, `useCompleteCalendar` (the
+  `/calendar` screen finishes a sign-in it is handed), `useSetCalendarTarget`, `useDisconnectCalendar`, `useCalendarFeeds`,
   `useCreateFeed`, `useRevokeFeed`, `useInvites`, `useSendInvite`, `useCalls`,
   `useCallProvider`, `useLogCall` and `useDialCall`.
 - **Configuration**: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (unset: Google is not
   offered), `GOOGLE_CALENDAR_TRANSPORT=fake` (the in-memory Google, `fakeGoogle()` in
   `@hykr/api/testing`; production refuses it), `CALENDAR_PUBLIC_URL`, `CALENDAR_RETURN_URL`,
   `CALENDAR_APP_RETURN_URL` (a native app's link, such as `agenticstack://calendar`) and
-  `CALENDAR_SYNC_DAYS` (`application/.env.example`).
+  `CALENDAR_SYNC_DAYS` (`application/.env.example`). Microsoft: `CALENDAR_PROVIDERS` naming
+  `microsoft`, `MICROSOFT_CALENDAR_CLIENT_ID` and `_CLIENT_SECRET`, `_TENANT` (default
+  `common`), `_REDIRECT_URL` (default `<BETTER_AUTH_URL>/api/calendar/microsoft/callback`),
+  `MICROSOFT_CALENDAR_TRANSPORT=fake` (`fakeMicrosoft()`; production refuses it) and the
+  overrides `MICROSOFT_LOGIN_URL` and `MICROSOFT_GRAPH_URL`. Live calls to Microsoft go through
+  the egress guard, to those two hosts only.
 
 ### 5.25 Acceptance: one-time codes and evidence
 
@@ -3720,7 +3789,7 @@ The `customFields` trait with a `customFieldsColumn()` (`<CustomFieldInputs>` in
 Out: the business adds an endpoint (`POST /api/integrations/endpoints`) and nothing is declared. In: contribute a connector (`defineConnector`, `hmacConnector`) and a `defineConnectorHandler` whose `ctx.write` goes through the write path. Section 5.14.
 
 **…put records in people's calendars?**
-`traits.schedulable` on the spec and `calendarPlugin()` in the app; a move in Google is an event your module may subscribe to. Section 5.24.
+`traits.schedulable` on the spec and `calendarPlugin()` in the app; a move in Google or Outlook is an event your module may subscribe to. Section 5.24.
 
 **…run work that takes minutes, elsewhere?**
 `defineJob` (contributed as `jobs`) and `startJob(tx, p, Job, input)` in a command's `run`; `<JobProgress job />` in the app. Section 5.17.
@@ -3889,7 +3958,6 @@ These are not built. Each has a workaround for now.
 | A document send left `sending` for good | A send's job claims it before delivering, so it leaves at most once. If every try of that job stopped part way (the worker died each time), the row stays `sending`; nothing sweeps it. Send the document again. |
 | A file on two records, versioned files | One file belongs to one record field. Upload the file again for a second record. |
 | Storage quotas, malware scanning | Not built. Keep `FILES_MAX_BYTES` and each field's `maxBytes` small. |
-| References on records with a parent (a line naming a product) | `defineServer` refuses `traits.references` on a child: `children.replace` inserts in bulk. Load each id in the parent's command (`Target.repo.get(tx, p, id)`) before saving the lines, and key the column with `tenant_id`. |
 | An audited unlink when a referenced record is deleted | The sample's `ON DELETE SET NULL (meeting_id)` clears the links in the transaction of the meeting's audited delete; the to-dos and notes it changes get no audit row and no new version, and a phone learns of it on its next read. To audit each one, unlink them through their repository in a command before the delete. |
 | Files of a deleted business or of rows deleted outside the write path | Their rows go with the business (cascade) or stay attached; their objects stay in the bucket. |
 | Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |
@@ -3928,8 +3996,8 @@ These are not built. Each has a workaround for now.
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. A retention period for inbound events would also have to keep their keys: a sender that signs no timestamp can have an old request posted again, and only its stored key drops it (decisions S2). |
 | Inbound senders without signed ids | Their events are keyed by the body, so two events with byte-identical bodies are one, and a batch regrouped on retry stores its events again. Sign the ids (`signedContent`, `signedIds`) to avoid both (decisions S2). |
 | The sample's supplier reports | `orders-supplier` takes only `order.fulfilled`, for an accepted order its party supplies; a supplier's acknowledgement or dispatch has no state, and nothing answers the supplier's system. An order is placed (`order.placed`) only when its customer accepts it. |
-| OAuth connectors | Business connections store credentials as given; only the calendar's per-person Google connection has an OAuth flow and token refresh (section 5.24). |
-| Other calendars (Microsoft 365, CalDAV), a calendar other than the primary one | Only Google, into each person's primary calendar. Others subscribe to their ICS feed. |
+| OAuth connectors | Business connections store credentials as given; only the calendar's per-person connections (Google, Microsoft) have an OAuth flow and token refresh (section 5.24). |
+| Other calendars (CalDAV, Apple iCloud), a calendar other than the primary one | Google and Microsoft 365, into each person's primary calendar. CalDAV and iCloud users subscribe to their ICS feed. Invite replies are not read. |
 | Changes made in Google written back | Sync is one way; a move or deletion in Google is stored as `calendar.event_moved` / `calendar.event_removed` for a module's subscriber to act on (the sample's meetings do). |
 | Invite replies | Attendees' accept or decline is not read (no inbound mail); invites go out with `RSVP=FALSE`. |
 | Confirming invite updates | A change to an invited record emails every recipient an update at once; nobody confirms it first. |

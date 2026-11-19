@@ -185,7 +185,9 @@ export const RenderDocument = defineCommand(RenderDocumentSpec, {
     };
     // biome-ignore lint/suspicious/noExplicitAny: any child entity
     const children = async (child: ChildEntityDef<any, any>, parentId = input.id) =>
-      (await child.children.list(tx, p, parentId)).map((r) => toJson(child.toRead(r, p)) as Values);
+      (await child.readMany(tx, await child.children.list(tx, p, parentId), p)).map(
+        (r) => toJson(r) as Values,
+      );
     const limits = documentsConfig().images;
     // Loaded here, not at import: the API's configuration reads the environment when it loads.
     const { config: apiConfig } = await import('../../config.js');

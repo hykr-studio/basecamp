@@ -1,6 +1,6 @@
 import { commandController, commandHandler, entityController, entityHandlers } from '@hykr/core';
 import { Module } from '@nestjs/common';
-import { Order, OrderItem } from './order.entity.js';
+import { Order, OrderItem, Product } from './order.entity.js';
 import { ReviseOrder } from './revise-order.command.js';
 import { SaveOrder } from './save-order.command.js';
 
@@ -12,10 +12,12 @@ import { SaveOrder } from './save-order.command.js';
     commandController(ReviseOrder),
     entityController(Order),
     entityController(OrderItem),
+    entityController(Product),
   ],
   providers: [
     ...entityHandlers(Order),
     ...entityHandlers(OrderItem),
+    ...entityHandlers(Product),
     commandHandler(SaveOrder),
     commandHandler(ReviseOrder),
   ],
