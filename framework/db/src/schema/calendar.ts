@@ -2,7 +2,7 @@
 // records are in it as which events, the invites emailed for records, private feeds, and
 // sign-ins under way.
 import { sql } from 'drizzle-orm';
-import { index, integer, jsonb, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { app, id } from './base.js';
 import { integrationConnections } from './integrations.js';
@@ -19,7 +19,7 @@ export const calendarConnections = app.table(
     userId: text('user_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
-    /** 'google'. */
+    /** 'google' | 'microsoft'. A person has at most one connection per provider. */
     provider: text('provider').notNull(),
     /** The account's email. */
     account: text('account').notNull(),
@@ -29,13 +29,18 @@ export const calendarConnections = app.table(
     /** The grant's tokens as JSON, sealed for this row. */
     tokensSealed: text('tokens_sealed').notNull(),
     scopes: text('scopes').array().notNull().default(sql`'{}'::text[]`),
-    /** Where changes were last read up to. */
+    /** Where changes were last read up to: Google's sync token, Graph's deltaLink. */
     syncToken: text('sync_token'),
-    /** The open push channel, if any. */
+    /**
+     * The person's records are written to this calendar of theirs. Unset on all of them: the
+     * first connected (decisions B21).
+     */
+    writeTo: boolean('write_to').notNull().default(false),
+    /** The open push channel (Google) or subscription (Microsoft), if any. */
     channelId: text('channel_id'),
     channelResourceId: text('channel_resource_id'),
     channelExpiresAt: at('channel_expires_at'),
-    /** The B10 connection Google's notifications are posted to. */
+    /** The B10 connection the provider's notifications are posted to. */
     inboundConnectionId: text('inbound_connection_id').references(() => integrationConnections.id, {
       onDelete: 'set null',
     }),
@@ -166,7 +171,7 @@ export const calendarOauthStates = app.table(
     userId: text('user_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
-    /** 'google'. */
+    /** 'google' | 'microsoft'. A person has at most one connection per provider. */
     provider: text('provider').notNull(),
     stateHash: text('state_hash').notNull(),
     verifierSealed: text('verifier_sealed').notNull(),

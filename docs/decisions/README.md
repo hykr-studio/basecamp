@@ -54,6 +54,7 @@ change the sample application or a business's settings, not the framework.
 | [B18](B18.md) | B18 | Personal data: requests with a deadline, export, erasure over contributors, retention, audit redaction, the register. | `e00ab149` |
 | [B19](B19.md) | B19 | The platform-operator tier: named operators, consented and time-boxed support access, provisioning, inbound routing, a usage report. | `3c230097` |
 | [B20](B20.md) | B20 | `basecamp import`: CSV, JSON or NDJSON through the write path as a job, re-runs keyed by external id, dry runs, an error report. | `1c2d3e30` |
+| [B21](B21.md) | B21 | Microsoft 365 / Outlook as a second calendar provider behind `CalendarProviderDef`; generic `:provider` routes; busy time merged across providers, one write target per person. | `feat/platform-gaps` |
 | [H1](H1.md) | A4, A5, A9 | Notification words read as each recipient may, approval requests on every channel, sends held by the undo window, the contact role named by the application. | `9952ca62` |
 | [H2](H2.md) | Settings (A4, A5, A8, B1, B3, B6, B7, B9) | One writer for every settings section that opts in (`PATCH /api/settings/sections/:section`), and the base settings. | `510f8033` |
 | [H3](H3.md) | A1, A3, A8, A11 | MCP tool hints and flag gating; embeddings and the guardrail metered; agent calls refused at 100%; purchases settled only in their own business. | `0bed14f6` |

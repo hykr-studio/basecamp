@@ -1958,7 +1958,7 @@ pnpm exec basecamp import todo domain/src/modules/todos/import/todos.csv \
 ### 5.24 Calendars and calls
 
 Records with a time reach people's calendars, and calls are logged on records
-(`docs/decisions/B17.md`). Which entities are events, whose calendars they go on and what a
+(`docs/decisions/B17.md`; Microsoft 365 in `docs/decisions/B21.md`). Which entities are events, whose calendars they go on and what a
 move in a calendar means are the application's. The sample's `meetings` module uses them.
 
 - **The trait.** `traits.schedulable: { title, startsAt, endsAt, location?, description?,
@@ -1966,36 +1966,66 @@ move in a calendar means are the application's. The sample's `meetings` module u
   `people` the table's columns holding user ids (one or a list; default the owner column), and
   `hiddenWhen: { field, in }` the values that take a record off every calendar. The server
   checks it at start: a field or column that does not exist stops it.
-- **Google Calendar** (`@hykr/connectors/google-calendar`, transport only). Each person
-  connects their own account: `POST /api/calendar/connections { provider: 'google', returnTo? }`
-  returns the authorization URL (PKCE, offline access, scopes `calendar.events` and
-  `calendar.freebusy`). The `state` is a random token; the server keeps who started the sign-in,
-  in which business, and the PKCE verifier (sealed), for ten minutes. Google returns to
-  `GET /api/calendar/google/callback`, which exchanges nothing: it sends the browser on to the
-  app (`CALENDAR_RETURN_URL`, or `CALENDAR_APP_RETURN_URL` for `returnTo: 'app'`) with `code`
-  and `state`, and the app calls `POST /api/calendar/google/complete { code, state }` under its
-  session. Only the person who started it, in that business, finishes it; anyone else's try is
-  403 (`calendar_sign_in_not_yours`, `calendar_sign_in_other_business`) and uses the sign-in up,
-  so a consent link sent to someone else connects nothing. Tokens are stored sealed; a refused
-  refresh marks the connection `needs_reauth`. People only (the assistant cannot connect).
-  `connectGoogleCalendar(person)` (`@hykr/api/testing`) does the round trip on the fake.
-  `GET /api/calendar/connections`
-  lists yours; `DELETE /api/calendar/connections/:id` takes our events out of Google and revokes
-  the grant.
-- **Sync** is one way, records to Google. The subscriber `calendar.records` queues
+- **Providers.** Google (`@hykr/connectors/google-calendar`) and Microsoft 365 / Outlook.com
+  (`@hykr/connectors/microsoft-calendar`, Microsoft Graph), both transport only, behind one
+  `CalendarProviderDef` (`features/calendar/providers/`: sign-in, `freeBusy`, `upsertEvent`,
+  `deleteEvent`, `changes`, `watch`, `stopWatch`). `CALENDAR_PROVIDERS` turns them on
+  (`google,microsoft`; default `google`); one is offered once its OAuth client is set, and
+  `GET /api/calendar/providers` says which. Tokens, sign-in states, `needs_reauth`, feeds and
+  invites are shared. A person connects each provider at most once, and both at the same time.
+- **Connecting.** `POST /api/calendar/:provider/start { returnTo? }` returns the authorization
+  URL (PKCE S256, offline access). Google asks for `calendar.events` and `calendar.freebusy`;
+  Microsoft for `openid email profile offline_access Calendars.ReadWrite` on
+  `login.microsoftonline.com/<MICROSOFT_CALENDAR_TENANT>` (`common`: work and personal
+  accounts). The `state` is a random token; the server keeps who started the sign-in, in which
+  business, for which provider, and the PKCE verifier (sealed), for ten minutes. The provider
+  returns to `GET /api/calendar/:provider/callback`, which exchanges nothing: it sends the
+  browser on to the app (`CALENDAR_RETURN_URL`, or `CALENDAR_APP_RETURN_URL` for `returnTo:
+  'app'`) with `code`, `state` and `provider`, and the app calls `POST
+  /api/calendar/:provider/complete { code, state }` under its session. Only the person who
+  started it, in that business, at that provider, finishes it; anyone else's try is 403
+  (`calendar_sign_in_not_yours`, `calendar_sign_in_other_business`) and uses the sign-in up, so
+  a consent link sent to someone else connects nothing. A work organisation that requires an
+  admin's consent is refused as `admin_consent_required` (on the landing's `error`, or the
+  complete's `rule`), with a plain message. Tokens are stored sealed; a refused refresh marks
+  the connection `needs_reauth`. People only (the assistant cannot connect).
+  `connectCalendar(person, provider)` (`@hykr/api/testing`; also `connectGoogleCalendar`)
+  does the round trip on the fakes. The older `POST /api/calendar/connections { provider }`
+  stays for one release; `google/callback` and `google/complete` are the generic routes with
+  `google`.
+- **Connections.** `GET /api/calendar/connections` lists yours, each with `writeTo`: records
+  are written to one calendar per person, the one chosen with `PATCH
+  /api/calendar/connections/:id { writeTo: true }` (`calendar.connection.target`), else the
+  first connected. Changing it, or disconnecting the one written to, moves the events
+  (`calendar.target_changed`, `calendar.disconnected`, job `retarget`). Busy times are read
+  from all of them. `DELETE /api/calendar/connections/:id` takes our events out and closes the
+  channel; Google's grant is revoked, while Microsoft has no revoke for this flow: its tokens are
+  deleted, and the person removes the app at myapps.microsoft.com (work) or
+  account.live.com/consent/Manage (personal).
+- **Sync** is one way, records to the person's calendar. The subscriber `calendar.records` queues
   `calendar.sync` for every stored event about a schedulable record; the job reads the record
   **as each person** it belongs on (scoped repository, `toRead`): reachable and not hidden →
   upsert, otherwise → delete. A field hidden from them never reaches their calendar, and someone
-  who loses access loses the event. Google reports changes through a watch channel that posts
-  to the B10 inbound webhook (`/webhooks/google-calendar/:connection`; it needs an https
-  `CALENDAR_PUBLIC_URL`, elsewhere `calendar.maintain` polls every 10 minutes). A change to one
+  who loses access loses the event. Google's event id is derived from the record; Microsoft
+  makes its own, and our event carries the same derived key in an extended property, so a retry
+  whose answer was lost finds the event instead of making a second. Microsoft events are written
+  in the business's time zone. Google reports changes through a watch channel that posts to the
+  B10 inbound webhook (`/webhooks/google-calendar/:connection`), Microsoft through a Graph
+  subscription (`/webhooks/microsoft-calendar/:connection`: Graph's `?validationToken=`
+  handshake is answered by the connector's `handshake`, and each notification's `clientState`
+  is checked); both need an https `CALENDAR_PUBLIC_URL`, elsewhere `calendar.maintain` polls
+  every 10 minutes. The same schedule renews channels and subscriptions with less than a day
+  left (Graph keeps one about 70 hours). Microsoft's changes are read with a calendarView delta
+  query whose window runs from a day back to a year ahead of when its cursor was made: an event
+  moved out of it reads as removed, and a cursor Graph drops starts again. A change to one
   of our events stores `calendar.event_moved` or `calendar.event_removed`
-  (`CalendarEventChange`: the entity, record, person and times); the framework writes nothing
+  (`CalendarEventChange`: the entity, record, person, provider and times); the framework writes nothing
   back. A module that wants the move subscribes and writes as the person: the sample's
   `meetings.calendar-moved` runs `meeting.reschedule` with `writeAs(ctx, { principal, requestId,
   idempotencyKey }, op, input)`, the principal from `memberPrincipal(ctx.get, { userId,
   tenantId })` (both from `@hykr/api`).
-- **Free time.** `GET /api/calendar/busy?from&to[&userId]` (busy intervals, no titles) and
+- **Free time.** `GET /api/calendar/busy?from&to[&userId]` (busy intervals, no titles, merged
+  across every calendar the person connected: Microsoft's from `getSchedule`, never a subject) and
   `GET /api/calendar/free?from&to&minutes[&step&hoursFrom&hoursTo&userId]` (slots, in the
   business's time zone; `freeSlots` in `@hykr/contracts` is the pure version). With
   `hoursFrom`/`hoursTo`, slots keep inside those local hours. Without them, slots keep to the
@@ -2036,18 +2066,24 @@ move in a calendar means are the application's. The sample's `meetings` module u
   credentials. None ships: without one, `call.dial` is refused with `no_telephony_provider`.
   The provider's status webhook is a B10 connector handler that calls
   `ctx.write(callProviderUpdate(), { provider, externalId, status, … })`.
-- **In the app** `calendarPlugin()` adds `/calendar` (connect or disconnect Google; make, copy
+- **In the app** `calendarPlugin()` adds `/calendar` (connect each offered provider, pick the
+  one written to, disconnect; make, copy
   and revoke feeds), `<RecordInvites entity id />` a record's invites and `<RecordCalls entity
   id />` its calls (log one; "Call" when the business has a provider). The hooks are
-  `useCalendarConnections`, `useConnectCalendar`, `useCompleteCalendar` (the `/calendar` screen
-  finishes a sign-in it is handed), `useDisconnectCalendar`, `useCalendarFeeds`,
+  `useCalendarConnections`, `useConnectCalendar(provider)`, `useCompleteCalendar` (the
+  `/calendar` screen finishes a sign-in it is handed), `useSetCalendarTarget`, `useDisconnectCalendar`, `useCalendarFeeds`,
   `useCreateFeed`, `useRevokeFeed`, `useInvites`, `useSendInvite`, `useCalls`,
   `useCallProvider`, `useLogCall` and `useDialCall`.
 - **Configuration**: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (unset: Google is not
   offered), `GOOGLE_CALENDAR_TRANSPORT=fake` (the in-memory Google, `fakeGoogle()` in
   `@hykr/api/testing`; production refuses it), `CALENDAR_PUBLIC_URL`, `CALENDAR_RETURN_URL`,
   `CALENDAR_APP_RETURN_URL` (a native app's link, such as `agenticstack://calendar`) and
-  `CALENDAR_SYNC_DAYS` (`application/.env.example`).
+  `CALENDAR_SYNC_DAYS` (`application/.env.example`). Microsoft: `CALENDAR_PROVIDERS` naming
+  `microsoft`, `MICROSOFT_CALENDAR_CLIENT_ID` and `_CLIENT_SECRET`, `_TENANT` (default
+  `common`), `_REDIRECT_URL` (default `<BETTER_AUTH_URL>/api/calendar/microsoft/callback`),
+  `MICROSOFT_CALENDAR_TRANSPORT=fake` (`fakeMicrosoft()`; production refuses it) and the
+  overrides `MICROSOFT_LOGIN_URL` and `MICROSOFT_GRAPH_URL`. Live calls to Microsoft go through
+  the egress guard, to those two hosts only.
 
 ### 5.25 Acceptance: one-time codes and evidence
 
@@ -3646,7 +3682,7 @@ The `customFields` trait with a `customFieldsColumn()` (`<CustomFieldInputs>` in
 Out: the business adds an endpoint (`POST /api/integrations/endpoints`) and nothing is declared. In: contribute a connector (`defineConnector`, `hmacConnector`) and a `defineConnectorHandler` whose `ctx.write` goes through the write path. Section 5.14.
 
 **…put records in people's calendars?**
-`traits.schedulable` on the spec and `calendarPlugin()` in the app; a move in Google is an event your module may subscribe to. Section 5.24.
+`traits.schedulable` on the spec and `calendarPlugin()` in the app; a move in Google or Outlook is an event your module may subscribe to. Section 5.24.
 
 **…run work that takes minutes, elsewhere?**
 `defineJob` (contributed as `jobs`) and `startJob(tx, p, Job, input)` in a command's `run`; `<JobProgress job />` in the app. Section 5.17.
@@ -3851,8 +3887,8 @@ These are not built. Each has a workaround for now.
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. A retention period for inbound events would also have to keep their keys: a sender that signs no timestamp can have an old request posted again, and only its stored key drops it (decisions S2). |
 | Inbound senders without signed ids | Their events are keyed by the body, so two events with byte-identical bodies are one, and a batch regrouped on retry stores its events again. Sign the ids (`signedContent`, `signedIds`) to avoid both (decisions S2). |
 | The sample's supplier reports | `orders-supplier` takes only `order.fulfilled`, for an accepted order its party supplies; a supplier's acknowledgement or dispatch has no state, and nothing answers the supplier's system. An order is placed (`order.placed`) only when its customer accepts it. |
-| OAuth connectors | Business connections store credentials as given; only the calendar's per-person Google connection has an OAuth flow and token refresh (section 5.24). |
-| Other calendars (Microsoft 365, CalDAV), a calendar other than the primary one | Only Google, into each person's primary calendar. Others subscribe to their ICS feed. |
+| OAuth connectors | Business connections store credentials as given; only the calendar's per-person connections (Google, Microsoft) have an OAuth flow and token refresh (section 5.24). |
+| Other calendars (CalDAV, Apple iCloud), a calendar other than the primary one | Google and Microsoft 365, into each person's primary calendar. CalDAV and iCloud users subscribe to their ICS feed. Invite replies are not read. |
 | Changes made in Google written back | Sync is one way; a move or deletion in Google is stored as `calendar.event_moved` / `calendar.event_removed` for a module's subscriber to act on (the sample's meetings do). |
 | Invite replies | Attendees' accept or decline is not read (no inbound mail); invites go out with `RSVP=FALSE`. |
 | Confirming invite updates | A change to an invited record emails every recipient an update at once; nobody confirms it first. |

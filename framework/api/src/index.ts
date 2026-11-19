@@ -21,10 +21,14 @@ export {
 } from './features/acceptance/public.js';
 export * from './features/agents/public.js';
 export {
+  type CalendarProviderDef,
   contentOf,
   type EventContent,
+  enabledProviders as calendarProviders,
   googleSettings,
   memberPrincipal,
+  microsoftSettings,
+  providerOf as calendarProvider,
   schedulable,
   schedulables,
   uidOf,

@@ -3,19 +3,14 @@
 // through runWrite (ops.ts).
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { type IcsEvent, icsCalendar } from '@hykr/connectors';
-import {
-  authorizationUrl,
-  exchangeCode,
-  fakeGoogle,
-  googleCalendarClient,
-  googleCalendarConnector,
-  pkcePair,
-} from '@hykr/connectors/google-calendar';
+import { googleCalendarConnector, mergeBusy, pkcePair } from '@hykr/connectors/google-calendar';
+import { microsoftCalendarConnector } from '@hykr/connectors/microsoft-calendar';
 import {
   type BusyTimes,
   CalendarCapabilities,
   type CalendarConnectionInfo,
   type CalendarFeedInfo,
+  CalendarProvider,
   type CalendarProviderInfo,
   CompleteCalendarInput,
   ConnectCalendarInput,
@@ -26,6 +21,7 @@ import {
   openHoursOf,
   type Principal,
   parseTenantSettings,
+  SetCalendarTargetInput,
 } from '@hykr/contracts';
 import {
   findRepeat,
@@ -65,17 +61,18 @@ import {
   feedView,
   registerCalendarOps,
   revokeFeedOp,
+  targetOp,
 } from './ops.js';
 import { memberPrincipal } from './principal.js';
-import { contentOf, namesPerson, schedulables, uidOf } from './schedulable.js';
 import {
-  appReturnUrl,
-  checkCalendarSettings,
-  feedUrl,
-  googleSettings,
-  requireGoogle,
-  returnUrl,
-} from './settings.js';
+  type CalendarProviderDef,
+  enabledProviders,
+  type ProviderTokens,
+  providerOf,
+  requireProvider,
+} from './providers/index.js';
+import { contentOf, namesPerson, schedulables, uidOf } from './schedulable.js';
+import { appReturnUrl, checkCalendarSettings, feedUrl, returnUrl } from './settings.js';
 import { beginSignIn, findSignIn, takeSignIn, verifierOf } from './sign-in.js';
 import { CalendarSyncService } from './sync.service.js';
 import { accessTokenFor, GrantRevoked, sealTokens } from './tokens.js';
@@ -127,7 +124,7 @@ const writeCtx = (p: Principal, meta: CalendarWriteMeta, requestBody?: unknown):
   ...(requestBody !== undefined ? { requestBody } : {}),
 });
 
-/** Where the browser lands after Google, with what it brought back. */
+/** Where the browser lands after the provider, with what it brought back. */
 const landing = (to: string, outcome: Record<string, string>) => {
   const url = new URL(to);
   for (const [k, v] of Object.entries(outcome)) url.searchParams.set(k, v);
@@ -136,6 +133,17 @@ const landing = (to: string, outcome: Record<string, string>) => {
 
 const refused = (rule: string, message: string) =>
   new BadRequestException({ error: 'invalid', rule, message });
+
+/** A provider named in a route: one this framework knows, or a 404. */
+export function providerParam(name: string): CalendarProvider {
+  const parsed = CalendarProvider.safeParse(name);
+  if (!parsed.success) throw notFound('calendar provider');
+  return parsed.data;
+}
+
+/** The inbound connector a provider's notifications arrive through. */
+const connectorOf = (p: CalendarProviderDef) =>
+  p.name === 'microsoft' ? microsoftCalendarConnector : googleCalendarConnector;
 
 @Injectable()
 export class CalendarService implements OnModuleInit {
@@ -175,12 +183,18 @@ export class CalendarService implements OnModuleInit {
   /* ── Connections ──────────────────────────────────────────────────────── */
 
   providers(): CalendarProviderInfo[] {
-    return [{ name: 'google', available: googleSettings() !== null }];
+    return enabledProviders().map((name) => ({ name, available: providerOf(name) !== null }));
   }
 
-  /** The consent screen's URL for this person, in this business. */
-  async start(p: Principal, body: unknown): Promise<{ url: string }> {
-    const input = parse(ConnectCalendarInput, body);
+  /**
+   * The consent screen's URL for this person, in this business. The provider is the route's
+   * (`/api/calendar/:provider/start`) or, on the older `POST /api/calendar/connections`, the body's.
+   */
+  async start(p: Principal, body: unknown, route?: CalendarProvider): Promise<{ url: string }> {
+    const input = parse(
+      ConnectCalendarInput,
+      route ? { ...((body ?? {}) as object), provider: route } : body,
+    );
     const userId = userOf(p);
     if (!p.tenantId)
       throw new ForbiddenException({
@@ -188,47 +202,58 @@ export class CalendarService implements OnModuleInit {
         rule: 'no_business',
         reason: 'Connect a calendar from within a business',
       });
-    const google = requireGoogle();
+    const provider = requireProvider(input.provider);
     requireSecretBox();
     const pkce = pkcePair();
     // The verifier stays here, under a random state: the URL carries nothing it could be read from.
     const state = await beginSignIn(this.db, {
       tenantId: p.tenantId,
       userId,
-      provider: 'google',
+      provider: provider.name,
       verifier: pkce.verifier,
       returnTo: input.returnTo === 'app' ? appReturnUrl() : returnUrl(),
     });
     const [me] = await this.db.select({ email: user.email }).from(user).where(eq(user.id, userId));
-    const url = authorizationUrl({
-      clientId: google.clientId,
-      redirectUri: google.redirectUri,
+    const url = provider.oauth.authorizationUrl({
       state,
       codeChallenge: pkce.challenge,
-      endpoints: google.endpoints,
       ...(me?.email ? { loginHint: me.email } : {}),
     });
     // Offline: the fake's consent screen agrees at once, as the person's own address.
-    if (google.mode === 'fake') return { url: fakeGoogle().consent(url, me?.email ?? userId) };
+    if (provider.oauth.fakeConsent)
+      return { url: provider.oauth.fakeConsent(url, me?.email ?? userId) };
     return { url };
   }
 
   /**
-   * Google sends the browser back here, with no session to trust. Nothing is exchanged: the
-   * browser goes on to the app, with the code and the state, and the app finishes the sign-in
-   * under its own session (`complete`). Returns where the browser goes next.
+   * The provider sends the browser back here, with no session to trust. Nothing is exchanged:
+   * the browser goes on to the app, with the code and the state, and the app finishes the
+   * sign-in under its own session (`complete`). Returns where the browser goes next. A sign-in
+   * started for another provider is not this callback's.
    */
-  async callback(query: Record<string, unknown>): Promise<string> {
+  async callback(
+    query: Record<string, unknown>,
+    name: CalendarProvider = 'google',
+  ): Promise<string> {
     const signIn = await findSignIn(this.db, query.state);
-    if (!signIn) return landing(returnUrl(), { error: 'sign_in_expired' });
+    if (!signIn || signIn.provider !== name)
+      return landing(returnUrl(), { error: 'sign_in_expired' });
+    // The app finishes the sign-in at this provider's `complete`.
+    const whose = { provider: name };
     if (typeof query.error === 'string') {
-      // The person said no (or Google could not ask): this sign-in is over.
+      // The person said no (or the provider could not ask, or their organisation must approve
+      // the app first): this sign-in is over.
       await takeSignIn(this.db, query.state);
-      return landing(signIn.returnTo, { error: query.error.slice(0, 100) });
+      const refusal = providerOf(name)?.refusal(query);
+      return landing(signIn.returnTo, {
+        error: refusal?.rule ?? query.error.slice(0, 100),
+        ...whose,
+      });
     }
     const code = typeof query.code === 'string' ? query.code : '';
-    if (!code || code.length > 2048) return landing(signIn.returnTo, { error: 'no_code' });
-    return landing(signIn.returnTo, { code, state: query.state as string });
+    if (!code || code.length > 2048)
+      return landing(signIn.returnTo, { error: 'no_code', ...whose });
+    return landing(signIn.returnTo, { code, state: query.state as string, ...whose });
   }
 
   /**
@@ -238,10 +263,15 @@ export class CalendarService implements OnModuleInit {
    * Only then is the code exchanged, with the verifier kept here, and the connection written as
    * this person.
    */
-  async complete(p: Principal, meta: CalendarWriteMeta, body: unknown) {
+  async complete(
+    p: Principal,
+    meta: CalendarWriteMeta,
+    body: unknown,
+    name: CalendarProvider = 'google',
+  ) {
     const input = parse(CompleteCalendarInput, body);
     const userId = userOf(p);
-    // A retry with the same key answers the first answer: the sign-in and Google's code were
+    // A retry with the same key answers the first answer: the sign-in and the provider's code were
     // used up by it, so look before taking them. One sent while the first still runs waits for
     // it (`oneAtATime`'s claim is not the key's own row, which the connection's write keeps).
     const op = connectOp();
@@ -249,22 +279,24 @@ export class CalendarService implements OnModuleInit {
     return oneAtATime(this.db, ctx, async () => {
       const repeat = await findRepeat(this.db, ctx, op, input);
       if (repeat) return repeat.result;
-      return this.connect(p, meta, input, userId, op);
+      return this.connect(p, meta, input, userId, op, name);
     });
   }
 
-  /** The sign-in taken, Google's code exchanged, and the connection written as this person. */
+  /** The sign-in taken, the provider's code exchanged, and the connection written as this person. */
   private async connect(
     p: Principal,
     meta: CalendarWriteMeta,
     input: z.infer<typeof CompleteCalendarInput>,
     userId: string,
     op: ReturnType<typeof connectOp>,
+    name: CalendarProvider,
   ) {
-    const google = requireGoogle();
+    const provider = requireProvider(name);
     const box = requireSecretBox();
     const signIn = await takeSignIn(this.db, input.state);
-    if (!signIn)
+    // A sign-in for another provider cannot be finished here (and is used up by trying).
+    if (!signIn || signIn.provider !== provider.name)
       throw refused(
         'calendar_sign_in_invalid',
         'This calendar sign-in is old or was used already: start again',
@@ -296,26 +328,24 @@ export class CalendarService implements OnModuleInit {
         'This calendar sign-in cannot be finished: start again',
       );
     }
-    let tokens: Awaited<ReturnType<typeof exchangeCode>>;
+    let tokens: ProviderTokens;
     try {
-      tokens = await exchangeCode(google.transport, {
-        clientId: google.clientId,
-        clientSecret: google.clientSecret,
-        endpoints: google.endpoints,
-        redirectUri: google.redirectUri,
-        code: input.code,
-        codeVerifier,
-      });
+      tokens = await provider.oauth.exchangeCode({ code: input.code, codeVerifier });
     } catch (e) {
-      log.warn(`Google refused the code: ${e instanceof Error ? e.message : e}`);
-      throw refused('google_refused', 'Google did not accept this sign-in: start again');
+      log.warn(`${provider.label} refused the code: ${e instanceof Error ? e.message : e}`);
+      const refusal = provider.refusal(e);
+      if (refusal) throw refused(refusal.rule, refusal.message);
+      throw refused(
+        `${provider.name}_refused`,
+        `${provider.label} did not accept this sign-in: start again`,
+      );
     }
     if (!tokens.refreshToken)
       throw refused(
         'no_offline_access',
-        'Google gave no lasting access to the calendar: remove the app in your Google account and connect again',
+        `${provider.label} gave no lasting access to the calendar: remove the app in your ${provider.label} account and connect again`,
       );
-    const account = tokens.email ?? 'Google account';
+    const { email: account } = provider.account(tokens);
     const [existing] = await this.db
       .select()
       .from(calendarConnections)
@@ -323,10 +353,10 @@ export class CalendarService implements OnModuleInit {
         and(
           eq(calendarConnections.tenantId, tenantId),
           eq(calendarConnections.userId, userId),
-          eq(calendarConnections.provider, 'google'),
+          eq(calendarConnections.provider, provider.name),
         ),
       );
-    // Another Google account than before: take our events out of the old one first.
+    // Another account than before: take our events out of the old one first.
     const old =
       existing && existing.account !== account ? await this.sync.leftovers(existing.id) : null;
     const id = existing?.id ?? randomUUID();
@@ -337,7 +367,7 @@ export class CalendarService implements OnModuleInit {
       op,
       {
         id,
-        provider: 'google',
+        provider: provider.name,
         account,
         scopes: (tokens.scope ?? '').split(' ').filter(Boolean).slice(0, 20),
         sealed: sealTokens(tenantId, id, {
@@ -348,7 +378,7 @@ export class CalendarService implements OnModuleInit {
         inbound: {
           id: inboundId,
           sealed: box.seal(
-            JSON.stringify(googleCalendarConnector.generate?.()),
+            JSON.stringify(connectorOf(provider).generate?.()),
             connectionAad(tenantId, inboundId),
           ),
         },
@@ -369,11 +399,24 @@ export class CalendarService implements OnModuleInit {
           eq(calendarConnections.userId, userOf(p)),
         ),
       )
-      .orderBy(asc(calendarConnections.createdAt));
-    return rows.map(connectionView);
+      .orderBy(asc(calendarConnections.createdAt), asc(calendarConnections.id));
+    // The one records are written to: the chosen one, else the first connected (decisions B21).
+    const live = rows.filter((r) => r.status === 'active' && providerOf(r.provider));
+    const target = live.find((r) => r.writeTo) ?? live[0];
+    return rows.map((r) => ({ ...connectionView(r), writeTo: r.id === target?.id }));
   }
 
-  /** Disconnect: the write first (another person's is a 404), then Google cleaned up. */
+  /**
+   * Which of the person's connected calendars their records are written to (when they have more
+   * than one). Their events move there.
+   */
+  async setTarget(p: Principal, meta: CalendarWriteMeta, id: string, body: unknown) {
+    userOf(p);
+    const input = parse(SetCalendarTargetInput, body);
+    return (await this.run(p, meta, targetOp({ id }), input)).result;
+  }
+
+  /** Disconnect: the write first (another person's is a 404), then the provider cleaned up. */
   async disconnect(p: Principal, meta: CalendarWriteMeta, id: string) {
     userOf(p);
     const left = await this.sync.leftovers(id);
@@ -421,13 +464,16 @@ export class CalendarService implements OnModuleInit {
     return this.busyOf(p.tenantId as string, userId, window);
   }
 
+  /**
+   * Busy times from every calendar the person connected, merged: a slot is free only when it is
+   * free in all of them. A connection whose grant is gone is left out (and marked).
+   */
   private async busyOf(
     tenantId: string,
     userId: string,
     window: { from: string; to: string },
   ): Promise<BusyTimes> {
-    const google = googleSettings();
-    const [conn] = await this.db
+    const connections = await this.db
       .select()
       .from(calendarConnections)
       .where(
@@ -436,22 +482,31 @@ export class CalendarService implements OnModuleInit {
           eq(calendarConnections.userId, userId),
           eq(calendarConnections.status, 'active'),
         ),
-      );
-    if (!google || !conn) return { connected: false, busy: [] };
-    try {
-      const accessToken = await accessTokenFor(this.db, google, conn);
-      const api = googleCalendarClient(google.transport, {
-        accessToken,
-        endpoints: google.endpoints,
-      });
-      return {
-        connected: true,
-        busy: await api.freeBusy({ ...window, calendars: [conn.calendarId] }),
-      };
-    } catch (e) {
-      if (e instanceof GrantRevoked) return { connected: false, busy: [] };
-      throw e;
-    }
+      )
+      .orderBy(asc(calendarConnections.createdAt));
+    const answers = await Promise.all(
+      connections.map(async (conn) => {
+        const provider = providerOf(conn.provider);
+        if (!provider) return null;
+        try {
+          const accessToken = await accessTokenFor(this.db, provider, conn);
+          return await provider.freeBusy(accessToken, {
+            ...window,
+            calendarId: conn.calendarId,
+            account: conn.account,
+          });
+        } catch (e) {
+          if (e instanceof GrantRevoked) return null;
+          throw e;
+        }
+      }),
+    );
+    const answered = answers.filter((a) => a !== null);
+    if (!answered.length) return { connected: false, busy: [] };
+    return {
+      connected: true,
+      busy: answered.length === 1 ? answered[0] : mergeBusy(answered.flat()),
+    };
   }
 
   async free(p: Principal, query: Record<string, unknown>): Promise<FreeTimes> {

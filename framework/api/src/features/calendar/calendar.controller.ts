@@ -15,13 +15,14 @@ import {
   Header,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Redirect,
   UseGuards,
 } from '@nestjs/common';
 import { AllowAnonymous, OptionalAuth } from '@thallesp/nestjs-better-auth';
-import { CalendarService } from './calendar.service.js';
+import { CalendarService, providerParam } from './calendar.service.js';
 import { InvitesService } from './invites.js';
 
 const uuid = new ParseUUIDPipe();
@@ -45,27 +46,55 @@ export class CalendarController {
     return this.calendar.providers();
   }
 
+  /** Start connecting, the provider in the body. Kept for one release: use `:provider/start`. */
   @Post('connections')
   @UseGuards(HumanOnlyGuard)
   connect(@CurrentPrincipal() p: Principal, @Body() body: unknown) {
     return this.calendar.start(p, body);
   }
 
-  /** The app, back from Google with its code and state: only their starter finishes them. */
-  @Post('google/complete')
+  /** The consent screen's URL for this provider. */
+  @Post(':provider/start')
+  @UseGuards(HumanOnlyGuard)
+  start(
+    @CurrentPrincipal() p: Principal,
+    @Param('provider') provider: string,
+    @Body() body: unknown,
+  ) {
+    return this.calendar.start(p, body, providerParam(provider));
+  }
+
+  /**
+   * The app, back from the provider with its code and state: only their starter finishes them.
+   * `google/complete` was the only one before; it is this route with the provider `google`.
+   */
+  @Post(':provider/complete')
   @UseGuards(HumanOnlyGuard)
   complete(
     @CurrentPrincipal() p: Principal,
     @RequestMeta() meta: RequestMetaValue,
+    @Param('provider') provider: string,
     @Body() body: unknown,
   ) {
-    return this.calendar.complete(p, meta, body);
+    return this.calendar.complete(p, meta, body, providerParam(provider));
   }
 
   @Get('connections')
   @UseGuards(HumanOnlyGuard)
   connections(@CurrentPrincipal() p: Principal) {
     return this.calendar.list(p);
+  }
+
+  /** `{ writeTo: true }`: the person's records are written to this calendar of theirs. */
+  @Patch('connections/:id')
+  @UseGuards(HumanOnlyGuard)
+  setTarget(
+    @CurrentPrincipal() p: Principal,
+    @RequestMeta() meta: RequestMetaValue,
+    @Param('id', uuid) id: string,
+    @Body() body: unknown,
+  ) {
+    return this.calendar.setTarget(p, meta, id, body);
   }
 
   @Delete('connections/:id')
@@ -126,7 +155,7 @@ export class CalendarController {
 }
 
 /**
- * What arrives without a session: Google sending the browser back (nothing is exchanged here:
+ * What arrives without a session: a provider sending the browser back (nothing is exchanged here:
  * the browser goes on to the app, which finishes under its session), and a calendar app reading
  * a feed (the token says whose).
  */
@@ -135,10 +164,11 @@ export class CalendarController {
 export class CalendarPublicController {
   constructor(private readonly calendar: CalendarService) {}
 
-  @Get('google/callback')
+  /** Each provider's redirect URL; `google/callback` is this route with the provider `google`. */
+  @Get(':provider/callback')
   @Redirect()
-  async callback(@Query() query: Record<string, unknown>) {
-    return { url: await this.calendar.callback(query), statusCode: 302 };
+  async callback(@Param('provider') provider: string, @Query() query: Record<string, unknown>) {
+    return { url: await this.calendar.callback(query, providerParam(provider)), statusCode: 302 };
   }
 
   @Get('feed/:token')

@@ -136,7 +136,10 @@ export function contentOf(trait: SchedulableTrait, read: Values): EventContent |
 export const hashOf = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-/** A record's event id in a provider: Google's base32hex alphabet, the same for every person. */
+/**
+ * A record's event key, the same for every person: Google's event id (its base32hex alphabet),
+ * and the extended property Microsoft's event carries (decisions B21, 7).
+ */
 export const googleEventId = (tenantId: string, entity: string, id: string) =>
   `bc${createHash('sha256').update(`${tenantId}:${entity}:${id}`).digest('hex').slice(0, 40)}`;
 

@@ -136,9 +136,19 @@ export class InboundService implements OnApplicationBootstrap {
     };
   }
 
-  /** POST: verify, store each event once, queue it. Answers fast: senders retry slow ones. */
-  async receive(connectorName: string, connectionId: string, req: InboundRequest) {
+  /**
+   * POST: verify, store each event once, queue it. Answers fast: senders retry slow ones. A
+   * connector's handshake (Graph's `?validationToken=`) is answered with its text instead, and
+   * nothing is stored.
+   */
+  async receive(
+    connectorName: string,
+    connectionId: string,
+    req: InboundRequest,
+  ): Promise<{ stored: number } | { handshake: string }> {
     const { inbound, connection, credentials } = await this.open(connectorName, connectionId);
+    const handshake = inbound.handshake?.(req, credentials) ?? null;
+    if (handshake !== null) return { handshake };
     // A sender that posts headers only (a push channel) says so; any other needs a body to sign.
     if ((!req.rawBody?.length && !inbound.bodyless) || !inbound.verify(req, credentials))
       throw new UnauthorizedException('bad signature');
