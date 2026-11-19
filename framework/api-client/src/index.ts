@@ -36,6 +36,8 @@ import {
   type CommentPage,
   type ConfigurePrivacyInput,
   ConfigurePrivacySpec,
+  type ConnectionInfo,
+  type ConnectorInfo,
   type CreatedInvite,
   type CreateInviteInput,
   type CreatePartyInput,
@@ -1090,6 +1092,55 @@ export function createApiClient(opts: ApiClientOptions) {
         call<WriteResult<null>>(
           'DELETE',
           `/api/calendar/feeds/${encodeURIComponent(id)}`,
+          undefined,
+          key,
+        ),
+    },
+    /**
+     * The business's connections to other services, for people who manage integrations: the
+     * connectors it can connect, its connections, and connecting one by signing in (B21).
+     */
+    integrations: {
+      connectors: () => call<ConnectorInfo[]>('GET', '/api/integrations/connectors'),
+      connections: () => call<ConnectionInfo[]>('GET', '/api/integrations/connections'),
+      /**
+       * The provider's consent screen: open it. The provider sends the browser back to the API,
+       * which sends it on to the app (`returnTo`: the web app, or the native app's link) with a
+       * code and a state for `oauthComplete`. `connectionId`: sign that connection in again.
+       */
+      oauthStart: (
+        connector: string,
+        options: { returnTo?: 'web' | 'app'; connectionId?: string; label?: string } = {},
+      ) =>
+        call<{ url: string }>('POST', '/api/integrations/connections/oauth/start', {
+          connector,
+          ...options,
+        }),
+      /** Finish signing in, as the person who started it, in the business they started it in. */
+      oauthComplete: (input: { code: string; state: string }, key = newKey()) =>
+        call<WriteResult<ConnectionInfo>>(
+          'POST',
+          '/api/integrations/connections/oauth/complete',
+          input,
+          key,
+        ),
+      /** The accounts (pages) a signed-in connection receives events for. */
+      oauthPick: (id: string, accountIds: string[], key = newKey()) =>
+        call<
+          WriteResult<ConnectionInfo> & {
+            subscribed?: { id: string; ok: boolean; error?: string }[];
+          }
+        >(
+          'POST',
+          `/api/integrations/connections/${encodeURIComponent(id)}/oauth/pick`,
+          { accountIds },
+          key,
+        ),
+      /** Remove one: a signed-in connection's grant is withdrawn at the provider. */
+      disconnect: (id: string, key = newKey()) =>
+        call<WriteResult<null>>(
+          'DELETE',
+          `/api/integrations/connections/${encodeURIComponent(id)}`,
           undefined,
           key,
         ),

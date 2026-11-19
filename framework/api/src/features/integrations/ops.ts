@@ -4,13 +4,19 @@
 // approval. Inputs carry secrets only sealed, so a parked op stores nothing in the clear.
 import { checkUrl } from '@hykr/connectors';
 import { capabilities, type Principal } from '@hykr/contracts';
-import { allow, deny, registerOp, type Tx, type WriteOp } from '@hykr/core';
-import { integrationConnections, integrationDeliveries, integrationEndpoints } from '@hykr/db';
+import { allow, deny, type NamedEvent, registerOp, type Tx, type WriteOp } from '@hykr/core';
+import {
+  integrationAccounts,
+  integrationConnections,
+  integrationDeliveries,
+  integrationEndpoints,
+} from '@hykr/db';
 import { can, userIdOf } from '@hykr/policy';
-import { NotFoundException } from '@nestjs/common';
-import { and, eq, sql } from 'drizzle-orm';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { IntegrationsCapability } from './capability.js';
+import { connectors } from './registry.js';
 import { outboundPolicy } from './settings.js';
 
 export type EndpointRow = typeof integrationEndpoints.$inferSelect;
@@ -35,17 +41,49 @@ export const endpointView = (r: EndpointRow) => ({
   updatedAt: r.updatedAt.toISOString(),
 });
 
+/** A stored event of the integration bus's own records (connections): ids and names only. */
+export class IntegrationEvent implements NamedEvent {
+  constructor(
+    readonly eventName: string,
+    readonly row: Record<string, unknown>,
+    readonly resourceType = 'integration_connection',
+  ) {}
+  get resourceId() {
+    return typeof this.row.id === 'string' ? this.row.id : null;
+  }
+}
+
+/** Where a connection's sender posts: its own URL, or the provider's one URL (a shared one). */
+function inboundPathOf(r: ConnectionRow) {
+  const inbound = connectors.get(r.connector)?.inbound;
+  if (inbound && !inbound.verify && inbound.shared) return `/webhooks/${r.connector}`;
+  return `/webhooks/${r.connector}/${r.id}`;
+}
+
 export const connectionView = (r: ConnectionRow) => ({
   id: r.id,
   connector: r.connector,
   label: r.label,
-  status: r.status as 'active' | 'disabled',
+  status: r.status as 'active' | 'disabled' | 'needs_reauth',
+  /** 'credentials' (given) or 'oauth' (signed in). */
+  auth: r.auth as 'credentials' | 'oauth',
   public: r.public as Record<string, unknown>,
+  /** What a signed-in connection's grant allows. */
+  scopes: r.scopes,
+  /** When its access token ends, if it does. */
+  tokenExpiresAt: r.tokenExpiresAt?.toISOString() ?? null,
+  /** Why it needs signing in again. */
+  lastError: r.lastError,
   /** Where the sender posts: this server's address, then this path. */
-  inboundPath: `/webhooks/${r.connector}/${r.id}`,
+  inboundPath: inboundPathOf(r),
   createdAt: r.createdAt.toISOString(),
   updatedAt: r.updatedAt.toISOString(),
 });
+
+export type AccountRow = typeof integrationAccounts.$inferSelect;
+
+/** An account a signed-in connection reaches: its id and name, never its token. */
+export const accountView = (a: AccountRow) => ({ id: a.accountId, name: a.name, held: a.held });
 
 export const deliveryView = (r: DeliveryRow) => ({
   id: r.id,
@@ -141,6 +179,48 @@ const ConnectionUpdateOp = z.strictObject({
   public: z.record(z.string(), z.unknown()).optional(),
 });
 const Nothing = z.strictObject({});
+
+/** POST /api/integrations/connections/oauth/start. */
+export const OAuthStart = z.strictObject({
+  connector: z.string().max(40),
+  returnTo: z.enum(['web', 'app']).default('web'),
+  label: z.string().max(200).optional(),
+  /** Sign an existing connection in again (it needs it, or more scopes). */
+  connectionId: z.uuid().optional(),
+});
+
+/** POST /api/integrations/connections/oauth/complete: what the provider sent the browser back with. */
+export const OAuthComplete = z.strictObject({
+  code: z.string().min(1).max(4096),
+  state: z.string().min(1).max(200),
+});
+
+/** POST /api/integrations/connections/:id/oauth/pick. */
+export const OAuthPick = z.strictObject({
+  accountIds: z.array(z.string().min(1).max(200)).max(200),
+});
+
+const AccountInput = z.strictObject({
+  accountId: z.string().min(1).max(200),
+  name: z.string().max(500),
+  tokenSealed: Sealed.optional(),
+  held: z.boolean(),
+});
+
+const OAuthConnectOp = z.strictObject({
+  id: z.uuid(),
+  connector: z.string().max(40),
+  label: z.string().max(200).nullable().optional(),
+  /** Signing `id` in again: it exists. */
+  reconnect: z.boolean(),
+  sealed: Sealed,
+  scopes: z.array(z.string().max(200)).max(100),
+  tokenExpiresAt: z.iso.datetime().nullable(),
+  public: z.record(z.string(), z.string().max(500)),
+  accounts: z.array(AccountInput).max(200),
+});
+
+const OAuthPickOp = OAuthPick;
 
 /* ── Authorization ─────────────────────────────────────────────────────────── */
 
@@ -432,7 +512,10 @@ export function updateConnectionOp(
     input: ConnectionUpdateOp,
     args: { id },
     load: loadConnection(id),
-    authorize: (p) => manage(p),
+    authorize: (p, loaded, input) =>
+      loaded.status === 'needs_reauth' && input.status === 'active'
+        ? deny('oauth_sign_in_needed', 'Sign this connection in again to turn it back on')
+        : manage(p),
     summarize: (input, row) =>
       input.sealed
         ? `New credentials for ${row.label ?? row.connector}`
@@ -567,6 +650,246 @@ export function retryDeliveryOp(
   };
 }
 
+/* ── Signed-in connections (decisions B21) ──────────────────────────────────── */
+
+/**
+ * An account held elsewhere (by another connection, in any business) refuses the write: a
+ * provider's shared URL routes each account's events to one connection only.
+ */
+async function heldElsewhere(tx: Tx, connector: string, connectionId: string, ids: string[]) {
+  if (!ids.length) return;
+  const taken = await tx
+    .select({ accountId: integrationAccounts.accountId })
+    .from(integrationAccounts)
+    .where(
+      and(
+        eq(integrationAccounts.connector, connector),
+        eq(integrationAccounts.held, true),
+        inArray(integrationAccounts.accountId, ids),
+        ne(integrationAccounts.connectionId, connectionId),
+      ),
+    );
+  if (taken.length)
+    throw new ConflictException({
+      error: 'conflict',
+      rule: 'account_connected_elsewhere',
+      reason: `Connected elsewhere already: ${taken.map((t) => t.accountId).join(', ')}. Disconnect it there first.`,
+      accounts: taken.map((t) => t.accountId),
+    });
+}
+
+/** The postgres error of a unique index: a concurrent hold took the account first. */
+const isUniqueViolation = (e: unknown) =>
+  (e as { code?: string; cause?: { code?: string } })?.code === '23505' ||
+  (e as { cause?: { code?: string } })?.cause?.code === '23505';
+
+const takenRace = () =>
+  new ConflictException({
+    error: 'conflict',
+    rule: 'account_connected_elsewhere',
+    reason: 'An account was connected elsewhere at the same moment. Disconnect it there first.',
+  });
+
+const accountsOf = (tx: Tx, connectionId: string) =>
+  tx.select().from(integrationAccounts).where(eq(integrationAccounts.connectionId, connectionId));
+
+/**
+ * A connection signed in: created, or (signing it in again) its grant replaced. The tokens come
+ * sealed; the accounts are the provider's own answer (`describe`), held at once or offered for a
+ * pick. Audited without a token; `connection.oauth_connected` names who, what and the scopes.
+ */
+export function oauthConnectOp(): WriteOp<
+  z.infer<typeof OAuthConnectOp>,
+  ConnectionRow | undefined,
+  ConnectionRow
+> {
+  return {
+    name: 'integrations.connection.oauth_connect',
+    kind: 'command',
+    resourceType: CONNECTION,
+    resourceId: (input) => input.id,
+    input: OAuthConnectOp,
+    load: async (tx, p, input) => {
+      if (!input.reconnect) return undefined;
+      const row = await loadConnection(input.id)(tx, p);
+      if (row.connector !== input.connector) throw notFound('connection');
+      return row;
+    },
+    authorize: (p) => manage(p),
+    summarize: (input) =>
+      input.reconnect
+        ? `Sign ${input.connector} in again`
+        : `Connect ${input.label ?? input.connector}`,
+    run: async ({ tx, principal, input, loaded }) => {
+      const tenantId = principal.tenantId as string;
+      const id = loaded?.id ?? input.id;
+      const before = loaded ? await accountsOf(tx, id) : [];
+      const wasHeld = new Set(before.filter((a) => a.held).map((a) => a.accountId));
+      // Signing in again keeps what was picked, of the accounts the grant still reaches.
+      const accounts = input.accounts.map((a) => ({
+        ...a,
+        held: a.held || wasHeld.has(a.accountId),
+      }));
+      await heldElsewhere(
+        tx,
+        input.connector,
+        id,
+        accounts.filter((a) => a.held).map((a) => a.accountId),
+      );
+      const values = {
+        credentialsSealed: input.sealed,
+        scopes: input.scopes,
+        tokenExpiresAt: input.tokenExpiresAt ? new Date(input.tokenExpiresAt) : null,
+        expiryNoticeAt: null,
+        public: input.public,
+        status: 'active',
+        lastError: null,
+        updatedAt: new Date(),
+      };
+      const [row] = loaded
+        ? await tx
+            .update(integrationConnections)
+            .set({ ...values, ...(input.label ? { label: input.label } : {}) })
+            .where(eq(integrationConnections.id, loaded.id))
+            .returning()
+        : await tx
+            .insert(integrationConnections)
+            .values({
+              id,
+              tenantId,
+              connector: input.connector,
+              label: input.label ?? null,
+              auth: 'oauth',
+              owner: 'business',
+              createdBy: userIdOf(principal) ?? null,
+              ...values,
+            })
+            .returning();
+      try {
+        await tx.delete(integrationAccounts).where(eq(integrationAccounts.connectionId, id));
+        if (accounts.length)
+          await tx.insert(integrationAccounts).values(
+            accounts.map((a) => ({
+              tenantId,
+              connectionId: id,
+              connector: input.connector,
+              accountId: a.accountId,
+              name: a.name,
+              tokenSealed: a.tokenSealed ?? null,
+              held: a.held,
+            })),
+          );
+      } catch (e) {
+        if (isUniqueViolation(e)) throw takenRace();
+        throw e;
+      }
+      const names = (held: boolean) =>
+        accounts.filter((a) => a.held === held).map((a) => ({ id: a.accountId, name: a.name }));
+      return {
+        value: row,
+        touched: [
+          {
+            type: CONNECTION,
+            id: row.id,
+            change: loaded ? ('updated' as const) : ('created' as const),
+            ...(loaded ? { before: connectionView(loaded) } : {}),
+            after: {
+              ...connectionView(row),
+              credentials: loaded ? 'replaced' : 'signed in',
+              accounts: { held: names(true), offered: names(false) },
+            },
+          },
+        ],
+        events: [
+          new IntegrationEvent('connection.oauth_connected', {
+            id: row.id,
+            tenantId,
+            connector: row.connector,
+            label: row.label ?? row.connector,
+            userId: userIdOf(principal) ?? null,
+            scopes: row.scopes,
+            public: row.public,
+            accounts: names(true),
+            reconnect: !!loaded,
+          }),
+        ],
+      };
+    },
+    present: (row) => connectionView(row),
+  };
+}
+
+/** The accounts a signed-in connection holds: the ones picked, of those it was offered. */
+export function oauthPickOp(
+  args: Id,
+): WriteOp<z.infer<typeof OAuthPickOp>, ConnectionRow, ConnectionRow> {
+  const id = idOf(args);
+  return {
+    name: 'integrations.connection.oauth_pick',
+    kind: 'command',
+    resourceType: CONNECTION,
+    resourceId: () => id,
+    input: OAuthPickOp,
+    args: { id },
+    load: loadConnection(id),
+    authorize: (p) => manage(p),
+    summarize: (input, row) =>
+      `Receive ${input.accountIds.length} account(s) on ${row.label ?? row.connector}`,
+    run: async ({ tx, input, loaded }) => {
+      const offered = await accountsOf(tx, loaded.id);
+      const known = new Set(offered.map((a) => a.accountId));
+      const unknown = input.accountIds.filter((a) => !known.has(a));
+      if (unknown.length)
+        throw new BadRequestException({
+          error: 'invalid',
+          rule: 'account_not_offered',
+          message: `Not offered by this sign-in: ${unknown.join(', ')}`,
+        });
+      const picked = [...new Set(input.accountIds)];
+      await heldElsewhere(tx, loaded.connector, loaded.id, picked);
+      try {
+        const now = new Date();
+        await tx
+          .update(integrationAccounts)
+          .set({ held: false, updatedAt: now })
+          .where(eq(integrationAccounts.connectionId, loaded.id));
+        if (picked.length)
+          await tx
+            .update(integrationAccounts)
+            .set({ held: true, updatedAt: now })
+            .where(
+              and(
+                eq(integrationAccounts.connectionId, loaded.id),
+                inArray(integrationAccounts.accountId, picked),
+              ),
+            );
+      } catch (e) {
+        if (isUniqueViolation(e)) throw takenRace();
+        throw e;
+      }
+      const [row] = await tx
+        .update(integrationConnections)
+        .set({ updatedAt: new Date() })
+        .where(eq(integrationConnections.id, loaded.id))
+        .returning();
+      const heldBefore = offered.filter((a) => a.held).map((a) => a.accountId);
+      return {
+        value: row,
+        touched: [
+          {
+            type: CONNECTION,
+            id: row.id,
+            change: 'updated',
+            before: { ...connectionView(loaded), held: heldBefore },
+            after: { ...connectionView(row), held: picked },
+          },
+        ],
+      };
+    },
+    present: (row) => connectionView(row),
+  };
+}
+
 const OWNER = {};
 const asArgs = (args: Record<string, unknown> | null) => args as Id;
 
@@ -583,5 +906,7 @@ export function registerIntegrationOps() {
   registerOp('integrations.connection.create', () => createConnectionOp(), OWNER);
   registerOp('integrations.connection.update', (a) => updateConnectionOp(asArgs(a)), OWNER);
   registerOp('integrations.connection.delete', (a) => deleteConnectionOp(asArgs(a)), OWNER);
+  registerOp('integrations.connection.oauth_connect', () => oauthConnectOp(), OWNER);
+  registerOp('integrations.connection.oauth_pick', (a) => oauthPickOp(asArgs(a)), OWNER);
   registerOp('integrations.delivery.retry', (a) => retryDeliveryOp(asArgs(a)), OWNER);
 }

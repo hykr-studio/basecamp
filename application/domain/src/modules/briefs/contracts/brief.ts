@@ -15,8 +15,11 @@ const summary = z.string().trim().min(1).max(2000);
 /** A day Postgres can store: `z.iso.date()` takes the year 0000 (developer guide, section 14). */
 const neededBy = storableDate();
 
-/** Where a brief came from: the team typed it in, or a customer answered the brief form. */
-export const BRIEF_SOURCES = ['team', 'form'] as const;
+/**
+ * Where a brief came from: the team typed it in, a customer answered the brief form, or a lead
+ * form of the business's Facebook or Instagram ads (the meta-leads connection, decisions B21).
+ */
+export const BRIEF_SOURCES = ['team', 'form', 'lead_ad'] as const;
 /** The brief form's name: what a share link to it names (server/form.ts declares it). */
 export const BRIEF_FORM = 'briefs.brief';
 /** A brief is new until someone on the team has read it. */
@@ -76,7 +79,7 @@ export const BriefSpec = entitySpec({
   name: 'brief',
   label: 'brief',
   description:
-    "Briefs: what a customer needs (a summary, a rough budget, by when), typed in by the team or answered by the customer on the business's brief form.",
+    "Briefs: what a customer needs (a summary, a rough budget, by when), typed in by the team, answered by the customer on the business's brief form, or sent from a lead form of the business's Facebook or Instagram ads.",
   schemas: { read: BriefView, create: CreateBriefInput, update: UpdateBriefInput },
   fieldLabels: {
     name: { en: 'Your name', hi: 'आपका नाम', te: 'మీ పేరు' },

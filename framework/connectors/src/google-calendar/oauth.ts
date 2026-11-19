@@ -1,6 +1,6 @@
 // Google's OAuth 2.0 for a person's calendar: the consent URL (PKCE S256, offline access so a
 // refresh token comes back), the code exchange, refreshing an access token and revoking a grant.
-import { createHash, randomBytes } from 'node:crypto';
+import { pkceChallenge, pkcePair } from '../oauth.js';
 import {
   GOOGLE_ENDPOINTS,
   type GoogleEndpoints,
@@ -19,14 +19,8 @@ export const GOOGLE_CALENDAR_SCOPES = [
   'https://www.googleapis.com/auth/calendar.freebusy',
 ] as const;
 
-/** A PKCE verifier (kept on the server) and its S256 challenge (sent to the consent screen). */
-export function pkcePair(): { verifier: string; challenge: string } {
-  const verifier = randomBytes(48).toString('base64url');
-  return { verifier, challenge: pkceChallenge(verifier) };
-}
-
-export const pkceChallenge = (verifier: string) =>
-  createHash('sha256').update(verifier).digest('base64url');
+/** PKCE is the generic connector OAuth's (`../oauth.js`), kept here for the calendar's imports. */
+export { pkceChallenge, pkcePair };
 
 export interface AuthorizationRequest {
   clientId: string;

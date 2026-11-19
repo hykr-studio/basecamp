@@ -11,6 +11,7 @@ import {
 } from '@hykr/core';
 import {
   type Database,
+  integrationAccounts,
   integrationAttempts,
   integrationConnections,
   integrationDeliveries,
@@ -33,7 +34,10 @@ import { storableInstant } from '../../infra/instant.js';
 import { beforeOf, beforeWhere, encodeKeyset, keysetTime } from '../inbox/cursor.js';
 import { IntegrationsCapability } from './capability.js';
 import { DeliveriesService } from './deliveries.service.js';
+import { checkOAuthSettings, isOAuthConnector, oauthClient } from './oauth/settings.js';
+import { openGrant, revokeGrant } from './oauth/tokens.js';
 import {
+  accountView,
   ConnectionCreate,
   ConnectionUpdate,
   connectionView,
@@ -112,6 +116,7 @@ export class IntegrationsService implements OnModuleInit {
 
   onModuleInit() {
     checkSettings();
+    checkOAuthSettings();
     registerIntegrationOps();
   }
 
@@ -195,6 +200,16 @@ export class IntegrationsService implements OnModuleInit {
       inbound: c.inbound !== undefined,
       generates: c.generate !== undefined,
       publicFields: c.publicFields ?? [],
+      /** Connected by signing in: its scopes, whether this server offers it, and a pick step. */
+      oauth: isOAuthConnector(c)
+        ? {
+            scopes: [...c.oauth.scopes],
+            available: oauthClient(c) !== null,
+            pick: !!c.oauth.pick,
+          }
+        : null,
+      /** The provider posts to one URL for everyone: /webhooks/<name>. */
+      sharedInbound: c.inbound?.shared ? `/webhooks/${c.name}` : null,
     }));
   }
 
@@ -364,6 +379,29 @@ export class IntegrationsService implements OnModuleInit {
     return { value, public: pub };
   }
 
+  /** The accounts of a business's signed-in connections (ids and names, never tokens). */
+  private async accounts(tenantId: string, connectionId?: string) {
+    const rows = await this.db
+      .select()
+      .from(integrationAccounts)
+      .where(
+        and(
+          eq(integrationAccounts.tenantId, tenantId),
+          connectionId ? eq(integrationAccounts.connectionId, connectionId) : undefined,
+        ),
+      )
+      .orderBy(asc(integrationAccounts.name));
+    const by = new Map<string, ReturnType<typeof accountView>[]>();
+    for (const r of rows)
+      by.set(r.connectionId, [...(by.get(r.connectionId) ?? []), accountView(r)]);
+    return by;
+  }
+
+  private viewWith(row: typeof integrationConnections.$inferSelect, by: Map<string, unknown[]>) {
+    const view = connectionView(row);
+    return row.auth === 'oauth' ? { ...view, accounts: by.get(row.id) ?? [] } : view;
+  }
+
   async listConnections(p: Principal) {
     const tenantId = this.read(p);
     const rows = await this.db
@@ -371,11 +409,24 @@ export class IntegrationsService implements OnModuleInit {
       .from(integrationConnections)
       .where(eq(integrationConnections.tenantId, tenantId))
       .orderBy(asc(integrationConnections.createdAt));
-    return rows.map(connectionView);
+    const by = await this.accounts(tenantId);
+    return rows.map((r) => this.viewWith(r, by));
   }
 
   async getConnection(p: Principal, id: string) {
-    return connectionView(await this.connectionRow(this.read(p), id));
+    const tenantId = this.read(p);
+    const row = await this.connectionRow(tenantId, id);
+    return this.viewWith(row, await this.accounts(tenantId, id));
+  }
+
+  /** A connector that signs in takes no pasted credentials. */
+  private noCredentials(c: Connector<unknown>) {
+    if (isOAuthConnector(c))
+      throw new BadRequestException({
+        error: 'invalid',
+        rule: 'oauth_connector',
+        reason: `${c.name} is connected by signing in: POST /api/integrations/connections/oauth/start`,
+      });
   }
 
   private async connectionRow(tenantId: string, id: string) {
@@ -402,6 +453,7 @@ export class IntegrationsService implements OnModuleInit {
     const repeat = await findRepeat(this.db, this.ctx(p, meta), op, request);
     if (repeat) return made(repeat);
     const c = this.connector(input.connector);
+    this.noCredentials(c);
     if (!input.credentials && !c.generate)
       throw new BadRequestException({
         error: 'invalid',
@@ -471,6 +523,7 @@ export class IntegrationsService implements OnModuleInit {
     // Whether this person may change it at all is the op's to decide (and audit).
     const row = await this.connectionRow(p.tenantId ?? '', id);
     const c = this.connector(row.connector);
+    this.noCredentials(c);
     const creds = this.credentialsFor(c, credentials);
     const sealed = requireSecretBox().seal(
       JSON.stringify(creds.value),
@@ -480,8 +533,26 @@ export class IntegrationsService implements OnModuleInit {
     return out.result;
   }
 
+  /**
+   * Remove a connection. A signed-in one's grant is read first and, once the connection is gone,
+   * withdrawn at the provider, once (a repeat revokes nothing). A failed revoke is logged.
+   */
   async deleteConnection(p: Principal, meta: WriteMeta, id: string) {
-    return this.write(p, meta, deleteConnectionOp({ id }), {});
+    const [row] = await this.db
+      .select()
+      .from(integrationConnections)
+      .where(
+        and(
+          eq(integrationConnections.id, id),
+          eq(integrationConnections.tenantId, p.tenantId ?? ''),
+        ),
+      );
+    const c = row ? connectors.get(row.connector) : undefined;
+    const grant = row?.auth === 'oauth' && isOAuthConnector(c) ? openGrant(row) : null;
+    const out = await this.run(p, meta, deleteConnectionOp({ id }), {});
+    if (grant && isOAuthConnector(c) && out.result.status === 'done' && !out.repeat)
+      await revokeGrant(c, grant);
+    return out.result;
   }
 
   /** What the connection received, newest first. */

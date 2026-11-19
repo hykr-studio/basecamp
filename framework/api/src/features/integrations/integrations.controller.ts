@@ -15,19 +15,23 @@ import {
   Get,
   Header,
   HttpCode,
+  Next,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
   Query,
+  Redirect,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import { AllowAnonymous, OptionalAuth } from '@thallesp/nestjs-better-auth';
-import type { Request } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { InboundService } from './inbound.service.js';
 import { IntegrationsService } from './manage.service.js';
+import { OAuthConnectionsService } from './oauth/oauth.service.js';
 
 const uuid = new ParseUUIDPipe();
 
@@ -40,7 +44,10 @@ const uuid = new ParseUUIDPipe();
 @OptionalAuth()
 @UseGuards(PrincipalGuard, HumanOnlyGuard)
 export class IntegrationsController {
-  constructor(private readonly integrations: IntegrationsService) {}
+  constructor(
+    private readonly integrations: IntegrationsService,
+    private readonly oauth: OAuthConnectionsService,
+  ) {}
 
   @Get('connectors')
   connectors(@CurrentPrincipal() p: Principal) {
@@ -133,6 +140,35 @@ export class IntegrationsController {
     return this.integrations.createConnection(p, meta, body);
   }
 
+  /** Connect by signing in: the provider's consent screen, to open in the browser. */
+  @Post('connections/oauth/start')
+  @HttpCode(200)
+  oauthStart(@CurrentPrincipal() p: Principal, @Body() body: unknown) {
+    return this.oauth.start(p, body);
+  }
+
+  /** Finish signing in with what the provider sent the browser back with. */
+  @Post('connections/oauth/complete')
+  oauthComplete(
+    @CurrentPrincipal() p: Principal,
+    @RequestMeta() meta: RequestMetaValue,
+    @Body() body: unknown,
+  ) {
+    return this.oauth.complete(p, meta, body);
+  }
+
+  /** The accounts (pages) a signed-in connection receives events for. */
+  @Post('connections/:id/oauth/pick')
+  @HttpCode(200)
+  oauthPick(
+    @CurrentPrincipal() p: Principal,
+    @RequestMeta() meta: RequestMetaValue,
+    @Param('id', uuid) id: string,
+    @Body() body: unknown,
+  ) {
+    return this.oauth.pick(p, meta, id, body);
+  }
+
   @Get('connections/:id')
   connection(@CurrentPrincipal() p: Principal, @Param('id', uuid) id: string) {
     return this.integrations.getConnection(p, id);
@@ -167,6 +203,22 @@ export class IntegrationsController {
   }
 }
 
+/**
+ * Where a provider sends the browser back after signing in. Anonymous: it exchanges nothing, and
+ * sends the browser on to the deployment's app with the code and the state.
+ */
+@Controller('api/integrations')
+@AllowAnonymous()
+export class IntegrationsOAuthCallbackController {
+  constructor(private readonly oauth: OAuthConnectionsService) {}
+
+  @Get('oauth/callback')
+  @Redirect()
+  async callback(@Query() query: Record<string, unknown>) {
+    return { url: await this.oauth.callback(query), statusCode: 302 };
+  }
+}
+
 const toInbound = (req: Request & { rawBody?: Buffer }): InboundRequest => ({
   rawBody: req.rawBody ?? Buffer.alloc(0),
   headers: req.headers,
@@ -175,15 +227,46 @@ const toInbound = (req: Request & { rawBody?: Buffer }): InboundRequest => ({
 });
 
 /**
- * What outside systems send: `/webhooks/<connector>/<connection>`. Anonymous (the connector
- * verifies the request) and not throttled, like the WhatsApp webhook: it stores and queues,
- * and the work runs in the worker.
+ * What outside systems send: `/webhooks/<connector>/<connection>`, or `/webhooks/<connector>` for
+ * a provider that posts everything to one URL (routed by account, decisions B21). Anonymous (the
+ * connector verifies the request) and not throttled, like the WhatsApp webhook: it stores and
+ * queues, and the work runs in the worker.
  */
 @Controller('webhooks')
 @AllowAnonymous()
 @SkipThrottle()
 export class WebhooksController {
   constructor(private readonly inbound: InboundService) {}
+
+  /*
+   * A provider's one URL. Express 5 cannot constrain `:connector`, and this controller is
+   * mounted before the channels' (`/webhooks/whatsapp`): a name that is not a shared connector
+   * is passed on (`next()`), to the route that owns it or to the 404.
+   */
+  @Post(':connector')
+  async receiveShared(
+    @Param('connector') connector: string,
+    @Req() req: Request & { rawBody?: Buffer },
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    if (!this.inbound.isShared(connector)) return next();
+    await this.inbound.receiveShared(connector, toInbound(req));
+    res.status(200).type('text/plain').send('ok');
+  }
+
+  @Get(':connector')
+  async challengeShared(
+    @Param('connector') connector: string,
+    @Req() req: Request & { rawBody?: Buffer },
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    if (!this.inbound.isShared(connector)) return next();
+    const answer = await this.inbound.challengeShared(connector, toInbound(req));
+    if (answer === null) throw new ForbiddenException('no challenge here');
+    res.status(200).type('text/plain; charset=utf-8').send(answer);
+  }
 
   @Post(':connector/:connection')
   @HttpCode(200)

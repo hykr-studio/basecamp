@@ -31,7 +31,7 @@ export const briefs = app.table(
     status: text('status', { enum: ['new', 'reviewed'] })
       .notNull()
       .default('new'),
-    source: text('source', { enum: ['team', 'form'] })
+    source: text('source', { enum: ['team', 'form', 'lead_ad'] })
       .notNull()
       .default('team'),
     custom: customFieldsColumn(),

@@ -8,6 +8,7 @@ export * from './languages.js';
 export * from './parties.js';
 export * from './platform/inbox.js';
 export * from './platform/index.js';
+export * from './platform/integrations.js';
 export * from './platform/live.js';
 export * from './platform/mcp.js';
 export * from './platform/push.js';

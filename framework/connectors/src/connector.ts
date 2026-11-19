@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto';
 import type { Labels } from '@hykr/i18n';
 import type { z } from 'zod';
+import { type ConnectorCall, type ConnectorOAuth, oauthProblems } from './oauth.js';
 
 /** Request headers as Node gives them: lower-case names. */
 export type InboundHeaders = Readonly<Record<string, string | readonly string[] | undefined>>;
@@ -31,6 +32,38 @@ export interface InboundEvent {
   data: unknown;
 }
 
+/** The deployment's app at a provider, for a shared URL: its client and its other settings. */
+export interface SharedApp {
+  clientId: string;
+  clientSecret: string;
+  /** `<clientFrom>_<name>` from the environment (`setting('VERIFY_TOKEN')`). */
+  setting(name: string): string | undefined;
+}
+
+/**
+ * One URL for the whole provider, `/webhooks/<connector>` (decisions B21): the provider signs
+ * every request with the app's secret, and each event names the account it is about. Only an
+ * account a sign-in found (`oauth.describe`, from the provider's own answer) receives events, so
+ * no business can claim another's.
+ */
+export interface SharedInbound {
+  /** Is this request from the provider? Constant-time checks only. */
+  verify(req: InboundRequest, app: SharedApp, now?: number): boolean;
+  /** The events in a verified request. Throw when it cannot be read: the sender gets a 400. */
+  parse(req: InboundRequest, app: SharedApp): readonly InboundEvent[];
+  /** A subscription check by GET: the text to answer with, or null to refuse it (403). */
+  challenge?(req: InboundRequest, app: SharedApp): string | null;
+  /** The account an event is about: the id a connection holds (a page id). */
+  accountOf(event: InboundEvent): string;
+}
+
+/** What `expand` works with: the account the event came for and calls on the connection's behalf. */
+export interface ExpandContext {
+  /** The account the event was routed by (a shared URL), else null. */
+  account: string | null;
+  call: ConnectorCall;
+}
+
 /** How a connector takes requests in. */
 export interface ConnectorInbound<C> {
   /**
@@ -46,12 +79,23 @@ export interface ConnectorInbound<C> {
    * to key by and must set it.
    */
   signedIds?: boolean;
-  /** Is this request from the sender these credentials belong to? Constant-time checks only. */
-  verify(req: InboundRequest, credentials: C, now?: number): boolean;
+  /**
+   * Is this request from the sender these credentials belong to? Constant-time checks only.
+   * With `verify` and `parse` the connector takes requests at /webhooks/<name>/<connection>.
+   */
+  verify?(req: InboundRequest, credentials: C, now?: number): boolean;
   /** The events in a verified request. Throw when it cannot be read: the sender gets a 400. */
-  parse(req: InboundRequest, credentials: C): readonly InboundEvent[];
+  parse?(req: InboundRequest, credentials: C): readonly InboundEvent[];
   /** A subscription check by GET: the text to answer with, or null to refuse it (403). */
   challenge?(req: InboundRequest, credentials: C): string | null;
+  /** One URL for the provider, routed by account: needs `oauth`. */
+  shared?: SharedInbound;
+  /**
+   * The event in full, fetched once in the worker before any handler runs (a notice that names a
+   * record, turned into the record): its type and data replace the stored ones. A retry or a
+   * redelivery does not fetch it again. An error retries the event.
+   */
+  expand?(event: InboundEvent, ctx: ExpandContext): Promise<InboundEvent>;
 }
 
 /** One kind of outside system. Register it with the server's `connectors` contribution. */
@@ -60,20 +104,26 @@ export interface Connector<C = unknown> {
   name: string;
   label: Labels;
   description?: Labels;
-  /** What a connection stores, validated before it is sealed. */
+  /**
+   * What a connection stores, validated before it is sealed. A connector with `oauth` stores its
+   * grant's tokens: `oauthCredentials`.
+   */
   credentials: z.ZodType<C>;
   /** Fields that are not secret (an account id): stored in the clear and shown back. */
   publicFields?: readonly (keyof C & string)[];
   /** Make the credentials for a new connection (the secret the sender signs with). */
   generate?(): C;
   inbound?: ConnectorInbound<C>;
+  /** Connected by signing in, never by pasting credentials (decisions B21). */
+  oauth?: ConnectorOAuth;
 }
 
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
 
 /**
- * A connector, checked: its name, its public fields are plain field names, and a sender that
- * posts no body says its ids are signed (there is nothing else to key its events by).
+ * A connector, checked: its name, its public fields are plain field names, a sender that posts
+ * no body says its ids are signed (there is nothing else to key its events by), a shared URL is
+ * only for a connector that signs in, and an OAuth connector's URLs are https on its listed hosts.
  */
 export function defineConnector<C>(def: Connector<C>): Connector<C> {
   if (!NAME.test(def.name))
@@ -87,6 +137,19 @@ export function defineConnector<C>(def: Connector<C>): Connector<C> {
     throw new Error(
       `Connector ${def.name}: a sender that posts no body has only its ids to key events by: set inbound.signedIds once verify covers them`,
     );
+  const inbound = def.inbound;
+  if (inbound && !!inbound.verify !== !!inbound.parse)
+    throw new Error(`Connector ${def.name}: inbound.verify and inbound.parse go together`);
+  if (inbound && !inbound.verify && !inbound.shared)
+    throw new Error(`Connector ${def.name}: inbound needs verify and parse, or shared`);
+  if (inbound?.shared && !def.oauth)
+    throw new Error(
+      `Connector ${def.name}: a shared URL routes by account ids only a sign-in may write: declare oauth`,
+    );
+  if (def.oauth) {
+    const problems = oauthProblems(def.name, def.oauth);
+    if (problems.length) throw new Error(problems.join('; '));
+  }
   return def;
 }
 

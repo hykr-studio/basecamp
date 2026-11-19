@@ -9,6 +9,7 @@ export * from './comments';
 export * from './export';
 export * from './imports';
 export * from './inbox';
+export * from './integrations';
 export { type LiveOptions, livePlugin } from './live/LivePlugin';
 export { onLiveEvent } from './live/listeners';
 export { ConnectionsScreen, connectionsPlugin, scopeWords } from './mcp';

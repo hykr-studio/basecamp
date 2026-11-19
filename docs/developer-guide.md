@@ -1401,8 +1401,119 @@ contributes: {
 - **Server code** that calls a sender back opens a connection's credentials with
   `openConnection(db, tenantId, id)`, and makes any request to a business-given address with
   `safeRequest(url, init, outboundPolicy())`.
+- **Signing in (OAuth connectors, decisions B21).** A connector that a business connects by
+  signing in, rather than by pasting keys, declares `oauth`, and stores the grant's tokens
+  (`credentials: oauthCredentials`):
 
-The fixture's `framework/api/test/fixture/src/features/integrations/` uses each part. So does the
+```ts
+defineConnector({
+  name: 'crm-cloud',
+  label: { en: 'CRM Cloud' },
+  credentials: oauthCredentials,
+  oauth: {
+    authorizeUrl: 'https://login.crm.example/authorize',
+    tokenUrl: 'https://login.crm.example/token',
+    revokeUrl: 'https://login.crm.example/revoke',   // RFC 7009; or a `revoke(tokens, ctx)` hook
+    apiUrl: 'https://api.crm.example/v2',            // what ctx.api('/me') and connectorRequest use
+    hosts: ['login.crm.example', 'api.crm.example'], // every host it may call
+    scopes: ['contacts.read'],
+    clientFrom: 'CRM_APP',                           // CRM_APP_ID, CRM_APP_SECRET
+    // pkce (default true), refresh (default true), extraParams, scopeSeparator
+    describe: async (tokens, ctx) => ({ public: { account: '…' }, accounts: [{ id, name }] }),
+    // exchange(tokens, ctx), grantedScopes(tokens, ctx), pick: { subscribe(account, call) },
+    // isAuthError(res): see the hooks in @hykr/connectors' oauth.ts
+  },
+});
+```
+
+  The URLs must be https on `hosts`, or `defineConnector` throws. A deployment may point them
+  elsewhere with `<clientFrom>_AUTHORIZE_URL`, `_TOKEN_URL`, `_REVOKE_URL` and `_API_URL` (a
+  proxy, a test's fake). These are checked when the API and the worker start: https on the
+  hosts, or on an `INTEGRATIONS_ALLOWED_HOSTS` host. The client is always the deployment's,
+  never a business's. Without `<clientFrom>_ID` and `_SECRET` the connector is listed as not
+  available and its start answers 503 `oauth_unavailable`. The flow, for a person with
+  `integrations.manage` (never the assistant):
+  1. `POST /api/integrations/connections/oauth/start { connector, returnTo: 'web' | 'app',
+     connectionId?, label? }` answers `{ url }`, the consent screen. It makes a PKCE pair and a
+     single-use state: 32 bytes, kept as its SHA-256, with the verifier sealed for that person
+     and business, for 10 minutes. `connectionId` signs an existing connection in again.
+  2. The provider sends the browser to `GET /api/integrations/oauth/callback`. It is anonymous
+     and exchanges nothing: it sends the browser on to `INTEGRATIONS_RETURN_URL`, or
+     `INTEGRATIONS_APP_RETURN_URL` (the deployment's addresses, never the request's), with
+     `code` and `state`, or with `error` (`oauth_refused` when the person said no,
+     `sign_in_expired`).
+  3. The app posts `POST /api/integrations/connections/oauth/complete { code, state }` under
+     its own session. The state is taken once. Someone else's is refused 403 `oauth_not_yours`,
+     and one started in another business 403 `oauth_other_business`. Then the server exchanges
+     the code, runs `exchange` and checks the granted scopes: fewer than declared is 400
+     `oauth_scopes_missing` with `missing`. It runs `describe`, then
+     `integrations.connection.oauth_connect` through `runWrite`. That write seals the tokens
+     under `connection:<tenant>:<id>`, stores the accounts the provider named, and records
+     `connection.oauth_connected` (the person, the connector, the scopes and the public
+     fields). A retry with the same `idempotency-key` answers the same connection; one sent
+     while the first still runs waits for it (`oneAtATime`).
+  4. With `oauth.pick`, the accounts are only offered:
+     `POST /api/integrations/connections/:id/oauth/pick { accountIds }` holds the ones picked
+     and calls `pick.subscribe` for each (the answer's `subscribed` says which worked).
+
+  `POST /api/integrations/connections` refuses an OAuth connector (400 `oauth_connector`).
+  `DELETE /api/integrations/connections/:id` withdraws the grant at the provider once, after the
+  connection and its tokens are gone; a failed revoke is logged, and the connection still goes.
+  A connection's answer carries `auth: 'oauth'`, `scopes`, `tokenExpiresAt`, `lastError` and
+  `accounts: [{ id, name, held }]`. A token never appears in an answer, the audit trail, an
+  event, the log or an export.
+- **Using the tokens.** In a connector handler, `ctx.request({ url: '/me', method?, headers?,
+  body?, account? })` calls the provider. Elsewhere on the server, use
+  `connectorRequest(db, { tenantId, connectionId }, init)` from `@hykr/api`. Either goes
+  through the egress guard, to the connector's `hosts` only, with a fresh token:
+  - The access token is refreshed when fewer than 60 seconds remain and sealed again, with the
+    current `SECRETS_KEY`.
+  - A 401, or what `isAuthError` counts as one, refreshes and retries once.
+  - `account` uses that account's own token (a page's).
+
+  `ctx.accessToken(account?)` gives the token itself. These mark the connection `needs_reauth`:
+  `invalid_grant` on a refresh, a second refusal, a refused account token, or the end of a grant
+  that does not refresh (`refresh: false`). The mark is audited, and it records
+  `connection.needs_reauth`, so the framework's notification of that name tells holders of
+  `integrations.manage` (in-app and email). Its calls then throw `ConnectionNeedsReauth` (409
+  `connection_needs_reauth`). Its inbound events are stored but wait until someone signs it in
+  again (start with `connectionId`); a `PATCH` to `active` is refused with
+  `oauth_sign_in_needed`. A grant that does not refresh is announced a week before it ends
+  (`connection.reauth_soon`).
+- **One URL for a provider.** A provider that posts every event to one app-wide URL, signed with
+  the app's secret and naming the account (a Facebook page), declares
+  `inbound.shared: { verify(req, app), parse(req, app), challenge?(req, app), accountOf(event) }`.
+  `app` holds the deployment's client and `setting(name)`, which reads `<clientFrom>_<name>`. It
+  posts to `/webhooks/<connector>`. The request is verified once, and each event goes to the one
+  connection holding its account. It is safe because only `oauth/complete` writes an account
+  id, from the provider's own answer, never typed by a business. One account is held by one
+  connection anywhere: holding it twice is 409 `account_connected_elsewhere`. An event for an
+  account nobody holds is kept in `app.integration_unrouted` by its key only (no content) for
+  30 days, and logged. `inbound.shared` needs `oauth`. A connector may also declare
+  `inbound.expand(event, { account, call })`: the worker runs it once before the handlers, and
+  stores its result in place of the event (a notice that names a record, fetched as the record).
+- **Facebook and Instagram lead ads.** `metaLeads()` from `@hykr/connectors/meta-leads` signs in
+  with Facebook. It swaps Meta's short-lived token for a long-lived one, lists the person's pages
+  with their page tokens, and subscribes each page picked to the app's `leadgen` webhook. Each
+  notice at `/webhooks/meta-leads` (signed `X-Hub-Signature-256` with `META_APP_SECRET`) is
+  fetched once with the page's token. Handlers take the result as a `lead` event:
+  `{ leadId, pageId, form, ad, fields: [{ name, values }], createdAt }`. Page tokens do not
+  expire; Meta's error 190 marks the connection `needs_reauth`. Instagram lead forms belong to
+  the Facebook page the Instagram account is linked to. The deployment sets up:
+  - a Meta app with Facebook Login and the `leads_retrieval`, `pages_show_list` and
+    `pages_manage_metadata` permissions (`leads_retrieval` needs Meta's app review);
+  - `META_APP_ID` and `META_APP_SECRET`;
+  - the app's valid OAuth redirect URI, `INTEGRATIONS_OAUTH_REDIRECT_URL` (default
+    `<BETTER_AUTH_URL>/api/integrations/oauth/callback`);
+  - the page object's `leadgen` webhook at `<BETTER_AUTH_URL>/webhooks/meta-leads`, with
+    `META_APP_VERIFY_TOKEN` as its verify token;
+  - and the app's privacy policy URL, which app review asks for.
+
+The fixture's `framework/api/test/fixture/src/features/integrations/` uses each part (its
+`features/oauth/` the connectors that sign in, against `fakeOAuthProvider()` from
+`@hykr/api/testing`, which also plays Meta; `connectOAuth(person, connector)` runs the whole
+sign-in). The sample's `briefs` module turns each lead into a brief (`server/lead-ads.ts`,
+`source: 'lead_ad'`). So does the
 sample's `orders` module (`docs/decisions/H5.md`): accepting an order stores `order.placed`, the
 order with its lines, and its read projector `costHidden` takes each line's cost out for an
 endpoint not given `orders.cost.read`; its connector `orders-supplier` (`server/connector.ts`,
@@ -3844,14 +3955,14 @@ These are not built. Each has a workaround for now.
 | Bull Board in production | It is mounted outside production only, for operators holding `platform.queues`. |
 | Support in history and events | `audit.events.on_behalf_of` marks support and operator writes, but the history screen does not label them, and stored events carry only the actor. Read a grant's activity (`GET /api/support-access/:id/activity`) or the audit. |
 | Support access and capabilities | Support access holds only capabilities declared `supportable: true` where they are defined (an application's own included); an application keeps a framework one from it with `supportWithheld`. Links made under support before this rule have no `on_behalf_of` and last until they expire. |
-| Integration screens | Endpoints, connections and the delivery log have an HTTP API only (`/api/integrations/*`): no app or back-office screen, and no typed `@hykr/api-client` methods. |
+| Integration screens | The app's `integrationsPlugin()` (`/integrations`) connects a service by signing in, picks its pages, signs a connection in again and disconnects it; `api.integrations` covers those calls. Endpoints, the delivery log, connections made with credentials and a screen per connector have the HTTP API only (`/api/integrations/*`), and the back office has none. |
 | Webhooks for approvals and other non-entity records | Only entity events are sent (their read schema projects them). |
 | Webhook delivery order, auto-pause, alerts | Deliveries of one record can arrive out of order; an endpoint that keeps failing is not paused and nobody is told. |
-| One inbound URL per connector | Each connection has its own URL. Routing a provider's single URL by its account id is not built (decisions B10, 20). |
+| One inbound URL per connector | Only a connector that signs in (`oauth`) takes a provider's single URL, `/webhooks/<connector>`, routed by the accounts its sign-in found (decisions B21). A provider with no sign-in still gets one URL per connection (decisions B10, 20). An unrouted event is kept by its key only; nobody can assign it to a connection. |
 | Integration log retention | Deliveries, attempts and inbound events stay until their endpoint or connection is deleted. A retention period for inbound events would also have to keep their keys: a sender that signs no timestamp can have an old request posted again, and only its stored key drops it (decisions S2). |
 | Inbound senders without signed ids | Their events are keyed by the body, so two events with byte-identical bodies are one, and a batch regrouped on retry stores its events again. Sign the ids (`signedContent`, `signedIds`) to avoid both (decisions S2). |
 | The sample's supplier reports | `orders-supplier` takes only `order.fulfilled`, for an accepted order its party supplies; a supplier's acknowledgement or dispatch has no state, and nothing answers the supplier's system. An order is placed (`order.placed`) only when its customer accepts it. |
-| OAuth connectors | Business connections store credentials as given; only the calendar's per-person Google connection has an OAuth flow and token refresh (section 5.24). |
+| OAuth connectors | A connector signs a business in (`oauth`, section 5.14, decisions B21). A person's own connection (`owner: 'person'`) is not built, so the calendar keeps its own Google flow (section 5.24). Providers with a client per business, device-code or client-credentials grants are not covered. |
 | Other calendars (Microsoft 365, CalDAV), a calendar other than the primary one | Only Google, into each person's primary calendar. Others subscribe to their ICS feed. |
 | Changes made in Google written back | Sync is one way; a move or deletion in Google is stored as `calendar.event_moved` / `calendar.event_removed` for a module's subscriber to act on (the sample's meetings do). |
 | Invite replies | Attendees' accept or decline is not read (no inbound mail); invites go out with `RSVP=FALSE`. |

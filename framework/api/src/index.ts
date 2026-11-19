@@ -155,6 +155,11 @@ export {
 export { IntegrationsCapability } from './features/integrations/capability.js';
 export { openConnection } from './features/integrations/credentials.js';
 export {
+  ConnectionNeedsReauth,
+  connectorRequest,
+  isNeedsReauth,
+} from './features/integrations/oauth/tokens.js';
+export {
   type ConnectorHandler,
   type ConnectorHandlerContext,
   connectorHandlers,

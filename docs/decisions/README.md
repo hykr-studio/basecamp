@@ -54,6 +54,7 @@ change the sample application or a business's settings, not the framework.
 | [B18](B18.md) | B18 | Personal data: requests with a deadline, export, erasure over contributors, retention, audit redaction, the register. | `e00ab149` |
 | [B19](B19.md) | B19 | The platform-operator tier: named operators, consented and time-boxed support access, provisioning, inbound routing, a usage report. | `3c230097` |
 | [B20](B20.md) | B20 | `basecamp import`: CSV, JSON or NDJSON through the write path as a job, re-runs keyed by external id, dry runs, an error report. | `1c2d3e30` |
+| [B21](B21.md) | OAuth connectors, shared URLs | Connectors that sign a business in (OAuth: PKCE, sealed tokens refreshed and revoked, `needs_reauth` told to managers), one webhook URL per provider routed by the accounts a sign-in found, and `meta-leads` (Facebook and Instagram lead ads), whose leads the sample turns into briefs. | (this branch) |
 | [H1](H1.md) | A4, A5, A9 | Notification words read as each recipient may, approval requests on every channel, sends held by the undo window, the contact role named by the application. | `9952ca62` |
 | [H2](H2.md) | Settings (A4, A5, A8, B1, B3, B6, B7, B9) | One writer for every settings section that opts in (`PATCH /api/settings/sections/:section`), and the base settings. | `510f8033` |
 | [H3](H3.md) | A1, A3, A8, A11 | MCP tool hints and flag gating; embeddings and the guardrail metered; agent calls refused at 100%; purchases settled only in their own business. | `0bed14f6` |
@@ -110,7 +111,7 @@ How to read it:
   the choice itself. "Settled by H1" (or another unit) means a later unit answered it; the row stays so the
   change is visible. "None" means the unit reported the choice without a question.
 
-The table has 563 rows: the 458 items of the units' "Assumptions to review" sections and
+The table has 569 rows: the 464 items of the units' "Assumptions to review" sections and
 70 assumptions the units reported to the run that their docs do not state, less duplicates merged
 and process notes left out (merging the integration branch into a unit, which test approach a fix
 took, where a demo lived before its module existed), plus 79 rows from the fix units V1 to V13
@@ -533,6 +534,12 @@ row, and the two B18 rows V8 handed to the integrator). Those stay in each unit'
 | B20 | B20 | Write path, row by row | Every row goes through `runWrite` with the entity's own create or update; one audit row per record. A batch `insertMany` was rejected: level rules on `<entity>.create` would not see it. | Plan B20 row; CLAUDE.md rule 1 | Is one audit row per record acceptable for large imports? |
 | B20 | B20 | Dry run | Runs every batch as a real run, then rolls it back; refused writes stay audited as denied, like any refused write. | Gap list (`--dry-run`) | Should a dry run's refusals be left out of the audit? |
 | B20 | B20 | Imports and storage | `basecamp import` refuses `STORAGE_DRIVER=memory`, because the worker that runs the job could not read the file. | Default | None |
+| B21 | OAuth connectors | Who connects | `integrations.manage` (owner, admin), as for other connections. | Open question's suggested answer; decisions B21 #5 | Should an operations role connect lead sources without managing webhooks? |
+| B21 | OAuth connectors | Unrouted events | Kept by key only (no content) for 30 days, logged, never assignable. | Default; decisions B21 #21 | Should an operator see them, for a page connected later? |
+| B21 | OAuth connectors | A lead brief's customer | A lead becomes a brief with no customer record; its 365-day retention applies. | Default; decisions B21 #24 | Should a lead also make or match a customer by phone, so forgetting that person finds it? |
+| B21 | OAuth connectors | Meta's long-lived user token | Its 60 days are not tracked (page tokens do not expire); error 190 marks the connection. | Decisions B21 #23 | Is signing in again to pick pages after 60 days fine? |
+| B21 | OAuth connectors | Scopes missing | Refused with `oauth_scopes_missing`; the grant is left at the provider. | Default; decisions B21 #8 | Should the server withdraw it? |
+| B21 | OAuth connectors | Expiry notice | A grant that does not refresh is told once, 7 days ahead, checked by the every-minute sweep. | Open question's suggested answer; decisions B21 #16 | Is a week's notice right? |
 | H1 | A5 | Inbox always, not a fallback step | The approval request always lands in the decider's inbox and reaches them by the first of push, WhatsApp and email that works (decision 6). | Task; PRD Platform & AI §7.1 (push, WhatsApp, email); A5 decision 25 | Should a pushed request skip the inbox, or should the inbox item go when the request is decided? |
 | H1 | A5 | WhatsApp without buttons | A request decided in the app only does not go to WhatsApp at all; the decider gets push or email (decision 7). | Task; default | Should it go to WhatsApp as a plain message with a link, which needs a new template? |
 | H1 | A4 | Recipients who cannot read the record | The words leave out what a recipient may not read, but the dispatcher does not check that a recipient may read the record at all: `to` decides who. | Default | Should a notification about a record skip a recipient who cannot open it? |

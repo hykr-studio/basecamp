@@ -1,9 +1,11 @@
 // The integration bus (decisions B10): where a business sends its events (webhook endpoints),
 // what was sent and how each try went (deliveries, attempts), the outside systems it connects
 // (connections, their credentials sealed), and what those systems sent in (inbound events).
+// Connections made by signing in (decisions B21) add their sign-ins under way, the accounts a
+// grant reaches (what routes a provider's one webhook URL) and the events no account matched.
 // Secrets are stored sealed only (@hykr/connectors' secret box under SECRETS_KEY).
 import { sql } from 'drizzle-orm';
-import { index, integer, jsonb, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { app, id } from './base.js';
 import { tenantColumn } from './tenancy.js';
@@ -108,12 +110,24 @@ export const integrationConnections = app.table(
     /** The connector's name: 'standard-webhooks'. */
     connector: text('connector').notNull(),
     label: text('label'),
-    /** 'active' | 'disabled'. */
+    /** 'active' | 'disabled' | 'needs_reauth' (an OAuth grant the provider no longer takes). */
     status: text('status').notNull().default('active'),
+    /** 'credentials' (given) | 'oauth' (a sign-in: the credentials are the grant's tokens). */
+    auth: text('auth').notNull().default('credentials'),
+    /** Whose connection: 'business' (a person's own may follow, decisions B21). */
+    owner: text('owner').notNull().default('business'),
     /** The credentials as JSON, sealed for this row. */
     credentialsSealed: text('credentials_sealed').notNull(),
     /** The connector's public fields, in the clear. */
     public: jsonb('public').notNull().default({}),
+    /** What the grant allows (OAuth only). */
+    scopes: text('scopes').array().notNull().default(sql`'{}'::text[]`),
+    /** When the grant's access token stops working, if it does (OAuth only). */
+    tokenExpiresAt: at('token_expires_at'),
+    /** When its managers were told the grant ends soon (a grant that does not refresh). */
+    expiryNoticeAt: at('expiry_notice_at'),
+    /** Why it needs signing in again. */
+    lastError: text('last_error'),
     createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
     createdAt: at('created_at').defaultNow().notNull(),
     updatedAt: at('updated_at').defaultNow().notNull(),
@@ -147,6 +161,10 @@ export const integrationInbound = app.table(
     handled: jsonb('handled').notNull().default({}),
     error: text('error'),
     queues: text('queues').notNull().default('bull'),
+    /** The account a shared URL routed it by (a page id), else null. */
+    accountId: text('account_id'),
+    /** When the connector's `expand` turned it into its full form: it is not fetched again. */
+    expandedAt: at('expanded_at'),
     receivedAt: at('received_at').defaultNow().notNull(),
     processedAt: at('processed_at'),
   },
@@ -156,5 +174,90 @@ export const integrationInbound = app.table(
     index('integration_inbound_pending_idx')
       .on(table.queues, table.receivedAt)
       .where(sql`${table.status} = 'pending'`),
+  ],
+);
+
+/**
+ * A connection sign-in under way (decisions B21): who started it, in which business, for which
+ * connector (and which connection, signing in again), the PKCE verifier (sealed for the row) and
+ * where the browser returns. Used once, by that person only. Only the SHA-256 of the state the
+ * provider carries is kept.
+ */
+export const integrationOauthStates = app.table(
+  'integration_oauth_states',
+  {
+    id: id(),
+    tenantId: tenantColumn(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    connector: text('connector').notNull(),
+    /** Signing an existing connection in again; null for a new one. */
+    connectionId: text('connection_id').references(() => integrationConnections.id, {
+      onDelete: 'cascade',
+    }),
+    label: text('label'),
+    stateHash: text('state_hash').notNull(),
+    verifierSealed: text('verifier_sealed').notNull(),
+    /** Where the browser goes after the provider: one of the deployment's addresses. */
+    returnTo: text('return_to').notNull(),
+    expiresAt: at('expires_at').notNull(),
+    createdAt: at('created_at').defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('integration_oauth_states_state_uq').on(table.stateHash),
+    index('integration_oauth_states_expires_idx').on(table.expiresAt),
+  ],
+);
+
+/**
+ * An account an OAuth connection's grant reaches (a Facebook page), as the provider named it at
+ * sign-in. A held account receives the provider's shared webhook events for its id; at most one
+ * connection anywhere holds an id (`account_connected_elsewhere`). Its own token, if the provider
+ * gives one, is sealed for the row.
+ */
+export const integrationAccounts = app.table(
+  'integration_accounts',
+  {
+    id: id(),
+    tenantId: tenantColumn(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => integrationConnections.id, { onDelete: 'cascade' }),
+    connector: text('connector').notNull(),
+    /** The provider's id for it. */
+    accountId: text('account_id').notNull(),
+    name: text('name').notNull(),
+    tokenSealed: text('token_sealed'),
+    /** Picked: it receives events. Offered only, until the person picks it. */
+    held: boolean('held').notNull().default(false),
+    createdAt: at('created_at').defaultNow().notNull(),
+    updatedAt: at('updated_at').defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('integration_accounts_connection_uq').on(table.connectionId, table.accountId),
+    uniqueIndex('integration_accounts_held_uq')
+      .on(table.connector, table.accountId)
+      .where(sql`${table.held}`),
+  ],
+);
+
+/**
+ * An event a provider's shared URL sent for an account no connection holds: kept by its key so it
+ * is logged once, without its content (it belongs to no business), and forgotten after 30 days.
+ */
+export const integrationUnrouted = app.table(
+  'integration_unrouted',
+  {
+    id: id(),
+    connector: text('connector').notNull(),
+    accountId: text('account_id').notNull(),
+    externalId: text('external_id').notNull(),
+    type: text('type').notNull(),
+    receivedAt: at('received_at').defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('integration_unrouted_event_uq').on(table.connector, table.externalId),
+    index('integration_unrouted_received_idx').on(table.receivedAt),
   ],
 );

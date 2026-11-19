@@ -1,7 +1,12 @@
 // The integration bus's registries: connectors (kinds of outside systems) and connector handlers
 // (what an inbound event does in the application). Nothing here reads the configuration or
 // loads Nest: safe to import from an application module at load time.
-import { type Connector, defineConnector } from '@hykr/connectors';
+import {
+  type Connector,
+  type ConnectorRequestInit,
+  defineConnector,
+  type OAuthResponse,
+} from '@hykr/connectors';
 import {
   createHookRegistry,
   type Principal,
@@ -83,6 +88,17 @@ export interface ConnectorHandlerContext extends ServerContext {
   write(op: WriteOp<any, any, any>, input: unknown): Promise<WriteResult>;
   /** The connection's credentials, opened: to call the sender back. */
   credentials<C = unknown>(): Promise<C>;
+  /**
+   * A signed-in connection's access token, fresh (refreshed when fewer than 60 seconds remain),
+   * or the account's own (`account`: a page's). Throws when the connection needs signing in
+   * again: the event then waits for it.
+   */
+  accessToken(account?: string): Promise<string>;
+  /**
+   * A call to a signed-in connection's provider (`connectorRequest`): its hosts only, under the
+   * egress guard, with a fresh token, retried once on a 401.
+   */
+  request(init: ConnectorRequestInit): Promise<OAuthResponse>;
 }
 
 /**

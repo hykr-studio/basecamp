@@ -11,6 +11,7 @@ export { commentMessages } from './comments.js';
 export { creditsMessages } from './credits.js';
 export { documentMessages } from './documents.js';
 export { exportMessages } from './export.js';
+export { integrationMessages } from './integrations.js';
 export { mcpMessages } from './mcp.js';
 export { offlineMessages } from './offline.js';
 export { privacyMessages } from './privacy.js';

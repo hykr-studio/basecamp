@@ -1,6 +1,7 @@
 /**
- * The briefs module, server side: briefs (what a customer needs, in their words), and the brief
- * form a business shares by link, whose answers are briefs.
+ * The briefs module, server side: briefs (what a customer needs, in their words), the brief
+ * form a business shares by link, whose answers are briefs, and leads from the business's
+ * Facebook and Instagram lead ads (meta-leads), which become briefs too.
  */
 import { defineModule } from '@hykr/api';
 import { briefsAgent } from './agent/index.js';
@@ -9,6 +10,7 @@ import * as tables from './db/schema.js';
 import { briefsNotifications } from './notifications/index.js';
 import { BriefsModule } from './server/briefs.module.js';
 import { BriefForm } from './server/form.js';
+import { BriefFromLeadAd, LeadAdsConnector } from './server/lead-ads.js';
 import { briefsViews } from './views/index.js';
 
 export const briefs = defineModule({
@@ -20,5 +22,9 @@ export const briefs = defineModule({
   notifications: briefsNotifications.notifications,
   agent: briefsAgent,
   tables,
-  contributes: { publicForms: [BriefForm] },
+  contributes: {
+    publicForms: [BriefForm],
+    connectors: [LeadAdsConnector],
+    connectorHandlers: [BriefFromLeadAd],
+  },
 });

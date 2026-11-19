@@ -1,6 +1,7 @@
 /**
  * The framework's own notifications: a request waiting for someone's decision, its outcome told
- * back to the customer who asked, and a person mentioned in a comment. Any domain gets them.
+ * back to the customer who asked, a person mentioned in a comment, and a connection made by
+ * signing in that stopped working or soon will. Any domain gets them.
  */
 import { type Labels, pick, t } from '@hykr/i18n';
 import { defineNotification, type Row } from '../define-notification.js';
@@ -137,8 +138,81 @@ export const CommentMentionNotification = defineNotification<CommentMentionRow>(
   dedupe: (m) => `comment.mention:${m.commentId}:${m.target.kind}:${m.target.id}`,
 });
 
+/** A `connection.needs_reauth` or `connection.reauth_soon` event's row (decisions B21). */
+export type ConnectionReauthRow = Row & {
+  connector: string;
+  label: string;
+  reason?: string;
+  /** When the grant ends (`connection.reauth_soon`). */
+  expiresAt?: string;
+};
+
+/** Where a business manages its connections, in the app. */
+const INTEGRATIONS_PATH = '/integrations';
+/** Who keeps a business's connections working: holders of `integrations.manage`. */
+const MANAGERS = 'integrations.manage';
+
+/**
+ * A connection made by signing in stopped working (the provider no longer takes its grant):
+ * the people who manage the business's integrations find it in their inbox and by email, with
+ * a link to sign it in again. Nothing arrives from it until then.
+ */
+export const ConnectionNeedsReauthNotification = defineNotification<ConnectionReauthRow>({
+  key: 'connection.needs_reauth',
+  topic: 'service',
+  send: { on: ['connection.needs_reauth'] },
+  to: () => [{ capability: MANAGERS }],
+  channels: ['email'],
+  also: ['inapp'],
+  inapp: {
+    title: (c, r) => t(r.lang, 'integrations.needsReauth', { label: c.label }),
+    body: (c, r) => t(r.lang, 'integrations.needsReauthBody', { label: c.label }),
+    url: () => INTEGRATIONS_PATH,
+  },
+  email: {
+    subject: (c, r) => t(r.lang, 'integrations.needsReauth', { label: c.label }),
+    body: (c, r) =>
+      t(r.lang, 'integrations.needsReauthEmail', {
+        label: c.label,
+        url: `${r.appUrl ?? ''}${INTEGRATIONS_PATH}`,
+      }),
+  },
+  dedupe: (c) => `connection.needs_reauth:${c.id}:${c.reason ?? ''}`,
+});
+
+/** A grant that does not refresh ends within a week: its managers are told once, ahead. */
+export const ConnectionReauthSoonNotification = defineNotification<ConnectionReauthRow>({
+  key: 'connection.reauth_soon',
+  topic: 'service',
+  send: { on: ['connection.reauth_soon'] },
+  to: () => [{ capability: MANAGERS }],
+  channels: ['email'],
+  also: ['inapp'],
+  inapp: {
+    title: (c, r) => t(r.lang, 'integrations.reauthSoon', { label: c.label }),
+    body: (c, r) =>
+      t(r.lang, 'integrations.reauthSoonBody', {
+        label: c.label,
+        date: (c.expiresAt ?? '').slice(0, 10),
+      }),
+    url: () => INTEGRATIONS_PATH,
+  },
+  email: {
+    subject: (c, r) => t(r.lang, 'integrations.reauthSoon', { label: c.label }),
+    body: (c, r) =>
+      t(r.lang, 'integrations.reauthSoonEmail', {
+        label: c.label,
+        date: (c.expiresAt ?? '').slice(0, 10),
+        url: `${r.appUrl ?? ''}${INTEGRATIONS_PATH}`,
+      }),
+  },
+  dedupe: (c) => `connection.reauth_soon:${c.id}:${c.expiresAt ?? ''}`,
+});
+
 export const frameworkNotifications = [
   ApprovalRequestNotification,
   ApprovalOutcomeNotification,
   CommentMentionNotification,
+  ConnectionNeedsReauthNotification,
+  ConnectionReauthSoonNotification,
 ];

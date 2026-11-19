@@ -263,6 +263,50 @@ export async function connectGoogleCalendar(person: Person, headers: Record<stri
   const done = await person.call('POST', '/api/calendar/google/complete', { code, state }, headers);
   return { ...done, landing };
 }
+/** A fake OAuth provider (and Meta Graph) on 127.0.0.1, for connectors that sign in (B21). */
+export {
+  type FakeLead,
+  type FakeOAuthProvider,
+  type FakeOAuthRequest,
+  type FakePage,
+  fakeOAuthProvider,
+} from './testing-oauth.js';
+
+/**
+ * Connect a business to a connector by signing in, as the app does: the API's consent URL, the
+ * provider's redirect (a fake agrees at once) through the API's callback to the app, and the app
+ * finishing it under the person's session. `headers` go with both of the person's calls
+ * (`x-tenant-id`, `idempotency-key`). Returns the finish's answer and where the browser landed.
+ */
+export async function connectOAuth(
+  person: Person,
+  connector: string,
+  headers: Record<string, string> = {},
+  options: { connectionId?: string; label?: string } = {},
+) {
+  const start = await person.call<{ url: string }>(
+    'POST',
+    '/api/integrations/connections/oauth/start',
+    { connector, ...options },
+    headers,
+  );
+  if (start.status !== 200) throw new Error(`signing in: ${JSON.stringify(start.body)}`);
+  const consent = await fetch(start.body.url, { redirect: 'manual' });
+  const callback = consent.headers.get('location') ?? '';
+  const back = await fetch(callback, { redirect: 'manual' });
+  const landing = new URL(back.headers.get('location') ?? '');
+  const code = landing.searchParams.get('code') ?? '';
+  const state = landing.searchParams.get('state') ?? '';
+  if (!code) return { status: 0, body: null as Json, headers: back.headers, landing, code, state };
+  const done = await person.call(
+    'POST',
+    '/api/integrations/connections/oauth/complete',
+    { code, state },
+    headers,
+  );
+  return { ...done, landing, code, state };
+}
+
 /** The application the test booted (its catalog, registry, notifications and assistant). */
 export { runtime } from './runtime.js';
 

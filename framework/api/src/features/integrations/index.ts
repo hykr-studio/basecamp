@@ -1,7 +1,9 @@
 // The integration bus (decisions B10): signed outbound webhooks with retries and a delivery log,
 // verified inbound webhooks handled as the business's system principal, and connections whose
-// credentials are sealed with SECRETS_KEY. Transport (signing, sealing, the egress guard, the
-// Connector interface) is @hykr/connectors'.
+// credentials are sealed with SECRETS_KEY, and connections made by signing in (decisions B21):
+// OAuth tokens sealed, refreshed and revoked here, and a provider's one webhook URL routed by the
+// accounts a sign-in found. Transport (signing, sealing, the egress guard, the Connector
+// interface, OAuth calls) is @hykr/connectors'.
 import { standardWebhooks } from '@hykr/connectors';
 import type { ReadProjector } from '@hykr/core';
 import { defineQueue, defineSchedule } from '../../queues/define.js';
@@ -10,8 +12,13 @@ import { defineFeature } from '../feature.js';
 import { IntegrationsCapability } from './capability.js';
 import { DELIVER_QUEUE, DeliveriesService, type DeliverJob, SWEEP } from './deliveries.service.js';
 import { INBOUND_QUEUE, type InboundJob, InboundService } from './inbound.service.js';
-import { IntegrationsController, WebhooksController } from './integrations.controller.js';
+import {
+  IntegrationsController,
+  IntegrationsOAuthCallbackController,
+  WebhooksController,
+} from './integrations.controller.js';
 import { IntegrationsService } from './manage.service.js';
+import { OAuthConnectionsService } from './oauth/oauth.service.js';
 import { webhookable } from './payload.js';
 import { integrationCopies, integrationsErasure, integrationsParts } from './privacy.js';
 
@@ -50,7 +57,7 @@ export const WebhookFanOut = defineSubscriber({
   },
 });
 
-/** An approval card of an integrations op never shows a sealed value. */
+/** An approval card of an integrations op never shows a sealed value (a grant's, an account's). */
 export const SealedOffCards: ReadProjector = {
   name: 'integrations.sealed',
   project: (type, value) => {
@@ -59,15 +66,22 @@ export const SealedOffCards: ReadProjector = {
     const input = value.input;
     if (!input || typeof input !== 'object' || Array.isArray(input)) return value;
     const { sealed: _sealed, ...rest } = input as Record<string, unknown>;
+    // A sign-in's accounts carry their own tokens, sealed: never shown either.
+    if (Array.isArray(rest.accounts))
+      rest.accounts = rest.accounts.map((a) => {
+        if (!a || typeof a !== 'object') return a;
+        const { tokenSealed: _token, ...account } = a as Record<string, unknown>;
+        return account;
+      });
     return { ...value, input: rest };
   },
 };
 
 export const integrationsFeature = defineFeature({
   name: 'integrations',
-  controllers: [IntegrationsController, WebhooksController],
-  providers: [IntegrationsService, DeliveriesService, InboundService],
-  exports: [IntegrationsService, DeliveriesService, InboundService],
+  controllers: [IntegrationsController, IntegrationsOAuthCallbackController, WebhooksController],
+  providers: [IntegrationsService, DeliveriesService, InboundService, OAuthConnectionsService],
+  exports: [IntegrationsService, DeliveriesService, InboundService, OAuthConnectionsService],
   contributes: {
     capabilities: [IntegrationsCapability],
     connectors: [standardWebhooks],
