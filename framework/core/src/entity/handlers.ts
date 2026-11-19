@@ -191,7 +191,8 @@ export function entityHandlers(def: AnyEntityDef): Type[] {
       for (const x of def.plugins())
         x.query?.(q.query, q.principal, { spec: def.spec, table: def.table });
       const page = await def.repo.list(this.options.db, q.principal, q.query);
-      return { ...page, items: page.items.map((row) => def.toRead(row, q.principal)) };
+      // Each row as the reader sees it, with its references' labels (one query per target).
+      return { ...page, items: await def.readMany(this.options.db, page.items, q.principal) };
     }
   }
 
@@ -210,7 +211,9 @@ export function entityHandlers(def: AnyEntityDef): Type[] {
     constructor(@Inject(CORE_OPTIONS) private readonly options: CoreOptions) {}
     async execute(q: InstanceType<typeof cqrs.GetQuery>) {
       assertExposed(def, 'get', q.principal);
-      return def.toRead(await def.repo.get(this.options.db, q.principal, q.id), q.principal);
+      const row = await def.repo.get(this.options.db, q.principal, q.id);
+      const [read] = await def.readMany(this.options.db, [row], q.principal);
+      return read;
     }
   }
 

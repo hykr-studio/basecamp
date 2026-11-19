@@ -1,7 +1,7 @@
 import { defineChildEntity, defineEntity, deny } from '@hykr/core';
 import { BUSINESS_ACCESS, readByParticipants } from '../../../server/access.js';
-import { OrderItemSpec, OrderSpec, SupplierRole } from '../contracts/index.js';
-import { orderItems, orders } from '../db/schema.js';
+import { OrderItemSpec, OrderSpec, ProductSpec, SupplierRole } from '../contracts/index.js';
+import { orderItems, orders, products } from '../db/schema.js';
 
 /**
  * Orders: written only by order.save (a draft), their transitions (order.transition) and
@@ -55,4 +55,19 @@ export const OrderItem = defineChildEntity(OrderItemSpec, {
     write: BUSINESS_ACCESS.write,
   },
   parent: { def: Order, owner: (t) => t.ownerId, customer: (t) => t.customerId },
+});
+
+/**
+ * The business's products: the whole team reads them (an order's line may name one), owners,
+ * admins and ops change them. Someone outside the team reads none, so a line's product reads to
+ * them as `{ id, label: null }`.
+ */
+export const Product = defineEntity(ProductSpec, {
+  table: products,
+  owner: (t) => t.ownerId,
+  customer: (t) => t.customerId,
+  access: {
+    read: { owner: 'tenant', admin: 'tenant', ops: 'tenant', staff: 'tenant' },
+    write: { owner: 'tenant', admin: 'tenant', ops: 'tenant' },
+  },
 });

@@ -1,4 +1,4 @@
-// References (V2): a field that names another record (`traits.references`) names one its writer
+// References (V2, R1): a field that names another record (`traits.references`) names one its writer
 // can read in their business. An unknown id, another business's id and a record the writer
 // cannot read get the same 404, through every entry point (the app, the assistant, MCP, a
 // command, an offline create, an import, an approved replay). A key no spec declares is the
@@ -113,6 +113,28 @@ describe('a person naming a room', () => {
     }
     expect((await as(staff)('GET', `/api/bookings/${id}`)).body).toMatchObject({
       roomId: staffRoom,
+    });
+  });
+
+  it('audits each refusal as denied, with the rule unknown_reference (R1)', async () => {
+    const before = await pool.query(
+      `select count(*)::int n from audit.events
+       where tenant_id = $1 and action = 'booking.create' and outcome = 'denied'`,
+      [tenantId],
+    );
+    const res = await as(staff)('POST', '/api/bookings', { title: 'Audited', roomId: unknown });
+    expect(res.body).toEqual(refused);
+    const after = await pool.query(
+      `select rule, reason, actor_id from audit.events
+       where tenant_id = $1 and action = 'booking.create' and outcome = 'denied'
+       order by at desc`,
+      [tenantId],
+    );
+    expect(after.rows).toHaveLength(before.rows[0].n + 1);
+    expect(after.rows[0]).toEqual({
+      rule: 'unknown_reference',
+      reason: 'No such room',
+      actor_id: staff.id,
     });
   });
 

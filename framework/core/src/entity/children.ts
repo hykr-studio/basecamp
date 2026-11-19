@@ -23,12 +23,18 @@ import {
   type RuleContext,
   tenantOf,
 } from './define-entity.js';
+import { checkReferencesMany, type ReferencingItem, referencesChecked } from './references.js';
 
 type Values = Record<string, unknown>;
 type Row<T extends Table> = T['$inferSelect'];
 
 /** One node of a tree to write: its fields, its id if it is already stored, the nodes under it. */
 export type ChildNode = Values & { id?: string; children?: readonly ChildNode[] };
+
+/** Where a tree sits in the write's input, for a refusal's `path`: `['items']`. Default none. */
+export interface TreeAt {
+  at?: readonly (string | number)[];
+}
 
 /** What a tree write did, row by row, in tree order. */
 export interface ChildrenResult<R> {
@@ -90,7 +96,7 @@ export interface ChildRepository<T extends Table> {
     parent: Values,
     nodes: readonly ChildNode[],
     via: RuleContext,
-    opts?: { under?: string },
+    opts?: { under?: string } & TreeAt,
   ): Promise<ChildrenResult<Row<T>>>;
   /**
    * Make the parent's children exactly this tree: nodes with an id are kept (updated where they
@@ -103,7 +109,21 @@ export interface ChildRepository<T extends Table> {
     parent: Values,
     nodes: readonly ChildNode[],
     via: RuleContext,
+    opts?: TreeAt,
   ): Promise<ChildrenResult<Row<T>>>;
+  /**
+   * Refuse, before anything is written, a tree whose nodes name records the principal cannot
+   * read (`traits.references`): the same check and 404 the tree writes make, for a command's
+   * `load` (its `authorize` is synchronous), so a write that would park is refused before it
+   * reaches an approver. With the parent, a stored node's unchanged reference is not checked
+   * again (as the write does not).
+   */
+  checkReferences(
+    conn: Conn,
+    p: Principal,
+    nodes: readonly ChildNode[],
+    opts?: { parent?: Values } & TreeAt,
+  ): Promise<void>;
 }
 
 export interface ChildEntityConfig<S extends EntitySpec, T extends Table, P extends Table>
@@ -197,6 +217,7 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
     throw new Error(`${spec.name} is already a child of another entity`);
   links.set(spec.name, link);
   const label = spec.label;
+  const refFields = Object.keys(spec.traits?.references ?? {});
   const notFound = () => new NotFoundException({ error: 'not_found', message: `No such ${label}` });
   const id = (row: Values) => String(row.id);
 
@@ -235,7 +256,7 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
   }
 
   /** Every stored child of the parent, through the child's scoped repository. */
-  async function stored(conn: Conn, p: Principal, parentId: string): Promise<Row<T>[]> {
+  async function storedRows(conn: Conn, p: Principal, parentId: string): Promise<Row<T>[]> {
     const q: ListQuery = {
       filters: [{ field: trait.field, op: 'eq', value: parentId }],
       sort: trait.position ? [{ field: trait.position, dir: 'asc' }] : [],
@@ -401,6 +422,23 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
     };
   }
 
+  /** Where a node is: `[...at, 3, 'children', 1]`. */
+  type Path = readonly (string | number)[];
+  const refOf = (node: ChildNode) => (typeof node.ref === 'string' ? node.ref : undefined);
+  const item = (values: Values, node: ChildNode, path: Path): ReferencingItem => ({
+    values,
+    path,
+    ...(refOf(node) !== undefined ? { ref: refOf(node) } : {}),
+  });
+  /** A stored node's patch that changes one of its references, as an item to check. */
+  const changedRefs = (row: Values, patch: Values): Values | undefined => {
+    const out: Values = {};
+    for (const key of refFields)
+      if (patch[key] !== undefined && patch[key] !== null && patch[key] !== row[key])
+        out[key] = patch[key];
+    return Object.keys(out).length ? out : undefined;
+  };
+
   const same = (a: unknown, b: unknown) => {
     const norm = (v: unknown) => (v instanceof Date ? v.toISOString() : v === undefined ? null : v);
     return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
@@ -430,12 +468,12 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
   const children: ChildRepository<T> = {
     async list(conn, p, parentId) {
       const parent = (await parentDef.repo.get(conn, p, parentId)) as Values;
-      return treeOrder(await stored(conn, p, id(parent)));
+      return treeOrder(await storedRows(conn, p, id(parent)));
     },
 
     async insert(tx, p, parentRow, nodes, via, opts = {}) {
       const parent = await writableParent(tx, p, parentRow);
-      const existing = await stored(tx, p, id(parent));
+      const existing = await storedRows(tx, p, id(parent));
       let depthAbove = 0;
       let upId: string | null = null;
       if (opts.under !== undefined) {
@@ -449,7 +487,8 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
       checkShape(nodes, existing.length, depthAbove);
       const siblings = existing.filter((r) => ((r as Values)[trait.nest ?? ''] ?? null) === upId);
       const rows: Values[] = [];
-      const walk = (list: readonly ChildNode[], up: string | null, start: number) => {
+      const items: ReferencingItem[] = [];
+      const walk = (list: readonly ChildNode[], up: string | null, start: number, path: Path) => {
         list.forEach((node, i) => {
           if (node.id !== undefined)
             throw new BadRequestException({
@@ -458,10 +497,13 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
             });
           const made = newRow(p, parent, node, up, start + i, via);
           rows.push(made.values);
-          walk(node.children ?? [], made.id, 0);
+          items.push(item(made.values, node, [...path, i]));
+          walk(node.children ?? [], made.id, 0, [...path, i, 'children']);
         });
       };
-      walk(nodes, upId, trait.nest ? siblings.length : existing.length);
+      walk(nodes, upId, trait.nest ? siblings.length : existing.length, opts.at ?? []);
+      // Every new node's references, one query per target, before any row is written (R1).
+      await checkReferencesMany(tx, p, spec, items);
       const created = await insertRows(tx, rows);
       return {
         rows: treeOrder([...existing, ...created]),
@@ -477,15 +519,16 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
       };
     },
 
-    async replace(tx, p, parentRow, nodes, via) {
+    async replace(tx, p, parentRow, nodes, via, opts = {}) {
       const parent = await writableParent(tx, p, parentRow);
-      const existing = await stored(tx, p, id(parent));
+      const existing = await storedRows(tx, p, id(parent));
       checkShape(nodes, 0, 0);
       const byId = new Map(existing.map((r) => [id(r as Values), r as Values]));
       const kept = new Set<string>();
       const inserts: Values[] = [];
       const patches: { row: Values; patch: Values }[] = [];
-      const walk = (list: readonly ChildNode[], up: string | null) => {
+      const items: ReferencingItem[] = [];
+      const walk = (list: readonly ChildNode[], up: string | null, path: Path) => {
         list.forEach((node, i) => {
           let nodeId: string;
           if (node.id !== undefined) {
@@ -501,16 +544,25 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
             };
             // A record's currency is its parent's and never changes: not part of a patch.
             if (currencyKey) delete patch[currencyKey];
-            if (changes(p, row, patch)) patches.push({ row, patch });
+            if (changes(p, row, patch)) {
+              patches.push({ row, patch });
+              // A reference it changes is checked with the new nodes', not again by repo.update.
+              const changed = changedRefs(row, patch);
+              if (changed) items.push(item(changed, node, [...path, i]));
+              referencesChecked.add(patch);
+            }
           } else {
             const made = newRow(p, parent, node, up, i, via);
             inserts.push(made.values);
+            items.push(item(made.values, node, [...path, i]));
             nodeId = made.id;
           }
-          walk(node.children ?? [], nodeId);
+          walk(node.children ?? [], nodeId, [...path, i, 'children']);
         });
       };
-      walk(nodes, null);
+      walk(nodes, null, opts.at ?? []);
+      // Every new and changed reference, one query per target, before any row is written (R1).
+      await checkReferencesMany(tx, p, spec, items);
 
       // New rows first (a kept node may move under one), then changes, then deletions.
       const created = await insertRows(tx, inserts);
@@ -549,6 +601,25 @@ export function defineChildEntity<S extends EntitySpec, T extends Table, P exten
       for (const r of existing) if (kept.has(id(r as Values))) after.set(id(r as Values), r);
       for (const r of [...updated, ...created]) after.set(id(r as Values), r);
       return { rows: treeOrder([...after.values()]), created, updated, deleted, touched };
+    },
+
+    async checkReferences(conn, p, nodes, opts = {}) {
+      if (!refFields.length) return;
+      const stored = new Map<string, Values>();
+      if (opts.parent) {
+        const parent = (await parentDef.repo.get(conn, p, id(opts.parent))) as Values;
+        for (const r of await storedRows(conn, p, id(parent))) stored.set(id(r as Values), r);
+      }
+      const items: ReferencingItem[] = [];
+      const walk = (list: readonly ChildNode[], path: Path) =>
+        list.forEach((node, i) => {
+          const row = node.id !== undefined ? stored.get(node.id) : undefined;
+          const values = row ? changedRefs(row, node) : node;
+          if (values) items.push(item(values, node, [...path, i]));
+          walk(node.children ?? [], [...path, i, 'children']);
+        });
+      walk(nodes, opts.at ?? []);
+      await checkReferencesMany(conn, p, spec, items);
     },
   };
 

@@ -31,6 +31,7 @@ import {
   count,
   eq,
   getTableColumns,
+  inArray,
   or,
   type SQL,
   sql,
@@ -51,7 +52,12 @@ import { buildListSql, decodeCursor, type ListSelected, listQuery } from '../que
 import type { Conn, Tx } from '../tokens.js';
 import { strongerDecision } from '../write/decisions.js';
 import { defineEntityCqrs, type EntityCqrs } from './cqrs-classes.js';
-import { checkReferences, referenceRefusal } from './references.js';
+import {
+  checkReferences,
+  readReferences,
+  referenceRefusal,
+  referencesChecked,
+} from './references.js';
 
 type Row<T extends Table> = T['$inferSelect'];
 type Values = Record<string, unknown>;
@@ -103,6 +109,11 @@ export interface EntityConfig<S extends EntitySpec, T extends Table> {
 export interface EntityRepository<T extends Table> {
   get(conn: Conn, p: Principal, id: string): Promise<Row<T>>;
   find(conn: Conn, p: Principal, id: string): Promise<Row<T> | undefined>;
+  /**
+   * The rows of these ids the principal reaches, in one query, under exactly `find`'s scope (their
+   * business, read access, plugins' scopes); ids not reached are left out, in no order.
+   */
+  findMany(conn: Conn, p: Principal, ids: readonly string[]): Promise<Row<T>[]>;
   list(conn: Conn, p: Principal, q: ListQuery | ListInput): Promise<Page<Row<T>>>;
   insert(tx: Tx, p: Principal, input: Record<string, unknown>, ctx?: RuleContext): Promise<Row<T>>;
   update(
@@ -129,6 +140,11 @@ export interface EntityDef<S extends EntitySpec = EntitySpec, T extends Table = 
    * schema's fields, then projected for p (plugins and read projectors may hide fields).
    */
   toRead(row: Row<T>, p: Principal): z.infer<S['schemas']['read']>;
+  /**
+   * Rows as they leave the server for this principal (`toRead`), with their references' labels
+   * (`references: { field: { id, label } }`) when the spec declares any: one query per target.
+   */
+  readMany(conn: Conn, rows: readonly Row<T>[], p: Principal): Promise<Values[]>;
   /** A stored row as the JSON its read schema parses: dates as ISO, then plugins' toJson. */
   readJson(row: Values): Values;
   /** A record in its read shape as p may see it: plugins' project, then the read projectors. */
@@ -432,6 +448,13 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
         .limit(1);
       return row as Row<T> | undefined;
     },
+    async findMany(conn, p, ids) {
+      if (!ids.length) return [];
+      return (await conn
+        .select()
+        .from(table as Table)
+        .where(scoped(p, 'read', inArray(idCol, [...ids])))) as Row<T>[];
+    },
     async get(conn, p, id) {
       const row = await repo.find(conn, p, id);
       // Someone else's id and a missing id look the same: 404, never 403.
@@ -498,7 +521,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     async update(tx, p, row, patch, ctx = { via: 'crud' }) {
       const parsed = spec.schemas.update.parse(patch) as Record<string, unknown>;
       checkRules(p, 'update', row, parsed, ctx);
-      await checkReferences(tx, p, spec, row as Values, parsed);
+      if (!referencesChecked.has(patch)) await checkReferences(tx, p, spec, row as Values, parsed);
       const id = (row as { id: string }).id;
       const stale = staleWhere(row, parsed);
       // Nothing left to write (an empty patch, or one an erasure's scrubbing emptied since it
@@ -564,6 +587,13 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       project(spec.schemas.read.parse(readJson(row as Values)) as Values, p) as z.infer<
         S['schemas']['read']
       >,
+    readMany: async (conn, rows, p) =>
+      readReferences(
+        conn,
+        p,
+        spec,
+        rows.map((row) => def.toRead(row, p) as Values),
+      ),
     readJson,
     project,
     plugins,
