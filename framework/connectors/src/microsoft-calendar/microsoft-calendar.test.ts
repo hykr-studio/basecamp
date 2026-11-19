@@ -206,7 +206,7 @@ describe('Graph', () => {
       new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000 + n * 86_400_000).toISOString();
     fake.edit(email, a.id, { start: day(10), end: day(10.5) });
     fake.remove(email, b.id);
-    // Moved out of the delta's window: Graph reports it removed (decisions B21).
+    // Moved out of the delta's window: Graph reports it removed (decisions B22).
     fake.edit(email, c.id, { start: day(400), end: day(400.5) });
     const next = await client.changes(first.cursor);
     expect(next.items).toEqual([

@@ -1,5 +1,5 @@
 {
-  "id": "b75fc569-1dc1-4875-b773-3d36e526ae41",
+  "id": "a8a87e0b-267b-4b0c-bb2b-d70079bb811f",
   "prevId": "a8ea22dc-d6f8-48f3-be08-13c766f22c8a",
   "version": "7",
   "dialect": "postgresql",
@@ -85,6 +85,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "document_images": {
+          "name": "document_images",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         },
         "statement": {
           "name": "statement",
@@ -2676,13 +2682,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "write_to": {
-          "name": "write_to",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
         },
         "channel_id": {
           "name": "channel_id",

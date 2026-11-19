@@ -1,4 +1,4 @@
-// Microsoft 365 / Outlook calendars (B21), on the fixture's appointments: connecting by OAuth
+// Microsoft 365 / Outlook calendars (B22), on the fixture's appointments: connecting by OAuth
 // with PKCE (the in-memory fake Microsoft), records written once to the person's target calendar
 // (an extended property finds a retry's event again), changes made in Outlook coming back as
 // events through a Graph subscription or by polling, the validation handshake, renewal before

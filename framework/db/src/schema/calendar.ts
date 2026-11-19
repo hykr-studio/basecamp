@@ -33,7 +33,7 @@ export const calendarConnections = app.table(
     syncToken: text('sync_token'),
     /**
      * The person's records are written to this calendar of theirs. Unset on all of them: the
-     * first connected (decisions B21).
+     * first connected (decisions B22).
      */
     writeTo: boolean('write_to').notNull().default(false),
     /** The open push channel (Google) or subscription (Microsoft), if any. */

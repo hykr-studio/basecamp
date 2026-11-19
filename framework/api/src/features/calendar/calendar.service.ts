@@ -400,7 +400,7 @@ export class CalendarService implements OnModuleInit {
         ),
       )
       .orderBy(asc(calendarConnections.createdAt), asc(calendarConnections.id));
-    // The one records are written to: the chosen one, else the first connected (decisions B21).
+    // The one records are written to: the chosen one, else the first connected (decisions B22).
     const live = rows.filter((r) => r.status === 'active' && providerOf(r.provider));
     const target = live.find((r) => r.writeTo) ?? live[0];
     return rows.map((r) => ({ ...connectionView(r), writeTo: r.id === target?.id }));

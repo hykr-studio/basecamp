@@ -138,7 +138,7 @@ export const hashOf = (value: unknown) =>
 
 /**
  * A record's event key, the same for every person: Google's event id (its base32hex alphabet),
- * and the extended property Microsoft's event carries (decisions B21, 7).
+ * and the extended property Microsoft's event carries (decisions B22, 7).
  */
 export const googleEventId = (tenantId: string, entity: string, id: string) =>
   `bc${createHash('sha256').update(`${tenantId}:${entity}:${id}`).digest('hex').slice(0, 40)}`;

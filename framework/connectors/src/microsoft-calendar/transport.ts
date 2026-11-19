@@ -1,6 +1,6 @@
 // How the Microsoft calendar connector reaches Microsoft: one function per request, so a fake
 // (tests, offline development) replaces the network without touching the client. Live requests
-// go through the egress guard, and only to the fixed Microsoft hosts (decisions B21).
+// go through the egress guard, and only to the fixed Microsoft hosts (decisions B22).
 import { checkUrl, safeRequest } from '../egress.js';
 
 /** One request to Microsoft (the identity platform or Graph). */

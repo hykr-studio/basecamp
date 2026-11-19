@@ -1235,8 +1235,10 @@ photos: fileColumns('photos'),   // text[]; fileColumn('cover') for one file
 - **Uploading** is three steps: `POST /api/files { name, mime, size, for: { entity, field, id? } }`
   (people only), a `PUT` of exactly those bytes to the URL it returns (with its headers), then
   `POST /api/files/:id/confirm`. Presign checks the field's `accept` (`image/*` never matches SVG) and
-  size, then the person's reach: they may update that record now, or create one. Confirm checks the
-  size, and that an image or a PDF starts like one. `api.files.upload(blob, { name, mime, for })` in
+  size, then the person's reach: they may update that record now, or create one. The entity's
+  rules see that check as `ctx.via === 'file.upload'`, so an entity changed only by its commands
+  (the sample's orders) can let it through: the record changes when the command puts the file on
+  it. Confirm checks the size, and that an image or a PDF starts like one. `api.files.upload(blob, { name, mime, for })` in
   `@hykr/api-client` does all three; `<FileField entity field value onChange />` in `@hykr/app` picks
   from the library, the camera or the file picker, and `<FileThumbs ids />` shows a record's files.
 - **Attaching is the record's write.** Put the new id in the field with the entity's create or update
@@ -1704,10 +1706,55 @@ export const OrderDocument = defineDocument<Data>({
   Nothing re-reads live rows: version N shows what was true when it was asked for.
 - **The layout** `render` returns: `heading`, `text`, `fields` (label and value, one or two
   columns), `table` (weighted columns, rows of kind `line`, `group` or `subtotal` with an
-  indent; its header repeats on each page), `totals`, `spacer`, `rule`, `pageBreak`, plus a
-  header and footer on every page (`{page}`, `{pages}`). `ctx.label`, `ctx.money` and `ctx.date`
-  (the business's time zone) write in the document's language. It is checked when asked, so a
-  template's mistake fails the request.
+  indent; its header repeats on each page), `totals`, `spacer`, `rule`, `pageBreak`, `image`,
+  `images` and `qr` (below), plus a header and footer on every page (`{page}`, `{pages}`), each
+  with an optional image. `ctx.label`, `ctx.money` and `ctx.date` (the business's time zone)
+  write in the document's language. It is checked when asked, so a template's mistake fails the
+  request: 422 `bad_layout` with the issues and their paths.
+- **Images** (`docs/decisions/B21.md`). `load` picks them with `ctx.image(fileId)` (an
+  `ImageRef`, or null) and `ctx.images(fileIds)` (in order, the refused left out), returns them
+  in its data, and `render` names them:
+
+  ```ts
+  load: async ({ record, image, images, appUrl }) => ({
+    ...,
+    logo: await image(String(record.logo)),          // null: not shown
+    photos: await images(record.photos as string[]),
+    link: `${appUrl}/quotes/${record.id}`,
+  }),
+  render: (d, ctx) => ({
+    title, header: d.logo ? { image: { image: d.logo, height: 32 }, right: d.number } : undefined,
+    blocks: [
+      { type: 'image', image: d.photos[0], width: 240, align: 'left', alt: 'Kitchen', caption: '…' },
+      { type: 'images', items: d.photos.map((image) => ({ image, alt: '…' })), columns: 3 },
+      { type: 'qr', data: d.link, size: 96, caption: '…' },
+    ],
+  }),
+  ```
+
+  `image` fits one picture into `width` × `height` points at its own proportions (neither: the
+  content width; one: the other follows; both: inside), never stretched, never wider than the
+  content, scaled to one page when taller; `align`, `caption`, `alt` (required: the PDF's
+  alternate text). `images`: 1 to 60 `items` in 1 to 4 `columns`, each cell `height` high
+  (default 3/4 of its width); a row never splits across pages. `qr`: `data` (up to 1 000
+  characters) as vector squares, `size` 72 to 288 points (default 108), `errorCorrection` L, M
+  (default), Q or H; text too long for its level is 422 `qr_too_long`. A header or footer
+  `image: { image, height: 12–48, side }` is drawn on every page, the text on its side left out,
+  and the margin grows so the content never runs under it. A JPEG is turned by its EXIF
+  orientation.
+  `ctx.image` gives a file only if the requester reaches it as `GET /api/files/:id` would (on a
+  record they reach, in a field they still see), it is `ready`, PNG or JPEG (SVG, WebP, HEIC are
+  refused), and within the limits; it reads and hashes its bytes. The snapshot keeps each
+  picture's file and SHA-256 (`data.images`); a layout naming any other image is 422
+  `image_not_loaded`. The worker reads the bytes from storage (never a web address) and checks
+  the SHA-256: a file erased or changed since fails the document at once, `image_unavailable`.
+  Limits per deployment: `DOCUMENTS_IMAGES_MAX` (200 images; 422 `too_many_images`),
+  `DOCUMENTS_IMAGE_MAX_BYTES` (10 MB) and `DOCUMENTS_IMAGE_MAX_PIXELS` (40 M) per image (over
+  them, `ctx.image` answers null and logs `image_too_large`), `DOCUMENTS_IMAGES_MAX_BYTES`
+  (60 MB per document; 422 `images_too_large`). An acceptance's evidence lists the pictures
+  (`document.images`). The fake engine writes `[Image: <alt>]`, `[QR: <data>]` and
+  `[Image: header]` lines. `ctx.appUrl` is the app's address (APP_URL), for a link a document
+  shows.
 - **The engine** (`DOCUMENTS_ENGINE`): `pdf` is pdfkit with HarfBuzz shaping and the Noto fonts
   (Latin, Devanagari, Telugu; regular and bold). A line may mix scripts: each run is set in its
   own font. `fake` writes the layout's lines as plain text in a small PDF: both Vitest configs
@@ -1958,7 +2005,7 @@ pnpm exec basecamp import todo domain/src/modules/todos/import/todos.csv \
 ### 5.24 Calendars and calls
 
 Records with a time reach people's calendars, and calls are logged on records
-(`docs/decisions/B17.md`; Microsoft 365 in `docs/decisions/B21.md`). Which entities are events, whose calendars they go on and what a
+(`docs/decisions/B17.md`; Microsoft 365 in `docs/decisions/B22.md`). Which entities are events, whose calendars they go on and what a
 move in a calendar means are the application's. The sample's `meetings` module uses them.
 
 - **The trait.** `traits.schedulable: { title, startsAt, endsAt, location?, description?,
@@ -2337,6 +2384,10 @@ retentionPeriods: [{ target: 'channel.inbound-payloads', days: 30 }],
     (`members.invites` on the register).
   - Files: what they sent is erased, and the `file.*` audit rows lose its name, those of a file
     they sent that is gone already (thrown away, swept) too.
+    A document already made that shows one of those files as a picture keeps it, as it keeps a
+    name it shows: its stored PDF and snapshot stay as they were. A version asked for after does
+    not reach the erased file (`ctx.image` answers null; one waiting to be drawn fails
+    `image_unavailable`). See `docs/decisions/B21.md` for the open question.
   - Calls: a contact's number, the call's notes and its error leave each call with them; a member
     is unlinked from their calls and loses their own number on them.
   - The integration bus: stored webhook bodies and inbound payloads lose values that are the
@@ -3838,7 +3889,7 @@ These are not built. Each has a workaround for now.
 | A link for a WhatsApp request someone else decides | The waiting line says the team was asked, with no link: a contact cannot open the business's app. A member finds the request in the app's Approvals. |
 | Thumbnails, resizing, EXIF stripping | Files are kept as uploaded. The app picks photos at 0.8 quality; show images sized down. |
 | Keeping WhatsApp voice-note audio | Voice notes become words only (`inbound.processor.ts`). Upload audio in the app and transcribe it (`POST /api/files/:id/transcribe`). |
-| Images in documents (a logo, a signature, photos) | The layout has no image block. Put the business's name in the header. |
+| Images in documents: in table cells, WebP and HEIC, photos shrunk to the size drawn, a logo from branding | `image`, `images`, `qr` and a header or footer image draw PNG and JPEG files from records (5.19). A picture in a table cell, a WebP or HEIC photo, or a logo at `branding.logoUrl` is not drawn; phone photos are embedded at full size, so a pack of many can outgrow an attachment. |
 | A Chromium engine, digital signatures, PDF/A | Documents are drawn by pdfkit only, unsigned; their SHA-256 is kept, and an acceptance binds it (section 5.25). |
 | Notifications that carry a document | The dispatcher sends no files. Send a document with `document.send` (a subscriber can call it as the person). |
 | A WhatsApp document's later failure | A send is `sent` once WhatsApp has it; its message's own status shows a later failure, and no email follows. |

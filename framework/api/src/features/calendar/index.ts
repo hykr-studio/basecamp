@@ -1,4 +1,4 @@
-// Calendars (decisions B17, B21): schedulable records in people's own Google and Microsoft 365
+// Calendars (decisions B17, B22): schedulable records in people's own Google and Microsoft 365
 // calendars (per-person OAuth, push channels and Graph subscriptions through the integration
 // bus), invites by email with an .ics, private feeds, and busy and free time.
 

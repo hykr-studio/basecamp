@@ -1,4 +1,4 @@
-// What a calendar service is to the calendar feature (decisions B21): its sign-in, the busy
+// What a calendar service is to the calendar feature (decisions B22): its sign-in, the busy
 // times it reads, the events it keeps for records, the changes it reports, and the channel it
 // tells us about them through. Google and Microsoft implement it; tokens, sign-in states,
 // needs_reauth, feeds and invites stay the feature's own, shared by every provider.

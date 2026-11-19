@@ -1,5 +1,5 @@
 // The calendar services this deployment offers: CALENDAR_PROVIDERS names them (default
-// `google`), and each is offered once its OAuth client is set (decisions B21).
+// `google`), and each is offered once its OAuth client is set (decisions B22).
 import { CalendarProvider } from '@hykr/contracts';
 import { ServiceUnavailableException } from '@nestjs/common';
 import { googleSettings, microsoftSettings } from '../settings.js';

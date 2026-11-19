@@ -1,7 +1,7 @@
 // Records to connected calendars, and changes made there back to the application as events.
 // Each record is read as the person whose calendar it goes to, so access and hidden fields hold
 // in their calendar exactly as in the app (decisions B17, 10 to 12). Every provider is reached
-// through its `CalendarProviderDef` (decisions B21); a person with more than one connection has
+// through its `CalendarProviderDef` (decisions B22); a person with more than one connection has
 // records written to one of them, their target.
 import type { CalendarEventChange } from '@hykr/contracts';
 import { recordEvents, settingsIn, systemPrincipal, tenantZone, toJson } from '@hykr/core';

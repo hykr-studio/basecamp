@@ -1,4 +1,4 @@
-// Microsoft 365 / Outlook.com behind the provider interface (decisions B21): the identity
+// Microsoft 365 / Outlook.com behind the provider interface (decisions B22): the identity
 // platform's sign-in with PKCE, Graph's getSchedule for busy times, events keyed by an extended
 // property, a calendarView delta query for changes, and change subscriptions.
 import {
@@ -59,7 +59,7 @@ export function microsoftProvider(ms: MicrosoftSettings): CalendarProviderDef {
       refresh: (refreshToken) =>
         microsoftRefreshToken(ms.transport, { ...oauthClient, refreshToken }),
       // No revoke endpoint for this flow: the tokens are deleted, and the person can remove the
-      // app in their account (decisions B21).
+      // app in their account (decisions B22).
       ...(ms.mode === 'fake'
         ? { fakeConsent: (url: string, email: string) => fakeMicrosoft().consent(url, email) }
         : {}),

@@ -28,6 +28,8 @@ export const acceptances = audit.table(
     documentVersion: integer('document_version').notNull(),
     documentSha256: text('document_sha256').notNull(),
     documentFileName: text('document_file_name').notNull(),
+    /** The images the PDF shows, each its file and SHA-256 when asked for (null: none). */
+    documentImages: jsonb('document_images').$type<{ fileId: string; sha256: string }[]>(),
     /** The words agreed to, as shown, and their language. */
     statement: text('statement').notNull(),
     lang: text('lang').notNull(),

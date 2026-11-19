@@ -136,12 +136,17 @@ export interface EntityDef<S extends EntitySpec = EntitySpec, T extends Table = 
   /** The entity plugins that apply to it now (registered and whose appliesTo says so). */
   plugins(): readonly EntityPlugin[];
   summarize(action: WriteAction, input: Record<string, unknown> | null, row: Row<T> | null): string;
-  /** Access, rules, plugins' decisions, then approval: the decision for one CRUD write. */
+  /**
+   * Access, rules, plugins' decisions, then approval: the decision for one CRUD write. `via` is
+   * what rules see as `ctx.via` (default 'crud'): an upload for a file field asks as
+   * 'file.upload', so an entity changed only by its commands can still take files for them.
+   */
   decide(
     p: Principal,
     action: WriteAction,
     row: Row<T> | null,
     input: Record<string, unknown> | null,
+    via?: string,
   ): AuthorizeResult;
   events: boolean;
   cqrs: EntityCqrs;
@@ -573,7 +578,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
         action === 'create'
           ? `Create ${label} "${title(row, input)}"`
           : `${verb[action]} "${title(row, input)}"`),
-    decide(p, action, row, input) {
+    decide(p, action, row, input, via = 'crud') {
       // Whose rows these are: a write needs a grant that covers the row (or, to create, any).
       const reach = accessFor(p, access, 'write');
       if (reach.kind === 'needs_assurance')
@@ -603,7 +608,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       // Then the rules, the entity's and its plugins': any refusal wins; a rule may park.
       let decision: AuthorizeResult | null = null;
       for (const rule of allRules()) {
-        const result = rule(p, action, row, input, { via: 'crud' });
+        const result = rule(p, action, row, input, { via });
         if (result?.decision === 'deny') return result;
         decision = strongerDecision(decision, result);
       }
