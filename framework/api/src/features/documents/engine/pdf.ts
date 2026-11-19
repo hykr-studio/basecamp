@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit';
-import { type Align, type CheckedLayout, pageText } from '../layout.js';
+import { type Align, type CheckedLayout, type ImageRef, pageText, qrMatrix } from '../layout.js';
 import type { DocumentEngine, Rendered, RenderMeta } from './engine.js';
 import { fontName, type LoadedFont, loadFonts, type Script, scriptRuns } from './fonts.js';
 
@@ -10,6 +10,18 @@ const HEADING = { 1: SIZE.h1, 2: SIZE.h2, 3: SIZE.h3 } as const;
 const PAD = { x: 4, y: 3 };
 /** How far one level of a table row's indent moves its first cell. */
 const INDENT = 10;
+/** Between a picture and its caption, between grid cells, and between a header image and content. */
+const GAP = { caption: 4, cell: 8, edge: 6 };
+/** A QR code's quiet zone, in modules, on every side (the standard's four). */
+const QUIET = 4;
+
+/** An image pdfkit opened once (embedded once, however often it is drawn). */
+interface Opened {
+  width: number;
+  height: number;
+  /** A JPEG's EXIF orientation (1 to 8); pdfkit turns the image by it when drawing. */
+  orientation?: number;
+}
 
 type Checked<T extends CheckedLayout['blocks'][number]['type']> = Extract<
   CheckedLayout['blocks'][number],
@@ -50,10 +62,11 @@ class PdfWriter {
   private readonly top: number;
   private readonly bottom: number;
   private y: number;
+  private readonly opened = new Map<string, Opened>();
 
   constructor(
     private readonly layout: CheckedLayout,
-    meta: RenderMeta,
+    private readonly meta: RenderMeta,
     private readonly fonts: ReadonlyMap<string, LoadedFont>,
   ) {
     this.doc = new PDFDocument({
@@ -73,9 +86,58 @@ class PdfWriter {
     const page = this.doc.page;
     this.left = page.margins.left;
     this.width = page.width - page.margins.left - page.margins.right;
-    this.top = page.margins.top;
-    this.bottom = page.height - page.margins.bottom;
+    // A header or footer image taller than its margin pushes the content in: never under it.
+    const head = this.pageImageBox('header');
+    const foot = this.pageImageBox('footer');
+    this.top = Math.max(page.margins.top, head ? head.y + head.height + GAP.edge : 0);
+    this.bottom = Math.min(
+      page.height - page.margins.bottom,
+      foot ? foot.y - GAP.edge : Number.POSITIVE_INFINITY,
+    );
     this.y = this.top;
+  }
+
+  /** Where a header's or footer's image sits on every page (its top and height), if it has one. */
+  private pageImageBox(where: 'header' | 'footer') {
+    const image = this.layout[where]?.image;
+    if (!image) return undefined;
+    const page = this.doc.page;
+    const margin = this.layout.page.margin;
+    const inset = Math.max((margin - image.height) / 2, 8);
+    const y = where === 'header' ? inset : page.height - inset - image.height;
+    return { y, height: image.height };
+  }
+
+  /** An image's bytes, opened once per file. */
+  private open(ref: ImageRef): Opened {
+    const had = this.opened.get(ref.fileId);
+    if (had) return had;
+    const bytes = this.meta.images?.get(ref.fileId);
+    if (!bytes) throw new Error(`image_unavailable: ${ref.fileId} (its bytes were not read)`);
+    // pdfkit's types leave openImage out; it parses the image once and embeds it on first use.
+    const image = (this.doc as unknown as { openImage(src: Buffer): Opened }).openImage(bytes);
+    this.opened.set(ref.fileId, image);
+    return image;
+  }
+
+  /** An image's width and height as it shows: a JPEG's EXIF orientation 5 to 8 turns it. */
+  private shape(ref: ImageRef): { width: number; height: number } {
+    const image = this.open(ref);
+    const turned = (image.orientation ?? 1) > 4;
+    return turned
+      ? { width: image.height, height: image.width }
+      : { width: image.width, height: image.height };
+  }
+
+  /**
+   * Draw an image fitted into the box at (x, y) of w × h, at its own proportions, centred in it;
+   * its alternate text marked for readers.
+   */
+  private drawImage(ref: ImageRef, x: number, y: number, w: number, h: number, alt?: string) {
+    const image = this.open(ref);
+    if (alt) this.doc.markContent('Span', { alt });
+    this.doc.image(image as never, x, y, { fit: [w, h], align: 'center', valign: 'center' });
+    if (alt) this.doc.endMarkedContent();
   }
 
   private font(script: Script, bold: boolean): LoadedFont {
@@ -344,6 +406,132 @@ class PdfWriter {
     this.y += 8;
   }
 
+  /** A caption's lines under a picture, `width` wide. */
+  private captionLines(caption: string | undefined, width: number) {
+    return caption ? this.wrap(caption, width, { size: SIZE.small, color: COLOR.muted }) : [];
+  }
+
+  private image(b: Checked<'image'>) {
+    const shape = this.shape(b.image);
+    const ratio = shape.width / shape.height;
+    let w: number;
+    let h: number;
+    if (b.width && b.height) {
+      // Fitted inside the box, never stretched.
+      w = Math.min(b.width, b.height * ratio);
+      h = w / ratio;
+    } else if (b.width) {
+      w = b.width;
+      h = w / ratio;
+    } else if (b.height) {
+      h = b.height;
+      w = h * ratio;
+    } else {
+      w = this.width;
+      h = w / ratio;
+    }
+    // Never wider than the content, never taller than a page (with its caption).
+    const caption = this.captionLines(b.caption, this.width);
+    const captionHeight = caption.reduce((s, l) => s + l.height, 0);
+    const room = this.bottom - this.top - (captionHeight ? captionHeight + GAP.caption : 0);
+    const scale = Math.min(1, this.width / w, room / h);
+    w *= scale;
+    h *= scale;
+    this.ensure(h + (captionHeight ? captionHeight + GAP.caption : 0));
+    const x =
+      b.align === 'left'
+        ? this.left
+        : b.align === 'right'
+          ? this.left + this.width - w
+          : this.left + (this.width - w) / 2;
+    this.drawImage(b.image, x, this.y, w, h, b.alt);
+    this.y += h;
+    if (captionHeight) {
+      this.y += GAP.caption;
+      this.drawLines(caption, this.left, this.y, this.width, b.align, {
+        size: SIZE.small,
+        color: COLOR.muted,
+      });
+      this.y += captionHeight;
+    }
+    this.y += 10;
+  }
+
+  private images(b: Checked<'images'>) {
+    const cols = b.columns;
+    const cellWidth = (this.width - GAP.cell * (cols - 1)) / cols;
+    const style = { size: SIZE.small, color: COLOR.muted };
+    for (let i = 0; i < b.items.length; i += cols) {
+      const row = b.items.slice(i, i + cols).map((item) => ({
+        item,
+        caption: this.captionLines(item.caption, cellWidth),
+      }));
+      const captionHeight = Math.max(
+        0,
+        ...row.map((c) => c.caption.reduce((s, l) => s + l.height, 0)),
+      );
+      const below = captionHeight ? captionHeight + GAP.caption : 0;
+      // A row never splits: one taller than a page is made shorter to fit one.
+      const cellHeight = Math.min(b.height ?? (cellWidth * 3) / 4, this.bottom - this.top - below);
+      this.ensure(cellHeight + below);
+      row.forEach((c, j) => {
+        const x = this.left + j * (cellWidth + GAP.cell);
+        this.drawImage(c.item.image, x, this.y, cellWidth, cellHeight, c.item.alt);
+        if (c.caption.length)
+          this.drawLines(
+            c.caption,
+            x,
+            this.y + cellHeight + GAP.caption,
+            cellWidth,
+            'center',
+            style,
+          );
+      });
+      this.y += cellHeight + below + GAP.cell;
+    }
+    this.y += 4;
+  }
+
+  private qr(b: Checked<'qr'>) {
+    const matrix = qrMatrix(b.data, b.errorCorrection);
+    const caption = this.captionLines(b.caption, this.width);
+    const captionHeight = caption.reduce((s, l) => s + l.height, 0);
+    const size = Math.min(b.size, this.width);
+    this.ensure(size + (captionHeight ? captionHeight + GAP.caption : 0));
+    const x =
+      b.align === 'left'
+        ? this.left
+        : b.align === 'right'
+          ? this.left + this.width - size
+          : this.left + (this.width - size) / 2;
+    const unit = size / (matrix.size + QUIET * 2);
+    const doc = this.doc.save();
+    // Dark modules as squares, a row's neighbours joined into one rectangle.
+    for (let r = 0; r < matrix.size; r++) {
+      let c = 0;
+      while (c < matrix.size) {
+        if (!matrix.dark(r, c)) {
+          c++;
+          continue;
+        }
+        const from = c;
+        while (c < matrix.size && matrix.dark(r, c)) c++;
+        doc.rect(x + (QUIET + from) * unit, this.y + (QUIET + r) * unit, (c - from) * unit, unit);
+      }
+    }
+    doc.fillColor('#000000').fill().restore();
+    this.y += size;
+    if (captionHeight) {
+      this.y += GAP.caption;
+      this.drawLines(caption, this.left, this.y, this.width, b.align, {
+        size: SIZE.small,
+        color: COLOR.muted,
+      });
+      this.y += captionHeight;
+    }
+    this.y += 10;
+  }
+
   /** The header and footer of every page, once the page count is known. */
   private pageLines() {
     const { header, footer } = this.layout;
@@ -362,12 +550,30 @@ class PdfWriter {
         const x = align === 'left' ? this.left : this.left + this.width - half;
         this.drawLine(line, x, top, half, align, style);
       };
-      const headTop = Math.max(margin / 2 - 6, 8);
-      const footTop = page.height - Math.max(margin / 2 + 4, 18);
-      put(header?.left, headTop, 'left');
-      put(header?.right, headTop, 'right');
-      put(footer?.left, footTop, 'left');
-      put(footer?.right, footTop, 'right');
+      const head = this.pageImageBox('header');
+      const foot = this.pageImageBox('footer');
+      // Beside an image, the text is centred on it; otherwise where it always was.
+      const headTop = head ? head.y + head.height / 2 - 5 : Math.max(margin / 2 - 6, 8);
+      const footTop = foot
+        ? foot.y + foot.height / 2 - 5
+        : page.height - Math.max(margin / 2 + 4, 18);
+      const line = (
+        l: NonNullable<CheckedLayout['header']>,
+        top: number,
+        box: { y: number; height: number } | undefined,
+      ) => {
+        const image = l.image;
+        if (image && box) {
+          const { width, height } = this.shape(image.image);
+          const w = Math.min((width / height) * box.height, half);
+          const x = image.side === 'left' ? this.left : this.left + this.width - w;
+          this.drawImage(image.image, x, box.y, w, box.height);
+        }
+        if (image?.side !== 'left') put(l.left, top, 'left');
+        if (image?.side !== 'right') put(l.right, top, 'right');
+      };
+      if (header) line(header, headTop, head);
+      if (footer) line(footer, footTop, foot);
     }
   }
 
@@ -411,6 +617,15 @@ class PdfWriter {
           break;
         case 'pageBreak':
           if (this.y > this.top) this.newPage();
+          break;
+        case 'image':
+          this.image(b);
+          break;
+        case 'images':
+          this.images(b);
+          break;
+        case 'qr':
+          this.qr(b);
           break;
       }
     }

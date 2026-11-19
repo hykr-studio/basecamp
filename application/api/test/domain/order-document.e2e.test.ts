@@ -1,8 +1,9 @@
 // The orders module's PDF (orders.order, B2): an order's groups, lines, tax and totals in
 // English, Hindi or Telugu, never its cost; opened by every colleague who reads the order and by
 // nobody outside the business; made and sent by the scripted assistant (to yourself at once, to
-// anyone else after approval). Tests draw with the fake engine (vitest.config.ts); the real
-// engine draws the same layout here once.
+// anyone else after approval); with the order's photo and a QR code that opens it. Tests draw with
+// the fake engine (vitest.config.ts); the real engine draws the same layout here.
+import { crc32, deflateSync } from 'node:zlib';
 import { createPdfEngine, documents, layoutOf } from '@hykr/api';
 import { addMember, boot, eventually, me, Person, pool, server, shutdown } from '@hykr/api/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -144,6 +145,82 @@ describe("an order's PDF", () => {
     expect(raw.startsWith('%PDF-')).toBe(true);
     expect(raw).toMatch(/\/BaseFont \/[A-Z]{6}\+NotoSansTelugu/);
     expect(pages).toBe(1);
+  }, 30_000);
+});
+
+describe('an order with a photo', () => {
+  /** An 80 × 60 PNG of one colour. */
+  const png = () => {
+    const chunk = (type: string, data: Buffer) => {
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length);
+      const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+      const crc = Buffer.alloc(4);
+      crc.writeUInt32BE(crc32(body) >>> 0);
+      return Buffer.concat([len, body, crc]);
+    };
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(80, 0);
+    ihdr.writeUInt32BE(60, 4);
+    ihdr.set([8, 2, 0, 0, 0], 8);
+    const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(80 * 3, 0x70)]);
+    return Buffer.concat([
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+      chunk('IHDR', ihdr),
+      chunk('IDAT', deflateSync(Buffer.concat(Array(60).fill(row)))),
+      chunk('IEND', Buffer.alloc(0)),
+    ]);
+  };
+
+  it('its PDF shows the photo from its file field, and a QR code that opens it in the app', async () => {
+    const first = await owner.call('POST', '/api/orders/save', { title: 'Flat 9C', items: rooms });
+    expect(first.status).toBe(200);
+    const id = first.body.value.order.id as string;
+    // A photo for this order, uploaded for its field, then saved onto it with the whole order.
+    const bytes = png();
+    const pre = await owner.call('POST', '/api/files', {
+      name: 'kitchen.png',
+      mime: 'image/png',
+      size: bytes.length,
+      for: { entity: 'order', field: 'photo', id },
+    });
+    expect(pre.status, JSON.stringify(pre.body)).toBe(201);
+    await fetch(`${server.base}${pre.body.upload.url}`, {
+      method: 'PUT',
+      headers: pre.body.upload.headers,
+      body: new Uint8Array(bytes),
+    });
+    expect((await owner.call('POST', `/api/files/${pre.body.file.id}/confirm`)).status).toBe(200);
+    const saved = await owner.call('POST', '/api/orders/save', {
+      orderId: id,
+      title: 'Flat 9C',
+      photo: pre.body.file.id,
+      items: rooms,
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const withPhoto = saved.body.value.order as { id: string; photo: string };
+    expect(withPhoto.photo).toBe(pre.body.file.id);
+    const doc = await ready(owner, (await render(owner, withPhoto.id)).body.value.id);
+    const text = await pdfText(doc.url);
+    expect(text).toContain('([Image: Flat 9C])');
+    expect(text).toMatch(new RegExp(`\\(\\[QR: https?://[^\\]]+/orders/${withPhoto.id}\\]\\)`));
+    expect(text).toContain('(Scan to open this order)');
+
+    // The real engine draws it too, the picture's bytes as stored.
+    const { rows } = await pool.query('select data from app.documents where id = $1', [doc.id]);
+    expect(rows[0].data.images).toEqual([
+      expect.objectContaining({ fileId: pre.body.file.id, mime: 'image/png' }),
+    ]);
+    const def = documents.get('orders.order');
+    if (!def) throw new Error('orders.order is not declared');
+    const layout = layoutOf(def, rows[0].data.value, 'hi', rows[0].data.business);
+    const { bytes: drawn, pages } = await createPdfEngine().render(layout, {
+      lang: 'hi',
+      createdAt: new Date(),
+      images: new Map([[pre.body.file.id, bytes]]),
+    });
+    expect(drawn.toString('latin1')).toContain('/Subtype /Image');
+    expect(pages).toBeGreaterThanOrEqual(1);
   }, 30_000);
 });
 

@@ -1,17 +1,19 @@
-// The documents feature in use (B2): a `memos` module with a field only owners see (a read
+// The documents feature in use (B2, B21): a `memos` module with a field only owners see (a read
 // projector by capability; another hides a send's error), a role that reads memos and nothing
-// else, three documents of a memo (one that counts every role and capability of its requester,
-// one that names the capability that matters, one that hides nothing), a WhatsApp template with a
-// document header, scripts for the assistant, and the server the documents e2e test boots
-// (`documentsApp`).
+// else, four documents of a memo (one that counts every role and capability of its requester,
+// one that names the capability that matters, one that hides nothing, and a photo sheet with
+// pictures, a grid, a header logo and a QR code), a WhatsApp template with a document header,
+// scripts for the assistant, and the server the documents e2e test boots (`documentsApp`).
 import { call, defineScript, items, say, written } from '@hykr/agents/script';
-import { defineDocument, defineModule, defineServer } from '@hykr/api';
+import { defineDocument, defineModule, defineServer, type ImageRef } from '@hykr/api';
 import {
   type Contributions,
   CreatedBy,
   defineCapability,
   defineRole,
   entitySpec,
+  FileRef,
+  fileRefs,
   moduleSpec,
 } from '@hykr/contracts';
 import { defineEntity, entityController, entityHandlers, type ReadProjector } from '@hykr/core';
@@ -31,6 +33,10 @@ export const Memo = z.object({
   body: z.string(),
   /** Only with memos.secret.read. */
   secret: z.string().nullable().optional(),
+  photo: FileRef.nullable(),
+  photos: fileRefs(20),
+  /** Only with memos.secret.read. */
+  secretPhoto: FileRef.nullable().optional(),
   createdBy: CreatedBy,
   createdAt: z.iso.datetime(),
 });
@@ -45,8 +51,16 @@ export const MemoSpec = entitySpec({
       title,
       body: z.string().max(5000).default(''),
       secret: z.string().optional(),
+      photo: FileRef.optional(),
+      photos: fileRefs(20).optional(),
+      secretPhoto: FileRef.optional(),
     }),
-    update: z.object({ title: title.optional(), body: z.string().max(5000).optional() }),
+    update: z.object({
+      title: title.optional(),
+      body: z.string().max(5000).optional(),
+      photo: FileRef.nullable().optional(),
+      photos: fileRefs(20).optional(),
+    }),
   },
   list: {
     filterable: { title: 'text' },
@@ -54,6 +68,14 @@ export const MemoSpec = entitySpec({
     defaultSort: [['createdAt', 'asc']],
     search: ['title'],
     pageSize: { default: 50, max: 100 },
+  },
+  // Pictures of any kind, SVG included (named): a document draws only PNG and JPEG.
+  traits: {
+    files: {
+      photo: { accept: ['image/*', 'image/svg+xml'] },
+      photos: { accept: ['image/*', 'image/svg+xml'], max: 20 },
+      secretPhoto: { accept: ['image/*'] },
+    },
   },
 });
 
@@ -92,7 +114,7 @@ export const secretHidden: ReadProjector = {
   name: 'fixture.memos.secret',
   project: (type, value, p) => {
     if (type !== 'memo' || can(p, SecretRead)) return value;
-    const { secret: _hidden, ...rest } = value;
+    const { secret: _hidden, secretPhoto: _picture, ...rest } = value;
     return rest;
   },
 };
@@ -201,6 +223,83 @@ export const MemoCard = defineDocument<{ title: string }>({
   send: { email: { subject: (d) => `Card ${d.title}`, body: () => 'The card is attached.' } },
 });
 
+type PhotoData = {
+  title: string;
+  photo: ImageRef | null;
+  photos: ImageRef[];
+  secret: ImageRef | null;
+  /** Each file id the memo's body names after "probe:", and whether `ctx.image` gave it. */
+  probes: { id: string; given: boolean }[];
+  /** The body's "forge" or "unloaded": the layout names an image wrongly. */
+  mistake: string | null;
+  qr: string | null;
+};
+
+const ids = (v: unknown) => (Array.isArray(v) ? (v as string[]) : []);
+
+/**
+ * A memo's photo sheet: its picture, its photos in a grid, the secret picture (with
+ * memos.secret.read), the first photo as the header's logo, and a QR code of the body's "qr:"
+ * line. The body also drives the tests: "probe:<id>,<id>" asks `ctx.image` for those files;
+ * "forge" names the picture with another SHA-256 and "unloaded" names a file load was not given.
+ */
+export const MemoPhotos = defineDocument<PhotoData>({
+  name: 'memos.photos',
+  label: same('Memo photos'),
+  entity: 'memo',
+  capabilities: [SecretRead.name],
+  load: async ({ record, image, images }) => {
+    const body = String(record.body ?? '');
+    const probeIds = /probe:([^\s]+)/.exec(body)?.[1]?.split(',') ?? [];
+    const probes: PhotoData['probes'] = [];
+    for (const id of probeIds) probes.push({ id, given: !!(await image(id)) });
+    return {
+      title: String(record.title),
+      photo: record.photo ? await image(String(record.photo)) : null,
+      photos: await images(ids(record.photos)),
+      secret: record.secretPhoto ? await image(String(record.secretPhoto)) : null,
+      probes,
+      mistake: /\b(forge|unloaded:[^\s]+)/.exec(body)?.[1] ?? null,
+      qr: /qr:([^\s]+)/.exec(body)?.[1] ?? null,
+    };
+  },
+  render: (d) => {
+    const forged = (ref: ImageRef): ImageRef =>
+      d.mistake === 'forge'
+        ? { ...ref, sha256: '0'.repeat(64) }
+        : d.mistake?.startsWith('unloaded:')
+          ? { ...ref, fileId: d.mistake.slice('unloaded:'.length) }
+          : ref;
+    const logo = d.photos[0];
+    return {
+      title: `Photos ${d.title}`,
+      ...(logo ? { header: { image: { image: logo, height: 24 }, right: d.title } } : {}),
+      blocks: [
+        { type: 'heading', text: d.title },
+        ...d.probes.map((p) => ({
+          type: 'text' as const,
+          text: `probe ${p.id}: ${p.given ? 'given' : 'refused'}`,
+        })),
+        ...(d.photo
+          ? [{ type: 'image' as const, image: forged(d.photo), alt: 'photo', caption: d.title }]
+          : []),
+        ...(d.photos.length
+          ? [
+              {
+                type: 'images' as const,
+                columns: 3 as const,
+                items: d.photos.map((image, i) => ({ image, alt: `photo ${i + 1}` })),
+              },
+            ]
+          : []),
+        ...(d.secret ? [{ type: 'image' as const, image: d.secret, alt: 'secret' }] : []),
+        ...(d.qr ? [{ type: 'qr' as const, data: d.qr, caption: 'Scan' }] : []),
+      ],
+    };
+  },
+  fileName: (d) => `photos-${d.title}`,
+});
+
 /**
  * The assistant's scripts:
  *   pdf of memo <title>         list-memos → render-document (memos.memo)
@@ -261,7 +360,7 @@ export const documentsContributions: Partial<Contributions> = {
   roles: [Reader],
   capabilities: [SecretRead],
   readProjectors: [secretHidden, sendErrorHidden],
-  documents: [MemoDocument, MemoSheet, MemoCard],
+  documents: [MemoDocument, MemoSheet, MemoCard, MemoPhotos],
 };
 
 /** The fixture plus memos and their documents. */

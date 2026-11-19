@@ -4,7 +4,12 @@ import './routes.js';
 
 export { type DocumentRow, reachable as reachableDocument } from './access.js';
 export { layoutOf } from './commands.js';
-export { type DocumentsConfig, documentsConfig } from './config.js';
+export {
+  type DocumentsConfig,
+  documentsConfig,
+  IMAGE_LIMITS,
+  type ImageLimits,
+} from './config.js';
 export {
   channelsOf,
   type DocumentBusiness,
@@ -33,6 +38,10 @@ export {
   type CheckedLayout,
   DocumentBlock,
   DocumentLayout,
+  ImageRef,
+  imageRefsOf,
   layoutLines,
   pageText,
+  QrCorrection,
+  qrMatrix,
 } from './layout.js';

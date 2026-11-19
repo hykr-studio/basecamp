@@ -77,6 +77,22 @@ describe('approval rules see the action, the input and the row', () => {
     const Order = defineEntity(Spec, { table: orders, owner: (t) => t.ownerId });
     expect(Order.decide(ana, 'create', null, { amount: 500 }).decision).toBe('needs_approval');
     expect(Order.decide(ana, 'create', null, { amount: 50 }).decision).toBe('allow');
+
+    // Rules see who asks as `via`: 'crud' by default; an upload for a file field names itself.
+    const seen: string[] = [];
+    const Locked = defineEntity(Spec, {
+      table: orders,
+      owner: (t) => t.ownerId,
+      rules: [
+        (_p, _action, _row, _input, ctx) => {
+          seen.push(ctx.via);
+          return ctx.via === 'file.upload' ? null : deny('commands_only', 'Saved by a command');
+        },
+      ],
+    });
+    expect(Locked.decide(ana, 'create', null, { amount: 1 }).decision).toBe('deny');
+    expect(Locked.decide(ana, 'create', null, {}, 'file.upload').decision).toBe('allow');
+    expect(seen).toEqual(['crud', 'file.upload']);
   });
 });
 
