@@ -1,5 +1,5 @@
 // Integrations: what a business's managers are told when a connection made by signing in stops
-// working, or will soon (decisions B21), and the app's integrations screen.
+// working, or will soon (decisions B24), and the app's integrations screen.
 import { defineMessages } from './define.js';
 
 export const integrationMessages = defineMessages({

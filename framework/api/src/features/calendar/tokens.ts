@@ -1,15 +1,10 @@
 // A connection's OAuth tokens: sealed for its row with SECRETS_KEY (the integration bus's box),
 // opened only to call the provider, refreshed when they are about to expire.
 import { SecretBoxError } from '@hykr/connectors';
-import {
-  GoogleApiError,
-  type GoogleTokens,
-  refreshAccessToken,
-} from '@hykr/connectors/google-calendar';
 import { calendarConnections, type Database } from '@hykr/db';
 import { eq } from 'drizzle-orm';
 import { requireSecretBox, secretBox } from '../integrations/settings.js';
-import type { GoogleSettings } from './settings.js';
+import type { CalendarProviderDef, ProviderTokens } from './providers/index.js';
 
 export type ConnectionRow = typeof calendarConnections.$inferSelect;
 
@@ -40,13 +35,10 @@ export function openTokens(row: Pick<ConnectionRow, 'tenantId' | 'id' | 'tokensS
   }
 }
 
-/** Google said the grant is gone: the person must connect again. */
+/** The provider said the grant is gone: the person must connect again. */
 export class GrantRevoked extends Error {
   override readonly name = 'GrantRevoked';
 }
-
-const isRevoked = (e: unknown) =>
-  e instanceof GoogleApiError && (e.reason === 'invalid_grant' || e.status === 401);
 
 /**
  * An access token good for a minute more: the stored one, or a fresh one (stored sealed again).
@@ -54,7 +46,7 @@ const isRevoked = (e: unknown) =>
  */
 export async function accessTokenFor(
   db: Database,
-  google: GoogleSettings,
+  provider: CalendarProviderDef,
   row: ConnectionRow,
 ): Promise<string> {
   const tokens = openTokens(row);
@@ -63,18 +55,17 @@ export async function accessTokenFor(
     throw new GrantRevoked('The stored grant does not open');
   }
   if (tokens.expiresAt > Date.now() + 60_000) return tokens.accessToken;
-  let fresh: GoogleTokens;
+  let fresh: ProviderTokens;
   try {
-    fresh = await refreshAccessToken(google.transport, {
-      clientId: google.clientId,
-      clientSecret: google.clientSecret,
-      endpoints: google.endpoints,
-      refreshToken: tokens.refreshToken,
-    });
+    fresh = await provider.oauth.refresh(tokens.refreshToken);
   } catch (e) {
-    if (isRevoked(e)) {
-      await markReauth(db, row.id, 'Google no longer accepts this connection: connect again');
-      throw new GrantRevoked('Google refused the grant');
+    if (provider.isRevoked(e)) {
+      await markReauth(
+        db,
+        row.id,
+        `${provider.label} no longer accepts this connection: connect again`,
+      );
+      throw new GrantRevoked(`${provider.label} refused the grant`);
     }
     throw e;
   }

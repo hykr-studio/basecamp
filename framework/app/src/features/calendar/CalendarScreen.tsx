@@ -1,4 +1,4 @@
-import type { CalendarConnectionInfo, CalendarFeedInfo } from '@hykr/contracts';
+import type { CalendarConnectionInfo, CalendarFeedInfo, CalendarProvider } from '@hykr/contracts';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Linking, Platform, ScrollView, Text, View } from 'react-native';
@@ -22,16 +22,27 @@ import {
   useCreateFeed,
   useDisconnectCalendar,
   useRevokeFeed,
+  useSetCalendarTarget,
 } from './hooks';
 
 /** Copy text where the platform lets a page do it (the web); elsewhere the text is selectable. */
 const clipboard = () =>
   Platform.OS === 'web' && typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
 
-function ConnectionRow({ c }: { c: CalendarConnectionInfo }) {
+const PROVIDER_NAME: Record<CalendarProvider, string> = {
+  google: 'Google',
+  microsoft: 'Microsoft',
+};
+const CONNECT_LABEL = {
+  google: 'calendar.connectGoogle',
+  microsoft: 'calendar.connectMicrosoft',
+} as const;
+
+function ConnectionRow({ c, several }: { c: CalendarConnectionInfo; several: boolean }) {
   const { t } = useT();
   const toast = useToast();
   const disconnect = useDisconnectCalendar();
+  const target = useSetCalendarTarget();
   return (
     <View style={[styles.row, { gap: space.sm, paddingVertical: space.xs }]}>
       <Icon name="calendar" color={c.status === 'active' ? colors.primary : colors.danger} />
@@ -39,12 +50,25 @@ function ConnectionRow({ c }: { c: CalendarConnectionInfo }) {
         <Text style={styles.text}>{c.account}</Text>
         <Text style={styles.muted}>
           {c.status === 'needs_reauth'
-            ? t('calendar.needsReauth')
+            ? t('calendar.needsReauth', { provider: PROVIDER_NAME[c.provider] })
             : c.lastSyncedAt
-              ? t('calendar.lastSynced', { when: when(c.lastSyncedAt) })
-              : 'Google'}
+              ? `${PROVIDER_NAME[c.provider]} · ${t('calendar.lastSynced', { when: when(c.lastSyncedAt) })}`
+              : PROVIDER_NAME[c.provider]}
         </Text>
+        {several && c.writeTo && <Text style={styles.muted}>{t('calendar.writesHere')}</Text>}
       </View>
+      {several && !c.writeTo && c.status === 'active' && (
+        <Button
+          title={t('calendar.writeHere')}
+          variant="ghost"
+          busy={target.isPending}
+          onPress={() =>
+            target.mutate(c.id, {
+              onError: (e) => toast.show({ message: errorMessage(e), tone: 'error' }),
+            })
+          }
+        />
+      )}
       <Button
         title={t('calendar.disconnect')}
         variant="ghost"
@@ -65,8 +89,9 @@ function Connections() {
   const providers = useCalendarProviders();
   const connections = useCalendarConnections();
   const connect = useConnectCalendar();
-  const offered = providers.data?.some((p) => p.name === 'google' && p.available) ?? false;
-  const has = (connections.data ?? []).length > 0;
+  const offered = (providers.data ?? []).filter((p) => p.available).map((p) => p.name);
+  const list = connections.data ?? [];
+  const connected = new Set(list.map((c) => c.provider));
   return (
     <View style={{ gap: space.sm }}>
       <SectionHeading>{t('calendar.connections')}</SectionHeading>
@@ -75,24 +100,27 @@ function Connections() {
       ) : !connections.data ? (
         <Loading />
       ) : (
-        connections.data.map((c) => <ConnectionRow key={c.id} c={c} />)
+        list.map((c) => <ConnectionRow key={c.id} c={c} several={list.length > 1} />)
       )}
-      {!offered ? (
+      {!offered.length ? (
         <Text style={styles.muted}>{t('calendar.notOffered')}</Text>
       ) : (
-        <View style={styles.row}>
-          <Button
-            title={t('calendar.connectGoogle')}
-            icon="link"
-            variant={has ? 'secondary' : 'primary'}
-            busy={connect.isPending}
-            onPress={() =>
-              connect.mutate(undefined, {
-                onSuccess: ({ url }) => void Linking.openURL(url),
-                onError: (e) => toast.show({ message: errorMessage(e), tone: 'error' }),
-              })
-            }
-          />
+        <View style={[styles.row, { gap: space.sm, flexWrap: 'wrap' }]}>
+          {offered.map((name) => (
+            <Button
+              key={name}
+              title={t(CONNECT_LABEL[name])}
+              icon="link"
+              variant={connected.has(name) || list.length ? 'secondary' : 'primary'}
+              busy={connect.isPending && connect.variables === name}
+              onPress={() =>
+                connect.mutate(name, {
+                  onSuccess: ({ url }) => void Linking.openURL(url),
+                  onError: (e) => toast.show({ message: errorMessage(e), tone: 'error' }),
+                })
+              }
+            />
+          ))}
         </View>
       )}
     </View>
@@ -173,7 +201,7 @@ type Param = string | string[] | undefined;
 const first = (v: Param) => (Array.isArray(v) ? v[0] : v) ?? '';
 
 /**
- * Back from Google (`?code=&state=`, or `?error=`): the sign-in is finished here, once, under
+ * Back from the provider (`?code=&state=&provider=`, or `?error=`): the sign-in is finished here, once, under
  * this app's session (the server refuses it to anyone but the person who started it), and the
  * address is cleared after.
  */
@@ -181,8 +209,15 @@ function useFinishSignIn(): boolean {
   const { t } = useT();
   const toast = useToast();
   const complete = useCompleteCalendar();
-  const params = useLocalSearchParams<{ code?: string; state?: string; error?: string }>();
+  const params = useLocalSearchParams<{
+    code?: string;
+    state?: string;
+    error?: string;
+    provider?: string;
+  }>();
   const code = first(params.code as Param);
+  const provider: CalendarProvider =
+    first(params.provider as Param) === 'microsoft' ? 'microsoft' : 'google';
   const state = first(params.state as Param);
   const error = first(params.error as Param);
   const seen = useRef('');
@@ -194,12 +229,18 @@ function useFinishSignIn(): boolean {
     seen.current = key;
     const clear = () => router.replace('/calendar' as never);
     if (error) {
-      toast.show({ message: t('calendar.signInStopped', { reason: error }), tone: 'error' });
+      toast.show({
+        message:
+          error === 'admin_consent_required'
+            ? t('calendar.adminConsent')
+            : t('calendar.signInStopped', { reason: error }),
+        tone: 'error',
+      });
       clear();
       return;
     }
     mutate(
-      { code, state },
+      { code, state, provider },
       {
         onSuccess: () => toast.show({ message: t('calendar.connected'), tone: 'success' }),
         onError: (e) =>
@@ -210,12 +251,13 @@ function useFinishSignIn(): boolean {
         onSettled: clear,
       },
     );
-  }, [code, state, error, mutate, t, toast]);
+  }, [code, state, error, provider, mutate, t, toast]);
   return complete.isPending;
 }
 
 /**
- * The person's calendars (`/calendar`): connect Google, see when it last synced, disconnect;
+ * The person's calendars (`/calendar`): connect Google or Outlook, pick the one events are
+ * written to, see when each last synced, disconnect;
  * make, copy and revoke private feed links. Google sends the browser back here, through the
  * API, with a code and a state that this screen finishes connecting with.
  */

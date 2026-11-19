@@ -11,7 +11,7 @@ import type { GrantKind, GrantTarget, WriteHook } from '../hooks.js';
 
 /** The link's own conditions: this link, in the row's business, not revoked, not ended. */
 const live = (linkId: string, tenant: unknown): SQL =>
-  sql`${shareLinks.id} = ${linkId} and ${shareLinks.tenantId} = ${tenant} and ${shareLinks.revokedAt} is null and ${shareLinks.expiresAt} > now()`;
+  sql`${shareLinks.id} = ${linkId} and ${shareLinks.tenantId} = ${tenant} and ${shareLinks.revokedAt} is null and (${shareLinks.expiresAt} is null or ${shareLinks.expiresAt} > now())`;
 
 /**
  * `share`: given by `accessFor` to a guest (never written in an access map). A row of a declared

@@ -399,8 +399,8 @@ describe('defineServer refuses modules that collide', () => {
   });
 });
 
-describe('defineServer refuses references it cannot check (V2)', () => {
-  it('to an entity that is not there, from a field no write sets, or on a child', () => {
+describe('defineServer refuses references it cannot check (V2, R1)', () => {
+  it('to an entity that is not there, or from a field no write sets', () => {
     const target = mod('refto');
     const from = defineModule({
       name: 'reffrom',
@@ -415,21 +415,48 @@ describe('defineServer refuses references it cannot check (V2)', () => {
       'reffrom: the reference nowhere is not a field it creates or updates',
       'reffrom: the reference id names nothing, which is not an entity',
     ]);
-    const child = defineModule({
-      name: 'refkid',
+  });
+
+  it('a record with a parent declares references, refused for the same reasons', () => {
+    const target = mod('refto');
+    const kid = (references: Record<string, unknown>) =>
+      defineModule({
+        name: 'refkid',
+        entities: {
+          refkids: entity('refkid', {
+            traits: {
+              parent: { entity: 'refto', field: 'title' },
+              references: references as never,
+            },
+          }),
+        },
+        commands: [],
+      });
+    // A line naming an entity of another module, with or without a label: it boots.
+    expect(() => server(target, kid({ title: 'refto' }))).not.toThrow();
+    expect(() => server(target, kid({ title: { entity: 'refto', label: 'title' } }))).not.toThrow();
+    expect(
+      problems(() => server(target, kid({ nowhere: 'refto', title: { entity: 'nothing' } }))),
+    ).toEqual([
+      'refkid: the reference nowhere is not a field it creates or updates',
+      'refkid: the reference title names nothing, which is not an entity',
+    ]);
+  });
+
+  it('a label its target does not read', () => {
+    const target = mod('refto');
+    const from = defineModule({
+      name: 'reffrom',
       entities: {
-        refkids: entity('refkid', {
-          traits: {
-            parent: { entity: 'refto', field: 'title' },
-            references: { title: 'refto' },
-          },
+        reffroms: entity('reffrom', {
+          traits: { references: { title: { entity: 'refto', label: 'colour' } } },
         }),
       },
       commands: [],
     });
-    expect(problems(() => server(target, child))).toContain(
-      'refkid: a record with a parent cannot declare references (its children are saved in bulk, unchecked)',
-    );
+    expect(problems(() => server(target, from))).toEqual([
+      'reffrom: the reference title reads refto.colour, which refto has not',
+    ]);
   });
 });
 

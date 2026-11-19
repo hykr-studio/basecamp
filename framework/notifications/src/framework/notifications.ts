@@ -138,7 +138,7 @@ export const CommentMentionNotification = defineNotification<CommentMentionRow>(
   dedupe: (m) => `comment.mention:${m.commentId}:${m.target.kind}:${m.target.id}`,
 });
 
-/** A `connection.needs_reauth` or `connection.reauth_soon` event's row (decisions B21). */
+/** A `connection.needs_reauth` or `connection.reauth_soon` event's row (decisions B24). */
 export type ConnectionReauthRow = Row & {
   connector: string;
   label: string;

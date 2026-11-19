@@ -6,18 +6,24 @@ import { randomBytes } from 'node:crypto';
 import {
   type AuthorizeResult,
   CreateShareInput,
+  FrameworkCapabilities,
   maskAddress,
   onBehalfOfKey,
   type Principal,
   type PublicFormDef,
   publicForms,
+  ReissueShareInput,
+  RenewShareInput,
   type ShareableDef,
   ShareCapabilities,
   ShareCodeInput,
   type ShareLinkInfo,
+  type ShareSendChannel,
+  type ShareSendInfo,
   type ShareStatus,
   SharesSettings,
   ShareVerifyInput,
+  sendOrderOf,
   shareables,
 } from '@hykr/contracts';
 import {
@@ -26,6 +32,7 @@ import {
   deny,
   entityDef,
   entityOp,
+  needsApproval,
   type RunResult,
   type ShareLinkRow,
   settingsIn,
@@ -33,14 +40,24 @@ import {
   type Tx,
   type WriteOp,
 } from '@hykr/core';
-import { contacts, customers, shareLinks, shareSessions, tenants, user } from '@hykr/db';
+import {
+  contacts,
+  customers,
+  type DbOrTx,
+  shareLinks,
+  shareSends,
+  shareSessions,
+  tenants,
+  user,
+} from '@hykr/db';
 import { type Lang, pick } from '@hykr/i18n';
-import { can } from '@hykr/policy';
+import { can, subjectOf } from '@hykr/policy';
 import { BadRequestException, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
-import { and, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { OtpRow, OtpService } from '../../channels/otp/otp.service.js';
 import { OtpRequested } from '../acceptance/ops.js';
+import { requireSecretBox } from '../integrations/settings.js';
 
 type Values = Record<string, unknown>;
 const DAY = 24 * 60 * 60 * 1000;
@@ -67,15 +84,46 @@ function op<I, L, V>(o: {
   run: WriteOp<I, L, V>['run'];
   present: (value: V, p: Principal) => unknown;
   args?: Values;
+  /** Default true: the framework's own operation (no level rules). An assistant's draft is not. */
+  system?: boolean;
 }): WriteOp<I, L, V> {
   return { kind: 'command', resourceType: 'shareLink', system: true, ...o };
 }
+
+/* ── A share's events: ids and states only, never a token or an address ────── */
+
+export class ShareEvent {
+  readonly resourceId: string;
+  constructor(
+    readonly eventName: string,
+    readonly row: { id: string; tenantId: string } & Values,
+    readonly resourceType = 'shareSend',
+  ) {
+    this.resourceId = row.id;
+  }
+}
+
+/** What a send's token is sealed for: this business and this send only. */
+export const sendAad = (tenantId: string, sendId: string) => `share-send:${tenantId}:${sendId}`;
+
+export type ShareSendRow = typeof shareSends.$inferSelect;
+
+/** A send as the team sees it: where it went masked, never its token. */
+export const sendInfoOf = (r: ShareSendRow): ShareSendInfo => ({
+  id: r.id,
+  channel: r.channel,
+  sentTo: r.address ? maskAddress(r.address) : null,
+  status: r.status,
+  error: r.error,
+  sentAt: r.sentAt?.toISOString() ?? null,
+  createdAt: r.createdAt.toISOString(),
+});
 
 /* ── Presenting a link ─────────────────────────────────────────────────────── */
 
 export function statusOf(row: ShareLinkRow, now = new Date()): ShareStatus {
   if (row.revokedAt) return 'revoked';
-  if (row.expiresAt <= now) return 'expired';
+  if (row.expiresAt && row.expiresAt <= now) return 'expired';
   if (row.maxUses !== null && row.uses >= row.maxUses) return 'used';
   return 'active';
 }
@@ -88,7 +136,7 @@ export const targetOf = (row: ShareLinkRow): ShareLinkInfo['target'] =>
       : { entity: row.resourceType ?? '', id: row.resourceId ?? '' };
 
 /** A link as the team sees it: never its token; where its code goes, masked. */
-export function infoOf(row: ShareLinkRow): ShareLinkInfo {
+export function infoOf(row: ShareLinkRow, sends?: ShareSendRow[]): ShareLinkInfo {
   return {
     id: row.id,
     kind: row.kind,
@@ -107,12 +155,71 @@ export function infoOf(row: ShareLinkRow): ShareLinkInfo {
     maxUses: row.maxUses,
     views: row.views,
     lastViewedAt: row.lastViewedAt?.toISOString() ?? null,
-    expiresAt: row.expiresAt.toISOString(),
+    expiresAt: row.expiresAt?.toISOString() ?? null,
     revokedAt: row.revokedAt?.toISOString() ?? null,
     createdBy: row.createdBy,
     onBehalfOf: row.onBehalfOf,
     createdAt: row.createdAt.toISOString(),
+    ...(sends ? { sends: sends.map(sendInfoOf) } : {}),
   };
+}
+
+/** The latest sends of these links, newest first, a few each. */
+export async function sendsOf(tx: DbOrTx, linkIds: string[]): Promise<Map<string, ShareSendRow[]>> {
+  const out = new Map<string, ShareSendRow[]>();
+  if (!linkIds.length) return out;
+  const rows = await tx
+    .select()
+    .from(shareSends)
+    .where(inArray(shareSends.linkId, linkIds))
+    .orderBy(desc(shareSends.createdAt));
+  for (const r of rows) {
+    const list = out.get(r.linkId) ?? [];
+    if (list.length < 5) list.push(r);
+    out.set(r.linkId, list);
+  }
+  return out;
+}
+
+/* ── How long a link lasts ─────────────────────────────────────────────────── */
+
+/** What a declaration lets a link to it be: its own cap, and whether it may have no end. */
+type LinkPolicy = Pick<ShareableDef, 'otp' | 'maxDays' | 'lasting' | 'send'>;
+
+/**
+ * The days a link lasts, or null for no end; or the refusal. No end only where the declaration
+ * says `lasting` and the business allows it (`shares.allowLasting`): anything else is too long.
+ */
+export function daysFor(
+  settings: SharesSettings,
+  policy: LinkPolicy,
+  asked: number | null | undefined,
+): { days: number | null } | { refused: AuthorizeResult } {
+  const max = Math.min(settings.maxDays, policy.maxDays ?? Number.POSITIVE_INFINITY);
+  if (asked === null)
+    return policy.lasting && settings.allowLasting
+      ? { days: null }
+      : { refused: deny('too_long', `A link here ends: at most ${max} days`) };
+  const days = asked ?? Math.min(settings.defaultDays, max);
+  if (days > max) return { refused: deny('too_long', `A link lasts at most ${max} days here`) };
+  return { days };
+}
+
+/** When a link of these days ends: never past support access it was made under (S1). */
+function endOf(p: Principal, days: number | null): Date | null {
+  const until =
+    p.onBehalfOf?.kind === 'support' ? Date.parse(p.onBehalfOf.until) : Number.POSITIVE_INFINITY;
+  const end = days === null ? Number.POSITIVE_INFINITY : Date.now() + days * DAY;
+  const at = Math.min(end, until);
+  return Number.isFinite(at) ? new Date(at) : null;
+}
+
+/** The declaration a link was made under: its shareable or its form (a page has none). */
+function policyOfLink(row: ShareLinkRow): LinkPolicy {
+  if (row.kind === 'form') return (row.form ? publicForms.get(row.form) : undefined) ?? {};
+  if (row.kind === 'record')
+    return (row.resourceType ? shareables.get(row.resourceType) : undefined) ?? {};
+  return {};
 }
 
 /* ── share.create ──────────────────────────────────────────────────────────── */
@@ -123,6 +230,8 @@ interface Recipient {
   customerId: string | null;
   whatsapp: string | null;
   email: string | null;
+  /** How the team calls them (an approval card's line). */
+  name: string | null;
 }
 
 interface CreateLoaded {
@@ -130,9 +239,11 @@ interface CreateLoaded {
   resourceType: string | null;
   resourceId: string | null;
   form: string | null;
-  policy: Pick<ShareableDef, 'otp' | 'maxDays'>;
+  policy: LinkPolicy;
   recipient: Recipient | null;
   settings: SharesSettings;
+  /** What the approval card names: the record, its recipient. */
+  names: { target: string; recipient: string | null };
 }
 
 /** The recipient a link names, in this business (404 otherwise). */
@@ -144,7 +255,8 @@ async function recipientOf(
   row?: Values,
 ): Promise<Recipient | null> {
   if (!to) return null;
-  if ('email' in to) return { contactId: null, customerId: null, whatsapp: null, email: to.email };
+  if ('email' in to)
+    return { contactId: null, customerId: null, whatsapp: null, email: to.email, name: to.email };
   // The record's own customer, when it has one: a link for nobody in particular otherwise.
   if ('recordCustomer' in to) {
     const customerId = typeof row?.customerId === 'string' ? row.customerId : undefined;
@@ -156,7 +268,13 @@ async function recipientOf(
       .from(contacts)
       .where(and(eq(contacts.id, to.contactId), eq(contacts.tenantId, tenantId)));
     if (!c) throw notFound('contact');
-    return { contactId: c.id, customerId: c.customerId, whatsapp: c.address, email: null };
+    return {
+      contactId: c.id,
+      customerId: c.customerId,
+      whatsapp: c.address,
+      email: null,
+      name: c.profileName ?? null,
+    };
   }
   const [c] = await tx
     .select({
@@ -164,6 +282,7 @@ async function recipientOf(
       contactId: customers.contactId,
       address: contacts.address,
       email: user.email,
+      name: customers.displayName,
     })
     .from(customers)
     .leftJoin(contacts, eq(contacts.id, customers.contactId))
@@ -175,6 +294,7 @@ async function recipientOf(
     customerId: c.id,
     whatsapp: c.address ?? null,
     email: c.email ?? null,
+    name: c.name,
   };
 }
 
@@ -188,73 +308,194 @@ async function reachedRecord(tx: Tx, p: Principal, entity: string, id: string) {
   return { def, shareable, row };
 }
 
-export function createOp(): WriteOp<
-  z.output<typeof CreateShareInput>,
-  CreateLoaded,
-  {
-    row: ShareLinkRow;
-    token: string;
-  }
-> {
+/** A record's title for an approval card: its title, name or number, else its kind. */
+function titleOf(def: AnyEntityDef, row: Values): string {
+  const v = row.title ?? row.name ?? row.number;
+  return typeof v === 'string' && v.trim() ? `${def.spec.label} "${v.trim()}"` : def.spec.label;
+}
+
+/** The channels a send of this declaration may go by. */
+const channelsOf = (policy: LinkPolicy): ShareSendChannel[] => sendOrderOf(policy.send);
+
+/**
+ * Who may ask for a link to be sent: its maker (making it now, or the link's maker), anyone else
+ * holding `customers.message`; the assistant always waits for its person's approval.
+ */
+function sendDecision(
+  p: Principal,
+  policy: LinkPolicy,
+  send: { channel?: ShareSendChannel },
+  maker: boolean,
+): AuthorizeResult | null {
+  if (send.channel && !channelsOf(policy).includes(send.channel))
+    return deny('channel_unavailable', `A link to this is not sent by ${send.channel}`);
+  if (!maker && !can(p, FrameworkCapabilities.messageCustomers))
+    return deny('cannot_send_to_others', 'Only the business sends links to others');
+  if (p.actor.kind === 'agent')
+    return needsApproval('agent_sends_share', 'Links the assistant sends need approval');
+  return null;
+}
+
+/** A send of a new link: queued, its token sealed for this row only, until it has gone. */
+async function queueSend(
+  tx: Tx,
+  p: Principal,
+  link: ShareLinkRow,
+  token: string,
+  channel: ShareSendChannel | undefined,
+) {
+  const box = requireSecretBox();
+  // A customer first: it brings its contact's number and its account's email, so a send that
+  // cannot go on WhatsApp still goes by email.
+  const recipient: Record<string, string> = link.customerId
+    ? { customerId: link.customerId }
+    : link.contactId
+      ? { contactId: link.contactId }
+      : { email: link.email ?? '' };
+  const subject = subjectOf(p);
+  const [row] = await tx
+    .insert(shareSends)
+    .values({
+      tenantId: link.tenantId,
+      linkId: link.id,
+      recipient,
+      channel: channel ?? null,
+      status: 'queued',
+      requestedBy: subject?.kind === 'user' ? subject.userId : null,
+    })
+    .returning();
+  const [sealed] = await tx
+    .update(shareSends)
+    .set({ tokenSealed: box.seal(token, sendAad(link.tenantId, row.id)) })
+    .where(eq(shareSends.id, row.id))
+    .returning();
+  return {
+    row: sealed,
+    touched: {
+      type: 'shareSend',
+      id: row.id,
+      change: 'created' as const,
+      after: { linkId: link.id, to: recipient, channel: row.channel, status: row.status },
+    },
+    event: new ShareEvent('share.send_requested', {
+      id: row.id,
+      tenantId: row.tenantId,
+      linkId: link.id,
+    }),
+  };
+}
+
+/** What a made link answers: its token only to the person who made it, never to the assistant. */
+export type Made = { row: ShareLinkRow; token: string; send: ShareSendRow | null; note: string };
+
+/**
+ * A link answered to a person: its token (once). To the assistant, and so in its run and any
+ * stored answer: the link without its token, its send, and what will happen.
+ */
+function presentMade({ row, token, send, note }: Made, p: Principal) {
+  if (p.actor.kind === 'user') return { ...infoOf(row, send ? [send] : []), token };
+  return {
+    id: row.id,
+    status: 'queued',
+    send: send ? sendInfoOf(send) : null,
+    message: note,
+  };
+}
+
+/** What the assistant is told once a send is approved and queued. */
+const madeNote = (l: { names: CreateLoaded['names'] }, channel?: ShareSendChannel) =>
+  `A link to ${l.names.target} will be sent to ${l.names.recipient ?? 'its recipient'}${
+    channel ? ` on ${channel === 'whatsapp' ? 'WhatsApp' : 'email'}` : ''
+  }`;
+
+/**
+ * share.create. `via: 'draft'` is the assistant's path (POST /api/shares/drafts): it may be asked
+ * by the assistant, always sends to a named recipient, waits for its person's approval, and is
+ * not the framework's own operation (the application's level rules apply to it). The plain path
+ * stays people only.
+ */
+export function createOp(
+  args: { via?: 'draft' } = {},
+): WriteOp<z.output<typeof CreateShareInput>, CreateLoaded, Made> {
+  const draft = args.via === 'draft';
   return op({
     name: 'share.create',
+    ...(draft ? { args: { via: 'draft' }, system: false } : {}),
     input: CreateShareInput,
     resourceId: (_input, l) => l?.resourceId ?? null,
     load: async (tx, p, input) => {
       const tenantId = tenantOf(p);
       const settings = (await settingsIn(tx, tenantId)).shares;
       const t = input.target;
-      if ('entity' in t) {
-        const { def, shareable, row } = await reachedRecord(tx, p, t.entity, t.id);
+      const loaded = async (): Promise<Omit<CreateLoaded, 'names'> & { target: string }> => {
+        if ('entity' in t) {
+          const { def, shareable, row } = await reachedRecord(tx, p, t.entity, t.id);
+          return {
+            kind: 'record',
+            resourceType: def.name,
+            resourceId: t.id,
+            form: null,
+            policy: shareable,
+            recipient: await recipientOf(tx, tenantId, input.to, row),
+            settings,
+            target: titleOf(def, row),
+          };
+        }
+        if (input.to && 'recordCustomer' in input.to)
+          throw new BadRequestException({
+            error: 'no_customer',
+            message: 'Only a record has a customer to share it with',
+          });
+        const recipient = await recipientOf(tx, tenantId, input.to);
+        if ('page' in t) {
+          const page = entityDef('page');
+          const row = page
+            ? ((await page.repo.find(tx, p, t.page)) as Values | undefined)
+            : undefined;
+          if (!row) throw notFound('page');
+          return {
+            kind: 'page',
+            resourceType: 'page',
+            resourceId: t.page,
+            form: null,
+            policy: {},
+            recipient,
+            settings,
+            target: typeof row.name === 'string' ? `the page "${row.name}"` : 'a page',
+          };
+        }
+        const form = publicForms.get(t.form);
+        if (!form || !entityDef(form.entity)) throw notFound('form');
         return {
-          kind: 'record',
-          resourceType: def.name,
-          resourceId: t.id,
-          form: null,
-          policy: shareable,
-          recipient: await recipientOf(tx, tenantId, input.to, row),
-          settings,
-        };
-      }
-      if (input.to && 'recordCustomer' in input.to)
-        throw new BadRequestException({
-          error: 'no_customer',
-          message: 'Only a record has a customer to share it with',
-        });
-      const recipient = await recipientOf(tx, tenantId, input.to);
-      if ('page' in t) {
-        const page = entityDef('page');
-        if (!page || !(await page.repo.find(tx, p, t.page))) throw notFound('page');
-        return {
-          kind: 'page',
-          resourceType: 'page',
-          resourceId: t.page,
-          form: null,
-          policy: {},
+          kind: 'form',
+          resourceType: null,
+          resourceId: null,
+          form: form.name,
+          policy: form,
           recipient,
           settings,
+          target: `the form "${pick(form.label, 'en')}"`,
         };
-      }
-      const form = publicForms.get(t.form);
-      if (!form || !entityDef(form.entity)) throw notFound('form');
-      return {
-        kind: 'form',
-        resourceType: null,
-        resourceId: null,
-        form: form.name,
-        policy: form,
-        recipient,
-        settings,
       };
+      const { target, ...l } = await loaded();
+      // A send needs someone to send it to (a form posted on a website has nobody).
+      if ((input.send || draft) && !l.recipient)
+        throw new BadRequestException({
+          error: 'no_recipient',
+          message: 'This link has no recipient to send it to',
+        });
+      return { ...l, names: { target, recipient: l.recipient?.name ?? null } };
     },
     authorize(p, l, input) {
-      if (p.actor.kind !== 'user')
+      if (draft ? p.actor.kind !== 'user' && p.actor.kind !== 'agent' : p.actor.kind !== 'user')
         return deny('humans_only', 'Only people can share by link: the assistant cannot');
+      // A link is someone's: an assistant drafts one only for a person with an account.
+      if (subjectOf(p)?.kind !== 'user')
+        return deny('people_only', 'Only a member of the team shares by link');
       if (!can(p, ShareCapabilities.create))
         return deny('shares_create', 'You cannot share by link here');
-      const max = Math.min(l.settings.maxDays, l.policy.maxDays ?? Number.POSITIVE_INFINITY);
-      const days = input.expiresInDays ?? Math.min(l.settings.defaultDays, max);
-      if (days > max) return deny('too_long', `A link lasts at most ${max} days here`);
+      const days = daysFor(l.settings, l.policy, input.expiresInDays);
+      if ('refused' in days) return days.refused;
       if (l.policy.otp === 'required' && !input.otp)
         return deny('code_needed', 'A link to this asks for a code: choose WhatsApp or email');
       // The record's own customer as the recipient: say what is missing on the record, since
@@ -273,23 +514,32 @@ export function createOp(): WriteOp<
         return deny('no_email', missing('an email'));
       if (input.maxUses !== undefined && l.kind !== 'form')
         return deny('uses_for_forms', 'Only a form link counts its answers');
+      const send = input.send ?? (draft ? {} : undefined);
+      if (send) {
+        // Making it now: the person (or their assistant) is its maker.
+        const decided = sendDecision(p, l.policy, send, true);
+        if (decided) return decided;
+        return allow('shares_create_send', 'Shares what they reach, and sends it to its recipient');
+      }
       return allow('shares_create', 'Shares what they reach');
     },
-    summarize: (input, l) =>
-      l.kind === 'form'
+    summarize: (input, l) => {
+      const send = input.send ?? (draft ? {} : undefined);
+      if (send)
+        return `Send a link to ${l.names.target} to ${l.names.recipient ?? 'its recipient'}${
+          send.channel
+            ? ` on ${send.channel === 'whatsapp' ? 'WhatsApp' : 'email'}`
+            : ' on WhatsApp or by email'
+        }`;
+      return l.kind === 'form'
         ? `Share the form ${l.form}`
         : l.kind === 'page'
           ? 'Share a page'
-          : `Share ${l.resourceType} ${'id' in input.target ? input.target.id : ''}`,
+          : `Share ${l.resourceType} ${'id' in input.target ? input.target.id : ''}`;
+    },
     async run({ tx, principal: p, input, loaded: l }) {
       const token = randomBytes(32).toString('base64url');
-      const max = Math.min(l.settings.maxDays, l.policy.maxDays ?? Number.POSITIVE_INFINITY);
-      const days = input.expiresInDays ?? Math.min(l.settings.defaultDays, max);
-      // Made under support access: it never outlives that access (S1).
-      const until =
-        p.onBehalfOf?.kind === 'support'
-          ? Date.parse(p.onBehalfOf.until)
-          : Number.POSITIVE_INFINITY;
+      const days = daysFor(l.settings, l.policy, input.expiresInDays);
       const otp = input.otp ?? null;
       const [row] = await tx
         .insert(shareLinks)
@@ -301,7 +551,7 @@ export function createOp(): WriteOp<
           resourceId: l.resourceId,
           form: l.form,
           label: input.label ?? null,
-          createdBy: p.actor.id,
+          createdBy: makerOf(p),
           contactId: l.recipient?.contactId ?? null,
           customerId: l.recipient?.customerId ?? null,
           email: l.recipient?.email ?? null,
@@ -313,18 +563,32 @@ export function createOp(): WriteOp<
                 ? (l.recipient?.email ?? null)
                 : null,
           maxUses: input.maxUses ?? null,
-          expiresAt: new Date(Math.min(Date.now() + days * DAY, until)),
+          expiresAt: endOf(p, 'days' in days ? days.days : null),
           onBehalfOf: onBehalfOfKey(p.onBehalfOf),
         })
         .returning();
-      // The token is in the answer only: the audit and the database keep its hash.
+      const send = input.send ?? (draft ? {} : undefined);
+      const queued = send ? await queueSend(tx, p, row, token, send.channel) : null;
+      // The token is in the answer only: the audit, the events and the database keep its hash
+      // (and, for a send, a sealed copy on the send until it has gone).
       return {
-        value: { row, token },
-        touched: [{ type: 'shareLink', id: row.id, change: 'created', after: infoOf(row) }],
+        value: { row, token, send: queued?.row ?? null, note: madeNote(l, send?.channel) },
+        touched: [
+          { type: 'shareLink', id: row.id, change: 'created', after: infoOf(row) },
+          ...(queued ? [queued.touched] : []),
+        ],
+        events: queued ? [queued.event] : [],
       };
     },
-    present: ({ row, token }) => ({ ...infoOf(row), token }),
+    present: presentMade,
   });
+}
+
+/** The person a link is made by: the person themself, or the one an assistant acts for. */
+function makerOf(p: Principal): string {
+  const subject = subjectOf(p);
+  if (subject?.kind === 'user') return subject.userId;
+  return p.actor.id;
 }
 
 /* ── share.revoke ──────────────────────────────────────────────────────────── */
@@ -373,6 +637,223 @@ export function revokeOp(id: string): WriteOp<Record<string, never>, ShareLinkRo
     },
     present: (row) => infoOf(row),
   });
+}
+
+/* ── share.renew / share.reissue ───────────────────────────────────────────── */
+
+/** A link its maker or a manager of links may change; anyone else gets 404. Locked. */
+async function ownLink(tx: Tx, p: Principal, id: string): Promise<ShareLinkRow> {
+  const [row] = await tx
+    .select()
+    .from(shareLinks)
+    .where(and(eq(shareLinks.id, id), eq(shareLinks.tenantId, tenantOf(p))))
+    .for('update');
+  if (!row) throw notFound('link');
+  const me = subjectOf(p);
+  const mine = me?.kind === 'user' && row.createdBy === me.userId;
+  if (!mine && !can(p, ShareCapabilities.manage)) throw notFound('link');
+  return row;
+}
+
+/** A revoked link stays revoked: renew and reissue refuse it. */
+const revoked = () => deny('link_revoked', 'This link was withdrawn: make a new one');
+
+/**
+ * share.renew: a new end date (or none), the same token, so the address its recipient holds
+ * keeps working. An ended link comes back; a revoked one does not.
+ */
+export function renewOp(
+  id: string,
+): WriteOp<RenewShareInput, { row: ShareLinkRow; settings: SharesSettings }, ShareLinkRow> {
+  return op({
+    name: 'share.renew',
+    args: { id },
+    input: RenewShareInput,
+    resourceId: () => id,
+    load: async (tx, p) => {
+      const row = await ownLink(tx, p, id);
+      return { row, settings: (await settingsIn(tx, row.tenantId)).shares };
+    },
+    authorize(p, { row, settings }, input) {
+      if (p.actor.kind !== 'user') return deny('humans_only', 'Only people can renew a link');
+      if (row.revokedAt) return revoked();
+      const days = daysFor(settings, policyOfLink(row), input.expiresInDays);
+      if ('refused' in days) return days.refused;
+      return allow('shares_renew', 'Renews a link they made or manage');
+    },
+    summarize: (input) =>
+      input.expiresInDays === null
+        ? 'Renew a share link with no end date'
+        : `Renew a share link for ${input.expiresInDays} days`,
+    async run({ tx, principal: p, input, loaded: { row, settings } }) {
+      const days = daysFor(settings, policyOfLink(row), input.expiresInDays);
+      // Under support access a link still never outlives it (S1).
+      const [after] = await tx
+        .update(shareLinks)
+        .set({ expiresAt: endOf(p, 'days' in days ? days.days : null) })
+        .where(eq(shareLinks.id, row.id))
+        .returning();
+      return {
+        value: after,
+        touched: [
+          {
+            type: 'shareLink',
+            id: row.id,
+            change: 'updated',
+            before: infoOf(row),
+            after: infoOf(after),
+          },
+        ],
+      };
+    },
+    present: (row) => infoOf(row),
+  });
+}
+
+interface ReissueLoaded {
+  row: ShareLinkRow;
+  settings: SharesSettings;
+  names: CreateLoaded['names'];
+}
+
+/**
+ * share.reissue: the link revoked and a new one made with the same settings (target, recipient,
+ * code, uses, label; the same length, or none for a lasting link), a new token, sent to its
+ * recipient when asked. How a lost link, or one made before it could be sent, is sent: its token
+ * is kept nowhere, so the new one is. `via: 'draft'` is the assistant's (it always sends, and
+ * waits for approval).
+ */
+export function reissueOp(
+  id: string,
+  args: { via?: 'draft' } = {},
+): WriteOp<ReissueShareInput, ReissueLoaded, Made> {
+  const draft = args.via === 'draft';
+  return op({
+    name: 'share.reissue',
+    args: draft ? { id, via: 'draft' } : { id },
+    ...(draft ? { system: false } : {}),
+    input: ReissueShareInput,
+    resourceId: () => id,
+    load: async (tx, p, input) => {
+      const row = await ownLink(tx, p, id);
+      const settings = (await settingsIn(tx, row.tenantId)).shares;
+      const recipient =
+        row.contactId || row.customerId || row.email
+          ? await recipientOf(
+              tx,
+              row.tenantId,
+              row.contactId
+                ? { contactId: row.contactId }
+                : row.customerId
+                  ? { customerId: row.customerId }
+                  : { email: row.email ?? '' },
+            ).catch(() => null)
+          : null;
+      if ((input.send || draft) && !recipient)
+        throw new BadRequestException({
+          error: 'no_recipient',
+          message: 'This link has no recipient to send it to',
+        });
+      const def = row.resourceType ? entityDef(row.resourceType) : undefined;
+      const target =
+        row.kind === 'form'
+          ? `the form "${row.form ? pick(publicForms.get(row.form)?.label ?? { en: row.form }, 'en') : ''}"`
+          : row.kind === 'page'
+            ? 'a page'
+            : (def?.spec.label ?? 'a record');
+      return { row, settings, names: { target, recipient: recipient?.name ?? null } };
+    },
+    authorize(p, { row, settings }, input) {
+      if (draft ? p.actor.kind !== 'user' && p.actor.kind !== 'agent' : p.actor.kind !== 'user')
+        return deny('humans_only', 'Only people can reissue a link: the assistant cannot');
+      if (subjectOf(p)?.kind !== 'user')
+        return deny('people_only', 'Only a member of the team shares by link');
+      if (!can(p, ShareCapabilities.create))
+        return deny('shares_create', 'You cannot share by link here');
+      if (row.revokedAt) return revoked();
+      const send = input.send ?? (draft ? {} : undefined);
+      if (send) {
+        const me = subjectOf(p);
+        const maker = me?.kind === 'user' && me.userId === row.createdBy;
+        const decided = sendDecision(p, policyOfLink(row), send, maker);
+        if (decided) return decided;
+      }
+      // The same length, under today's rules: a lasting link only while the business allows it.
+      const days = daysFor(settings, policyOfLink(row), lengthOf(row));
+      if ('refused' in days) return days.refused;
+      return allow('shares_reissue', 'Reissues a link they made or manage');
+    },
+    summarize: (input, { names }) => {
+      const send = input.send ?? (draft ? {} : undefined);
+      return send
+        ? `Send a new link to ${names.target} to ${names.recipient ?? 'its recipient'}${
+            send.channel ? ` on ${send.channel === 'whatsapp' ? 'WhatsApp' : 'email'}` : ''
+          } (the old link stops working)`
+        : 'Reissue a share link (the old link stops working)';
+    },
+    async run({ tx, principal: p, input, loaded: { row, settings, names } }) {
+      const now = new Date();
+      const [old] = await tx
+        .update(shareLinks)
+        .set({ revokedAt: now, revokedBy: makerOf(p) })
+        .where(eq(shareLinks.id, row.id))
+        .returning();
+      const token = randomBytes(32).toString('base64url');
+      const days = daysFor(settings, policyOfLink(row), lengthOf(row));
+      const [made] = await tx
+        .insert(shareLinks)
+        .values({
+          tenantId: row.tenantId,
+          tokenHash: shareHash(token),
+          kind: row.kind,
+          resourceType: row.resourceType,
+          resourceId: row.resourceId,
+          form: row.form,
+          label: row.label,
+          createdBy: row.createdBy,
+          contactId: row.contactId,
+          customerId: row.customerId,
+          email: row.email,
+          otpChannel: row.otpChannel,
+          otpAddress: row.otpAddress,
+          maxUses: row.maxUses,
+          uses: row.uses,
+          expiresAt: endOf(p, 'days' in days ? days.days : null),
+          onBehalfOf: onBehalfOfKey(p.onBehalfOf),
+        })
+        .returning();
+      const send = input.send ?? (draft ? {} : undefined);
+      const queued = send ? await queueSend(tx, p, made, token, send.channel) : null;
+      return {
+        value: {
+          row: made,
+          token,
+          send: queued?.row ?? null,
+          note: madeNote({ names }, send?.channel),
+        },
+        touched: [
+          {
+            type: 'shareLink',
+            id: row.id,
+            change: 'updated',
+            before: infoOf(row),
+            after: infoOf(old),
+          },
+          { type: 'shareLink', id: made.id, change: 'created', after: infoOf(made) },
+          ...(queued ? [queued.touched] : []),
+        ],
+        events: queued ? [queued.event] : [],
+      };
+    },
+    present: presentMade,
+  });
+}
+
+/** How long a link was made to last, in days (null: no end), for its reissue. */
+function lengthOf(row: ShareLinkRow): number | null {
+  if (!row.expiresAt) return null;
+  const days = Math.round((row.expiresAt.getTime() - row.createdAt.getTime()) / DAY);
+  return Math.min(Math.max(days, 1), 3650);
 }
 
 /* ── share.code / share.verify: a gated link's one-time code ────────────────── */
@@ -489,7 +970,10 @@ export function verifyOp(
       if (!(await otp.consume(tx, loaded.ch.id))) throw noCode();
       const session = randomBytes(32).toString('base64url');
       const until = new Date(
-        Math.min(link.expiresAt.getTime(), Date.now() + loaded.hours * 60 * 60 * 1000),
+        Math.min(
+          link.expiresAt?.getTime() ?? Number.POSITIVE_INFINITY,
+          Date.now() + loaded.hours * 60 * 60 * 1000,
+        ),
       );
       const [row] = await tx
         .insert(shareSessions)
@@ -538,7 +1022,7 @@ async function spendUse(tx: Tx, link: ShareLinkRow): Promise<void> {
       and(
         eq(shareLinks.id, link.id),
         isNull(shareLinks.revokedAt),
-        gt(shareLinks.expiresAt, new Date()),
+        or(isNull(shareLinks.expiresAt), gt(shareLinks.expiresAt, new Date())),
         or(isNull(shareLinks.maxUses), lt(shareLinks.uses, shareLinks.maxUses)),
       ),
     )

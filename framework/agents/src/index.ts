@@ -20,6 +20,7 @@ export {
   type TurnVoice,
   voiceOf,
 } from './durable.js';
+export { FAKE_VISION_MARKER, fakeVisionModel, visionReply } from './fake/vision.js';
 export * from './models/index.js';
 export { type AgentModuleOf, mergeAgentModules, scriptConflicts, suitesFor } from './modules.js';
 export { EndWhenPaused, isPausedRefusal, pausedIn, pausedText, sayingModel } from './paused.js';
@@ -39,3 +40,12 @@ export {
   usageContext,
 } from './usage.js';
 export { AGENT_ID, agentVersion, buildInstructions, isFakeModel } from './version.js';
+export {
+  READING_MAX,
+  readAsText,
+  readAsValue,
+  VISION_SYSTEM,
+  type VisionPart,
+  VisionUnreadable,
+  type VisionUsage,
+} from './vision.js';

@@ -1,4 +1,4 @@
-// Connecting a business by signing in (decisions B21): start (the consent screen's URL), the
+// Connecting a business by signing in (decisions B24): start (the consent screen's URL), the
 // provider's callback (anonymous: it only sends the browser on, as the calendar's does), and
 // complete (the code exchanged under the session of the person who started, in that business),
 // then picking the accounts the connection receives events for. As the calendar's sign-in

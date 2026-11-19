@@ -1,8 +1,14 @@
 // A spec's references (`traits.references`, V2): each id a write sets or changes names a record
 // the writer can read in their business, or the write is refused, the same way whether the id is
 // unknown, another business's, or one the writer cannot read. docs/decisions/V2.md.
-import { type EntitySpec, type Principal, referencesOf } from '@hykr/contracts';
-import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
+import {
+  type EntitySpec,
+  type Principal,
+  type ReferenceLabels,
+  referenceLabelsOf,
+  referencesOf,
+} from '@hykr/contracts';
+import { BadRequestException, ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import type { Conn } from '../tokens.js';
 import { entityDef } from './registry.js';
 
@@ -37,6 +43,121 @@ export async function checkReferences(
         field,
       });
   }
+}
+
+/**
+ * Patches whose references a tree write already checked in bulk (`children.replace`), so
+ * `repo.update` does not load them again one by one. Internal to the core.
+ */
+export const referencesChecked = new WeakSet<object>();
+
+/** The most distinct ids of one target entity one bulk write may name (R1). */
+export const MAX_REFERENCES = 1000;
+
+/** One record of a bulk write, as its references are checked: its values, where it is. */
+export interface ReferencingItem {
+  values: Values;
+  /** Where the record is in the write's input, e.g. `['items', 12]`; the field is appended. */
+  path: readonly (string | number)[];
+  /** The record's own key in the input, when it has one (a line's `ref`). */
+  ref?: string;
+}
+
+/**
+ * The bulk form of `checkReferences`, for records a write inserts together (a tree's new lines):
+ * every reference each item sets, loaded with one query per target entity
+ * (`target.repo.findMany`, as the writer), whatever the number of items. The first item whose id
+ * is not found refuses the whole write, before anything is stored: 404 `{ error: 'not_found',
+ * message: 'No such <target>', field, path, ref? }`. More than `MAX_REFERENCES` distinct ids of
+ * one target: 400 `too_many_references`. Null and undefined pass.
+ */
+export async function checkReferencesMany(
+  conn: Conn,
+  p: Principal,
+  spec: EntitySpec,
+  items: readonly ReferencingItem[],
+): Promise<void> {
+  const refs = referencesOf(spec);
+  if (!refs.length || !items.length) return;
+  const wanted = new Map<string, { ids: Set<string>; field: string }>();
+  for (const [field, entity] of refs)
+    for (const item of items) {
+      const id = item.values[field];
+      if (id === undefined || id === null) continue;
+      const w = wanted.get(entity) ?? { ids: new Set<string>(), field };
+      wanted.set(entity, w);
+      if (typeof id === 'string') w.ids.add(id);
+    }
+  const found = new Map<string, Set<string>>();
+  for (const [entity, { ids, field }] of wanted) {
+    const target = entityDef(entity);
+    if (!target) throw new Error(`${spec.name}.${field} names ${entity}, which is not served`);
+    if (ids.size > MAX_REFERENCES)
+      throw new BadRequestException({
+        error: 'too_many_references',
+        message: `At most ${MAX_REFERENCES} different ${target.spec.plural} in one write`,
+        field,
+      });
+    const rows = (await target.repo.findMany(conn, p, [...ids])) as Values[];
+    found.set(entity, new Set(rows.map((r) => String(r.id))));
+  }
+  for (const item of items)
+    for (const [field, entity] of refs) {
+      const id = item.values[field];
+      if (id === undefined || id === null) continue;
+      if (typeof id === 'string' && found.get(entity)?.has(id)) continue;
+      throw new NotFoundException({
+        error: 'not_found',
+        message: `No such ${entityDef(entity)?.spec.label ?? entity}`,
+        field,
+        path: [...item.path, field],
+        ...(item.ref !== undefined ? { ref: item.ref } : {}),
+      });
+    }
+}
+
+/**
+ * The labels of a page of records' references (R1), for a spec that declares any: one query per
+ * target over the page's ids, as the reader (`findMany`), each label read from the target as the
+ * reader may see it (`toRead`, so field policy applies). A target the reader cannot see, or a
+ * label field hidden from them, reads `label: null`. Returns the reads with `references` added.
+ */
+export async function readReferences<R extends Values>(
+  conn: Conn,
+  p: Principal,
+  spec: EntitySpec,
+  reads: R[],
+): Promise<(R & { references?: ReferenceLabels })[]> {
+  const labelled = referenceLabelsOf(spec);
+  if (!labelled.length || !reads.length) return reads;
+  const byTarget = new Map<string, Set<string>>();
+  for (const [field, entity] of labelled)
+    for (const r of reads)
+      if (typeof r[field] === 'string')
+        byTarget.set(entity, (byTarget.get(entity) ?? new Set()).add(r[field] as string));
+  const seen = new Map<string, Map<string, Values>>();
+  for (const [entity, ids] of byTarget) {
+    const target = entityDef(entity);
+    if (!target) throw new Error(`${spec.name} reads ${entity}, which is not served`);
+    const rows = await target.repo.findMany(conn, p, [...ids]);
+    seen.set(
+      entity,
+      new Map(rows.map((row) => [String((row as Values).id), target.toRead(row, p) as Values])),
+    );
+  }
+  return reads.map((r) => {
+    const references: ReferenceLabels = {};
+    for (const [field, entity, label] of labelled) {
+      const id = r[field];
+      if (typeof id !== 'string') continue;
+      const value = seen.get(entity)?.get(id)?.[label];
+      references[field] = {
+        id,
+        label: value === undefined || value === null ? null : String(value),
+      };
+    }
+    return { ...r, references };
+  });
 }
 
 /** The code of a Postgres error, also through drizzle's wrapper. */

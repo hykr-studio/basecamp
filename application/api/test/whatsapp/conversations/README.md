@@ -15,6 +15,7 @@ running (`docker compose up -d whaloc-test`).
 |---|---|
 | `say: {as, text}` | A text message from them |
 | `voice: {as, lang, text}` | A voice note whose words are `text` (fake speech-to-text) |
+| `photo: {as, sees, caption?}` | A photo (PNG) in which the scripted vision model sees `sees` |
 | `tap: {as, button, sentTo?}` | Tap a button by its title on the latest message that has it (sent to `sentTo`, default themselves: a forwarded button when different) |
 | `repeat: {}` | Send the last message again (a double tap) |
 | `redeliver: {as}` | Meta delivers the webhook of their last message again |

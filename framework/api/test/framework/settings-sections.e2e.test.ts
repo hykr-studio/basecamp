@@ -116,7 +116,7 @@ describe('reading the sections', () => {
     expect(res.body.find((s: { key: string }) => s.key === 'shares')).toEqual({
       key: 'shares',
       capability: 'settings.manage',
-      value: { defaultDays: 7, maxDays: 90, sessionHours: 12 },
+      value: { defaultDays: 7, maxDays: 90, sessionHours: 12, allowLasting: false },
       problems: [],
     });
     // No zone of its own (X2): the deployment's applies, so `timeZone` is not set here.
@@ -209,7 +209,10 @@ describe('who may change them', () => {
     expect(own.body).toMatchObject({ status: 'done', value: { key: 'files' } });
     expect((await stored(otherTenant)).files).toEqual({ keepInboundMedia: false });
     expect(await stored()).toEqual(before);
-    expect((await read(owner, 'files')).body.value).toEqual({ keepInboundMedia: true });
+    expect((await read(owner, 'files')).body.value).toEqual({
+      keepInboundMedia: true,
+      readInbound: true,
+    });
   });
 
   it("a module's own section is changed by its own capability, and checked by its own check", async () => {
@@ -297,6 +300,7 @@ describe('a change through the write path', () => {
       defaultDays: 14,
       maxDays: 30,
       sessionHours: 12,
+      allowLasting: false,
     });
     const general = (await config().get(tenantId)).settings;
     await patch(owner, 'general', { quietHours: { from: '22:30' }, replyTime: '1 day' });

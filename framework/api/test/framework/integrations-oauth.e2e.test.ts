@@ -1,4 +1,4 @@
-// Connectors that sign in (B21): a business connects a service by signing in (start, the
+// Connectors that sign in (B24): a business connects a service by signing in (start, the
 // provider's consent, the anonymous callback, complete under the person's session), its tokens
 // sealed, refreshed before they end, revoked when it is removed, and marked for signing in again
 // (its managers told) when the provider stops taking them. A provider's one webhook URL routes

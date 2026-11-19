@@ -228,7 +228,7 @@ const toInbound = (req: Request & { rawBody?: Buffer }): InboundRequest => ({
 
 /**
  * What outside systems send: `/webhooks/<connector>/<connection>`, or `/webhooks/<connector>` for
- * a provider that posts everything to one URL (routed by account, decisions B21). Anonymous (the
+ * a provider that posts everything to one URL (routed by account, decisions B24). Anonymous (the
  * connector verifies the request) and not throttled, like the WhatsApp webhook: it stores and
  * queues, and the work runs in the worker.
  */
@@ -274,8 +274,15 @@ export class WebhooksController {
     @Param('connector') connector: string,
     @Param('connection') connection: string,
     @Req() req: Request & { rawBody?: Buffer },
+    @Res({ passthrough: true }) res: Response,
   ) {
-    await this.inbound.receive(connector, connection, toInbound(req));
+    const out = await this.inbound.receive(connector, connection, toInbound(req));
+    if ('handshake' in out) {
+      // The sender's own token, echoed as plain text (never as HTML).
+      res.setHeader('content-type', 'text/plain; charset=utf-8');
+      res.setHeader('x-content-type-options', 'nosniff');
+      return out.handshake;
+    }
     return 'ok';
   }
 

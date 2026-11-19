@@ -51,6 +51,22 @@ export const authRateLimit = () => ({
   },
 });
 
+/**
+ * One more hit on a counter that resets an hour after its first (a lasting form link's answers,
+ * decisions B23): whether this hit is within `limit`. Under the deployment's queue prefix, so a
+ * test run's counters are its own. Not switched off by THROTTLE=off: it is the form's own limit.
+ */
+export async function hitHourly(key: string, limit: number): Promise<boolean> {
+  const redis = throttleStorage().redis;
+  const at = `${config.queuePrefix}:hourly:${key}`;
+  const [[, hits], [, ttl]] = (await redis.multi().incr(at).pttl(at).exec()) as [
+    [unknown, number],
+    [unknown, number],
+  ];
+  if (ttl < 0) await redis.pexpire(at, 60 * 60 * 1000);
+  return hits <= limit;
+}
+
 const sha256 = (value: string) => createHash('sha256').update(value).digest();
 const keys = () => [config.agentApiKey, config.voiceAgentKey].filter(Boolean).map(sha256);
 

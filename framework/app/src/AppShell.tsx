@@ -31,6 +31,7 @@ import { Thread } from './chat/Thread';
 import { Button } from './components/Button';
 import { WhatsAppLink } from './components/WhatsAppLink';
 import { type AppConfig, configure } from './config';
+import { PushToggle } from './features/push/PushControls';
 import { ApprovalCard } from './framework/ApprovalCard';
 import { ApprovalsAnnouncer } from './framework/ApprovalsAnnouncer';
 import { ASSISTANT_ICON } from './framework/AssistantMark';
@@ -377,6 +378,7 @@ function ShellLayout({ user, onSignOut }: { user: SessionUser; onSignOut: () => 
               {user.email}
             </Text>
             <WhatsAppLink />
+            <PushToggle />
           </View>
           <Button title="Sign out" icon="log-out" variant="subtle" onPress={onSignOut} />
         </View>

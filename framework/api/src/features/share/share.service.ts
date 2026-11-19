@@ -46,7 +46,7 @@ import { ZodError } from 'zod';
 import { runtime } from '../../runtime.js';
 import { acceptanceOf } from '../acceptance/define.js';
 import { DocumentsService } from '../documents/documents.service.js';
-import { infoOf } from './ops.js';
+import { infoOf, sendsOf } from './ops.js';
 
 type Values = Record<string, unknown>;
 
@@ -90,8 +90,12 @@ export class ShareService {
   }
 
   /** What may be shared here: the shareable entities and the public forms. */
-  kinds(): ShareKinds {
+  async kinds(p?: Principal): Promise<ShareKinds> {
+    const allowLasting = p?.tenantId
+      ? (await this.tenants.get(p.tenantId)).settings.shares.allowLasting
+      : false;
     return {
+      allowLasting,
       entities: shareables.all().map((s) => ({
         entity: s.entity,
         children: [...(s.children ?? [])],
@@ -99,12 +103,14 @@ export class ShareService {
         acceptances: !!s.acceptances,
         pages: s.pages !== false,
         otp: s.otp ?? 'optional',
+        lasting: !!s.lasting,
       })),
       forms: publicForms.all().map((f) => ({
         name: f.name,
         entity: f.entity,
         label: { ...f.label },
         otp: f.otp ?? 'optional',
+        lasting: !!f.lasting,
       })),
     };
   }
@@ -139,7 +145,11 @@ export class ShareService {
       .where(and(eq(links.tenantId, p.tenantId), where))
       .orderBy(desc(links.createdAt))
       .limit(200);
-    return rows.map(infoOf);
+    const sends = await sendsOf(
+      this.db,
+      rows.map((r) => r.id),
+    );
+    return rows.map((r) => infoOf(r, sends.get(r.id) ?? []));
   }
 
   /* ── What a guest sees ───────────────────────────────────────────────────── */
@@ -155,7 +165,7 @@ export class ShareService {
         id: link.id,
         kind: link.kind,
         label: link.label,
-        expiresAt: link.expiresAt.toISOString(),
+        expiresAt: link.expiresAt?.toISOString() ?? null,
       },
       business: {
         name: settings.branding.name ?? name,
@@ -194,7 +204,7 @@ export class ShareService {
       const rows = await child.children.list(this.db, p, id);
       children.push({
         entity: child.name,
-        items: rows.slice(0, CHILD_ROWS).map((r) => child.toRead(r, p) as Values),
+        items: await child.readMany(this.db, rows.slice(0, CHILD_ROWS), p),
         truncated: rows.length > CHILD_ROWS,
       });
     }

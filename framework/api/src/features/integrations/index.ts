@@ -1,6 +1,6 @@
 // The integration bus (decisions B10): signed outbound webhooks with retries and a delivery log,
 // verified inbound webhooks handled as the business's system principal, and connections whose
-// credentials are sealed with SECRETS_KEY, and connections made by signing in (decisions B21):
+// credentials are sealed with SECRETS_KEY, and connections made by signing in (decisions B24):
 // OAuth tokens sealed, refreshed and revoked here, and a provider's one webhook URL routed by the
 // accounts a sign-in found. Transport (signing, sealing, the egress guard, the Connector
 // interface, OAuth calls) is @hykr/connectors'.

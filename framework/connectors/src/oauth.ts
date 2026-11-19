@@ -1,4 +1,4 @@
-// OAuth 2.0 for a connector (decisions B21): what a connector declares to be connected by signing
+// OAuth 2.0 for a connector (decisions B24): what a connector declares to be connected by signing
 // in, and the provider calls the server makes for it (the consent screen's URL, the code exchange,
 // a refresh, a revoke). Every call goes through an `OAuthHttp` the server hands in, built on the
 // egress guard: nothing here reaches the network on its own, reads the environment or stores.

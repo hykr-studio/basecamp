@@ -1,4 +1,4 @@
-// The briefs module and Facebook and Instagram lead ads (B21): the owner connects the business by
+// The briefs module and Facebook and Instagram lead ads (B24): the owner connects the business by
 // signing in with Facebook (the fake provider stands in for Meta), picks the studio's page, and
 // each lead sent from one of its lead forms arrives at the app's one webhook URL, is fetched once
 // with the page's token and becomes a brief, `source: 'lead_ad'`, as the business's system.

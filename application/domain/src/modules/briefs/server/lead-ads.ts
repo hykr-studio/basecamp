@@ -4,7 +4,7 @@ import { entityOp, tenantMoney } from '@hykr/core';
 import { Brief } from './brief.entity.js';
 
 /**
- * Facebook and Instagram lead ads (decisions B21): the business signs in with Facebook, picks
+ * Facebook and Instagram lead ads (decisions B24): the business signs in with Facebook, picks
  * its pages, and each lead someone sends from one of their lead forms reaches this handler with
  * its answers (the framework fetched them). Here a lead becomes a new brief, `source: 'lead_ad'`,
  * owned by the business's default owner, for the team to read like one from the brief form.

@@ -12,4 +12,6 @@ export const pushSettings = {
   accessToken: () => env.EXPO_ACCESS_TOKEN || undefined,
   /** How old a send is before its receipt is asked for. Default a minute. */
   receiptDelayMs: () => positive(env.PUSH_RECEIPT_DELAY_MS, 60_000),
+  /** How recent a device's use must be for it to count as where the person is. Default 10 minutes. */
+  activeMs: () => positive(env.PUSH_ACTIVE_MS, 10 * 60_000),
 };

@@ -1,4 +1,4 @@
-// The business's integrations in the app (B21): its connections and connecting one by signing
+// The business's integrations in the app (B24): its connections and connecting one by signing
 // in (`/integrations`, where providers send the browser back), with the hooks under it.
 import type { AppPlugin, NavItem } from '../../framework/app-domain';
 import { useCanManageIntegrations } from './hooks';

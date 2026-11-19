@@ -42,8 +42,12 @@ export type MediaRef = { mediaId: string } | { link: string };
 /** A template's header, filled when sent: the document it carries. */
 export type TemplateHeader = { kind: 'document'; filename: string } & MediaRef;
 
-/** A message to send, normalized. Buttons: at most 3; list rows: at most 10. */
-export type OutboundMessage =
+/**
+ * A message to send, normalized. Buttons: at most 3; list rows: at most 10. `sensitive` lists
+ * text in it that must not stay in the message log once it has gone (a share link's token): the
+ * log keeps `[link]` in its place after the send. Adapters never send it.
+ */
+export type OutboundMessage = (
   | { kind: 'text'; to: string; text: string }
   /** A file as a document message (inside the 24-hour window only, like any free-form message). */
   | ({ kind: 'document'; to: string; filename: string; caption?: string } & MediaRef)
@@ -66,7 +70,18 @@ export type OutboundMessage =
       buttons?: ({ payload: string } | { urlParam: string })[];
       /** The template's header, when it has one (a DOCUMENT header carries this file). */
       header?: TemplateHeader;
-    };
+    }
+) & { sensitive?: readonly string[] };
+
+/** A sent message as the log keeps it: each sensitive text replaced by `[link]`. */
+export function scrubSensitive<T>(body: T): T {
+  const sensitive = (body as { sensitive?: readonly string[] } | null)?.sensitive;
+  if (!sensitive?.length) return body;
+  const { sensitive: _drop, ...rest } = body as Record<string, unknown>;
+  let text = JSON.stringify(rest);
+  for (const s of sensitive) if (s) text = text.split(s).join('[link]');
+  return JSON.parse(text) as T;
+}
 
 /** A template as the provider holds it. */
 export type RemoteTemplate = {

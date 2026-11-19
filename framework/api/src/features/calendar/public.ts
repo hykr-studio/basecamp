@@ -3,5 +3,7 @@
 import './routes.js';
 
 export { memberPrincipal, writeAs } from './principal.js';
+export type { CalendarProviderDef } from './providers/index.js';
+export { enabledProviders, providerOf } from './providers/index.js';
 export { contentOf, type EventContent, schedulable, schedulables, uidOf } from './schedulable.js';
-export { googleSettings } from './settings.js';
+export { googleSettings, microsoftSettings } from './settings.js';

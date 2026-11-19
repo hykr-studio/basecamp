@@ -25,6 +25,8 @@ export const pushTokens = channel.table(
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     /** The last time the device registered it (each sign-in). */
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    /** The last time the person used the app on it: a push goes where they are (W1). */
+    activeAt: timestamp('active_at', { withTimezone: true }),
   },
   (table) => [
     uniqueIndex('push_tokens_token_tenant_idx').on(table.token, table.tenantId),
@@ -50,7 +52,10 @@ export const pushTickets = channel.table(
       .references(() => user.id, { onDelete: 'cascade' }),
     /** The notification to this person, across their devices. */
     send: text('send_id').notNull(),
+    /** The Expo token; for a browser, its subscription's id (never the endpoint). */
     token: text('token').notNull(),
+    /** 'web' for a browser's send (final when it is made: Web Push has no receipts). Else Expo. */
+    platform: text('platform'),
     /** The push service's ticket id, to ask for the receipt. None when it refused at once. */
     receiptId: text('receipt_id'),
     notification: text('notification').notNull(),
@@ -70,5 +75,41 @@ export const pushTickets = channel.table(
     index('push_tickets_pending_idx').on(table.queues, table.status, table.createdAt),
     index('push_tickets_send_idx').on(table.send),
     index('push_tickets_user_idx').on(table.userId),
+  ],
+);
+
+/**
+ * A person's browser, for web push (the push feature in @hykr/api): its push subscription,
+ * registered for the business the person was working in, on the origin the app was open on. The
+ * endpoint is the push service's address for this browser; the keys encrypt what is sent to it
+ * (RFC 8291) and are sealed with SECRETS_KEY. A subscription belongs to one person at a time; it
+ * is deleted when its owner forgets it or the push service says it is gone (404, 410).
+ */
+export const webPushSubscriptions = channel.table(
+  'web_push_subscriptions',
+  {
+    id: id(),
+    tenantId: text('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    endpoint: text('endpoint').notNull(),
+    /** The browser's public key, sealed. */
+    p256dh: text('p256dh').notNull(),
+    /** The browser's authentication secret, sealed. */
+    auth: text('auth').notNull(),
+    /** The browser's name and system ("Chrome on macOS"), never the whole User-Agent. */
+    userAgent: text('user_agent'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    /** The last time the browser registered it (each sign-in). */
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    /** The last time the person used the app in this browser: a push goes where they are. */
+    activeAt: timestamp('active_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('web_push_subscriptions_endpoint_tenant_idx').on(table.endpoint, table.tenantId),
+    index('web_push_subscriptions_user_idx').on(table.tenantId, table.userId),
   ],
 );

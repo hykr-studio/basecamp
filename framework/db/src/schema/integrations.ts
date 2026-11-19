@@ -1,7 +1,7 @@
 // The integration bus (decisions B10): where a business sends its events (webhook endpoints),
 // what was sent and how each try went (deliveries, attempts), the outside systems it connects
 // (connections, their credentials sealed), and what those systems sent in (inbound events).
-// Connections made by signing in (decisions B21) add their sign-ins under way, the accounts a
+// Connections made by signing in (decisions B24) add their sign-ins under way, the accounts a
 // grant reaches (what routes a provider's one webhook URL) and the events no account matched.
 // Secrets are stored sealed only (@hykr/connectors' secret box under SECRETS_KEY).
 import { sql } from 'drizzle-orm';
@@ -114,7 +114,7 @@ export const integrationConnections = app.table(
     status: text('status').notNull().default('active'),
     /** 'credentials' (given) | 'oauth' (a sign-in: the credentials are the grant's tokens). */
     auth: text('auth').notNull().default('credentials'),
-    /** Whose connection: 'business' (a person's own may follow, decisions B21). */
+    /** Whose connection: 'business' (a person's own may follow, decisions B24). */
     owner: text('owner').notNull().default('business'),
     /** The credentials as JSON, sealed for this row. */
     credentialsSealed: text('credentials_sealed').notNull(),
@@ -178,7 +178,7 @@ export const integrationInbound = app.table(
 );
 
 /**
- * A connection sign-in under way (decisions B21): who started it, in which business, for which
+ * A connection sign-in under way (decisions B24): who started it, in which business, for which
  * connector (and which connection, signing in again), the PKCE verifier (sealed for the row) and
  * where the browser returns. Used once, by that person only. Only the SHA-256 of the state the
  * provider carries is kept.

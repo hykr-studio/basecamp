@@ -1,4 +1,4 @@
-// Signing a connector in (decisions B21): the deployment's settings, read from the environment
+// Signing a connector in (decisions B24): the deployment's settings, read from the environment
 // when used (a test sets them before it boots the app). Per OAuth connector, under its
 // `oauth.clientFrom` prefix <P>:
 //   <P>_ID, <P>_SECRET            the deployment's OAuth client; unset: the connector is not offered

@@ -4,7 +4,7 @@ import { type Database, pushTickets, pushTokens } from '@hykr/db';
 import type { Row } from '@hykr/notifications';
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { and, eq, inArray, lte, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
 import type { ExpoPushMessage, ExpoPushTicket } from 'expo-server-sdk';
 import { NotifyService } from '../../channels/notify/notify.service.js';
 import { config } from '../../config.js';
@@ -75,7 +75,10 @@ export class PushService {
    * This device, for this person, in the business they work in. A device belongs to one person:
    * the same token anywhere else (another person, in any business) is removed first.
    */
-  async register(p: Principal, input: RegisterPushToken): Promise<PushDevice> {
+  async register(
+    p: Principal,
+    input: Extract<RegisterPushToken, { token: string }>,
+  ): Promise<PushDevice> {
     const { Expo } = await loadSdk();
     if (!Expo.isExpoPushToken(input.token))
       throw new BadRequestException({ error: 'bad_token', message: 'Not an Expo push token' });
@@ -108,25 +111,38 @@ export class PushService {
     return rows.map(deviceOf);
   }
 
+  /** The person is using the app on this device now (theirs, in this business; else nothing). */
+  async active(p: Principal, token: string) {
+    await this.db
+      .update(pushTokens)
+      .set({ activeAt: sql`now()` })
+      .where(
+        and(
+          eq(pushTokens.token, token),
+          eq(pushTokens.tenantId, p.tenantId ?? ''),
+          eq(pushTokens.userId, p.actor.id),
+        ),
+      );
+  }
+
   /** No more pushes to this device, for anyone, in any business. */
   async forget(token: string) {
     await this.db.delete(pushTokens).where(eq(pushTokens.token, token));
   }
 
   /**
-   * One notification to one person: a message to each of their devices in this business. Sent
-   * when the push service accepted at least one; unavailable without a device; failed for now
-   * when it could not be reached or refused for now; failed for good otherwise.
+   * One notification to these devices of one person (the one they are on: PushPlaces chooses).
+   * Sent when the push service accepted at least one; failed for now when it could not be
+   * reached or refused for now; failed for good otherwise.
    */
-  async send(req: DeliveryRequest): Promise<DeliveryOutcome> {
+  async sendTo(
+    req: DeliveryRequest,
+    devices: readonly { token: string }[],
+  ): Promise<DeliveryOutcome> {
     const content = req.notification.push;
     if (!content) return { status: 'unavailable', reason: 'the notification has no push text' };
     const userId = req.to.userId;
     if (!userId) return { status: 'unavailable', reason: 'the recipient has no account' };
-    const devices = await this.db
-      .select({ token: pushTokens.token })
-      .from(pushTokens)
-      .where(and(eq(pushTokens.tenantId, req.tenantId), eq(pushTokens.userId, userId)));
     if (!devices.length) return { status: 'unavailable', reason: 'no device registered' };
 
     const row = req.row as Row;
@@ -197,6 +213,8 @@ export class PushService {
         and(
           eq(pushTickets.queues, prefix),
           eq(pushTickets.status, 'pending'),
+          // A browser's send is final when it is made (Web Push has no receipts).
+          isNull(pushTickets.platform),
           lte(
             pushTickets.createdAt,
             sql`now() - make_interval(secs => ${pushSettings.receiptDelayMs() / 1000})`,

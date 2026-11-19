@@ -28,4 +28,5 @@ export {
   verbs,
   written,
 } from './fake/engine.js';
+export { fileLineId } from './fake/scripts/files.js';
 export type { Expected } from './scorers.js';

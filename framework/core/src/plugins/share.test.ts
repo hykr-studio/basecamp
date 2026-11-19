@@ -3,11 +3,14 @@
 import {
   CustomFieldsInput,
   definePublicForm,
+  defineShareable,
   entitySpec,
   formAsksCustom,
   formFieldsOf,
+  formRateLimit,
   MoneyInput,
   publicFormProblems,
+  sendOrderOf,
 } from '@hykr/contracts';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -91,5 +94,41 @@ describe('a public form', () => {
   it('is named <module>.<form> and asks something', () => {
     expect(() => form(['name'], { name: 'Brief' })).toThrow(/<module>.<form>/);
     expect(() => form([], { custom: false })).toThrow(/asks nothing/);
+  });
+});
+
+describe('B23: lasting links, their limits and how they are sent', () => {
+  const form = (extra: object) =>
+    definePublicForm({
+      name: 'unit.lasting',
+      entity: 'unitBrief',
+      label: same('Ask'),
+      fields: ['name'],
+      ...extra,
+    });
+
+  it('a lasting form takes 20 answers an hour per link and 5 per address, unless it says', () => {
+    expect(formRateLimit(form({ lasting: true }))).toEqual({ perLink: 20, perIp: 5 });
+    expect(formRateLimit(form({ rateLimit: { perIp: 50 } }))).toEqual({ perLink: 20, perIp: 50 });
+    expect(formRateLimit(form({ rateLimit: false }))).toBeNull();
+  });
+
+  it('refuses limits that are not whole numbers of answers', () => {
+    expect(() => form({ rateLimit: { perLink: 0 } })).toThrow(/rateLimit.perLink/);
+    expect(() => form({ rateLimit: { perIp: 1.5 } })).toThrow(/rateLimit.perIp/);
+  });
+
+  it('sends by WhatsApp then email unless the declaration orders it, and refuses a bad order', () => {
+    expect(sendOrderOf(undefined)).toEqual(['whatsapp', 'email']);
+    expect(sendOrderOf({ order: ['email'] })).toEqual(['email']);
+    expect(() => defineShareable({ entity: 'unitBrief', send: { order: [] } })).toThrow(
+      /names no channel/,
+    );
+    expect(() =>
+      defineShareable({ entity: 'unitBrief', send: { order: ['email', 'email'] } }),
+    ).toThrow(/twice/);
+    expect(() =>
+      defineShareable({ entity: 'unitBrief', send: { order: ['sms' as 'email'] } }),
+    ).toThrow(/not a channel/);
   });
 });

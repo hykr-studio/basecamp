@@ -47,9 +47,13 @@ export const Levels = {
   }),
 } as const;
 
-/** A template sent to a customer by hand reaches someone outside the business. */
+/**
+ * A template sent to a customer by hand, or a share link the assistant drafts for one (decisions
+ * B23: only the assistant's draft is not the framework's own operation), reaches someone outside
+ * the business.
+ */
 export const SendsGoOutside = defineLevelRule({
   name: 'app.sends',
-  on: ['notify.send'],
+  on: ['notify.send', 'share.create', 'share.reissue'],
   decide: () => atLevel(Levels.external.name, 'send_goes_outside', 'It goes to a customer'),
 });

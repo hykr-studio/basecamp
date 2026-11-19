@@ -1,7 +1,7 @@
 # Decisions and assumptions register
 
 The platform-gaps run built, on `feat/platform-gaps`, the 31 framework capabilities the gap analysis
-found missing (A1 to A11, B1 to B20), the foundation they stand on (F0 to F6), and the fixes the
+found missing (A1 to A11, B1 to B20, and B21 to B24 after it), the foundation they stand on (F0 to F6), and the fixes the
 completeness, boundary and security reviews asked for. Each unit wrote its decisions down in
 `docs/decisions/<unit>.md` before it wrote code. This page is the way in for the product owner:
 
@@ -36,6 +36,7 @@ change the sample application or a business's settings, not the framework.
 | [A8](A8.md) | A8 | Business and record memory and conversation recall by meaning, re-checked for access, embedded through the model gateway. | `e75c7c72` |
 | [A9B15](A9B15.md) | A9, B15 | Push notifications through Expo, falling back to the next channel (A9); live updates over SSE, filtered per connection (B15). | `de1f6184` |
 | [A10](A10.md) | A10 | A deployment registry of OpenAI-compatible model gateways and a per-business model policy that fails closed. | `08e1fbce` |
+| [A12](A12.md) | A12 (Interioring) | The assistant reads images and PDFs: a `vision` model capability and policy pick, `read-file` and `readWithModel`, PDF pages drawn, `file_pages` metering, one audit row per read. | this change |
 | [A11](A11.md) | A11 | Feature flags, custom fields, white label and verified domains, platform-shared records, a business's own wording. | `fd6e0109` |
 | [A11X](A11X.md) | A11 (export) | Exporting a business's data as the person who asks: a job that writes a zip of JSON and CSV per entity as a file. | `a8dd0445` |
 | [B1](B1.md) | B1 | Files on records: presign, upload, confirm, reached only through the owning record; WhatsApp media kept; erasure. | `ccd38800` |
@@ -54,7 +55,10 @@ change the sample application or a business's settings, not the framework.
 | [B18](B18.md) | B18 | Personal data: requests with a deadline, export, erasure over contributors, retention, audit redaction, the register. | `e00ab149` |
 | [B19](B19.md) | B19 | The platform-operator tier: named operators, consented and time-boxed support access, provisioning, inbound routing, a usage report. | `3c230097` |
 | [B20](B20.md) | B20 | `basecamp import`: CSV, JSON or NDJSON through the write path as a job, re-runs keyed by external id, dry runs, an error report. | `1c2d3e30` |
-| [B21](B21.md) | OAuth connectors, shared URLs | Connectors that sign a business in (OAuth: PKCE, sealed tokens refreshed and revoked, `needs_reauth` told to managers), one webhook URL per provider routed by the accounts a sign-in found, and `meta-leads` (Facebook and Instagram lead ads), whose leads the sample turns into briefs. | (this branch) |
+| [B21](B21.md) | Documents (B2) | Images in documents: `image`, `images` and `qr` blocks and a header or footer image, picked by `load` as the requester (`ctx.image`), checked by SHA-256 in the worker, listed in acceptance evidence. | (this branch) |
+| [B22](B22.md) | B22 | Microsoft 365 / Outlook as a second calendar provider behind `CalendarProviderDef`; generic `:provider` routes; busy time merged across providers, one write target per person. | `feat/platform-gaps` |
+| [B23](B23.md) | Interioring's request (after B9) | Share links with no end (where declared `lasting` and the business allows it), renew and reissue, sending a link on WhatsApp or by email with a log (token sealed on the send, never logged), the assistant's drafts behind approval, the business's domain in links, hourly limits and a trap field for lasting forms. | this change |
+| [B24](B24.md) | OAuth connectors, shared URLs | Connectors that sign a business in (OAuth: PKCE, sealed tokens refreshed and revoked, `needs_reauth` told to managers), one webhook URL per provider routed by the accounts a sign-in found, and `meta-leads` (Facebook and Instagram lead ads), whose leads the sample turns into briefs. | (this branch) |
 | [H1](H1.md) | A4, A5, A9 | Notification words read as each recipient may, approval requests on every channel, sends held by the undo window, the contact role named by the application. | `9952ca62` |
 | [H2](H2.md) | Settings (A4, A5, A8, B1, B3, B6, B7, B9) | One writer for every settings section that opts in (`PATCH /api/settings/sections/:section`), and the base settings. | `510f8033` |
 | [H3](H3.md) | A1, A3, A8, A11 | MCP tool hints and flag gating; embeddings and the guardrail metered; agent calls refused at 100%; purchases settled only in their own business. | `0bed14f6` |
@@ -84,7 +88,9 @@ change the sample application or a business's settings, not the framework.
 | [V11](V11.md) | Validation (reviews of V5, V6, V7, V9) | `TRUST_PROXY`; a throwing filter loses one event alone; routes with their own reply run one at a time; an approver who left gives way; nothing in a write's transaction reaches the pool; an empty patch is refused. | `99f87fc7` |
 | [V12](V12.md) | Validation (acceptance) | Every keyset keeps its time to the microsecond and compares it in SQL; the ledger, delivery and routing logs page by (time, id). | `d2844401` |
 | [V13](V13.md) | Validation (acceptance) | A lookup before a write is not shown as the answer; a limit's refusal names the meter by its label; one alert per crossing. | `a0865ebd` |
+| [R1](R1.md) | Requirement (Interioring) | References on line items: a child spec declares `traits.references`, checked in bulk by its tree writes (one query per target), with the line's path; labels on read; a reference 404 audited as denied; the sample's order lines name a product. | this change |
 | [VALIDATION](VALIDATION.md) | Validation | The live validation at `23805b76`: 349 claims, 18 defects by root cause, the fixes V1 to V13 and their acceptance. | this change (after `f63bb019`) |
+| [W1](W1.md) | Web push (Interioring) | Push in a web browser: a `webpush` channel (VAPID, RFC 8291) beside Expo's, each push to one place (the device the person used last), sealed subscriptions, a service worker and manifest from `@hykr/app`'s config plugin, "Turn on notifications" in the app. | this change |
 
 Units are grouped as the run went: the foundation, the gaps (combined units such as `B3B5` built
 two gaps together, and `A11X` is A11's data export), then the fix units from the reviews: H for
@@ -92,7 +98,8 @@ completeness, S for security, X for the framework/application boundary, and `HLA
 `HCONS` for languages, documentation and the consumer job. After REPORT, the live validation
 ([VALIDATION](VALIDATION.md)) found 18 defects, and V1 to V13 fixed them: V1 to V9 one root cause
 each (the defect clusters `C<n>` in their Gaps column), V10 and V11 what the reviews of those
-units left, V12 and V13 what the acceptance runs found.
+units left, V12 and V13 what the acceptance runs found. W1 came later, from a customer's request
+(push in a web browser).
 
 ## Assumptions register
 
@@ -111,12 +118,13 @@ How to read it:
   the choice itself. "Settled by H1" (or another unit) means a later unit answered it; the row stays so the
   change is visible. "None" means the unit reported the choice without a question.
 
-The table has 569 rows: the 464 items of the units' "Assumptions to review" sections and
+The table has 592 rows (the five A12 rows and the six B24 rows included): the 458 items of the units' "Assumptions to review" sections and
 70 assumptions the units reported to the run that their docs do not state, less duplicates merged
 and process notes left out (merging the integration branch into a unit, which test approach a fix
 took, where a demo lived before its module existed), plus 79 rows from the fix units V1 to V13
 (their "Assumptions to review" sections, an assumption a later V unit settled merged into one
-row, and the two B18 rows V8 handed to the integrator). Those stay in each unit's doc.
+row, and the two B18 rows V8 handed to the integrator), plus 8 rows from B21, 6 from B24, 5 from R1 and 5 from W1.
+Those stay in each unit's doc.
 
 | Unit | Gap | Topic | What we chose | Source | Question for the owner |
 |---|---|---|---|---|---|
@@ -293,6 +301,11 @@ row, and the two B18 rows V8 handed to the integrator). Those stay in each unit'
 | A9B15 | B15 | Back office | It still polls its inbox every 10 s and an open conversation every 5 s. | Task note 'where easy'; hot-file table | Should inbound messages and handoffs publish live events too? |
 | A9B15, H1, H6 | A9, A5 | Order of channels | Each notification's `channels` list is its fallback order; the framework has none of its own. The sample's to-do reminder and the framework's approval request go by push, then WhatsApp, then email (H1); an application changes the approval request with `overrideNotification`. | PRD Platform & AI §7.1 (channels); plan boundary section | Does every notification follow push, WhatsApp, email, or does each choose? Should a business be able to change the order per approval level? |
 | A9B15 | A9 | A9 forget without a session | POST /api/push/tokens/forget needs no session: holding the token is the proof, it can only stop pushes, and it always answers 204. | Default (the shell signs out before plugins' cleanups run, F2 decision 13) | Acceptable, or should the app keep a per-device secret? |
+| A12 | A12 | Drawing in the API process | PDF pages are drawn and images resized in the API process, two files at a time, not on a worker queue. | Default | Is the API process acceptable, or should reads move to a queue for large PDFs? |
+| A12 | A12 | HEIC refused | HEIC photos get 422 `unsupported_type`, asking for a JPEG. | Open question (HEIC) | Convert HEIC once the image library is chosen? |
+| A12 | A12 | A long PDF refused | A PDF over `FILES_READ_MAX_PAGES` without `pages` is refused, not cut to its first pages. | Request acceptance | Should it read the first pages instead, saying so? |
+| A12 | A12 | Readings not kept | Every read calls the model again; nothing of the reading is stored on the file. | Open question (keep the reading) | Keep the reading on the file, as a transcript is? |
+| A12 | A12 | Agent runs and unattached files | A run (A6) reaches only files on records of entities its scope reads, and none on no record. | Request acceptance; default | Confirm. |
 | A10 | A10 | No policy means the defaults only | A business that never set a policy may use the deployment's default chat and embedding models, nothing else. | Default, fail closed (gap A10 "fails closed"; gap map risk on silent fallback) | Should a business without a policy instead get every model the deployment offers? |
 | A10 | A10 | The business sets its own policy | Owners and admins (`models.manage`) choose among the deployment's models. | Gap map ownerQuestions (operator vs studio); default | Should residency be set only by the platform operator (B19), or be a plan option the business cannot change? |
 | A10 | A10 | A model the business does not allow | A turn whose hook asks for a model the business does not allow is refused (403 `model_not_allowed`), not given the business's default model. | Default, fail closed | Is a refusal right, or should the policy quietly use the business's own model instead? |
@@ -534,12 +547,20 @@ row, and the two B18 rows V8 handed to the integrator). Those stay in each unit'
 | B20 | B20 | Write path, row by row | Every row goes through `runWrite` with the entity's own create or update; one audit row per record. A batch `insertMany` was rejected: level rules on `<entity>.create` would not see it. | Plan B20 row; CLAUDE.md rule 1 | Is one audit row per record acceptable for large imports? |
 | B20 | B20 | Dry run | Runs every batch as a real run, then rolls it back; refused writes stay audited as denied, like any refused write. | Gap list (`--dry-run`) | Should a dry run's refusals be left out of the audit? |
 | B20 | B20 | Imports and storage | `basecamp import` refuses `STORAGE_DRIVER=memory`, because the worker that runs the job could not read the file. | Default | None |
-| B21 | OAuth connectors | Who connects | `integrations.manage` (owner, admin), as for other connections. | Open question's suggested answer; decisions B21 #5 | Should an operations role connect lead sources without managing webhooks? |
-| B21 | OAuth connectors | Unrouted events | Kept by key only (no content) for 30 days, logged, never assignable. | Default; decisions B21 #21 | Should an operator see them, for a page connected later? |
-| B21 | OAuth connectors | A lead brief's customer | A lead becomes a brief with no customer record; its 365-day retention applies. | Default; decisions B21 #24 | Should a lead also make or match a customer by phone, so forgetting that person finds it? |
-| B21 | OAuth connectors | Meta's long-lived user token | Its 60 days are not tracked (page tokens do not expire); error 190 marks the connection. | Decisions B21 #23 | Is signing in again to pick pages after 60 days fine? |
-| B21 | OAuth connectors | Scopes missing | Refused with `oauth_scopes_missing`; the grant is left at the provider. | Default; decisions B21 #8 | Should the server withdraw it? |
-| B21 | OAuth connectors | Expiry notice | A grant that does not refresh is told once, 7 days ahead, checked by the every-minute sweep. | Open question's suggested answer; decisions B21 #16 | Is a week's notice right? |
+| B21 | B2 | Shrinking photos | Pictures are embedded at full size; no image library in the worker. | Requirement open question 1 | Shrink photos to the size they are drawn at (an image library in the worker, such as `sharp`)? |
+| B21 | B2 | WebP and HEIC | Refused: `ctx.image` answers null, the reason logged. | Requirement open question 2 | Convert them to JPEG (with the same library as shrinking)? |
+| B21 | B2 | Files gone before drawing | No hold on image files; the document fails `image_unavailable` and is asked for again. | Requirement open question 3 | Confirm. |
+| B21 | B2 | Erased files in documents already made | A PDF already made keeps the picture, as it keeps a name. | Requirement open question 4; B18 (documents keep their snapshot) | Confirm. |
+| B21 | B2 | The business's logo | A file on one of the application's records; `branding.logoUrl` is not fetched. | Requirement open question 5 | Should the logo be stored as a file in branding and offered as `ctx.business.logo`? |
+| B21 | B2 | Hashing images | `ctx.image` reads and hashes the bytes inside the document's write transaction (uploads carry no stored SHA-256). | Default | Should confirm store each upload's SHA-256, so documents read none of it when asked? |
+| B21 | B2 | Limits over one image | A file over the bytes or pixels limit is not shown (null, logged `image_too_large`); the document's count and total answer 422. | Requirement (both "null" and "a named error" were asked) | Should a document fail instead when one of its pictures is too large? |
+| B21 | B1 | Uploads for a commands-only entity | Presign asks the entity's rules as `via: 'file.upload'`; the money plugin still refuses an upload for a new money record. | Found building the sample | Should the money plugin let an upload for a new record through? |
+| B24 | OAuth connectors | Who connects | `integrations.manage` (owner, admin), as for other connections. | Open question's suggested answer; decisions B24 #5 | Should an operations role connect lead sources without managing webhooks? |
+| B24 | OAuth connectors | Unrouted events | Kept by key only (no content) for 30 days, logged, never assignable. | Default; decisions B24 #21 | Should an operator see them, for a page connected later? |
+| B24 | OAuth connectors | A lead brief's customer | A lead becomes a brief with no customer record; its 365-day retention applies. | Default; decisions B24 #24 | Should a lead also make or match a customer by phone, so forgetting that person finds it? |
+| B24 | OAuth connectors | Meta's long-lived user token | Its 60 days are not tracked (page tokens do not expire); error 190 marks the connection. | Decisions B21 #23 | Is signing in again to pick pages after 60 days fine? |
+| B24 | OAuth connectors | Scopes missing | Refused with `oauth_scopes_missing`; the grant is left at the provider. | Default; decisions B24 #8 | Should the server withdraw it? |
+| B24 | OAuth connectors | Expiry notice | A grant that does not refresh is told once, 7 days ahead, checked by the every-minute sweep. | Open question's suggested answer; decisions B24 #16 | Is a week's notice right? |
 | H1 | A5 | Inbox always, not a fallback step | The approval request always lands in the decider's inbox and reaches them by the first of push, WhatsApp and email that works (decision 6). | Task; PRD Platform & AI §7.1 (push, WhatsApp, email); A5 decision 25 | Should a pushed request skip the inbox, or should the inbox item go when the request is decided? |
 | H1 | A5 | WhatsApp without buttons | A request decided in the app only does not go to WhatsApp at all; the decider gets push or email (decision 7). | Task; default | Should it go to WhatsApp as a plain message with a link, which needs a new template? |
 | H1 | A4 | Recipients who cannot read the record | The words leave out what a recipient may not read, but the dispatcher does not check that a recipient may read the record at all: `to` decides who. | Default | Should a notification about a record skip a recipient who cannot open it? |
@@ -676,6 +697,11 @@ row, and the two B18 rows V8 handed to the integrator). Those stay in each unit'
 | V11 | Validation (A3) | Metering in a write announces before commit | With `record(uses, { tx })`, the in-process `credits.threshold` events are published when `record` returns, inside the write; the rows and the outbox twin commit with it, and a rolled-back write loses both. The wallet row's lock then lasts to the end of the write, so the guide says to meter last in `run`. | Default | None |
 | V11 | Validation (F4) | A standing provider reads on what it is given | `StandingProvider.forUser`'s `db` is a `Conn`, which may be a write's transaction; a provider written against `Database`-only members no longer compiles. | Default | None |
 | V11 | Validation (Settings) | The settings cache may hold a row read on a caller's transaction | `get` and `section` with a `conn` cache the row they read (10 s); a transaction that wrote `app.tenants` and rolled back would leave its settings served that long. No caller does both today; one that does should skip the cache. | Default | None |
+| R1 | Requirement (Interioring) | Copied lines keep their links | A revision copies its lines with their stored links, unchecked, as it keeps its parent's own unchanged link (V2 decision 4); only the lines a command then writes are checked. | R1 decision 8 | Should a revision re-check copied lines against the writer? |
+| R1 | Requirement (Interioring) | Two checks for a save that can park | A command that refuses early calls `children.checkReferences` in its load, and the tree write checks again in run: two queries per target. | R1 decision 3 | None |
+| R1 | Requirement (Interioring) | A reference 404 is audited | Every declared reference's refusal, top-level and child, writes a `denied` audit row (`unknown_reference`), then answers the same 404. | User's choice (2026-11-19) | None |
+| R1 | Requirement (Interioring) | Imports write no trees | The importer cannot write lines at all, so it cannot write them around the check; importing a tree through its parent's command is not built. | R1 decision 10 | Is a tree import needed? |
+| R1 | Requirement (Interioring) | Labels only on reads | Lists, gets, documents and shared records carry labels; a write's own result, webhooks, live events and summaries carry ids. | R1 decision 12 | Should a command's result carry labels too? |
 | V12 | Validation (Foundation) | An old cursor, once | For one page, a cursor made before the fix may show rows of its last millisecond again, ascending or descending; it skips none. | Default | None |
 | V12 | Validation (A3, B10, B19) | `next` is now a token | The ledger's `next` and the delivery log's `nextBefore` used to be ISO times. Passed back as `before` (the documented use) they keep working; one handed out before the fix is read as a strict time, so a client mid-walk at deploy may skip, once, unseen rows of that millisecond. | Default | Confirm. |
 | V12 | Validation (A3, B10, B19) | A time stays a time-only bound | `before=<ISO time>` still means strictly before that moment; rows at that very moment are excluded on purpose. | Default | Confirm. |
@@ -684,6 +710,11 @@ row, and the two B18 rows V8 handed to the integrator). Those stay in each unit'
 | V13 | Validation (A7) | Lookups are found by their place | A read before a write in the same turn is how the assistant found what to write, and is not shown: "Show order 12 and submit it" shows only the submit. A list before a refused write is hidden too (the reply says why); a list before a refused read stays. | V13 decisions 9 and 19 | Should a read the person asked for by name survive a later write? |
 | V13 | Validation (A7) | A list is a lookup when a later call shows one of its rows | "List my meetings and open the first" shows only the meeting. | V13 decision 19 | Is that right? |
 | V13 | Validation (A7) | A contributed write tool is known only by its result | A module's own write tool (`toolContributions`) is not in `writeToolIds`, so a list before its refused call still shows (section 14). | Default | None |
+| W1 | Web push | `push` reaching browsers | `push` reaches the person's phones and browsers; a chain that also lists `webpush` orders them itself. | Request open question 1; owner's choice in W1 | Should some notifications stay on phones only (list `webpush` to make `push` phones-only)? |
+| W1 | Web push | Phones and browsers together | One place per push: the device the person used within 10 minutes (`PUSH_ACTIVE_MS`), else the one used or signed in to last; the next device only when that one cannot take it. | The owner's answer | Settled by the owner: alert the person in one place, the one active now. |
+| W1 | Web push | Known push services | Endpoints only on FCM, Mozilla, Apple and WNS (and `WEB_PUSH_ALLOWED_HOSTS`). | Request ("checked against a list") | Should the list be a deployment setting? |
+| W1 | Web push | Urgency | `high` for approvals only, `normal` otherwise. | Request | Should a client's reply be urgent too? |
+| W1 | Web push | When to offer | The strip offers "Turn on notifications" only once something waits for the person (a request to decide, an unread inbox item); the person's card offers it at any time; the browser asks only on the click. | The owner's answer | Settled by the owner: wait until something needs it. |
 | V13 | Validation (A3) | The app's refused turn reads the generic paused sentence | Not the reason naming the meter, in every language; `GET /api/credits` and the credits screen name it. An agent's 402 is in English, since an agent's call carries no language. | V13 decision 21; default | Confirm. |
 | V13 | Validation (A3) | No numbers in a limit's reason | The status and the screen carry the quantities. | V13 decision 11 | Should the reason say "(2 of 1)" in the meter's display unit? |
 | V13 | Validation (A3) | One alert per crossing | A use that crosses both levels sends only the pause; no "low" after the pause, and none after the pause is lifted by a higher limit. | V13 decision 16 | Confirm. |
@@ -810,7 +841,7 @@ re-run": HCONS's full CI covers them). An item a later unit fixed says so. Devel
   - Fixed by S4: embedding calls are metered.
 - **A9B15**
   - There is no EAS project id or `eas.json`, so dev builds cannot get an Expo push token; push to a real device was not exercised.
-  - Web push (VAPID) is not supported; browser users get the next channel.
+  - Fixed by W1: web push (VAPID) for people working in a browser.
   - Live deletions reach only streams already told about the record and the person who deleted it.
   - The back office still polls its inbox and conversations; there is no `Last-Event-ID` replay.
   - Fixed by H1: push text is projected for the recipient.

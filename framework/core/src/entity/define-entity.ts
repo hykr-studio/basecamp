@@ -31,6 +31,7 @@ import {
   count,
   eq,
   getTableColumns,
+  inArray,
   or,
   type SQL,
   sql,
@@ -51,7 +52,12 @@ import { buildListSql, decodeCursor, type ListSelected, listQuery } from '../que
 import type { Conn, Tx } from '../tokens.js';
 import { strongerDecision } from '../write/decisions.js';
 import { defineEntityCqrs, type EntityCqrs } from './cqrs-classes.js';
-import { checkReferences, referenceRefusal } from './references.js';
+import {
+  checkReferences,
+  readReferences,
+  referenceRefusal,
+  referencesChecked,
+} from './references.js';
 
 type Row<T extends Table> = T['$inferSelect'];
 type Values = Record<string, unknown>;
@@ -103,6 +109,11 @@ export interface EntityConfig<S extends EntitySpec, T extends Table> {
 export interface EntityRepository<T extends Table> {
   get(conn: Conn, p: Principal, id: string): Promise<Row<T>>;
   find(conn: Conn, p: Principal, id: string): Promise<Row<T> | undefined>;
+  /**
+   * The rows of these ids the principal reaches, in one query, under exactly `find`'s scope (their
+   * business, read access, plugins' scopes); ids not reached are left out, in no order.
+   */
+  findMany(conn: Conn, p: Principal, ids: readonly string[]): Promise<Row<T>[]>;
   list(conn: Conn, p: Principal, q: ListQuery | ListInput): Promise<Page<Row<T>>>;
   insert(tx: Tx, p: Principal, input: Record<string, unknown>, ctx?: RuleContext): Promise<Row<T>>;
   update(
@@ -129,6 +140,11 @@ export interface EntityDef<S extends EntitySpec = EntitySpec, T extends Table = 
    * schema's fields, then projected for p (plugins and read projectors may hide fields).
    */
   toRead(row: Row<T>, p: Principal): z.infer<S['schemas']['read']>;
+  /**
+   * Rows as they leave the server for this principal (`toRead`), with their references' labels
+   * (`references: { field: { id, label } }`) when the spec declares any: one query per target.
+   */
+  readMany(conn: Conn, rows: readonly Row<T>[], p: Principal): Promise<Values[]>;
   /** A stored row as the JSON its read schema parses: dates as ISO, then plugins' toJson. */
   readJson(row: Values): Values;
   /** A record in its read shape as p may see it: plugins' project, then the read projectors. */
@@ -136,12 +152,17 @@ export interface EntityDef<S extends EntitySpec = EntitySpec, T extends Table = 
   /** The entity plugins that apply to it now (registered and whose appliesTo says so). */
   plugins(): readonly EntityPlugin[];
   summarize(action: WriteAction, input: Record<string, unknown> | null, row: Row<T> | null): string;
-  /** Access, rules, plugins' decisions, then approval: the decision for one CRUD write. */
+  /**
+   * Access, rules, plugins' decisions, then approval: the decision for one CRUD write. `via` is
+   * what rules see as `ctx.via` (default 'crud'): an upload for a file field asks as
+   * 'file.upload', so an entity changed only by its commands can still take files for them.
+   */
   decide(
     p: Principal,
     action: WriteAction,
     row: Row<T> | null,
     input: Record<string, unknown> | null,
+    via?: string,
   ): AuthorizeResult;
   events: boolean;
   cqrs: EntityCqrs;
@@ -432,6 +453,13 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
         .limit(1);
       return row as Row<T> | undefined;
     },
+    async findMany(conn, p, ids) {
+      if (!ids.length) return [];
+      return (await conn
+        .select()
+        .from(table as Table)
+        .where(scoped(p, 'read', inArray(idCol, [...ids])))) as Row<T>[];
+    },
     async get(conn, p, id) {
       const row = await repo.find(conn, p, id);
       // Someone else's id and a missing id look the same: 404, never 403.
@@ -498,7 +526,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
     async update(tx, p, row, patch, ctx = { via: 'crud' }) {
       const parsed = spec.schemas.update.parse(patch) as Record<string, unknown>;
       checkRules(p, 'update', row, parsed, ctx);
-      await checkReferences(tx, p, spec, row as Values, parsed);
+      if (!referencesChecked.has(patch)) await checkReferences(tx, p, spec, row as Values, parsed);
       const id = (row as { id: string }).id;
       const stale = staleWhere(row, parsed);
       // Nothing left to write (an empty patch, or one an erasure's scrubbing emptied since it
@@ -564,6 +592,13 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       project(spec.schemas.read.parse(readJson(row as Values)) as Values, p) as z.infer<
         S['schemas']['read']
       >,
+    readMany: async (conn, rows, p) =>
+      readReferences(
+        conn,
+        p,
+        spec,
+        rows.map((row) => def.toRead(row, p) as Values),
+      ),
     readJson,
     project,
     plugins,
@@ -573,7 +608,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
         action === 'create'
           ? `Create ${label} "${title(row, input)}"`
           : `${verb[action]} "${title(row, input)}"`),
-    decide(p, action, row, input) {
+    decide(p, action, row, input, via = 'crud') {
       // Whose rows these are: a write needs a grant that covers the row (or, to create, any).
       const reach = accessFor(p, access, 'write');
       if (reach.kind === 'needs_assurance')
@@ -603,7 +638,7 @@ export function defineEntity<S extends EntitySpec, T extends Table>(
       // Then the rules, the entity's and its plugins': any refusal wins; a rule may park.
       let decision: AuthorizeResult | null = null;
       for (const rule of allRules()) {
-        const result = rule(p, action, row, input, { via: 'crud' });
+        const result = rule(p, action, row, input, { via });
         if (result?.decision === 'deny') return result;
         decision = strongerDecision(decision, result);
       }

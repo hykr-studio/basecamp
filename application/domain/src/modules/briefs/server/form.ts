@@ -23,4 +23,7 @@ export const BriefForm = definePublicForm({
   fields: ['name', 'phone', 'summary', 'budget', 'neededBy', 'notes'],
   customerName: 'name',
   fixed: { source: 'form' },
+  // Posted once on a website, it may have no end date where the business allows it (B23): its
+  // link then takes so many answers an hour and asks for the page's trap field.
+  lasting: true,
 });

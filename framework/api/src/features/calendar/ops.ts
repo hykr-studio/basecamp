@@ -1,7 +1,7 @@
 // Every change to the calendar feature's own records goes through runWrite as one of these ops:
 // connecting and disconnecting a calendar, making and revoking a feed. Each is the person's own
 // (another person's is a 404), audited before and after, never with a token in it.
-import type { Principal } from '@hykr/contracts';
+import { CalendarProvider, type Principal } from '@hykr/contracts';
 import { allow, deny, type NamedEvent, registerOp, type Tx, type WriteOp } from '@hykr/core';
 import {
   calendarConnections,
@@ -11,7 +11,7 @@ import {
 } from '@hykr/db';
 import { subjectOf } from '@hykr/policy';
 import { NotFoundException } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { config } from '../../config.js';
 
@@ -33,10 +33,11 @@ export class CalendarEvent implements NamedEvent {
 /** What leaves the API (and the audit trail) of a connection: never its tokens. */
 export const connectionView = (r: ConnectionRow) => ({
   id: r.id,
-  provider: r.provider as 'google',
+  provider: r.provider as CalendarProvider,
   account: r.account,
   status: r.status as 'active' | 'needs_reauth' | 'stopped',
   push: !!r.channelId && !!r.channelExpiresAt && r.channelExpiresAt > new Date(),
+  writeTo: r.writeTo,
   lastSyncedAt: r.lastSyncedAt?.toISOString() ?? null,
   lastError: r.lastError,
   createdAt: r.createdAt.toISOString(),
@@ -71,7 +72,7 @@ const Sealed = z.string().min(1).max(20_000);
 
 const ConnectInput = z.strictObject({
   id: z.uuid(),
-  provider: z.literal('google'),
+  provider: CalendarProvider,
   account: z.string().min(1).max(320),
   scopes: z.array(z.string().max(200)).max(20),
   sealed: Sealed,
@@ -79,9 +80,16 @@ const ConnectInput = z.strictObject({
   inbound: z.strictObject({ id: z.uuid(), sealed: Sealed }),
 });
 
+/** Each provider's push inbox: the B10 connector and how its connection is named. */
+const INBOUND: Record<CalendarProvider, { connector: string; label: string }> = {
+  google: { connector: 'google-calendar', label: 'Google Calendar' },
+  microsoft: { connector: 'microsoft-calendar', label: 'Microsoft 365 calendar' },
+};
+
 /**
  * calendar.connection.connect: the person's calendar account, its tokens sealed. Connecting
- * again replaces them. Its push inbox (a B10 connection of `google-calendar`) is made with it.
+ * again replaces them. Its push inbox (a B10 connection of the provider's connector, such as
+ * `google-calendar`) is made with it.
  */
 export function connectOp(): WriteOp<
   z.infer<typeof ConnectInput>,
@@ -121,8 +129,8 @@ export function connectOp(): WriteOp<
           .values({
             id: input.inbound.id,
             tenantId,
-            connector: 'google-calendar',
-            label: `Google Calendar: ${input.account}`,
+            connector: INBOUND[input.provider].connector,
+            label: `${INBOUND[input.provider].label}: ${input.account}`,
             credentialsSealed: input.inbound.sealed,
             public: { calendarConnectionId: input.id, userId, account: input.account },
             createdBy: userId,
@@ -249,6 +257,76 @@ export function disconnectOp(args: Id): WriteOp<Record<string, never>, Connectio
   };
 }
 
+const TargetInput = z.strictObject({ writeTo: z.literal(true) });
+
+/**
+ * calendar.connection.target: the person's records are written to this calendar of theirs (one
+ * of several they connected), and to none of their others. The events move after the commit
+ * (`calendar.target_changed`).
+ */
+export function targetOp(
+  args: Id,
+): WriteOp<z.infer<typeof TargetInput>, ConnectionRow, ConnectionRow> {
+  const id = idOf(args);
+  return {
+    name: 'calendar.connection.target',
+    kind: 'command',
+    resourceType: CONNECTION,
+    resourceId: () => id,
+    input: TargetInput,
+    args: { id },
+    load: loadOwn(id),
+    authorize: (p) =>
+      notPerson(p) ?? allow('own_calendar', 'A person picks where their own records are written'),
+    summarize: (_input, row) => `Write events to the ${row.provider} calendar ${row.account}`,
+    run: async ({ tx, loaded }) => {
+      const others = await tx
+        .update(calendarConnections)
+        .set({ writeTo: false, updatedAt: new Date() })
+        .where(
+          and(
+            eq(calendarConnections.tenantId, loaded.tenantId),
+            eq(calendarConnections.userId, loaded.userId),
+            eq(calendarConnections.writeTo, true),
+            ne(calendarConnections.id, loaded.id),
+          ),
+        )
+        .returning({ id: calendarConnections.id });
+      const [row] = await tx
+        .update(calendarConnections)
+        .set({ writeTo: true, updatedAt: new Date() })
+        .where(eq(calendarConnections.id, loaded.id))
+        .returning();
+      return {
+        value: row,
+        touched: [
+          {
+            type: CONNECTION,
+            id: row.id,
+            change: 'updated' as const,
+            before: connectionView(loaded),
+            after: connectionView(row),
+          },
+          ...others.map((o) => ({
+            type: CONNECTION,
+            id: o.id,
+            change: 'updated' as const,
+            after: { writeTo: false },
+          })),
+        ],
+        events: [
+          new CalendarEvent(
+            'calendar.target_changed',
+            { id: row.id, tenantId: row.tenantId, userId: row.userId, provider: row.provider },
+            CONNECTION,
+          ),
+        ],
+      };
+    },
+    present: (row) => connectionView(row),
+  };
+}
+
 const FeedInput = z.strictObject({
   id: z.uuid(),
   label: z.string().trim().min(1).max(100).optional(),
@@ -329,6 +407,7 @@ const asArgs = (a: Record<string, unknown> | null) => a as Id;
 export function registerCalendarOps() {
   registerOp('calendar.connection.connect', () => connectOp(), OWNER);
   registerOp('calendar.connection.disconnect', (a) => disconnectOp(asArgs(a)), OWNER);
+  registerOp('calendar.connection.target', (a) => targetOp(asArgs(a)), OWNER);
   registerOp('calendar.feed.create', () => createFeedOp(), OWNER);
   registerOp('calendar.feed.revoke', (a) => revokeFeedOp(asArgs(a)), OWNER);
 }

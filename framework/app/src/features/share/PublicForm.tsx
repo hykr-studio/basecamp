@@ -1,7 +1,7 @@
 import { ShareError } from '@hykr/api-client';
-import type { FormField, SharedForm } from '@hykr/contracts';
+import { type FormField, SHARE_HONEYPOT, type SharedForm } from '@hykr/contracts';
 import { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { Button } from '../../components/Button';
 import { DateField } from '../../framework/DateField';
 import { Field } from '../../framework/Field';
@@ -79,6 +79,8 @@ export function PublicForm({ client, form }: { client: Client; form: SharedForm 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  // The trap a person never sees (decisions B23): a bot that fills every field fills it too.
+  const [trap, setTrap] = useState('');
   const set = (key: string, v: unknown) => setAnswers((a) => ({ ...a, [key]: v }));
   if (sent) return <Text style={styles.heading}>{t('share.form.sent')}</Text>;
   if (form.remaining === 0) return <Text style={styles.text}>{t('share.used')}</Text>;
@@ -105,6 +107,7 @@ export function PublicForm({ client, form }: { client: Client; form: SharedForm 
       const r = await client.submit({
         values,
         ...(Object.keys(custom).length ? { custom } : {}),
+        [SHARE_HONEYPOT]: trap,
       });
       if (r.status === 'done') setSent(true);
     } catch (e) {
@@ -113,7 +116,9 @@ export function PublicForm({ client, form }: { client: Client; form: SharedForm 
       setError(
         body?.error === 'link_used'
           ? t('share.used')
-          : (body?.message ?? (e instanceof Error ? e.message : String(e))),
+          : body?.error === 'too_many_answers'
+            ? t('share.tooMany')
+            : (body?.message ?? (e instanceof Error ? e.message : String(e))),
       );
     } finally {
       setBusy(false);
@@ -165,6 +170,16 @@ export function PublicForm({ client, form }: { client: Client; form: SharedForm 
           />
         );
       })}
+      <TextInput
+        value={trap}
+        onChangeText={setTrap}
+        aria-hidden
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        tabIndex={-1}
+        autoComplete="off"
+        style={{ position: 'absolute', left: -10000, width: 1, height: 1, opacity: 0 }}
+      />
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <Button title={t('share.form.send')} icon="send" busy={busy} onPress={submit} />
     </View>

@@ -247,6 +247,9 @@ The framework has no currency, number format or tax rule of its own; a module de
 - **Lines** are a child entity (`traits.parent`, `defineChildEntity`): rows of one parent record,
   in a tree of any depth, reached exactly when the parent is, and saved whole by a command
   (`children.replace`) as one write, one approval and one audit statement.
+  A line that names a catalogue record (a product, a price-list item) declares it in
+  `traits.references` on the child spec; the tree write checks every line's in bulk and the
+  lines read its label (developer guide 5.13, `docs/decisions/R1.md`).
 
 ## Places and totals
 

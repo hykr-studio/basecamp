@@ -159,9 +159,19 @@ export class InboundService implements OnApplicationBootstrap {
     };
   }
 
-  /** POST: verify, store each event once, queue it. Answers fast: senders retry slow ones. */
-  async receive(connectorName: string, connectionId: string, req: InboundRequest) {
+  /**
+   * POST: verify, store each event once, queue it. Answers fast: senders retry slow ones. A
+   * connector's handshake (Graph's `?validationToken=`) is answered with its text instead, and
+   * nothing is stored.
+   */
+  async receive(
+    connectorName: string,
+    connectionId: string,
+    req: InboundRequest,
+  ): Promise<{ stored: number } | { handshake: string }> {
     const { inbound, connection, credentials } = await this.open(connectorName, connectionId);
+    const handshake = inbound.handshake?.(req, credentials) ?? null;
+    if (handshake !== null) return { handshake };
     // A sender that posts headers only (a push channel) says so; any other needs a body to sign.
     if ((!req.rawBody?.length && !inbound.bodyless) || !inbound.verify(req, credentials))
       throw new UnauthorizedException('bad signature');
@@ -203,7 +213,7 @@ export class InboundService implements OnApplicationBootstrap {
     return { stored };
   }
 
-  /* ── One URL for a provider (decisions B21) ─────────────────────────────── */
+  /* ── One URL for a provider (decisions B24) ─────────────────────────────── */
 
   /** Does this connector take a provider's shared URL (`/webhooks/<name>`)? */
   isShared(connectorName: string): boolean {
@@ -336,7 +346,7 @@ export class InboundService implements OnApplicationBootstrap {
    * recovers one whose job was never added.
    */
   async sweep(): Promise<number> {
-    // A connection that needs signing in again keeps its events until it is (decisions B21).
+    // A connection that needs signing in again keeps its events until it is (decisions B24).
     const due = await this.db
       .select({ id: integrationInbound.id })
       .from(integrationInbound)

@@ -173,12 +173,27 @@ export function defineSharedEntity<S extends EntitySpec, T extends Table>(
     return shared as Row | undefined;
   }
 
+  /** `find` for many ids: the business's own rows, then the platform's for the ids left. */
+  async function findMany(conn: Conn, p: Principal, ids: readonly string[]): Promise<Row[]> {
+    const mine = await own.findMany(conn, p, ids);
+    const got = new Set(mine.map((r) => String((r as Values).id)));
+    const rest = ids.filter((id) => !got.has(id));
+    const theirs = rest.length ? platformWhere(p, { overridden: true }) : undefined;
+    if (!theirs) return mine;
+    const shared = await conn
+      .select()
+      .from(table as Table)
+      .where(and(theirs, inArray(idCol, rest)));
+    return [...mine, ...(shared as Row[])];
+  }
+
   return {
     ...def,
     repo: {
       ...own,
       list,
       find,
+      findMany,
       async get(conn, p, id) {
         const row = await find(conn, p, id);
         if (!row)

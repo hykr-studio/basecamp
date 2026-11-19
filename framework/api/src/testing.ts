@@ -240,14 +240,41 @@ export async function eventually<T>(
 
 /** The in-memory Google a test server talks to with GOOGLE_CALENDAR_TRANSPORT=fake. */
 export { type FakeGoogle, fakeGoogle } from '@hykr/connectors/google-calendar';
+/** The in-memory Microsoft a test server talks to with MICROSOFT_CALENDAR_TRANSPORT=fake. */
+export { type FakeMicrosoft, fakeMicrosoft } from '@hykr/connectors/microsoft-calendar';
 
 /**
- * Connect a person's Google calendar on the fake Google (GOOGLE_CALENDAR_TRANSPORT=fake), as the
- * app does: the API's consent URL (the fake agrees at once), Google's redirect through the API's
- * callback to the app, and the app finishing it under the person's session. `headers` go with
- * both of the person's calls (`x-tenant-id`). Returns the finish's answer and where the browser
- * landed.
+ * Connect a person's calendar on a fake provider, as the app does: the API's consent URL (the
+ * fake agrees at once), the provider's redirect through the API's callback to the app, and the
+ * app finishing it under the person's session. `headers` go with both of the person's calls
+ * (`x-tenant-id`). Returns the finish's answer and where the browser landed.
  */
+export async function connectCalendar(
+  person: Person,
+  provider: 'google' | 'microsoft',
+  headers: Record<string, string> = {},
+) {
+  const start = await person.call<{ url: string }>(
+    'POST',
+    `/api/calendar/${provider}/start`,
+    {},
+    headers,
+  );
+  if (start.status !== 201) throw new Error(`connecting: ${JSON.stringify(start.body)}`);
+  const back = await fetch(start.body.url, { redirect: 'manual' });
+  const landing = new URL(back.headers.get('location') ?? '');
+  const code = landing.searchParams.get('code') ?? '';
+  const state = landing.searchParams.get('state') ?? '';
+  const done = await person.call(
+    'POST',
+    `/api/calendar/${provider}/complete`,
+    { code, state },
+    headers,
+  );
+  return { ...done, landing };
+}
+
+/** Connect a person's Google calendar on the fake Google (GOOGLE_CALENDAR_TRANSPORT=fake). */
 export async function connectGoogleCalendar(person: Person, headers: Record<string, string> = {}) {
   const start = await person.call<{ url: string }>(
     'POST',
@@ -263,7 +290,7 @@ export async function connectGoogleCalendar(person: Person, headers: Record<stri
   const done = await person.call('POST', '/api/calendar/google/complete', { code, state }, headers);
   return { ...done, landing };
 }
-/** A fake OAuth provider (and Meta Graph) on 127.0.0.1, for connectors that sign in (B21). */
+/** A fake OAuth provider (and Meta Graph) on 127.0.0.1, for connectors that sign in (B24). */
 export {
   type FakeLead,
   type FakeOAuthProvider,
@@ -306,6 +333,10 @@ export async function connectOAuth(
   );
   return { ...done, landing, code, state };
 }
+
+/** Connect a person's Microsoft calendar on the fake Microsoft (MICROSOFT_CALENDAR_TRANSPORT=fake). */
+export const connectMicrosoftCalendar = (person: Person, headers: Record<string, string> = {}) =>
+  connectCalendar(person, 'microsoft', headers);
 
 /** The application the test booted (its catalog, registry, notifications and assistant). */
 export { runtime } from './runtime.js';

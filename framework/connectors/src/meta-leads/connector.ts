@@ -1,4 +1,4 @@
-// Facebook and Instagram lead ads (decisions B21): a business signs in with Facebook, picks the
+// Facebook and Instagram lead ads (decisions B24): a business signs in with Facebook, picks the
 // pages whose lead forms it wants, and Meta posts each new lead to the app's one webhook URL,
 // `/webhooks/meta-leads`, signed with the app's secret and naming the page. The page ids come from
 // Meta's own answer at sign-in (`/me/accounts`), so a lead reaches only the business holding its

@@ -10,5 +10,6 @@ export { handoffScripts } from './handoff.js';
 export { jobsScripts } from './jobs.js';
 export { memoryScripts } from './memory.js';
 export { pagesScripts } from './pages.js';
+export { shareScripts } from './share.js';
 export { statesScripts } from './states.js';
 export { testingScripts } from './testing.js';

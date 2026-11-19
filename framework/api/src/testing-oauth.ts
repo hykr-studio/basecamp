@@ -1,4 +1,4 @@
-// A fake OAuth provider for end-to-end tests (decisions B21): an HTTP server on 127.0.0.1 that
+// A fake OAuth provider for end-to-end tests (decisions B24): an HTTP server on 127.0.0.1 that
 // plays both a standard OAuth 2.0 provider (authorize, token, refresh, RFC 7009 revoke, a small
 // API) and Meta's Graph API as the meta-leads connector uses it (the long-lived exchange,
 // permissions, pages, page subscriptions, leads). It agrees at once at the consent screen, and a

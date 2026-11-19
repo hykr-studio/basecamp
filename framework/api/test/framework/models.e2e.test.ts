@@ -171,6 +171,7 @@ describe('GET /api/models', () => {
       label: 'Large',
       region: 'north',
       allowed: false,
+      capabilities: [],
       price: PRICE,
     });
     expect(res.body.models.find((m: { ref: string }) => m.ref === 'fake/scripted').allowed).toBe(

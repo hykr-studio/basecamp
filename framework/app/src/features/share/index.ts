@@ -5,7 +5,10 @@ export {
   useCanShare,
   useCreateShare,
   useManagesShares,
+  useReissueShare,
+  useRenewShare,
   useRevokeShare,
+  useSendShare,
   useShareKinds,
   useShares,
 } from './hooks';

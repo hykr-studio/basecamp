@@ -8,6 +8,7 @@ import { parseArgs } from 'node:util';
 import { dropBranchMigrations } from './db-rebase.js';
 import { IMPORT_OPTIONS, IMPORT_USAGE, type ImportFlags, importArgs } from './import-args.js';
 import { moduleAdd } from './module-add.js';
+import { vapidEnv } from './webpush-keys.js';
 
 /** The "basecamp" block of the application's package.json. */
 type Config = {
@@ -56,6 +57,7 @@ const HELP = `basecamp: run an application on the Basecamp framework
                                      default model, or one model of MODEL_PROVIDERS), every
                                      module's evals or one module's
   basecamp studio                    Mastra Studio for the assistant
+  basecamp webpush keys              a new VAPID key pair for web push, as .env lines
 
 Run it anywhere inside an application: the nearest package.json with a "basecamp" block is the
 application's root, and the nearest .env at or above it is loaded.`;
@@ -212,6 +214,12 @@ async function main() {
     console.log(HELP);
     return;
   }
+  // Needs no application: it only makes keys.
+  if (command === 'webpush') {
+    if (sub !== 'keys') fail('webpush keys');
+    console.log(vapidEnv());
+    return;
+  }
   const { root, config } = findRoot(process.cwd());
   loadEnv(root);
   const pm = packageManager(root);
@@ -356,6 +364,9 @@ async function main() {
       if (!['assistant', 'voice', 'whatsapp'].includes(suite))
         fail('eval assistant, eval voice or eval whatsapp');
       process.env.MODEL_MODE = values.live ? 'live' : 'fake';
+      // Each turn is scored from its stored trace, and Mastra writes traces in batches five
+      // seconds apart: a short batch here, so a turn takes as long as its work.
+      process.env.TRACE_BATCH_MS ??= '100';
       // One registered model for this run: check a model before a business allows it.
       if (values.model) {
         if (!values.live) fail('--model needs --live: the scripted model answers otherwise');

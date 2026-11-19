@@ -1,0 +1,1 @@
+ALTER TABLE "app"."calendar_connections" ADD COLUMN "write_to" boolean DEFAULT false NOT NULL;

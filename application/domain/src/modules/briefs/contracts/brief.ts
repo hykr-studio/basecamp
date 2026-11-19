@@ -17,7 +17,7 @@ const neededBy = storableDate();
 
 /**
  * Where a brief came from: the team typed it in, a customer answered the brief form, or a lead
- * form of the business's Facebook or Instagram ads (the meta-leads connection, decisions B21).
+ * form of the business's Facebook or Instagram ads (the meta-leads connection, decisions B24).
  */
 export const BRIEF_SOURCES = ['team', 'form', 'lead_ad'] as const;
 /** The brief form's name: what a share link to it names (server/form.ts declares it). */

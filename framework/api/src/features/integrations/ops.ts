@@ -650,7 +650,7 @@ export function retryDeliveryOp(
   };
 }
 
-/* ── Signed-in connections (decisions B21) ──────────────────────────────────── */
+/* ── Signed-in connections (decisions B24) ──────────────────────────────────── */
 
 /**
  * An account held elsewhere (by another connection, in any business) refuses the write: a

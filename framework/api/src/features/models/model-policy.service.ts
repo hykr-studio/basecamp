@@ -1,6 +1,7 @@
 import {
   allows,
   chooseModel,
+  chooseVision,
   type EmbeddingModel,
   isFakeModel,
   type ModelChoice,
@@ -99,7 +100,7 @@ export class ModelPolicyService implements ModelGate, OnModuleInit, OnModuleDest
   /** The model for one use, or why none: settings or a registry that fail are a refusal. */
   private async pick(
     tenantId: string | null | undefined,
-    kind: ModelKind,
+    kind: ModelKind | 'vision',
     requested?: string,
   ): Promise<ModelChoice | ModelRefusal> {
     let policy: ModelPolicy;
@@ -115,7 +116,23 @@ export class ModelPolicyService implements ModelGate, OnModuleInit, OnModuleDest
     } catch (e) {
       return refusal('model_not_configured', reasonOf(e));
     }
+    if (kind === 'vision') return chooseVision(registry, policy);
     return chooseModel(registry, policy, { kind, requested });
+  }
+
+  /**
+   * The model that reads files for this business (its `vision` model, else its chat model if
+   * that one has vision), with its provider's region. Throws ModelRefused (`no_vision_model`).
+   */
+  async visionFor(tenantId: string | null | undefined): Promise<ModelChoice> {
+    const choice = await this.pick(tenantId, 'vision');
+    if (!choice.ok)
+      throw new ModelRefused(
+        choice.rule === 'no_vision_model'
+          ? choice
+          : { ...choice, rule: 'no_vision_model', status: 409 },
+      );
+    return choice;
   }
 
   /** The chat model for one of this business's turns (`requested`: a turn hook's). */
@@ -159,12 +176,14 @@ export class ModelPolicyService implements ModelGate, OnModuleInit, OnModuleDest
       embedding: offers('embedding')
         ? useOf(chooseModel(registry, policy, { kind: 'embedding' }))
         : null,
+      vision: useOf(chooseVision(registry, policy)),
       models: registry.models.map((m) => ({
         ref: m.ref,
         kind: m.kind,
         ...(m.label ? { label: m.label } : {}),
         ...(m.region ? { region: m.region } : {}),
         allowed: allows(registry, policy, m),
+        capabilities: [...m.capabilities],
         ...(prices && m.price ? { price: m.price } : {}),
       })),
     };

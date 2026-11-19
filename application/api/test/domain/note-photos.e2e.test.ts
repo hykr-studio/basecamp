@@ -224,3 +224,47 @@ describe('photos on notes', () => {
     });
   });
 });
+
+describe('reading a photo', () => {
+  it('a bill photo is read in the turn and becomes a to-do with its cost, waiting for approval', async () => {
+    // The scripted vision model sees what follows FAKE-VISION: in the bytes.
+    const bill = Buffer.concat([
+      png,
+      Buffer.from('FAKE-VISION:Amount: 1250 Vendor: Sharma Hardware'),
+    ]);
+    const pre = await alice.call('POST', '/api/files', {
+      name: 'bill.png',
+      mime: 'image/png',
+      size: bill.length,
+      for: { entity: 'note', field: 'photos' },
+    });
+    await fetch(`${server.base}${pre.body.upload.url}`, {
+      method: 'PUT',
+      headers: pre.body.upload.headers,
+      body: new Uint8Array(bill),
+    });
+    const id = pre.body.file.id as string;
+    expect((await alice.call('POST', `/api/files/${id}/confirm`)).status).toBe(200);
+
+    // As a WhatsApp turn names a file that came with it.
+    const said = await alice.chat(
+      `add this bill\nA file came with this message: "bill.png" (image/png, 1 KB), file id ${id}. To keep it on a record, put this id in one of that record's file fields. To see what it shows, read it with read-file.`,
+    );
+    expect(said.body.reply).toContain("I've asked for your approval");
+    const todos = await pool.query(
+      `select count(*)::int as n from app.todos where tenant_id = $1 and title = 'Pay Sharma Hardware'`,
+      [tenantId],
+    );
+    expect(todos.rows[0].n).toBe(0);
+    const waiting = await pool.query(
+      `select status from app.approvals where tenant_id = $1 and payload::text like '%Pay Sharma Hardware%' and payload::text like '%125000%'`,
+      [tenantId],
+    );
+    expect(waiting.rows).toEqual([{ status: 'pending' }]);
+    const reads = await pool.query(
+      `select count(*)::int as n from audit.events where action = 'file.read_by_model' and resource_id = $1`,
+      [id],
+    );
+    expect(reads.rows[0].n).toBe(1);
+  });
+});

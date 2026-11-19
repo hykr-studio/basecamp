@@ -1,4 +1,4 @@
-// A business's integrations (B10, B21) as the API lists them: the kinds of outside systems it can
+// A business's integrations (B10, B24) as the API lists them: the kinds of outside systems it can
 // connect, and its connections. Never a credential or a token.
 import type { Labels } from '@hykr/i18n';
 

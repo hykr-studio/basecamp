@@ -1,4 +1,4 @@
-// Connectors that sign in (B21) as an application uses them: a standard OAuth 2.0 connector (the
+// Connectors that sign in (B24) as an application uses them: a standard OAuth 2.0 connector (the
 // fake provider's account is the one account it reaches, held at once) and Meta's lead ads (pages
 // picked after signing in, one shared webhook URL), with a handler that records each lead it
 // takes. Both point at the test's fake provider through the deployment's environment

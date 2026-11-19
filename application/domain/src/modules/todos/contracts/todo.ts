@@ -94,8 +94,13 @@ export const TodoSpec = entitySpec({
       custom: '{ "priority": "high" }',
     },
   },
-  // An agent never deletes without the person.
-  approval: { delete: (p) => p.actor.kind === 'agent' },
+  // An agent never deletes without the person, and never adds a to-do that costs money (a bill
+  // it read from a photo, say) without them.
+  approval: {
+    delete: (p) => p.actor.kind === 'agent',
+    create: (p, { input }) =>
+      p.actor.kind === 'agent' && typeof input?.cost === 'number' && input.cost > 0,
+  },
   views: { list: 'todo.list', item: 'todo.item' },
   traits: {
     // Each business adds its own fields to to-dos (Settings → Custom fields: a priority, say).

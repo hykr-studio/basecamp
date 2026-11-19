@@ -1,4 +1,4 @@
-// An OAuth connection's grant (decisions B21): sealed for its row with SECRETS_KEY (the bus's box;
+// An OAuth connection's grant (decisions B24): sealed for its row with SECRETS_KEY (the bus's box;
 // what is refreshed is sealed again with the current key), opened only to call the provider,
 // refreshed when fewer than 60 seconds remain, and marked `needs_reauth` (audited, with a stored
 // event its managers are told of) when the provider stops taking it.

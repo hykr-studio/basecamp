@@ -278,6 +278,75 @@ describe('an order shared with its customer', () => {
   });
 });
 
+describe('an order’s page that lasts and is sent (B23)', () => {
+  it('has no end where the business allows it, and goes to the order’s customer once', async () => {
+    // The customer's own order: the order's customer is who a lasting page is for.
+    const saved = await customer.call(
+      'POST',
+      '/api/orders/save',
+      {
+        title: 'Rao residence',
+        items: [
+          { ref: 'w', title: 'Wardrobe', quantity: 1, unitPrice: '42000.00', taxRateBp: 1800 },
+        ],
+      },
+      inTenant(),
+    );
+    expect(saved.status).toBe(200);
+    const order = saved.body.value.order as Json;
+    const target = { entity: 'order', id: order.id };
+    const refused = await owner.call('POST', '/api/shares', { target, expiresInDays: null });
+    expect(refused.body.rule).toBe('too_long');
+    await setTenantSettings(tenantId, { shares: { allowLasting: true } });
+    await pool.query(
+      `insert into channel.templates (name, language, category, content_hash, status)
+       values ('order_link_v1', 'en', 'utility', 'test', 'APPROVED')
+       on conflict (name, language) do update set status = excluded.status`,
+    );
+    const made = await owner.call('POST', '/api/shares', {
+      target,
+      to: { recordCustomer: true },
+      expiresInDays: null,
+      send: {},
+    });
+    expect(made.status).toBe(201);
+    expect(made.body.value).toMatchObject({ expiresAt: null, to: { customerId } });
+    const send = await eventually(async () => {
+      const { rows } = await pool.query(
+        `select * from app.share_sends where link_id = $1 and status in ('sent', 'failed')`,
+        [made.body.value.id],
+      );
+      return rows[0];
+    });
+    expect(send).toMatchObject({ status: 'sent', token_sealed: null });
+    if (send.channel === 'whatsapp') {
+      const { rows } = await pool.query(
+        'select template, body from channel.messages where id = $1',
+        [send.message_id],
+      );
+      expect(rows[0].template).toBe('order_link_v1');
+      expect(JSON.stringify(rows[0].body)).not.toContain(made.body.value.token);
+    }
+    expect((await guest('GET', `/api/share/${made.body.value.token}`)).status).toBe(200);
+  });
+
+  it('the brief form posted on a website has no end, and asks for the page’s trap field', async () => {
+    const made = await owner.call('POST', '/api/shares', {
+      target: { form: 'briefs.brief' },
+      expiresInDays: null,
+    });
+    expect(made.status).toBe(201);
+    const token = made.body.value.token;
+    const values = { name: 'Web visitor', summary: 'A kitchen' };
+    expect((await guest('POST', `/api/share/${token}/submit`, { values })).body.error).toBe(
+      'spam_suspected',
+    );
+    expect((await guest('POST', `/api/share/${token}/submit`, { values, hp: '' })).status).toBe(
+      201,
+    );
+  });
+});
+
 describe('the brief form', () => {
   it('asks the brief’s questions, and an answer is a brief for a new customer', async () => {
     const made = await owner.call('POST', '/api/shares', { target: { form: 'briefs.brief' } });

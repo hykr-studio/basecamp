@@ -41,7 +41,7 @@ export interface SharedApp {
 }
 
 /**
- * One URL for the whole provider, `/webhooks/<connector>` (decisions B21): the provider signs
+ * One URL for the whole provider, `/webhooks/<connector>` (decisions B24): the provider signs
  * every request with the app's secret, and each event names the account it is about. Only an
  * account a sign-in found (`oauth.describe`, from the provider's own answer) receives events, so
  * no business can claim another's.
@@ -88,6 +88,13 @@ export interface ConnectorInbound<C> {
   parse?(req: InboundRequest, credentials: C): readonly InboundEvent[];
   /** A subscription check by GET: the text to answer with, or null to refuse it (403). */
   challenge?(req: InboundRequest, credentials: C): string | null;
+  /**
+   * A subscription check by POST (Microsoft Graph's `?validationToken=`): the text to answer
+   * with, as text/plain, or null when the request is not one (it is then verified as usual).
+   * Nothing is stored for it. Such a check carries no proof, so the answer must only echo what
+   * the sender sent.
+   */
+  handshake?(req: InboundRequest, credentials: C): string | null;
   /** One URL for the provider, routed by account: needs `oauth`. */
   shared?: SharedInbound;
   /**
@@ -114,7 +121,7 @@ export interface Connector<C = unknown> {
   /** Make the credentials for a new connection (the secret the sender signs with). */
   generate?(): C;
   inbound?: ConnectorInbound<C>;
-  /** Connected by signing in, never by pasting credentials (decisions B21). */
+  /** Connected by signing in, never by pasting credentials (decisions B24). */
   oauth?: ConnectorOAuth;
 }
 

@@ -1,10 +1,13 @@
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { api } from '../../api';
 import type { AppPlugin } from '../../framework/app-domain';
+import { activityReporter } from './activity';
 import { appPathOf } from './links';
+import { PushBanner } from './PushControls';
+import { signOutWebPush, startWebPush } from './web';
 
 export type PushOptions = {
   /** The EAS project id. Default: the app config's `extra.eas.projectId`. */
@@ -47,15 +50,28 @@ async function register(options: PushOptions): Promise<string | undefined> {
 }
 
 /**
- * Push notifications on iOS and Android: after sign-in the device is registered for the
+ * Push notifications. On iOS and Android: after sign-in the device is registered for the
  * person (the server sends what notifications list `push` for), a tap opens the notification's
  * link, and sign-out forgets the device. Needs the `expo-notifications` config plugin in the
  * app's app.json and an EAS project id.
+ *
+ * In a browser (web push): after sign-in the service worker (`/push-sw.js`) is registered, and
+ * when the person allowed notifications here before, the browser is registered again; otherwise
+ * a strip and the person's card offer "Turn on notifications", which asks the browser only on
+ * that click. A click on a notification focuses the app's tab (or opens one) on its link, and
+ * sign-out forgets the browser. Needs `@hykr/app` in the app's app.json plugins (it copies the
+ * service worker and a manifest into public/) and WEB_PUSH_* keys on the server.
  */
 export function pushPlugin(options: PushOptions = {}): AppPlugin {
+  const web = Platform.OS === 'web';
   return {
     name: 'push',
+    ...(web ? { Banner: PushBanner } : {}),
+    onSignOut: async () => {
+      if (web) await signOutWebPush();
+    },
     onSignedIn: () => {
+      if (web) return startWebPush();
       if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
       // In the foreground too: a banner and the list, no badge.
       Notifications.setNotificationHandler({
@@ -78,16 +94,29 @@ export function pushPlugin(options: PushOptions = {}): AppPlugin {
         open(response.notification.request.content.data);
         void Notifications.clearLastNotificationResponseAsync();
       });
+      // Where the person is: a push goes to the one device they used last. Each time the app
+      // comes to the front, and every few minutes while it stays there.
+      const activity = activityReporter(() =>
+        token ? api.push.active(token) : Promise.resolve(null),
+      );
+      const onFront = () => {
+        if (token && AppState.currentState === 'active') activity.ping();
+      };
+      const fronted = AppState.addEventListener('change', onFront);
+      const every = setInterval(onFront, 5 * 60_000);
       void register(options).then(
         (t) => {
           token = t;
           if (stopped && t) forget(t);
+          else onFront();
         },
         (e) => console.warn('Push notifications are off: registering this device failed:', e),
       );
       return () => {
         stopped = true;
         taps.remove();
+        fronted.remove();
+        clearInterval(every);
         if (token) forget(token);
       };
     },

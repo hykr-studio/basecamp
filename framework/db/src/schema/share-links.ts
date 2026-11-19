@@ -1,14 +1,14 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { index, integer, jsonb, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { app, id } from './base.js';
-import { contacts } from './channel.js';
+import { contacts, messages } from './channel.js';
 import { customers, tenants } from './tenancy.js';
 
 /**
  * Share links (docs/decisions/B9.md): one record, saved page or public form a business shows to
- * someone without an account. Only the token's SHA-256 is kept. Every link ends (`expiresAt`),
- * can be revoked, may count its uses (a form's answers), and may ask its recipient for a one-time
+ * someone without an account. Only the token's SHA-256 is kept. A link ends at `expiresAt`, or,
+ * with none (a lasting link, decisions B23), only when it is revoked. Any link can be revoked, may count its uses (a form's answers), and may ask its recipient for a one-time
  * code (`otpChannel`) before it shows anything. Rows stay after revocation, for the audit.
  */
 export const shareLinks = app.table(
@@ -45,7 +45,8 @@ export const shareLinks = app.table(
     uses: integer('uses').notNull().default(0),
     views: integer('views').notNull().default(0),
     lastViewedAt: timestamp('last_viewed_at', { withTimezone: true }),
-    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    /** Null: it has no end date (a lasting link): it ends when revoked. */
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     revokedBy: text('revoked_by'),
     /**
@@ -88,4 +89,43 @@ export const shareSessions = app.table(
     uniqueIndex('share_sessions_token_idx').on(t.tokenHash),
     index('share_sessions_link_idx').on(t.linkId),
   ],
+);
+
+/**
+ * A link sent to its recipient by the framework (decisions B23): by WhatsApp or email, once. The
+ * token is kept nowhere in clear: it waits here sealed with SECRETS_KEY (`tokenSealed`, opened
+ * only for this business and row) until the send finishes, then it is wiped. A send is claimed
+ * by one job (`claimedBy`), and a send found mid-way is finished from what is recorded, never
+ * sent twice.
+ */
+export const shareSends = app.table(
+  'share_sends',
+  {
+    id: id(),
+    tenantId: text('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    linkId: text('link_id')
+      .notNull()
+      .references(() => shareLinks.id, { onDelete: 'cascade' }),
+    /** The link's recipient as it was asked for: { contactId } | { customerId } | { email }. */
+    recipient: jsonb('recipient').$type<Record<string, string>>().notNull(),
+    /** The channel asked for, or the one it went by. */
+    channel: text('channel', { enum: ['whatsapp', 'email'] }),
+    /** Where it went (a wa_id or an email). */
+    address: text('address'),
+    status: text('status', { enum: ['waiting', 'queued', 'sending', 'sent', 'failed'] })
+      .notNull()
+      .default('queued'),
+    claimedBy: text('claimed_by'),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    messageId: text('message_id').references(() => messages.id, { onDelete: 'set null' }),
+    error: text('error'),
+    requestedBy: text('requested_by').references(() => user.id, { onDelete: 'set null' }),
+    /** The token, sealed, until the send finishes; null after. */
+    tokenSealed: text('token_sealed'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+  },
+  (t) => [index('share_sends_link_idx').on(t.linkId), index('share_sends_status_idx').on(t.status)],
 );

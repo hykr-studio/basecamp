@@ -59,6 +59,8 @@ export const AcceptanceInfo = z.object({
     version: z.number().int(),
     sha256: z.string(),
     fileName: z.string(),
+    /** The images the PDF shows: each file and the SHA-256 of its bytes when it was made. */
+    images: z.array(z.object({ fileId: z.string(), sha256: z.string() })).optional(),
   }),
   /** The words agreed to, in the language they were shown in. */
   statement: z.string(),

@@ -1,7 +1,7 @@
 import type { Subject } from '@hykr/contracts';
 import type { Conn } from '@hykr/core';
-import { shareLinks } from '@hykr/db';
-import { and, eq, type SQL, sql } from 'drizzle-orm';
+import { shareLinks, shareSends } from '@hykr/db';
+import { and, eq, inArray, type SQL, sql } from 'drizzle-orm';
 import type { ErasureContributor, ExportContributor } from '../../hooks.js';
 import { emailOf } from '../members/privacy.js';
 import { targetOf } from './ops.js';
@@ -24,8 +24,9 @@ async function naming(conn: Conn, subject: Subject, tenantId?: string): Promise<
 /**
  * "Delete my data": every link made for the subject is revoked and forgets whom it was for
  * (the contact or email, where its code went, and its label, which the maker wrote for them), in
- * the erasure's transaction. The rows stay (the audit names them), without the person; their
- * copies (audit rows, replies) lose the same.
+ * the erasure's transaction, and its sends forget where they went (B23: the recipient and the
+ * address; a send still waiting fails, its sealed token wiped). The rows stay (the audit names
+ * them), without the person; their copies (audit rows, replies) lose the same.
  */
 export const shareLinksErasure: ErasureContributor = {
   name: 'share-links',
@@ -45,6 +46,19 @@ export const shareLinksErasure: ErasureContributor = {
       })
       .where(where)
       .returning({ id: shareLinks.id });
+    const ids = erased.map((l) => l.id);
+    if (ids.length) {
+      await tx
+        .update(shareSends)
+        .set({ recipient: {}, address: null, tokenSealed: null })
+        .where(inArray(shareSends.linkId, ids));
+      await tx
+        .update(shareSends)
+        .set({ status: 'failed', error: 'erased' })
+        .where(
+          and(inArray(shareSends.linkId, ids), inArray(shareSends.status, ['waiting', 'queued'])),
+        );
+    }
     return {
       count: erased.length,
       erased: [
@@ -73,7 +87,7 @@ export const shareLinksExport: ExportContributor = {
         target: targetOf(r),
         label: r.label,
         views: r.views,
-        expiresAt: r.expiresAt.toISOString(),
+        expiresAt: r.expiresAt?.toISOString() ?? null,
         revokedAt: r.revokedAt?.toISOString() ?? null,
         createdAt: r.createdAt.toISOString(),
       })),

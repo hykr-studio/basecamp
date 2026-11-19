@@ -24,6 +24,7 @@ import {
   type BusyTimes,
   type CalendarConnectionInfo,
   type CalendarFeedInfo,
+  type CalendarProvider,
   type CalendarProviderInfo,
   type CallInfo,
   type CallProviderInfo,
@@ -105,6 +106,8 @@ import {
   type PublicBranding,
   type PushDevice,
   pathParams,
+  type ReadFileInput,
+  type ReadFileResult,
   type RecallQuery,
   type RecallResult,
   type RecordGrant,
@@ -146,6 +149,7 @@ import {
   type VoiceSessionEnd,
   type VoiceSessionRequest,
   type VoiceSessionResponse,
+  type WebPushKey,
   type WriteResult,
 } from '@hykr/contracts';
 import type { z } from 'zod';
@@ -480,6 +484,9 @@ export function createApiClient(opts: ApiClientOptions) {
     remove: (id: string) => call<null>('DELETE', fileUrl(id)),
     /** An audio file's words (kept once heard). */
     transcribe: (id: string) => call<FileTranscript>('POST', fileUrl(id, '/transcribe')),
+    /** What the business's vision model reads in an image or a PDF (its chosen pages). */
+    read: (id: string, body: ReadFileInput = {}) =>
+      call<ReadFileResult>('POST', fileUrl(id, '/read'), body),
     /**
      * Presign, PUT the bytes, confirm: a ready file for one entity's file field, whose id the
      * record's create or update then carries.
@@ -980,11 +987,29 @@ export function createApiClient(opts: ApiClientOptions) {
     chat: (input: ChatRequest) => call<ChatResponse>('POST', '/api/chat/once', input),
     chatStream,
     live,
-    /** This device, for push (people only); forget needs no session. */
+    /**
+     * This device or browser, for push (people only); forget needs no session. A phone registers
+     * its Expo token, a browser its Web Push subscription (with `webKey`'s public key).
+     */
     push: {
       register: (input: RegisterPushToken) => call<PushDevice>('POST', '/api/push/tokens', input),
       devices: () => call<PushDevice[]>('GET', '/api/push/tokens'),
-      forget: (token: string) => call<null>('POST', '/api/push/tokens/forget', { token }),
+      /** A phone's token, or `{ endpoint }` for a browser. */
+      forget: (device: string | { endpoint: string }) =>
+        call<null>(
+          'POST',
+          '/api/push/tokens/forget',
+          typeof device === 'string' ? { token: device } : { endpoint: device.endpoint },
+        ),
+      /** The person is using the app on this device (its token) or in this browser now. */
+      active: (device: string | { endpoint: string }) =>
+        call<null>(
+          'POST',
+          '/api/push/tokens/active',
+          typeof device === 'string' ? { token: device } : { endpoint: device.endpoint },
+        ),
+      /** The server's VAPID public key; null when web push is off. */
+      webKey: () => call<WebPushKey>('GET', '/api/push/web/key'),
     },
     /** Voice: a person starts a session; the voice worker reports its end. */
     voice: {
@@ -1035,21 +1060,34 @@ export function createApiClient(opts: ApiClientOptions) {
     calendar: {
       providers: () => call<CalendarProviderInfo[]>('GET', '/api/calendar/providers'),
       /**
-       * The consent screen's URL: open it. Google sends the browser back to the API, which sends
-       * it on to the app (`returnTo`: the web app, or the native app's link) with a code and a
-       * state for `complete`.
+       * The consent screen's URL: open it. The provider sends the browser back to the API,
+       * which sends it on to the app (`returnTo`: the web app, or the native app's link) with a
+       * code, a state and the provider for `complete`.
        */
-      connect: (provider: 'google' = 'google', returnTo?: 'web' | 'app') =>
-        call<{ url: string }>('POST', '/api/calendar/connections', {
-          provider,
-          ...(returnTo ? { returnTo } : {}),
-        }),
+      connect: (provider: CalendarProvider = 'google', returnTo?: 'web' | 'app') =>
+        call<{ url: string }>(
+          'POST',
+          `/api/calendar/${encodeURIComponent(provider)}/start`,
+          returnTo ? { returnTo } : {},
+        ),
       /** Finish connecting, as the person who started it, in the business they started it in. */
-      complete: (input: { code: string; state: string }, key = newKey()) =>
+      complete: (
+        input: { code: string; state: string },
+        key = newKey(),
+        provider: CalendarProvider = 'google',
+      ) =>
         call<WriteResult<CalendarConnectionInfo>>(
           'POST',
-          '/api/calendar/google/complete',
+          `/api/calendar/${encodeURIComponent(provider)}/complete`,
           input,
+          key,
+        ),
+      /** Write the person's records to this calendar of theirs (when they connected several). */
+      setWriteTo: (id: string, key = newKey()) =>
+        call<WriteResult<CalendarConnectionInfo>>(
+          'PATCH',
+          `/api/calendar/connections/${encodeURIComponent(id)}`,
+          { writeTo: true },
           key,
         ),
       connections: () => call<CalendarConnectionInfo[]>('GET', '/api/calendar/connections'),
@@ -1098,7 +1136,7 @@ export function createApiClient(opts: ApiClientOptions) {
     },
     /**
      * The business's connections to other services, for people who manage integrations: the
-     * connectors it can connect, its connections, and connecting one by signing in (B21).
+     * connectors it can connect, its connections, and connecting one by signing in (B24).
      */
     integrations: {
       connectors: () => call<ConnectorInfo[]>('GET', '/api/integrations/connectors'),

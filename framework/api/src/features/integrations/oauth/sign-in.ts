@@ -1,4 +1,4 @@
-// A connection sign-in under way (decisions B21, as the calendar's B17 36 and 37). The state the
+// A connection sign-in under way (decisions B24, as the calendar's B17 36 and 37). The state the
 // provider carries is a random token; the server keeps, under its SHA-256, who started the
 // sign-in, in which business, for which connector, the PKCE verifier (sealed for the row) and
 // where the browser returns. The row is taken once, and only the person who started it, signed
