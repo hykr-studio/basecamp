@@ -364,6 +364,9 @@ async function main() {
       if (!['assistant', 'voice', 'whatsapp'].includes(suite))
         fail('eval assistant, eval voice or eval whatsapp');
       process.env.MODEL_MODE = values.live ? 'live' : 'fake';
+      // Each turn is scored from its stored trace, and Mastra writes traces in batches five
+      // seconds apart: a short batch here, so a turn takes as long as its work.
+      process.env.TRACE_BATCH_MS ??= '100';
       // One registered model for this run: check a model before a business allows it.
       if (values.model) {
         if (!values.live) fail('--model needs --live: the scripted model answers otherwise');

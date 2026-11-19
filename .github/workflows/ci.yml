@@ -5,7 +5,12 @@ on:
     branches: [main]
   pull_request:
 
-# Both jobs run against the same services (each its own), with the same settings.
+# A push to a pull request replaces the run of the push before it.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The jobs run side by side, each against its own services, with the same settings.
 env:
   DATABASE_URL: postgres://app:app@localhost:5432/app
   MIGRATE_DATABASE_URL: postgres://app:app@localhost:5432/app
@@ -36,7 +41,35 @@ env:
   # line here only when its default is wrong for CI.
 
 jobs:
-  ci:
+  # What needs no services: the linters, the whole build (the apps' web exports included), the
+  # types, the dependency rules, and every package's unit tests.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version from package.json's packageManager
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+      - run: pnpm lint:boundary
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint:deps
+      - name: Unit tests (every package but the two the e2e jobs run)
+        run: pnpm turbo run test --filter='!@hykr/api' --filter='!@application/api'
+
+  # The framework's own tests: the compiled API booted on the fixture application, per file.
+  # The files run side by side, each worker on a database of its own (framework/api/test).
+  framework:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -73,15 +106,53 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Prepare the database (extensions, search path)
-        run: psql postgres://app:app@localhost:5432/app -v ON_ERROR_STOP=1 -f framework/cli/infra/postgres/init.sql
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f framework/cli/infra/postgres/init.sql
 
-      - run: pnpm lint
-      - run: pnpm lint:boundary
-      - run: pnpm build
-      - run: pnpm typecheck
-      - run: pnpm lint:deps
-      - run: pnpm db:migrate
-      - run: pnpm test
+      - run: pnpm turbo run build --filter=@hykr/api...
+      - run: pnpm --filter @hykr/api test
+
+  # The sample application's tests: its compiled API, per file, the same way.
+  application:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        # GitHub's runners are amd64, where postgis/postgis has images.
+        image: postgis/postgis:17-3.5
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app -d app"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+      # Email, for notifications WhatsApp can't deliver (the notification tests read it).
+      mailpit:
+        image: axllent/mailpit:latest
+        ports: ["1025:1025", "8025:8025"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version from package.json's packageManager
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Prepare the database (extensions, search path)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f framework/cli/infra/postgres/init.sql
+
+      - run: pnpm turbo run build --filter=@application/api...
+      - run: pnpm --filter @application/api test
 
   # The framework as a user gets it: every @hykr/* package packed as it would be published, a
   # new application scaffolded with create-basecamp, installed from those tarballs (no
@@ -90,7 +161,7 @@ jobs:
   # scripts/consumer.sh is the job; run it locally the same way.
   consumer:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
 
     services:
       postgres:

@@ -39,8 +39,9 @@ pnpm dev              # framework tsc -w watchers + `basecamp dev` (API, worker,
 
 - `pnpm lint`: Biome check (`pnpm format` fixes it). Style: single quotes, 2-space indent, 100 columns.
 - `pnpm typecheck` and `pnpm test` run through turbo. `pnpm lint:deps` runs the dependency-cruiser boundary rules; `pnpm lint:boundary` fails on product vocabulary in `framework/`.
-- CI (`.github/workflows/ci.yml`) runs lint, build, typecheck, lint:deps, db:migrate and test with
-  `MODEL_MODE=fake`. A second `consumer` job (`scripts/consumer.sh --run`) packs every `@hykr/*`
+- CI (`.github/workflows/ci.yml`) runs four jobs side by side with `MODEL_MODE=fake`: `checks` (lint,
+  build, typecheck, lint:deps and the unit tests, no services), `framework` (`@hykr/api`'s tests),
+  `application` (`@application/api`'s tests) and `consumer`. The `consumer` job (`scripts/consumer.sh --run`) packs every `@hykr/*`
   package, scaffolds an app with `create-basecamp` from the tarballs, builds and typechecks it, then
   migrates it, starts its API and runs `basecamp eval`, `eval voice` and `eval whatsapp`. If you change
   a package's public exports, `files` or dependencies, or a module's scripts or eval cases, that job is
@@ -86,7 +87,7 @@ pnpm --filter @application/domain test                              # views + no
 pnpm turbo run build --filter=@hykr/api...
 cd framework/api && pnpm exec tsc -p test/fixture/tsconfig.json && pnpm vitest run test/framework/pages.e2e.test.ts
 
-# Application e2e: boots application/api/dist/server.js; needs `pnpm db:migrate` first
+# Application e2e: boots application/api/dist/server.js; globalSetup migrates itself
 pnpm turbo run build --filter=@application/api...
 cd application/api && pnpm vitest run test/domain/todo.e2e.test.ts
 ```
@@ -94,12 +95,16 @@ cd application/api && pnpm vitest run test/domain/todo.e2e.test.ts
 E2E test gotchas:
 - They import compiled `dist/`, because Vitest's esbuild emits no decorator metadata for Nest. Rebuild after
   every source change. `pnpm test` does the build for you through turbo.
-- They need Postgres and Redis up (`pnpm infra:up`). Files run one at a time (`fileParallelism: false`)
-  against one database, and turbo runs `@application/api#test` after `@hykr/api#test`.
+- They need Postgres and Redis up (`pnpm infra:up`). Files run side by side, up to four at once
+  (`TEST_WORKERS`), each Vitest worker on a database of its own (`<database>_test_<n>`, made and
+  migrated by `globalSetup`, kept between runs) with its own Redis database and `BULL_PREFIX`
+  (`@hykr/api/testing/workers`). Within a worker, files still run one at a time against one
+  database. `TEST_WORKERS=1` runs every file in turn on `DATABASE_URL` itself. Turbo runs
+  `@application/api#test` after `@hykr/api#test`: they share the worker databases.
 - Vitest forces `MODEL_MODE=fake`, `WORKER_INLINE=1`, `THROTTLE=off` and `STORAGE_DRIVER=memory` (files in
   the test process; the S3 driver's own test runs against MinIO and skips without it). The voice e2e tests have no skip
   guard and fail unless `VOICE_AGENT_KEY` is set in `.env`.
-- Both Vitest configs load the root `.env` into the main process, so `globalSetup` migrates the same database
+- Both Vitest configs load the root `.env` into the main process, so `globalSetup` migrates the databases
   the tests use. Turbo runs test tasks uncached and passes them every environment variable.
 - Change a business's settings with `setTenantSettings` (`@hykr/api/testing`), never a bare
   `UPDATE app.tenants`: settings are cached per process for 10 s, so a request before the change
