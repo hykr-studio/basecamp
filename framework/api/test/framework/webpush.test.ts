@@ -1,6 +1,7 @@
 // Web push's settings and helpers (W1), without a server.
 import { createECDH } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
+import { orderPlaces } from '../../dist/features/push/place.js';
 import { browserOf, maskEndpoint } from '../../dist/features/push/web.service.js';
 import {
   endpointProblem,
@@ -102,5 +103,42 @@ describe('what a person sees of their browsers', () => {
     expect(browserOf(ua.safariIphone)).toBe('Safari on iOS');
     expect(browserOf(undefined)).toBeUndefined();
     expect(browserOf('curl/8.0')).toBeUndefined();
+  });
+});
+
+describe('one place: which device a push tries first', () => {
+  const now = Date.parse('2026-11-19T10:00:00Z');
+  const ago = (min: number) => new Date(now - min * 60_000);
+  const place = (name: string, kind: 'phone' | 'browser', active: number | null, seen: number) => ({
+    kind,
+    activeAt: active === null ? null : ago(active),
+    lastSeenAt: ago(seen),
+    row: name,
+  });
+  const order = (...places: ReturnType<typeof place>[]) =>
+    orderPlaces(places, now, 10 * 60_000).map((p) => p.row);
+
+  it('the device used within the window, most recent first', () => {
+    expect(
+      order(
+        place('phone', 'phone', 8, 20),
+        place('laptop', 'browser', 2, 300),
+        place('tablet', 'browser', null, 0),
+      ),
+    ).toEqual(['laptop', 'phone', 'tablet']);
+  });
+
+  it('nobody active: the device used or signed in to last', () => {
+    expect(order(place('phone', 'phone', 60, 600), place('laptop', 'browser', null, 30))).toEqual([
+      'laptop',
+      'phone',
+    ]);
+  });
+
+  it('a tie goes to the phone', () => {
+    expect(order(place('laptop', 'browser', 5, 100), place('phone', 'phone', 5, 100))).toEqual([
+      'phone',
+      'laptop',
+    ]);
   });
 });

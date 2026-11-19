@@ -25,6 +25,8 @@ export const pushTokens = channel.table(
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     /** The last time the device registered it (each sign-in). */
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    /** The last time the person used the app on it: a push goes where they are (W1). */
+    activeAt: timestamp('active_at', { withTimezone: true }),
   },
   (table) => [
     uniqueIndex('push_tokens_token_tenant_idx').on(table.token, table.tenantId),
@@ -103,6 +105,8 @@ export const webPushSubscriptions = channel.table(
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     /** The last time the browser registered it (each sign-in). */
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    /** The last time the person used the app in this browser: a push goes where they are. */
+    activeAt: timestamp('active_at', { withTimezone: true }),
   },
   (table) => [
     uniqueIndex('web_push_subscriptions_endpoint_tenant_idx').on(table.endpoint, table.tenantId),
