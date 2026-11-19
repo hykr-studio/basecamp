@@ -144,6 +144,7 @@ import {
   type VoiceSessionEnd,
   type VoiceSessionRequest,
   type VoiceSessionResponse,
+  type WebPushKey,
   type WriteResult,
 } from '@hykr/contracts';
 import type { z } from 'zod';
@@ -978,11 +979,22 @@ export function createApiClient(opts: ApiClientOptions) {
     chat: (input: ChatRequest) => call<ChatResponse>('POST', '/api/chat/once', input),
     chatStream,
     live,
-    /** This device, for push (people only); forget needs no session. */
+    /**
+     * This device or browser, for push (people only); forget needs no session. A phone registers
+     * its Expo token, a browser its Web Push subscription (with `webKey`'s public key).
+     */
     push: {
       register: (input: RegisterPushToken) => call<PushDevice>('POST', '/api/push/tokens', input),
       devices: () => call<PushDevice[]>('GET', '/api/push/tokens'),
-      forget: (token: string) => call<null>('POST', '/api/push/tokens/forget', { token }),
+      /** A phone's token, or `{ endpoint }` for a browser. */
+      forget: (device: string | { endpoint: string }) =>
+        call<null>(
+          'POST',
+          '/api/push/tokens/forget',
+          typeof device === 'string' ? { token: device } : { endpoint: device.endpoint },
+        ),
+      /** The server's VAPID public key; null when web push is off. */
+      webKey: () => call<WebPushKey>('GET', '/api/push/web/key'),
     },
     /** Voice: a person starts a session; the voice worker reports its end. */
     voice: {

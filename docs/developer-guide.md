@@ -1084,6 +1084,29 @@ Where each registry is read, and how to use it (`docs/decisions/F5.md` has the f
   business. Push reaches only devices registered in the notification's business. No device, or Expo
   refusing every device, moves on at once; a receipt error on every device (polled each minute by the
   `push.receipts` schedule) moves on later through `NotifyService.fallback`. A gone device is forgotten.
+- **Web push.** `webpush` is the browser's channel (Web Push with VAPID, `features/push`, decisions in
+  `docs/decisions/W1.md`). It says what `push` says (the notification's `push` content), so a
+  declaration does not change. `push` is a shorthand: it tries the person's phones, then their
+  browsers when no phone takes it. A notification that lists both (`['webpush', 'push', 'email']`)
+  orders them itself, and there `push` means phones only. The server needs `WEB_PUSH_PUBLIC_KEY`,
+  `WEB_PUSH_PRIVATE_KEY` and `WEB_PUSH_SUBJECT` (`basecamp webpush keys` prints a pair; `assertConfig`
+  refuses a partial set or a pair that does not match) and `SECRETS_KEY`, which seals each browser's
+  keys. Without them `webpush` is unavailable and the next channel is tried. A browser registers its
+  subscription with `POST /api/push/tokens` `{ platform: 'web', subscription }` (the key is
+  `GET /api/push/web/key`); its endpoint must be https on a known push service (FCM, Mozilla, Apple,
+  WNS) or on a host in `WEB_PUSH_ALLOWED_HOSTS`, else 400 `bad_endpoint`, and sends go out under the
+  egress guard. Each send is encrypted for the browser (RFC 8291), kept 24 hours by the push service,
+  and urgent for approvals. A 201 or 202 from any browser is sent (Web Push has no receipts, so it
+  is final and logged in `channel.push_tickets` with `platform: 'web'`); a 404 or 410 forgets that
+  browser; a 429 or 5xx is a failure for now (retried, then the next channel). In the app,
+  `pushPlugin()` registers the service worker at `/push-sw.js` after sign-in and asks for
+  permission only when the person clicks "Turn on notifications" (the strip it draws, or
+  `<PushToggle />` in the person's card; `usePushStatus()` says `on`, `off`, `blocked` or
+  `unsupported`). The service worker and a web manifest come from `@hykr/app`'s config plugin
+  (`"plugins": ["@hykr/app"]` in app.json), which writes them into the app's `public/` folder each
+  time Expo reads its config. A click on a notification focuses the app's tab on its link, or opens
+  one. Sign-out forgets the browser. A subscription belongs to the origin it was made on: a person on
+  two of a business's domains has two.
 - **In-app inbox.** `inapp` is the framework's in-app delivery channel (`features/inbox`, decisions in
   `docs/decisions/B16.md`). A notification that lists it needs `inapp: { title, body, url?, record? }`.
   It keeps one item per person and dedupe key in `channel.inbox_items`, in the reader's language, and
@@ -3403,12 +3426,12 @@ export const MeetingReminder = defineTemplate({
 | `send` | `{ on: [events] }`: send now |
 | `when` | `(row) => boolean`: checked at send time |
 | `to` | `(row) => [{ userId } \| { customerId } \| { contactId } \| { capability, except? } \| { partyId } \| { participantsOf, as? }]` |
-| `channels` | Fallback order, e.g. `['push', 'whatsapp', 'email']`; also any registered delivery channel (section 5.10) |
+| `channels` | Fallback order, e.g. `['push', 'whatsapp', 'email']`; `webpush` reaches browsers only (`push` alone tries phones, then browsers); also any registered delivery channel (section 5.10) |
 | `also` | Channels it goes to as well, whatever the fallback order does, e.g. `['inapp']` (the in-app inbox keeps it however it reached the person) |
 | `channelWhen` | `{ [channel]: (row) => boolean }`: a channel used only when it holds for the row, else the next one |
 | `whatsapp` | `{ template, params(row, reader) }`. Required when `'whatsapp'` is a channel (and for `onButton`, `approval`). |
 | `email` | `{ subject, body }`. Required when `'email'` is in `channels`. |
-| `push` | `{ title(row, reader), body(row, reader), url?(row) }`: what the phone shows, and the app path a tap opens. Required when `'push'` is in `channels`. |
+| `push` | `{ title(row, reader), body(row, reader), url?(row) }`: what the phone or browser shows, and the app path a tap or click opens. Required when `'push'` or `'webpush'` is in `channels`. |
 | `inapp` | `{ title(row, reader), body(row, reader), url?(row), record?(row) }`: what the person's in-app inbox keeps, and what it opens. Required when `'inapp'` is in `channels`. |
 | `onButton` | `{ [buttonId]: (row) => { reschedule?: Date; reply?: Labels } \| undefined }` |
 | `approval` | `(row) => approvalId`: the quick replies `approve` and `reject` decide that approval |
@@ -3416,7 +3439,7 @@ export const MeetingReminder = defineTemplate({
 
 Event names are `<entity>.created|updated|deleted`, your commands' `NamedEvent`s, `approval.requested` / `approval.decided`, and `comment.mentioned` (section 5.21). They come from the stored events (`app.domain_events`), so a notification is scheduled only once its write committed, still after a crash, and only once an undoable write's window closed.
 
-Who receives a notification (`to`, `when`, `dedupe`, `approval`, `schedule.at`, `channelWhen`) reads the row as stored. What it says (`whatsapp.params`, `email`, `push`, `inapp`) reads the row as each recipient may: the dispatcher resolves the recipient in the business (a person who left gets nothing) and passes the record through its read schema, field policy and read projectors, as `eventFor` does. A field the recipient may not read is not there, and neither are the record's columns its read schema does not show (its owner, its customer); keys that are the event's own (the SLA on `<entity>.sla.breached`) stay, and so do `id` and `tenantId`.
+Who receives a notification (`to`, `when`, `dedupe`, `approval`, `schedule.at`, `channelWhen`) reads the row as stored. What it says (`whatsapp.params`, `email`, `push` (web push too), `inapp`) reads the row as each recipient may: the dispatcher resolves the recipient in the business (a person who left gets nothing) and passes the record through its read schema, field policy and read projectors, as `eventFor` does. A field the recipient may not read is not there, and neither are the record's columns its read schema does not show (its owner, its customer); keys that are the event's own (the SLA on `<entity>.sla.breached`) stay, and so do `id` and `tenantId`.
 
 The framework's `approval.request` asks a request's deciders (never its requester) by push, else on WhatsApp with Approve and Reject (only where the request may be decided there: its channels allow WhatsApp and it asks for no more than a number), else by email, and always keeps it in their in-app inbox. Each opens `/approvals/<id>`; `Reader.appUrl` (the deployment's `APP_URL`) gives an email its link. Change its order with `overrideNotification('approval.request', { channels, also })`.
 
@@ -3664,6 +3687,9 @@ Nothing to declare: the modules give the MCP scopes and tools. Set `MCP_URL` and
 
 **…push a notification to a phone first?**
 `channels: ['push', 'whatsapp', 'email']` with `push: { title, body, url? }` on the notification, and `pushPlugin()` in the app. Sections 5.10 and 8.2.
+
+**…push a notification to someone working in a browser?**
+`push` already tries browsers after phones. To put the browser first, list `['webpush', 'push', 'email']`. Set the `WEB_PUSH_*` keys (`basecamp webpush keys`) and add `"@hykr/app"` to app.json's plugins. Section 5.10.
 
 **…offer ready-made agents?**
 `defineAgentTemplate` (contributed as `agentTemplates`), with scripted-model scripts for their runs (`runData(text)`). Section 5.26.
@@ -3936,7 +3962,6 @@ These are not built. Each has a workaround for now.
 | SQL hooks per module | `application/domain/sql/{pre,post}` holds every module's hooks in one folder, and nothing ties a hook to its module: one that names a removed module's table fails the next migrate. Name each file after its module, and remove it with the module. |
 | Guides checked in CI | The tutorials (`tutorial.md`, `new-application.md`) were replayed against the code by hand (`docs/decisions/HDOCS.md`); nothing in CI builds them, so they drift when an API changes. Replay a tutorial when you change what it uses. |
 | Push tokens in a dev build | There is no `eas.json` or EAS project id, so `getExpoPushTokenAsync` fails and the push plugin logs and stops. Set up EAS (or pass `pushPlugin({ projectId })`) and rebuild the dev client. |
-| Web push | The push plugin does nothing in a browser (no VAPID). People working on the web get the notification's next channel. |
 | Push through FCM or APNs directly | Push goes through Expo's push service only. |
 | Live deletions for everyone | A deleted record reaches only streams already told about it and the person who deleted it; others see it go at their next refetch (focus, reconnect, their own write). |
 | Agents beyond the basics | No 80% alert per agent (the business's credit alerts exist), no taking over another person's agent, no agents shared across businesses, no agent that answers a customer itself on WhatsApp. Agents take webhooks only from `agent-webhooks` connections unless the application contributes `agentWebhookHandler` for its connector. Deleting an agent deletes its run log (the audit trail keeps its writes). Conditions are polled (5 minutes at least). An event about a deleted record starts no agent (its owner can no longer read it). The back office edits triggers and the budget as JSON. An agent's saved triggers (`app.agent_triggers`) follow its definition only on `agent.create` and `agent.update`: another write that changes `agents.triggers` (an undo of an update) leaves them out of step, and a mention of that agent then starts nothing, with a warning in the log. |

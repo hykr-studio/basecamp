@@ -84,6 +84,7 @@ change the sample application or a business's settings, not the framework.
 | [V12](V12.md) | Validation (acceptance) | Every keyset keeps its time to the microsecond and compares it in SQL; the ledger, delivery and routing logs page by (time, id). | `d2844401` |
 | [V13](V13.md) | Validation (acceptance) | A lookup before a write is not shown as the answer; a limit's refusal names the meter by its label; one alert per crossing. | `a0865ebd` |
 | [VALIDATION](VALIDATION.md) | Validation | The live validation at `23805b76`: 349 claims, 18 defects by root cause, the fixes V1 to V13 and their acceptance. | this change (after `f63bb019`) |
+| [W1](W1.md) | Web push (Interioring) | Push in a web browser: a `webpush` channel (VAPID, RFC 8291) beside Expo's, `push` as a shorthand for phones then browsers, sealed subscriptions, a service worker and manifest from `@hykr/app`'s config plugin, "Turn on notifications" in the app. | this change |
 
 Units are grouped as the run went: the foundation, the gaps (combined units such as `B3B5` built
 two gaps together, and `A11X` is A11's data export), then the fix units from the reviews: H for
@@ -91,7 +92,8 @@ completeness, S for security, X for the framework/application boundary, and `HLA
 `HCONS` for languages, documentation and the consumer job. After REPORT, the live validation
 ([VALIDATION](VALIDATION.md)) found 18 defects, and V1 to V13 fixed them: V1 to V9 one root cause
 each (the defect clusters `C<n>` in their Gaps column), V10 and V11 what the reviews of those
-units left, V12 and V13 what the acceptance runs found.
+units left, V12 and V13 what the acceptance runs found. W1 came later, from a customer's request
+(push in a web browser).
 
 ## Assumptions register
 
@@ -110,12 +112,13 @@ How to read it:
   the choice itself. "Settled by H1" (or another unit) means a later unit answered it; the row stays so the
   change is visible. "None" means the unit reported the choice without a question.
 
-The table has 563 rows: the 458 items of the units' "Assumptions to review" sections and
+The table has 568 rows: the 458 items of the units' "Assumptions to review" sections and
 70 assumptions the units reported to the run that their docs do not state, less duplicates merged
 and process notes left out (merging the integration branch into a unit, which test approach a fix
 took, where a demo lived before its module existed), plus 79 rows from the fix units V1 to V13
 (their "Assumptions to review" sections, an assumption a later V unit settled merged into one
-row, and the two B18 rows V8 handed to the integrator). Those stay in each unit's doc.
+row, and the two B18 rows V8 handed to the integrator), plus 5 rows from W1. Those stay in each
+unit's doc.
 
 | Unit | Gap | Topic | What we chose | Source | Question for the owner |
 |---|---|---|---|---|---|
@@ -677,6 +680,11 @@ row, and the two B18 rows V8 handed to the integrator). Those stay in each unit'
 | V13 | Validation (A7) | Lookups are found by their place | A read before a write in the same turn is how the assistant found what to write, and is not shown: "Show order 12 and submit it" shows only the submit. A list before a refused write is hidden too (the reply says why); a list before a refused read stays. | V13 decisions 9 and 19 | Should a read the person asked for by name survive a later write? |
 | V13 | Validation (A7) | A list is a lookup when a later call shows one of its rows | "List my meetings and open the first" shows only the meeting. | V13 decision 19 | Is that right? |
 | V13 | Validation (A7) | A contributed write tool is known only by its result | A module's own write tool (`toolContributions`) is not in `writeToolIds`, so a list before its refused call still shows (section 14). | Default | None |
+| W1 | Web push | `push` reaching browsers | `push` tries the person's phones, then their browsers; a chain that also lists `webpush` orders them itself. | Request open question 1; owner's choice in W1 | Should some notifications stay on phones only (list `webpush` to make `push` phones-only)? |
+| W1 | Web push | Phones and browsers together | A person whose phone takes a push does not also get it in the browser. | Default | Should a desk worker get both at once? |
+| W1 | Web push | Known push services | Endpoints only on FCM, Mozilla, Apple and WNS (and `WEB_PUSH_ALLOWED_HOSTS`). | Request ("checked against a list") | Should the list be a deployment setting? |
+| W1 | Web push | Urgency | `high` for approvals only, `normal` otherwise. | Request | Should a client's reply be urgent too? |
+| W1 | Web push | When to offer | A dismissible strip and the person's card offer "Turn on notifications" on every page until the person answers; the browser asks only on the click. | Request open question 3; default | Should the offer wait for a moment that needs it (the first approval request)? |
 | V13 | Validation (A3) | The app's refused turn reads the generic paused sentence | Not the reason naming the meter, in every language; `GET /api/credits` and the credits screen name it. An agent's 402 is in English, since an agent's call carries no language. | V13 decision 21; default | Confirm. |
 | V13 | Validation (A3) | No numbers in a limit's reason | The status and the screen carry the quantities. | V13 decision 11 | Should the reason say "(2 of 1)" in the meter's display unit? |
 | V13 | Validation (A3) | One alert per crossing | A use that crosses both levels sends only the pause; no "low" after the pause, and none after the pause is lifted by a higher limit. | V13 decision 16 | Confirm. |
@@ -803,7 +811,7 @@ re-run": HCONS's full CI covers them). An item a later unit fixed says so. Devel
   - Fixed by S4: embedding calls are metered.
 - **A9B15**
   - There is no EAS project id or `eas.json`, so dev builds cannot get an Expo push token; push to a real device was not exercised.
-  - Web push (VAPID) is not supported; browser users get the next channel.
+  - Fixed by W1: web push (VAPID) for people working in a browser.
   - Live deletions reach only streams already told about the record and the person who deleted it.
   - The back office still polls its inbox and conversations; there is no `Last-Event-ID` replay.
   - Fixed by H1: push text is projected for the recipient.

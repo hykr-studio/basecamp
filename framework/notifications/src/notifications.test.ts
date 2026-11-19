@@ -137,6 +137,15 @@ describe('defineNotification', () => {
     expect(defineNotification({ ...base, channels: ['push', 'email'], push }).push).toBe(push);
   });
 
+  it('web push says what push says: it needs the same title and body', () => {
+    expect(() => defineNotification({ ...base, channels: ['webpush', 'email'] })).toThrow(
+      /webpush is a channel but has no push title and body/,
+    );
+    const push = { title: () => 'Done', body: () => 'It is done.' };
+    const both = defineNotification({ ...base, channels: ['webpush', 'push', 'email'], push });
+    expect(both.channels).toEqual(['webpush', 'push', 'email']);
+  });
+
   it('needs a title and body for the in-app inbox', () => {
     expect(() => defineNotification({ ...base, channels: ['inapp'] })).toThrow(
       /inapp is a channel but has no title and body/,

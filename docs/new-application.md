@@ -1270,6 +1270,35 @@ unset for the framework's neutral ones (no currency, UTC, no contact). Rename th
 `mobile/app.json` (`name`, `slug`, `scheme`, the iOS `bundleIdentifier` and the Android
 `package`). If you change `scheme`, change it in `_layout.tsx` too.
 
+### Push in the browser
+
+`pushPlugin()` also works in a browser, through Web Push. Three things make it work:
+
+- **The service worker and the manifest.** `mobile/app.json` lists `"@hykr/app"` first in its
+  `plugins`. That config plugin runs whenever Expo reads the config (`expo start`, `expo export`,
+  a build). It writes `public/push-sw.js` (the service worker), `public/manifest.webmanifest`
+  (your app's `name`, its `icon` and `display: standalone`) and `public/pwa-icon.png`. The web
+  build serves `public/` at the site's root. These files are generated and git-ignored
+  (`mobile/.gitignore`), so don't edit them. If they are missing from a web export, check that
+  the plugin is listed. The plugin refuses to continue when it cannot write them.
+- **The keys.** Run the command below and paste its three `WEB_PUSH_*` lines into `.env`.
+  Change the subject to an address of yours. The server also needs `SECRETS_KEY`. Without the
+  keys, `webpush` goes to the next channel.
+
+  ```bash
+  pnpm --dir application exec basecamp webpush keys
+  ```
+
+- **The chains.** `push` already tries a person's browsers when no phone takes it. To put the
+  browser first, list it: `channels: ['webpush', 'push', 'email']`. The sample does this for its
+  orders notifications.
+
+The browser is asked for permission only when the person clicks **Turn on notifications**.
+That button is on the strip the plugin shows, and in the person's card (`<PushToggle />`).
+Browsers block a permission prompt that no click led to. On an iPhone or iPad, Safari shows web
+push only for a site added to the Home Screen (Share, then Add to Home Screen); the manifest is
+what makes that possible.
+
 ## 11. Test it
 
 An end-to-end test boots your compiled API against real Postgres and Redis, with the scripted
