@@ -266,9 +266,13 @@ describe('the webpush channel', () => {
       url: `/chores/${made.value.id}`,
       notification: 'chore.webpushed',
     });
-    expect(await ticketsOf(staff.id)).toEqual([
-      { platform: 'web', status: 'ok', error: null, notification: 'chore.webpushed' },
-    ]);
+    // The ticket is written from the push service's answer, just after the message lands.
+    expect(
+      await eventually(async () => {
+        const tickets = await ticketsOf(staff.id);
+        return tickets.length ? tickets : undefined;
+      }),
+    ).toEqual([{ platform: 'web', status: 'ok', error: null, notification: 'chore.webpushed' }]);
     // One place: the other browser stays quiet.
     await new Promise((r) => setTimeout(r, 500));
     expect(to(two)).toEqual([]);

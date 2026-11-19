@@ -179,9 +179,13 @@ describe('the push channel', () => {
       data: { url: '/tasks', notification: 'task.pushed' },
     });
     expect(to(token('ravi'))).toEqual([]);
-    expect(await ticketsOf(ana.id)).toEqual([
-      { status: 'pending', error: null, notification: 'task.pushed' },
-    ]);
+    // The ticket is written from the provider's answer, just after the message lands.
+    expect(
+      await eventually(async () => {
+        const tickets = await ticketsOf(ana.id);
+        return tickets.length ? tickets : undefined;
+      }),
+    ).toEqual([{ status: 'pending', error: null, notification: 'task.pushed' }]);
     expect(t.id).toBeTruthy();
   });
 
@@ -213,6 +217,8 @@ describe('the push channel', () => {
     await register(eve, token('eve-late'));
     await task(eve, 'Push late');
     await eventually(() => (to(token('eve-late')).length ? true : undefined));
+    // Poll once the ticket is written (from the provider's answer, after the message lands).
+    await eventually(async () => ((await ticketsOf(eve.id)).length ? true : undefined));
     const polled = await poll();
     expect(polled?.fellBack).toBeGreaterThanOrEqual(1);
     await eventually(async () => ((await mailTo(eve.email)).includes('Pushed: Push late') ? 1 : 0));
