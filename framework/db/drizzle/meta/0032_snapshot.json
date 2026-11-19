@@ -1,5 +1,5 @@
 {
-  "id": "aaf7e679-8ad2-481d-8c29-59096a06bf2a",
+  "id": "37c2b156-2893-470d-b5ba-c73ab733ec57",
   "prevId": "a8a87e0b-267b-4b0c-bb2b-d70079bb811f",
   "version": "7",
   "dialect": "postgresql",
@@ -2682,13 +2682,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "write_to": {
-          "name": "write_to",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
         },
         "channel_id": {
           "name": "channel_id",
@@ -10969,6 +10962,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "platform": {
+          "name": "platform",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "receipt_id": {
           "name": "receipt_id",
           "type": "text",
@@ -11232,6 +11231,147 @@
         "push_tokens_user_id_user_id_fk": {
           "name": "push_tokens_user_id_user_id_fk",
           "tableFrom": "push_tokens",
+          "tableTo": "user",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "channel.web_push_subscriptions": {
+      "name": "web_push_subscriptions",
+      "schema": "channel",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()::text"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endpoint": {
+          "name": "endpoint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "p256dh": {
+          "name": "p256dh",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auth": {
+          "name": "auth",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_agent": {
+          "name": "user_agent",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "web_push_subscriptions_endpoint_tenant_idx": {
+          "name": "web_push_subscriptions_endpoint_tenant_idx",
+          "columns": [
+            {
+              "expression": "endpoint",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "web_push_subscriptions_user_idx": {
+          "name": "web_push_subscriptions_user_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "web_push_subscriptions_tenant_id_tenants_id_fk": {
+          "name": "web_push_subscriptions_tenant_id_tenants_id_fk",
+          "tableFrom": "web_push_subscriptions",
+          "tableTo": "tenants",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "web_push_subscriptions_user_id_user_id_fk": {
+          "name": "web_push_subscriptions_user_id_user_id_fk",
+          "tableFrom": "web_push_subscriptions",
           "tableTo": "user",
           "columnsFrom": [
             "user_id"
