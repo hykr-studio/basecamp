@@ -1,8 +1,10 @@
 import type { Labels } from '@hykr/i18n';
 import { z } from 'zod';
-import type { Assurance, Principal, TenantRole } from '../principal.js';
+import type { ApproverBy } from '../authorize.js';
+import type { Assurance, Principal } from '../principal.js';
 import type { Channel } from '../voice.js';
 import type { ListConfig } from './list.js';
+import type { CommandTraits, EntityTraits } from './traits.js';
 
 /**
  * Specs are the db-free half of an entity or command: names, schemas, list grammar and
@@ -18,34 +20,56 @@ export type Expose = 'all' | 'human' | 'internal';
 export type EntityAction = 'list' | 'get' | 'create' | 'update' | 'delete';
 export type WriteAction = 'create' | 'update' | 'delete';
 /**
- * Who decides a parked action, and where. By default the person it is for decides (their own
- * assistant's request); a customer's request goes to the business (owner and ops).
- * `channels` limits where it may be decided (['app'] for anything irreversible), and
- * `minAssurance` how sure we must be of the decider ('session' needs a signed-in account).
+ * Who decides a parked action, where, how surely, and what is at stake. By default the person it
+ * is for decides (their own assistant's request); a customer's request goes to the business
+ * (holders of `approvals.decide`). `by` names a capability, a person or an amount band instead
+ * (see `Approver` in authorize.ts). `channels` limits where it may be decided (['app'] for
+ * anything irreversible), `minAssurance` how sure we must be of the decider ('session' needs a
+ * signed-in account), and `level` names the application's approval level it parks at (its
+ * policy then fills in whatever this leaves out: who decides, where, for how long).
  */
 export type ApproverRule = {
-  by?: readonly TenantRole[] | 'self';
+  by?: ApproverBy;
   channels?: readonly Channel[];
   minAssurance?: Assurance;
+  level?: string;
 };
 
 /**
- * When an action waits for approval: always, never, when a check on the requester says so,
- * or the object form, which also says who decides it.
+ * What an approval check sees besides the requester: the action ('create'), its validated input
+ * and the row it changes. Either is null when it is not known: a tool's description is written
+ * before any call, and a create has no row.
+ */
+export type ApprovalContext = {
+  action: string;
+  input: Record<string, unknown> | null;
+  row: Record<string, unknown> | null;
+};
+
+/** Does this action wait, for this requester and this payload? */
+export type ApprovalCheck = (p: Principal, ctx: ApprovalContext) => boolean;
+
+/**
+ * When an action waits for approval: always, never, when a check on the requester and the
+ * payload says so, or the object form, which also says who decides it.
  */
 export type ApprovalRule =
   | 'always'
   | 'never'
-  | ((p: Principal) => boolean)
-  | (ApproverRule & { when?: 'always' | ((p: Principal) => boolean) });
+  | ApprovalCheck
+  | (ApproverRule & { when?: 'always' | ApprovalCheck });
 
-/** Does this rule park the action for this principal? */
-export function parksFor(rule: ApprovalRule | undefined, p: Principal): boolean {
+/** Does this rule park the action for this principal and payload? */
+export function parksFor(
+  rule: ApprovalRule | undefined,
+  p: Principal,
+  ctx: ApprovalContext,
+): boolean {
   if (!rule || rule === 'never') return false;
   if (rule === 'always') return true;
-  if (typeof rule === 'function') return rule(p);
+  if (typeof rule === 'function') return rule(p, ctx);
   const when = rule.when ?? 'always';
-  return when === 'always' || when(p);
+  return when === 'always' || when(p, ctx);
 }
 
 /** Who decides, from a rule (the object form; the others use the defaults). */
@@ -78,6 +102,8 @@ export interface EntitySpec<
    * `list`, one record as `item`. Names only, so contracts stays free of the registry.
    */
   views?: { list?: string; item?: string };
+  /** Behaviour it opts into (see traits.ts): each feature's plugin acts on its own key. */
+  traits?: Partial<EntityTraits>;
 }
 
 export function entitySpec<R extends z.ZodObject, C extends z.ZodObject, U extends z.ZodObject>(
@@ -122,6 +148,8 @@ export interface CommandSpec<I extends z.ZodObject = z.ZodObject, O extends z.Zo
   verb?: { do: string; did: string };
   /** The entities (by name) it changes, so clients refresh exactly those after it runs. */
   touches?: string[];
+  /** Behaviour it opts into (see traits.ts). */
+  traits?: Partial<CommandTraits>;
 }
 
 export function commandSpec<I extends z.ZodObject, O extends z.ZodType>(

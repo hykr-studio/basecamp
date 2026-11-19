@@ -22,7 +22,12 @@ const Message = z.looseObject({
     .looseObject({ id: z.string(), mime_type: z.string(), caption: z.string().optional() })
     .optional(),
   document: z
-    .looseObject({ id: z.string(), mime_type: z.string(), caption: z.string().optional() })
+    .looseObject({
+      id: z.string(),
+      mime_type: z.string(),
+      caption: z.string().optional(),
+      filename: z.string().max(255).optional(),
+    })
     .optional(),
   video: z
     .looseObject({ id: z.string(), mime_type: z.string(), caption: z.string().optional() })

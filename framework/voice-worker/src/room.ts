@@ -4,8 +4,9 @@ import {
   VOICE_HEARS_ATTRIBUTE,
   VOICE_LANG_TOPIC,
   VoiceDispatch,
-  VoiceLang,
+  VoiceLangCode,
 } from '@hykr/contracts';
+import { type Languages, languagesFromWire } from '@hykr/i18n';
 import { type JobContext, log } from '@livekit/agents';
 import { RoomEvent, type TextStreamReader } from '@livekit/rtc-node';
 import { config } from './config.js';
@@ -74,7 +75,14 @@ export async function openSession(ctx: JobContext): Promise<Session | undefined>
   }
   const dispatch = VoiceDispatch.safeParse(metadata);
   const named = parseVoiceRoom(ctx.job.room?.name ?? '');
-  if (!dispatch.success || !named || named.threadId !== dispatch.data.threadId) {
+  // The application's languages, from the dispatch: the worker never loads the application.
+  let set: Languages | undefined;
+  try {
+    set = dispatch.success ? languagesFromWire(dispatch.data.languages ?? []) : undefined;
+  } catch {
+    set = undefined;
+  }
+  if (!dispatch.success || !set || !named || named.threadId !== dispatch.data.threadId) {
     logger.warn('not a voice room the API dispatched; leaving');
     return undefined;
   }
@@ -104,7 +112,7 @@ export async function openSession(ctx: JobContext): Promise<Session | undefined>
   const ending = new AbortController();
   const session: Session = {
     person,
-    lang: new LangState(dispatch.data.lang),
+    lang: new LangState(dispatch.data.lang, set),
     api: apiFor(person),
     turns: 0,
     startedAt: Date.now(),
@@ -120,9 +128,8 @@ export async function openSession(ctx: JobContext): Promise<Session | undefined>
 
   // The language chip: the person pins a language, or goes back to auto.
   onText(ctx, VOICE_LANG_TOPIC, person.userId, (text) => {
-    const lang = VoiceLang.safeParse(text);
-    if (!lang.success) return;
-    session.lang.pin(lang.data);
+    const lang = VoiceLangCode.safeParse(text);
+    if (!lang.success || !session.lang.pin(lang.data)) return;
     session.onLangChange?.();
   });
 

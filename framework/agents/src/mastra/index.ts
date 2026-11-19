@@ -49,7 +49,10 @@ export function createMastra(input: {
       configs: {
         default: {
           serviceName: 'assistant',
-          exporters: [new MastraStorageExporter()],
+          // Traces are written in batches, five seconds apart unless TRACE_BATCH_MS says
+          // otherwise. An eval scores each turn from its stored trace, so it waits one batch
+          // per turn: `basecamp eval` sets a short one.
+          exporters: [new MastraStorageExporter(traceBatch())],
           spanOutputProcessors: [new SensitiveDataFilter()],
           // Who the agent acted for, and the run, become searchable trace metadata.
           requestContextKeys: ['userId', 'runId'],
@@ -60,4 +63,10 @@ export function createMastra(input: {
     }),
     logger: new PinoLogger({ name: 'assistant', level: 'info' }),
   });
+}
+
+/** The storage exporter's batch wait: TRACE_BATCH_MS when it is a number, else Mastra's own. */
+function traceBatch(): { maxBatchWaitMs?: number } {
+  const ms = Number(process.env.TRACE_BATCH_MS);
+  return process.env.TRACE_BATCH_MS && Number.isFinite(ms) && ms >= 0 ? { maxBatchWaitMs: ms } : {};
 }

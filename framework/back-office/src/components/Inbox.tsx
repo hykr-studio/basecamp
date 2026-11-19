@@ -20,6 +20,7 @@ export const REASONS: Record<string, string> = {
   agent_failed: "The assistant couldn't answer",
   agent_tool: 'The assistant handed over',
   staff_took: 'Taken by the team',
+  assistant_paused: 'The assistant is paused (credits)',
 };
 
 const nameOf = (i: InboxItem) => i.contact.name ?? `+${i.contact.address}`;

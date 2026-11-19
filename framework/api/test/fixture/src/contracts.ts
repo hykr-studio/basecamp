@@ -1,7 +1,7 @@
-// The fixture's entities and command: a task (plain CRUD) and a visit (a time, a reminder, and
-// a command that moves it). Small, but it covers what the framework's e2e tests need from a
-// domain, so they pass without any application.
-import { CreatedBy, commandSpec, defineDomain, entitySpec } from '@hykr/contracts';
+// The fixture's entities and command, in two modules: tasks (plain CRUD) and visits (a time, a
+// reminder, and a command that moves it). Small, but it covers what the framework's e2e tests
+// need from an application, so they pass without one.
+import { CreatedBy, commandSpec, entitySpec, moduleSpec } from '@hykr/contracts';
 import { z } from 'zod';
 
 const title = z.string().min(1).max(200);
@@ -41,6 +41,15 @@ export const TaskSpec = entitySpec({
   // An agent never deletes without the person.
   approval: { delete: (p) => p.actor.kind === 'agent' },
   views: { list: 'task.list' },
+  // Comments, added or edited: the assistant's wait for the person, a customer's for the business
+  // (team-only ones never wait); one may point at a version.
+  traits: {
+    comments: {
+      approval: (p, { input }) =>
+        input?.internal !== true && (p.actor.kind === 'agent' || p.customerId !== undefined),
+      anchor: z.object({ version: z.number().int().min(1) }),
+    },
+  },
 });
 
 export const Visit = z.object({
@@ -72,6 +81,8 @@ export const VisitSpec = entitySpec({
   // People delete visits; the assistant may not.
   expose: { list: 'all', get: 'all', create: 'all', update: 'all', delete: 'human' },
   approval: { delete: (p) => p.actor.kind === 'agent' },
+  // Visits take no comments.
+  traits: { comments: false },
 });
 
 export const RescheduleVisitSpec = commandSpec({
@@ -86,8 +97,12 @@ export const RescheduleVisitSpec = commandSpec({
   touches: ['visit'],
 });
 
-export const fixtureDomain = defineDomain({
-  name: 'Fixture',
-  entities: { tasks: TaskSpec, visits: VisitSpec },
+/** The tasks module's specs (isomorphic: the server and an app read them). */
+export const tasksSpec = moduleSpec({ name: 'tasks', entities: { tasks: TaskSpec }, commands: [] });
+
+/** The visits module's specs. */
+export const visitsSpec = moduleSpec({
+  name: 'visits',
+  entities: { visits: VisitSpec },
   commands: [RescheduleVisitSpec],
 });

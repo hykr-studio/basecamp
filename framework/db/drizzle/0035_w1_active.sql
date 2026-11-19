@@ -1,0 +1,2 @@
+ALTER TABLE "channel"."push_tokens" ADD COLUMN "active_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "channel"."web_push_subscriptions" ADD COLUMN "active_at" timestamp with time zone;

@@ -38,9 +38,13 @@ export const contacts = channel.table(
     /** The channel's id for the person: a WhatsApp wa_id (E.164 digits, no +). */
     address: text('address').notNull(),
     profileName: text('profile_name'),
-    /** BCP 47 (en-IN, hi-IN, te-IN): the language replies and templates use. */
-    locale: text('locale').notNull().default('en-IN'),
-    timeZone: text('time_zone').notNull().default('Asia/Kolkata'),
+    /** BCP 47 ('en', 'de-AT'): the language replies and templates use; its language is read. */
+    locale: text('locale').notNull().default('en'),
+    /**
+     * The person's IANA zone: their business's when the contact is made (`tenantZone` in
+     * @hykr/core), their device's once they link the number. The default is only a floor.
+     */
+    timeZone: text('time_zone').notNull().default('UTC'),
     userId: text('user_id').references(() => user.id, { onDelete: 'set null' }),
     customerId: text('customer_id').references((): AnyPgColumn => customers.id, {
       onDelete: 'set null',
@@ -195,7 +199,7 @@ export const handoffs = channel.table(
       .notNull()
       .default('open'),
     takenBy: text('taken_by'),
-    /** customer_asked, agent_failed, staff_took, agent_tool. */
+    /** customer_asked, agent_failed, staff_took, agent_tool, assistant_paused. */
     reason: text('reason').notNull(),
     /** What staff resolved, when they hand it back (the assistant reads it next). */
     resolution: text('resolution'),
@@ -210,7 +214,10 @@ export const handoffs = channel.table(
   ],
 );
 
-/** A one-time code sent to a number to link it to an account (login_code_v1). */
+/**
+ * Linking codes before `OtpService` (decisions B8, 12): unused now that they live in
+ * `channel.otp_challenges` (purpose `channel.link`); kept until a migration may drop it.
+ */
 export const linkCodes = channel.table('link_codes', {
   id: id(),
   userId: text('user_id')
@@ -220,7 +227,7 @@ export const linkCodes = channel.table('link_codes', {
     .notNull()
     .references(() => tenants.id, { onDelete: 'cascade' }),
   address: text('address').notNull(),
-  timeZone: text('time_zone').notNull().default('Asia/Kolkata'),
+  timeZone: text('time_zone').notNull().default('UTC'),
   codeHash: text('code_hash').notNull(),
   attempts: integer('attempts').notNull().default(0),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),

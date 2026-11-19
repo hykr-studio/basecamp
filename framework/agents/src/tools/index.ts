@@ -1,5 +1,5 @@
 import type { Catalog } from '@hykr/contracts';
-import { toolsFor as frameworkTools, type ToolKit } from '@hykr/core/tools';
+import { toolsFor as frameworkTools, generatedTools, type ToolKit } from '@hykr/core/tools';
 
 /** Which surfaces a turn can draw on decides the tool set; see agentFor. */
 export type Profile = 'app' | 'inline' | 'text';
@@ -11,4 +11,9 @@ export type Profile = 'app' | 'inline' | 'text';
  */
 export function toolsFor(kit: ToolKit, catalog: Catalog, profile: Profile) {
   return frameworkTools(kit, catalog, { canvas: profile === 'app' });
+}
+
+/** The generated tools only (no contributions), with who defined each: built once per agent. */
+export function generatedFor(kit: ToolKit, catalog: Catalog, profile: Profile) {
+  return generatedTools(kit, catalog, { canvas: profile === 'app' });
 }

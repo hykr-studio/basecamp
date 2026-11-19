@@ -7,7 +7,7 @@ export type HandoffState = 'open' | 'taken' | 'closed';
 export type InboxItem = {
   id: string;
   state: HandoffState;
-  /** customer_asked, agent_failed, agent_tool, staff_took. */
+  /** customer_asked, agent_failed, agent_tool, staff_took, assistant_paused. */
   reason: string;
   takenBy: string | null;
   openedAt: string;

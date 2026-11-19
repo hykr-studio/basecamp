@@ -1,16 +1,22 @@
+import { type Languages, languages } from '@hykr/i18n';
+
 /**
  * Words people send that code handles, never the agent: stopping and restarting messages,
- * help, asking for a person, erasing their data, linking their account. In English, Hindi and
- * Telugu, any case, with or without punctuation.
+ * help, asking for a person, erasing their data, linking their account. Any case, with or
+ * without punctuation. The framework knows them in English and in the translations it ships,
+ * and always matches those (a STOP is never missed); each of the application's languages adds
+ * its own (`keywords` in `defineLanguages`).
  */
-export type Keyword =
-  | 'stop'
-  | 'stop_reminders'
-  | 'start'
-  | 'help'
-  | 'human'
-  | 'delete_my_data'
-  | 'link_account';
+export const KEYWORDS = [
+  'stop',
+  'stop_reminders',
+  'start',
+  'help',
+  'human',
+  'delete_my_data',
+  'link_account',
+] as const;
+export type Keyword = (typeof KEYWORDS)[number];
 
 const WORDS: Record<Keyword, string[]> = {
   stop: ['stop', 'unsubscribe', 'रोकें', 'बंद करो', 'रोको', 'ఆపు', 'ఆపండి'],
@@ -38,13 +44,36 @@ const normal = (s: string) =>
     .replace(/[\s.!?।,]+/g, ' ')
     .trim();
 
-const TABLE = new Map<string, Keyword>(
-  (Object.entries(WORDS) as [Keyword, string[]][]).flatMap(([k, words]) =>
-    words.map((w) => [normal(w), k] as const),
-  ),
-);
+const isKeyword = (k: string): k is Keyword => (KEYWORDS as readonly string[]).includes(k);
+
+const table = (set: Languages) =>
+  new Map<string, Keyword>([
+    ...(Object.entries(WORDS) as [Keyword, string[]][]).flatMap(([k, words]) =>
+      words.map((w) => [normal(w), k] as const),
+    ),
+    ...set.list.flatMap((l) =>
+      Object.entries(l.keywords)
+        .filter(([k]) => isKeyword(k))
+        .flatMap(([k, words]) => words.map((w) => [normal(w), k as Keyword] as const)),
+    ),
+  ]);
+let built: { set: Languages; table: Map<string, Keyword> } | undefined;
 
 /** The keyword a whole message is, if it is one (a sentence that mentions one is not). */
 export function keywordOf(text: string): Keyword | undefined {
-  return TABLE.get(normal(text));
+  const set = languages();
+  if (built?.set !== set) built = { set, table: table(set) };
+  return built.table.get(normal(text));
+}
+
+/** A language's keywords that name no keyword: what `defineServer` refuses. */
+export function keywordProblems(set: Languages): string[] {
+  return set.list.flatMap((l) =>
+    Object.keys(l.keywords)
+      .filter((k) => !isKeyword(k))
+      .map(
+        (k) =>
+          `The language ${l.code} has words for "${k}", which is not a keyword (${KEYWORDS.join(', ')})`,
+      ),
+  );
 }

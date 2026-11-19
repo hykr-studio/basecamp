@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import { Pressable, Text, View } from 'react-native';
 import { api } from '../api';
 import { SectionHeading } from '../components/ScreenTitle';
+import { hrefFor } from '../runtime';
 import { colors, space, styles } from '../theme';
 import { labelOf } from './ApprovalPreview';
 import { AssistantMark } from './AssistantMark';
@@ -59,16 +60,11 @@ function line(e: HistoryEntry): { text: string; tone: string } {
 
 /**
  * "What the assistant did since you were last here": the latest lines of the audit trail by
- * the assistant, each with its mark. `hrefFor` lets the domain link a line to its record,
- * where the record's full history lives; `ask` is what to try when there is nothing yet.
+ * the assistant, each with its mark. A line links to its record where a module says where that
+ * record opens (`AppModule.hrefFor`), where its full history lives; `ask` is what to try when
+ * there is nothing yet.
  */
-export function AssistantActivity({
-  hrefFor,
-  ask,
-}: {
-  hrefFor?: (type: string, id: string) => string | undefined;
-  ask?: string;
-}) {
+export function AssistantActivity({ ask }: { ask?: string }) {
   const after = previousVisit();
   const q = useQuery({
     queryKey: ['history', 'recent'],
@@ -116,7 +112,7 @@ export function AssistantActivity({
         <View style={{ gap: 2 }}>
           {entries.slice(0, SHOWN).map((e) => {
             const d = line(e);
-            const href = e.resourceType && e.resourceId && hrefFor?.(e.resourceType, e.resourceId);
+            const href = e.resourceType && e.resourceId && hrefFor(e.resourceType, e.resourceId);
             const body = (
               <>
                 <AssistantMark size={18} />

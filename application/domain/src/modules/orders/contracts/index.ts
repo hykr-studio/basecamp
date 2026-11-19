@@ -1,0 +1,18 @@
+/** The orders module's specs: isomorphic, read by the server and the apps. */
+import { moduleSpec } from '@hykr/contracts';
+import { ReviseOrderSpec, SaveOrderSpec } from './commands.js';
+import { OrderItemSpec, OrderSpec } from './order.js';
+import { ProductSpec } from './product.js';
+
+export * from './commands.js';
+export * from './order.js';
+export * from './participants.js';
+export * from './product.js';
+
+export const ordersSpec = moduleSpec({
+  name: 'orders',
+  // The modules it builds on: it may import only their contracts/ and server/public.ts.
+  dependsOn: [],
+  entities: { orders: OrderSpec, orderItems: OrderItemSpec, products: ProductSpec },
+  commands: [SaveOrderSpec, ReviseOrderSpec],
+});

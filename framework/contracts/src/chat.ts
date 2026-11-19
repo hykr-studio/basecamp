@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { PageSpec, Present, Surfaces } from './framework/present.js';
-import { Channel, Lang } from './voice.js';
+import { Lang, LangCode } from './languages.js';
+import { Channel } from './voice.js';
 
 export const ChatRole = z.enum(['user', 'assistant']);
 export type ChatRole = z.infer<typeof ChatRole>;
@@ -74,6 +75,103 @@ export const ToolCallSummary = z.object({
 });
 export type ToolCallSummary = z.infer<typeof ToolCallSummary>;
 
+/** How a resumed call's request was decided (a durable run's write, @hykr/core tools). */
+const DECIDED = new Set(['approved', 'rejected', 'expired', 'failed']);
+
+/**
+ * Whether a tool's output (`{ ok, result, present }`, as the agent got it) is a write's: done,
+ * with its value; waiting for an approval; or, in a run that waited, how its request was decided.
+ * A read's record can carry a `status` of its own ('approved', 'done'), so the shape decides.
+ */
+export function wroteIn(output: unknown): boolean {
+  const r = (output as { result?: unknown } | null | undefined)?.result;
+  if (!r || typeof r !== 'object') return false;
+  const { status } = r as { status?: unknown };
+  if (status === 'done') return 'value' in r && !('id' in r);
+  if (status === 'needs_approval' || (typeof status === 'string' && DECIDED.has(status))) {
+    const { approval } = r as { approval?: unknown };
+    return !!approval && typeof approval === 'object' && !('id' in r);
+  }
+  return false;
+}
+
+/** One call of a turn: its tool's id, and what it returned (`{ ok, result, present }`). */
+export type TurnCall = { tool?: string; output: unknown };
+
+type Output =
+  | {
+      ok?: unknown;
+      result?: unknown;
+      present?: { kind?: unknown; props?: unknown; params?: unknown; choices?: unknown };
+    }
+  | null
+  | undefined;
+
+const idOf = (x: unknown): string | undefined => {
+  const id = (x as { id?: unknown } | null | undefined)?.id;
+  return typeof id === 'string' ? id : undefined;
+};
+
+/** A view a channel shows: a component on a screen, or words where there is none. */
+const showsView = (output: unknown) => {
+  const kind = (output as Output)?.present?.kind;
+  return kind === 'inline' || kind === 'text';
+};
+
+/** The records a list read, by id: its rows, and the rows a channel with buttons offers. */
+function rowsOf(output: unknown): Set<string> {
+  const o = output as Output;
+  const items = (o?.result as { items?: unknown } | null | undefined)?.items;
+  const choices = o?.present?.choices;
+  const ids = [...(Array.isArray(items) ? items : []), ...(Array.isArray(choices) ? choices : [])];
+  return new Set(ids.map(idOf).filter((id): id is string => id !== undefined));
+}
+
+/**
+ * The one record a call that answered showed: its view's record (`props.id`), the screen it
+ * opened on the canvas (`params.id`), or, in words, the record it read and showed. A refused call
+ * showed nothing.
+ */
+function recordShown(output: unknown): string | undefined {
+  const o = output as Output;
+  if (o?.ok !== true || !o.present) return undefined;
+  if (o.present.kind === 'open') return idOf(o.present.params);
+  if (!showsView(o)) return undefined;
+  return idOf(o.present.props) ?? idOf(o.result);
+}
+
+const NO_WRITES: ReadonlySet<string> = new Set();
+
+/**
+ * Which calls of one turn (in order) only looked something up, so no channel shows them as the
+ * answer: not WhatsApp's words, not the app's view, not the saved thread. A lookup is a read whose
+ * view (a list, a record, totals) came before
+ * - a write in the same turn: the write is what the turn did, whatever it answered (done, waiting,
+ *   decided, refused, or its input refused). A call is a write by its tool (`writes`, from
+ *   `writeToolIds`), or, for a tool the catalog does not list, by its result (`wroteIn`);
+ * - or a later call that showed or opened one of the records it listed ("open Site review": the
+ *   meetings, then the meeting): the list was how the assistant found it.
+ * A read with neither after it is the answer, and shows: one list, several lists, a list before a
+ * refused read. A canvas a call opened is not a view.
+ */
+export function lookupsIn(
+  calls: readonly TurnCall[],
+  writes: ReadonlySet<string> = NO_WRITES,
+): Set<number> {
+  const wrote = calls.map((c) => (c.tool !== undefined && writes.has(c.tool)) || wroteIn(c.output));
+  const shown = calls.map((c) => recordShown(c.output));
+  const lookups = new Set<number>();
+  calls.forEach((c, i) => {
+    if (wrote[i] || !showsView(c.output)) return;
+    if (wrote.slice(i + 1).some(Boolean)) lookups.add(i);
+    else {
+      const rows = rowsOf(c.output);
+      if (shown.slice(i + 1).some((id) => id !== undefined && rows.has(id))) lookups.add(i);
+    }
+  });
+  return lookups;
+}
+
 /** One agent turn: its reply, the run id that ties its audit rows together, and what it called. */
 export const ChatResponse = z.object({
   reply: z.string(),
@@ -97,6 +195,8 @@ export const HistoryEntry = z.object({
   resourceType: z.string().optional(),
   resourceId: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
+  /** A state change on this line: the state field's value before and after. */
+  transition: z.object({ from: z.string().nullable(), to: z.string() }).nullable().optional(),
 });
 export type HistoryEntry = z.infer<typeof HistoryEntry>;
 
@@ -120,7 +220,7 @@ export const ThreadMessage = z.object({
   metadata: z.object({
     runId: z.string().nullable(),
     channel: Channel,
-    lang: Lang.nullable(),
+    lang: LangCode.nullable(),
     createdAt: z.iso.datetime(),
   }),
 });

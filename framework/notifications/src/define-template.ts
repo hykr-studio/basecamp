@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { TemplateSpec } from '@hykr/channels';
-import { LANGS, type Labels, type Lang } from '@hykr/i18n';
+import { type Labels, type Lang, type Languages, languages, pick } from '@hykr/i18n';
 import type { z } from 'zod';
 
 /**
@@ -20,7 +20,11 @@ export type TemplateDef<P extends z.ZodObject = z.ZodObject> = {
   name: string;
   category: 'utility' | 'marketing' | 'authentication';
   params: P;
-  /** The text, per language, with named parameters: "Reminder: {{title}} at {{time}}." */
+  /**
+   * The text, with named parameters: "Reminder: {{title}} at {{time}}." English always; each of
+   * the application's other languages it has is synced and sent in that language, the rest get
+   * the English template.
+   */
   body: Labels;
   /** A short line under the body (a marketing template's opt-out, for one). */
   footer?: Labels;
@@ -29,6 +33,11 @@ export type TemplateDef<P extends z.ZodObject = z.ZodObject> = {
   example: z.infer<P>;
   /** Which URL button parameter fills the link's {{1}}, from the params. */
   urlParam?: keyof z.infer<P> & string;
+  /**
+   * A header above the body. `document`: the message carries a file (a PDF), given when it is
+   * sent (the documents feature fills it); a template without one cannot carry a file.
+   */
+  header?: { type: 'document' };
 };
 
 const NAME = /^[a-z][a-z0-9_]*_v\d+$/;
@@ -41,9 +50,9 @@ function check(def: TemplateDef) {
   };
   if (!NAME.test(def.name)) fail('name it snake_case with a version, like meeting_reminder_v1');
   const keys = Object.keys(def.params.shape).sort();
-  for (const lang of LANGS) {
-    const body = def.body[lang];
-    if (!body?.trim()) fail(`no ${lang} body`);
+  if (!def.body.en?.trim()) fail('no en body');
+  for (const [lang, body = ''] of Object.entries(def.body)) {
+    if (!body.trim()) fail(`no ${lang} body`);
     if (body.length > 1024) fail(`the ${lang} body is over 1,024 characters`);
     if (JSON.stringify(placeholders(body)) !== JSON.stringify(keys))
       fail(`the ${lang} body's parameters (${placeholders(body)}) are not the schema's (${keys})`);
@@ -57,6 +66,9 @@ function check(def: TemplateDef) {
   for (const k of keys)
     if (!String((def.example as Record<string, unknown>)[k] ?? '').trim())
       fail(`no example for ${k}`);
+  if (def.header && def.header.type !== 'document') fail('a header is { type: "document" }');
+  if (def.header && def.category === 'authentication')
+    fail('an authentication template cannot carry a document');
 }
 
 export function defineTemplate<P extends z.ZodObject>(def: TemplateDef<P>): TemplateDef<P> {
@@ -71,17 +83,18 @@ export function toTemplateSpec(def: TemplateDef, lang: Lang, appUrl: string): Te
     name: def.name,
     language: lang,
     category: def.category.toUpperCase() as TemplateSpec['category'],
-    body: def.body[lang],
+    body: pick(def.body, lang),
     examples: Object.fromEntries(Object.keys(def.params.shape).map((k) => [k, String(example[k])])),
-    ...(def.footer ? { footer: def.footer[lang] } : {}),
+    ...(def.header ? { header: { format: 'DOCUMENT' as const } } : {}),
+    ...(def.footer ? { footer: pick(def.footer, lang) } : {}),
     ...(def.buttons?.length
       ? {
           buttons: def.buttons.map((b) =>
             b.type === 'quick_reply'
-              ? { type: 'QUICK_REPLY' as const, text: b.text[lang] }
+              ? { type: 'QUICK_REPLY' as const, text: pick(b.text, lang) }
               : {
                   type: 'URL' as const,
-                  text: b.text[lang],
+                  text: pick(b.text, lang),
                   url: `${appUrl}${b.path}`,
                   example: `${appUrl}${b.path.replace('{{1}}', String(example[def.urlParam ?? ''] ?? 'example'))}`,
                 },
@@ -98,11 +111,23 @@ export function toTemplateSpec(def: TemplateDef, lang: Lang, appUrl: string): Te
 export function contentHash(def: TemplateDef, lang: Lang): string {
   const content = {
     category: def.category,
-    body: def.body[lang],
-    footer: def.footer?.[lang] ?? null,
+    body: pick(def.body, lang),
+    footer: def.footer ? pick(def.footer, lang) : null,
     buttons: (def.buttons ?? []).map((b) =>
-      b.type === 'quick_reply' ? ['quick_reply', b.text[lang]] : ['url', b.text[lang], b.path],
+      b.type === 'quick_reply'
+        ? ['quick_reply', pick(b.text, lang)]
+        : ['url', pick(b.text, lang), b.path],
     ),
+    // Only when present: every template without a header keeps the hash it was synced with.
+    ...(def.header ? { header: def.header.type } : {}),
   };
   return createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16);
+}
+
+/**
+ * The languages a template is synced and sent in: the application's languages it has a body
+ * for, English first. A contact in another language gets the English template.
+ */
+export function templateLanguages(def: TemplateDef, set: Languages = languages()): Lang[] {
+  return set.codes.filter((lang) => Boolean(def.body[lang]?.trim()));
 }

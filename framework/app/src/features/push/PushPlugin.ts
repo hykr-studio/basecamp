@@ -1,0 +1,124 @@
+import * as Device from 'expo-device';
+import * as Notifications from 'expo-notifications';
+import { router } from 'expo-router';
+import { AppState, Platform } from 'react-native';
+import { api } from '../../api';
+import type { AppPlugin } from '../../framework/app-domain';
+import { activityReporter } from './activity';
+import { appPathOf } from './links';
+import { PushBanner } from './PushControls';
+import { signOutWebPush, startWebPush } from './web';
+
+export type PushOptions = {
+  /** The EAS project id. Default: the app config's `extra.eas.projectId`. */
+  projectId?: string;
+  /** What Android shows as the notifications' channel name in the app's settings. */
+  androidChannel?: string;
+};
+
+/** A tapped notification opens its link. */
+function open(data: unknown) {
+  const path = appPathOf(data);
+  if (!path) return;
+  try {
+    router.navigate(path as never);
+  } catch (e) {
+    console.warn('A push notification’s link could not open:', e);
+  }
+}
+
+/**
+ * Ask once for permission, then register this device's Expo push token for the signed-in
+ * person. Nothing on the web, in a simulator, or when permission is refused.
+ */
+async function register(options: PushOptions): Promise<string | undefined> {
+  if (!Device.isDevice) return undefined;
+  if (Platform.OS === 'android')
+    await Notifications.setNotificationChannelAsync('default', {
+      name: options.androidChannel ?? 'Notifications',
+      importance: Notifications.AndroidImportance.DEFAULT,
+    });
+  let permission = await Notifications.getPermissionsAsync();
+  if (!permission.granted && permission.canAskAgain)
+    permission = await Notifications.requestPermissionsAsync();
+  if (!permission.granted) return undefined;
+  const { data: token } = await Notifications.getExpoPushTokenAsync(
+    options.projectId ? { projectId: options.projectId } : undefined,
+  );
+  await api.push.register({ token, platform: Platform.OS === 'ios' ? 'ios' : 'android' });
+  return token;
+}
+
+/**
+ * Push notifications. On iOS and Android: after sign-in the device is registered for the
+ * person (the server sends what notifications list `push` for), a tap opens the notification's
+ * link, and sign-out forgets the device. Needs the `expo-notifications` config plugin in the
+ * app's app.json and an EAS project id.
+ *
+ * In a browser (web push): after sign-in the service worker (`/push-sw.js`) is registered, and
+ * when the person allowed notifications here before, the browser is registered again; otherwise
+ * a strip and the person's card offer "Turn on notifications", which asks the browser only on
+ * that click. A click on a notification focuses the app's tab (or opens one) on its link, and
+ * sign-out forgets the browser. Needs `@hykr/app` in the app's app.json plugins (it copies the
+ * service worker and a manifest into public/) and WEB_PUSH_* keys on the server.
+ */
+export function pushPlugin(options: PushOptions = {}): AppPlugin {
+  const web = Platform.OS === 'web';
+  return {
+    name: 'push',
+    ...(web ? { Banner: PushBanner } : {}),
+    onSignOut: async () => {
+      if (web) await signOutWebPush();
+    },
+    onSignedIn: () => {
+      if (web) return startWebPush();
+      if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
+      // In the foreground too: a banner and the list, no badge.
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowBanner: true,
+          shouldShowList: true,
+          shouldPlaySound: true,
+          shouldSetBadge: false,
+        }),
+      });
+      let stopped = false;
+      let token: string | undefined;
+      const forget = (t: string) => void api.push.forget(t).catch(() => undefined);
+      const taps = Notifications.addNotificationResponseReceivedListener((response) =>
+        open(response.notification.request.content.data),
+      );
+      // A tap that started the app.
+      void Notifications.getLastNotificationResponseAsync().then((response) => {
+        if (!response || stopped) return;
+        open(response.notification.request.content.data);
+        void Notifications.clearLastNotificationResponseAsync();
+      });
+      // Where the person is: a push goes to the one device they used last. Each time the app
+      // comes to the front, and every few minutes while it stays there.
+      const activity = activityReporter(() =>
+        token ? api.push.active(token) : Promise.resolve(null),
+      );
+      const onFront = () => {
+        if (token && AppState.currentState === 'active') activity.ping();
+      };
+      const fronted = AppState.addEventListener('change', onFront);
+      const every = setInterval(onFront, 5 * 60_000);
+      void register(options).then(
+        (t) => {
+          token = t;
+          if (stopped && t) forget(t);
+          else onFront();
+        },
+        (e) => console.warn('Push notifications are off: registering this device failed:', e),
+      );
+      return () => {
+        stopped = true;
+        taps.remove();
+        fronted.remove();
+        clearInterval(every);
+        if (token) forget(token);
+      };
+    },
+  };
+}

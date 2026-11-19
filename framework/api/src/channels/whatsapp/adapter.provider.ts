@@ -16,6 +16,7 @@ export const whatsappProvider = {
       accessToken: config.whatsapp.accessToken,
       appSecret: config.whatsapp.appSecret,
       wabaId: config.whatsapp.wabaId,
+      appId: config.whatsapp.appId,
       log: (m) => log.warn(m),
     }),
 };

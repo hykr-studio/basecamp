@@ -11,6 +11,7 @@
       "!framework/db/drizzle",
       "!application/domain/drizzle",
       "!framework/api/test/fixture/drizzle",
+      "!framework/api/test/fixture/src/features/*/migrations",
       "!framework/create-basecamp/template",
       "!application/mobile/src/uniwind-types.d.ts",
       "!application/back-office/src/uniwind-types.d.ts",

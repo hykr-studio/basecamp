@@ -48,8 +48,10 @@ export function WhatsAppLink() {
   if (editing && codeSent) {
     return (
       <View className="gap-1.5">
-        <Text variant="label">Code sent to WhatsApp</Text>
-        <Text variant="muted">Type the 6-digit code that arrived on {phone}.</Text>
+        <Text variant="label">A code is on its way to WhatsApp</Text>
+        <Text variant="muted">
+          Type the 6-digit code that arrives on {phone}. None within a minute? Send again.
+        </Text>
         <TextInput
           value={code}
           onChangeText={(v) => setCode(v.replace(/\D/g, '').slice(0, 6))}
@@ -67,6 +69,7 @@ export function WhatsAppLink() {
         <View className="flex-row gap-1">
           <Button
             size="sm"
+            accessibilityLabel="Link this WhatsApp number"
             disabled={code.length !== 6 || save.isPending}
             onPress={() => save.mutate()}
           >
@@ -75,12 +78,18 @@ export function WhatsAppLink() {
           <Button
             size="sm"
             variant="subtle"
+            accessibilityLabel="Send the code again"
             onPress={() => send.mutate()}
             disabled={send.isPending}
           >
             <Text>Send again</Text>
           </Button>
-          <Button size="sm" variant="subtle" onPress={reset}>
+          <Button
+            size="sm"
+            variant="subtle"
+            accessibilityLabel="Cancel linking WhatsApp"
+            onPress={reset}
+          >
             <Text>Cancel</Text>
           </Button>
         </View>
@@ -107,12 +116,18 @@ export function WhatsAppLink() {
         <View className="flex-row gap-1">
           <Button
             size="sm"
+            accessibilityLabel="Send a code to this WhatsApp number"
             disabled={!phone.trim() || send.isPending}
             onPress={() => send.mutate()}
           >
             <Text>Send code</Text>
           </Button>
-          <Button size="sm" variant="subtle" onPress={reset}>
+          <Button
+            size="sm"
+            variant="subtle"
+            accessibilityLabel="Cancel linking WhatsApp"
+            onPress={reset}
+          >
             <Text>Cancel</Text>
           </Button>
         </View>
@@ -144,6 +159,7 @@ export function WhatsAppLink() {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel="Link WhatsApp"
       onPress={() => setEditing(true)}
       className="min-h-11 flex-row items-center gap-1.5 self-start"
     >

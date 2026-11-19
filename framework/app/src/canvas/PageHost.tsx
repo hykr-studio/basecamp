@@ -12,7 +12,14 @@ const NARROW = 700;
  */
 function Block({ block, narrow }: { block: PageBlock; narrow: boolean }) {
   const collapsed = narrow ? getRegistry().getViewDef(block.view)?.collapseTo : undefined;
-  return <InlineView view={collapsed ?? block.view} query={block.query} props={block.props} />;
+  return (
+    <InlineView
+      view={collapsed ?? block.view}
+      query={block.query}
+      props={block.props}
+      dataKey={block.id}
+    />
+  );
 }
 
 /** A composed page: stack, or two columns with full-width rows (span: 'full'). */

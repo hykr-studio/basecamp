@@ -1,6 +1,29 @@
-export type { AgentDomain, EvalCase, VoiceEvalCase } from './agent-domain.js';
+export type {
+  AgentDomain,
+  AgentModule,
+  EvalCase,
+  EvalSetup,
+  EvalSuite,
+  VoiceEvalCase,
+} from './agent-domain.js';
+export { DATA_MAX, dataBlock, runData, runMessage } from './agent-run.js';
 export { AGENT_KEYS, type Agents, createAgents, profileFor } from './agents.js';
-export { type ApiFor, createApiFor } from './context.js';
+export { ModelNotChosen, modelFor, turnModel } from './assistant.js';
+export { type ApiFor, agentRunToken, createApiFor } from './context.js';
+export {
+  durableAgent,
+  findSuspension,
+  parkedLine,
+  parkedView,
+  resumeSuspension,
+  type Suspension,
+  type TurnVoice,
+  voiceOf,
+} from './durable.js';
+export { FAKE_VISION_MARKER, fakeVisionModel, visionReply } from './fake/vision.js';
+export * from './models/index.js';
+export { type AgentModuleOf, mergeAgentModules, scriptConflicts, suitesFor } from './modules.js';
+export { EndWhenPaused, isPausedRefusal, pausedIn, pausedText, sayingModel } from './paused.js';
 export {
   briefForVoice,
   expectedOutcome,
@@ -8,4 +31,21 @@ export {
   noRetryAfterRefusal,
   repliesInLanguage,
 } from './scorers.js';
-export { AGENT_ID, agentVersion, buildInstructions, modelId } from './version.js';
+export {
+  type ModelUsage,
+  type ModelUsageSink,
+  meteredModel,
+  reportModelUsage,
+  setModelUsageSink,
+  usageContext,
+} from './usage.js';
+export { AGENT_ID, agentVersion, buildInstructions, isFakeModel } from './version.js';
+export {
+  READING_MAX,
+  readAsText,
+  readAsValue,
+  VISION_SYSTEM,
+  type VisionPart,
+  VisionUnreadable,
+  type VisionUsage,
+} from './vision.js';

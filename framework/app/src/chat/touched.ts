@@ -5,11 +5,14 @@ const pluralOf = (name: string) => specsOf().find((s) => s.name === name)?.plura
 
 /**
  * Which cached lists a tool may have changed, so they refresh without a manual reload: a
- * command refreshes the entities it declares it touches; an entity write refreshes its own.
+ * command refreshes the entities it declares it touches; an entity write refreshes its own; a
+ * comment, the comment lists.
  */
 export function touchedBy(tool: string): string[] {
   if (/^(list|get)-/.test(tool) || tool.startsWith('canvas-')) return [];
   const command = getCatalog().commands.find((c) => c.tool === tool);
+  // A comment changes its record's discussion and history, not the record.
+  if (command?.name.startsWith('comment.')) return ['comments', 'history'];
   if (command)
     return (command.touches ?? specsOf().map((s) => s.name)).flatMap(
       (name) => pluralOf(name) ?? [],
