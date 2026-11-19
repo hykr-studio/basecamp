@@ -35,6 +35,7 @@ import {
 } from 'drizzle-orm';
 import { z } from 'zod';
 import { allow, RuleDenied } from '../authorize.js';
+import { childLinkOf } from '../entity/children.js';
 import { EntityEvent } from '../entity/cqrs-classes.js';
 import { type AnyEntityDef, toJson } from '../entity/define-entity.js';
 import { checkReferences } from '../entity/references.js';
@@ -217,8 +218,27 @@ async function reverse(
   if (await def.repo.find(tx, p, t.id)) throw changedSince();
   const createShape = (def.spec.schemas.create as z.ZodObject).shape as Record<string, unknown>;
   const asInput = Object.fromEntries(Object.keys(createShape).map((k) => [k, before[k]]));
-  const decision = def.decide(p, 'create', null, asInput);
-  if (decision.decision === 'deny') throw new RuleDenied(decision);
+  // A line of a tree is never made one by one (the parent plugin refuses it); one the undone
+  // write removed comes back with its parent, which must still be there and be theirs to change.
+  const link = childLinkOf(def.name);
+  if (link) {
+    const fk = Object.entries(getTableColumns(def.table as Table)).find(
+      ([, c]) => c === link.fk,
+    )?.[0] as string;
+    const parent = await link.parent.repo.find(tx, p, String(before[fk]));
+    if (!parent) throw changedSince();
+    const decision = link.parent.decide(p, 'update', parent, {});
+    if (decision.decision === 'deny') throw new RuleDenied(decision);
+    // The parent's plugins may refuse a change to its lines (a frozen record's), as a save would.
+    const target = { spec: link.parent.spec, table: link.parent.table };
+    for (const x of link.parent.plugins()) {
+      const r = x.childWrite?.(parent as Values, target);
+      if (r?.decision === 'deny') throw new RuleDenied(r);
+    }
+  } else {
+    const decision = def.decide(p, 'create', null, asInput);
+    if (decision.decision === 'deny') throw new RuleDenied(decision);
+  }
   // Every record it names is one this person can still read in this business (V2), as undoing
   // an update checks through repo.update: else the reference's 404, and nothing comes back (V10).
   await checkReferences(tx, p, def.spec, null, before);

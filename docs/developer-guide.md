@@ -471,8 +471,19 @@ An unknown id, another business's record and one the writer cannot read all get 
 so does an update (or a revision) that keeps the stored id. A CRUD write and a public form's
 answer check before they can park. Undo checks the row it restores as it was: one whose target
 the person can no longer read stays deleted (docs/decisions/V10.md).
-`defineServer` refuses a reference to an entity that does not exist, from a field no write sets,
-or on a record with a parent (check a line's references in the parent's command).
+`defineServer` refuses a reference to an entity that does not exist, or from a field no write
+sets. A record with a parent (a line item) declares references the same way; its tree writes
+check them in bulk (5.13, `docs/decisions/R1.md`). Every refusal is audited as denied, with the
+rule `unknown_reference`.
+
+**A label on read.** Name a field of the target to read with each record:
+`references: { productId: { entity: 'product', label: 'name' } }`. Lists and gets then carry
+`references: { productId: { id, label } }`, one query per target for the whole page, read as
+the reader may see the target: one they cannot read, or a label field hidden from them (field
+policy), reads `label: null`, never its value. A null link has no entry. Webhooks, live events,
+summaries and a write's own result carry the id only. `defineServer` refuses a label its target's
+read schema has not. To read many records by id under the target's scope yourself,
+`Target.repo.findMany(conn, p, ids)` returns the ones the principal reaches, in one query.
 
 Back it in the database with a key that keeps the business: `(tenant_id, meeting_id)` →
 `meetings (tenant_id, id)`, with a unique `(tenant_id, id)` on the target. A plain
@@ -1389,6 +1400,28 @@ sample's `orders` module uses every part.
   client. Plain CRUD never adds, moves or deletes a node of a tree. Add composite foreign keys
   `(tenant_id, parent_id) → parent (tenant_id, id)` and `(parent_id, nest) → child (parent_id, id)`
   so the database also refuses a row that points elsewhere.
+- **A line that names another record** (a quote line's price-list item, an order line's product)
+  declares it on the child spec as on any record (5.2): `traits.references: { productId: {
+  entity: 'product', label: 'name' } }`, to any entity, another module's or a shared one included.
+  `children.insert` and `children.replace` check every new line's references, and every changed
+  line's changed ones, before writing anything: one `findMany` per target entity for the whole
+  tree, as the writer. The first line naming a record the writer cannot read refuses the whole
+  write: 404 `{ error: 'not_found', message: 'No such product', field, path, ref? }`, where `path`
+  is the line's place in the tree (`['items', 0, 'children', 2, 'productId']`, after the prefix
+  the command passes as `{ at: ['items'] }`) and `ref` its own key when the node carries one. A
+  kept line whose reference did not change is not checked again. More than 1,000 different ids of
+  one target in one write is 400 `too_many_references`. So every path that writes the tree is
+  checked with no code of the command's own: the app, the assistant and MCP, offline replays,
+  approved replays (checked again when they run), and undo putting removed lines back. A revision
+  copies its lines as they are (a kept link, decision 4 of V2); the lines a command then writes
+  are checked. To refuse before a write that would park reaches an approver, call
+  `Child.children.checkReferences(tx, p, nodes, { at: ['items'], parent })` in the command's
+  `load` (its `authorize` is synchronous); the sample's `order.save` does. Key the column with its
+  business like any reference: `(tenant_id, product_id) → products (tenant_id, id)` in
+  `schema.ts` for NO ACTION, RESTRICT or CASCADE (`tableRef(name)` down the graph), or a SQL post
+  hook for `ON DELETE SET NULL (product_id)` (the sample's `sql/post/order-products.sql`). Read
+  through `GET /api/<plural>?<parent>=` or `Child.readMany(conn, rows, p)` after `children.list`,
+  each line carries its labels (5.2). `docs/decisions/R1.md`.
 - **Large writes.** `runWrite` audits a write's rows in one statement, the JSON body limit is
   `JSON_BODY_LIMIT` (1 MB), and a tree holds at most 1000 nodes and 8 levels (`maxNodes`,
   `maxDepth` on the trait). The approval card sums up long lists.
@@ -3978,7 +4011,6 @@ These are not built. Each has a workaround for now.
 | A document send left `sending` for good | A send's job claims it before delivering, so it leaves at most once. If every try of that job stopped part way (the worker died each time), the row stays `sending`; nothing sweeps it. Send the document again. |
 | A file on two records, versioned files | One file belongs to one record field. Upload the file again for a second record. |
 | Storage quotas, malware scanning | Not built. Keep `FILES_MAX_BYTES` and each field's `maxBytes` small. |
-| References on records with a parent (a line naming a product) | `defineServer` refuses `traits.references` on a child: `children.replace` inserts in bulk. Load each id in the parent's command (`Target.repo.get(tx, p, id)`) before saving the lines, and key the column with `tenant_id`. |
 | An audited unlink when a referenced record is deleted | The sample's `ON DELETE SET NULL (meeting_id)` clears the links in the transaction of the meeting's audited delete; the to-dos and notes it changes get no audit row and no new version, and a phone learns of it on its next read. To audit each one, unlink them through their repository in a command before the delete. |
 | Files of a deleted business or of rows deleted outside the write path | Their rows go with the business (cascade) or stay attached; their objects stay in the bucket. |
 | Uploads over 5 GiB | One presigned PUT per file; multipart uploads are not built. |

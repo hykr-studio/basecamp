@@ -86,6 +86,7 @@ change the sample application or a business's settings, not the framework.
 | [V11](V11.md) | Validation (reviews of V5, V6, V7, V9) | `TRUST_PROXY`; a throwing filter loses one event alone; routes with their own reply run one at a time; an approver who left gives way; nothing in a write's transaction reaches the pool; an empty patch is refused. | `99f87fc7` |
 | [V12](V12.md) | Validation (acceptance) | Every keyset keeps its time to the microsecond and compares it in SQL; the ledger, delivery and routing logs page by (time, id). | `d2844401` |
 | [V13](V13.md) | Validation (acceptance) | A lookup before a write is not shown as the answer; a limit's refusal names the meter by its label; one alert per crossing. | `a0865ebd` |
+| [R1](R1.md) | Requirement (Interioring) | References on line items: a child spec declares `traits.references`, checked in bulk by its tree writes (one query per target), with the line's path; labels on read; a reference 404 audited as denied; the sample's order lines name a product. | this change |
 | [VALIDATION](VALIDATION.md) | Validation | The live validation at `23805b76`: 349 claims, 18 defects by root cause, the fixes V1 to V13 and their acceptance. | this change (after `f63bb019`) |
 | [W1](W1.md) | Web push (Interioring) | Push in a web browser: a `webpush` channel (VAPID, RFC 8291) beside Expo's, `push` as a shorthand for phones then browsers, sealed subscriptions, a service worker and manifest from `@hykr/app`'s config plugin, "Turn on notifications" in the app. | this change |
 
@@ -115,12 +116,12 @@ How to read it:
   the choice itself. "Settled by H1" (or another unit) means a later unit answered it; the row stays so the
   change is visible. "None" means the unit reported the choice without a question.
 
-The table has 581 rows (the five A12 rows included): the 458 items of the units' "Assumptions to review" sections and
+The table has 586 rows (the five A12 rows included): the 458 items of the units' "Assumptions to review" sections and
 70 assumptions the units reported to the run that their docs do not state, less duplicates merged
 and process notes left out (merging the integration branch into a unit, which test approach a fix
 took, where a demo lived before its module existed), plus 79 rows from the fix units V1 to V13
 (their "Assumptions to review" sections, an assumption a later V unit settled merged into one
-row, and the two B18 rows V8 handed to the integrator), plus 8 rows from B21 and 5 from W1.
+row, and the two B18 rows V8 handed to the integrator), plus 8 rows from B21, 5 from R1 and 5 from W1.
 Those stay in each unit's doc.
 
 | Unit | Gap | Topic | What we chose | Source | Question for the owner |
@@ -688,6 +689,11 @@ Those stay in each unit's doc.
 | V11 | Validation (A3) | Metering in a write announces before commit | With `record(uses, { tx })`, the in-process `credits.threshold` events are published when `record` returns, inside the write; the rows and the outbox twin commit with it, and a rolled-back write loses both. The wallet row's lock then lasts to the end of the write, so the guide says to meter last in `run`. | Default | None |
 | V11 | Validation (F4) | A standing provider reads on what it is given | `StandingProvider.forUser`'s `db` is a `Conn`, which may be a write's transaction; a provider written against `Database`-only members no longer compiles. | Default | None |
 | V11 | Validation (Settings) | The settings cache may hold a row read on a caller's transaction | `get` and `section` with a `conn` cache the row they read (10 s); a transaction that wrote `app.tenants` and rolled back would leave its settings served that long. No caller does both today; one that does should skip the cache. | Default | None |
+| R1 | Requirement (Interioring) | Copied lines keep their links | A revision copies its lines with their stored links, unchecked, as it keeps its parent's own unchanged link (V2 decision 4); only the lines a command then writes are checked. | R1 decision 8 | Should a revision re-check copied lines against the writer? |
+| R1 | Requirement (Interioring) | Two checks for a save that can park | A command that refuses early calls `children.checkReferences` in its load, and the tree write checks again in run: two queries per target. | R1 decision 3 | None |
+| R1 | Requirement (Interioring) | A reference 404 is audited | Every declared reference's refusal, top-level and child, writes a `denied` audit row (`unknown_reference`), then answers the same 404. | User's choice (2026-11-19) | None |
+| R1 | Requirement (Interioring) | Imports write no trees | The importer cannot write lines at all, so it cannot write them around the check; importing a tree through its parent's command is not built. | R1 decision 10 | Is a tree import needed? |
+| R1 | Requirement (Interioring) | Labels only on reads | Lists, gets, documents and shared records carry labels; a write's own result, webhooks, live events and summaries carry ids. | R1 decision 12 | Should a command's result carry labels too? |
 | V12 | Validation (Foundation) | An old cursor, once | For one page, a cursor made before the fix may show rows of its last millisecond again, ascending or descending; it skips none. | Default | None |
 | V12 | Validation (A3, B10, B19) | `next` is now a token | The ledger's `next` and the delivery log's `nextBefore` used to be ISO times. Passed back as `before` (the documented use) they keep working; one handed out before the fix is read as a strict time, so a client mid-walk at deploy may skip, once, unseen rows of that millisecond. | Default | Confirm. |
 | V12 | Validation (A3, B10, B19) | A time stays a time-only bound | `before=<ISO time>` still means strictly before that moment; rows at that very moment are excluded on purpose. | Default | Confirm. |

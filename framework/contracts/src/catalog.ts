@@ -304,8 +304,9 @@ export function createCatalog<const P extends readonly CatalogPart[]>(
         if (!names.has(name))
           problems.push(`${module}: the command ${spec.name} touches ${name}, which is no entity`);
   // A reference names an entity of the catalog, from a field a write sets (V2).
+  const byName = new Map(all.flatMap((m) => m.entities.map((s) => [s.name, s] as const)));
   for (const { entities } of all)
-    for (const spec of entities) problems.push(...referenceProblems(spec, names));
+    for (const spec of entities) problems.push(...referenceProblems(spec, byName));
 
   assertNoProblems(problems);
 
