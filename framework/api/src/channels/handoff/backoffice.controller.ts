@@ -1,6 +1,17 @@
 import type { ChannelAdapter, OutboundMessage } from '@hykr/channels';
-import { type Principal, RequestHumanInput, type TenantRole } from '@hykr/contracts';
-import { CurrentPrincipal, HumanOnlyGuard, PrincipalGuard } from '@hykr/core';
+import { FrameworkCapabilities, type Principal, RequestHumanInput } from '@hykr/contracts';
+import {
+  CurrentPrincipal,
+  findRepeat,
+  HumanOnlyGuard,
+  oneAtATime,
+  PrincipalGuard,
+  RequestMeta,
+  type RequestMetaValue,
+  requireCapability,
+  saveReply,
+  TenantConfigService,
+} from '@hykr/core';
 import { type Database, schema, writeAudit } from '@hykr/db';
 import { langOf } from '@hykr/i18n';
 import { HandoffReply } from '@hykr/notifications';
@@ -26,12 +37,10 @@ import { ThreadsService } from '../../modules/threads/threads.service.js';
 import { type Contact, ContactsService, WINDOW_MS } from '../contacts.service.js';
 import { OutboundService } from '../outbound.service.js';
 import { TemplateSync } from '../templates/template-sync.js';
-import { TenantsService } from '../tenants.service.js';
 import { WHATSAPP } from '../whatsapp/adapter.provider.js';
 import { type Handoff, HandoffService } from './handoff.service.js';
 
 const { handoffs, contacts, templates } = schema;
-const STAFF: readonly TenantRole[] = ['owner', 'admin', 'ops', 'staff'];
 
 /** Less than this left in the 24-hour window: answer soon, or only a template will reach them. */
 const WAITING_MS = 2 * 60 * 60 * 1000;
@@ -45,13 +54,12 @@ const ConsentInput = z.object({
   note: z.string().trim().max(200).optional(),
 });
 
+/** The back office is for people whose roles have `backoffice.use` (by default, the team). */
 function staffOnly(p: Principal) {
-  if (!p.roles?.some((r) => STAFF.includes(r)))
-    throw new ForbiddenException({
-      error: 'forbidden',
-      rule: 'staff_only',
-      reason: 'The back office is for the business',
-    });
+  requireCapability(p, FrameworkCapabilities.backOffice, {
+    rule: 'staff_only',
+    reason: 'The back office is for the business',
+  });
 }
 
 /**
@@ -70,7 +78,7 @@ export class BackOfficeController {
     private readonly contacts: ContactsService,
     private readonly outbound: OutboundService,
     private readonly threads: ThreadsService,
-    private readonly tenants: TenantsService,
+    private readonly tenants: TenantConfigService,
     private readonly chat: ChatService,
     @Inject(WHATSAPP) wa: ChannelAdapter,
   ) {
@@ -127,9 +135,34 @@ export class BackOfficeController {
   /** Inside the window: their words as text. Outside it: the approved reply template. */
   @Post('handoffs/:id/reply')
   @HttpCode(200)
-  async reply(@CurrentPrincipal() p: Principal, @Param('id') id: string, @Body() body: unknown) {
+  async reply(
+    @CurrentPrincipal() p: Principal,
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @RequestMeta() meta: RequestMetaValue,
+  ) {
     staffOnly(p);
     const { text } = ReplyInput.parse(body);
+    // A retry with the same idempotency-key sends nothing again: it answers as the first did,
+    // and one sent while the first still runs waits for it.
+    const ctx = { principal: p, idempotencyKey: meta.idempotencyKey };
+    const op = { name: 'handoff.reply', args: { id } };
+    return oneAtATime(this.db, ctx, async () => {
+      const repeat = await findRepeat(this.db, ctx, op, { text });
+      if (repeat) return (repeat.result as { value?: unknown }).value;
+      return this.send(p, id, text, async (sent) => {
+        await saveReply(this.db, ctx, op, { text }, { status: 'done', value: sent });
+      });
+    });
+  }
+
+  /** The reply itself: in the window as text, outside it as the approved template. */
+  private async send(
+    p: Principal,
+    id: string,
+    text: string,
+    done: (sent: { sent: OutboundMessage['kind'] }) => Promise<void>,
+  ) {
     const { handoff, contact } = await this.load(p, id);
     if (handoff.state === 'closed') throw new ConflictException({ error: 'closed' });
     const from = await this.contacts.numberOfTenant(contact.tenantId);
@@ -172,6 +205,7 @@ export class BackOfficeController {
         .set({ state: 'taken', takenBy: p.actor.id, takenAt: new Date(), flaggedAt: null })
         .where(eq(handoffs.id, handoff.id));
     await this.audit(p, 'handoff.replied', handoff, { as: message.kind });
+    await done({ sent: message.kind });
     return { sent: message.kind };
   }
 

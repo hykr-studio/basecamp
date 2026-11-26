@@ -63,14 +63,37 @@ export class ThreadsService {
     const key = `thread:${owner.tenantId}:${subjectKey(owner.subject)}`;
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
+      // Their conversation with the assistant: never one of their agents' threads (A6).
       const [row] = await tx
         .select()
         .from(threads)
-        .where(whose(owner))
+        .where(and(whose(owner), eq(threads.kind, 'chat')))
         .orderBy(desc(threads.updatedAt))
         .limit(1);
       if (row) return row;
       const [created] = await tx.insert(threads).values(columnsOf(owner)).returning();
+      return created;
+    });
+  }
+
+  /**
+   * The thread that holds one agent's runs (A6), owned by the agent's owner: one per agent, made
+   * on its first run. It never becomes the person's current conversation.
+   */
+  async agentThread(owner: ThreadOwner, agentId: string, title?: string) {
+    const key = `thread:agent:${agentId}`;
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
+      const [row] = await tx
+        .select()
+        .from(threads)
+        .where(and(whose(owner), eq(threads.kind, 'agent'), eq(threads.agentId, agentId)))
+        .limit(1);
+      if (row) return row;
+      const [created] = await tx
+        .insert(threads)
+        .values({ ...columnsOf(owner), kind: 'agent', agentId, title: title ?? null })
+        .returning();
       return created;
     });
   }

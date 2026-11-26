@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SectionHeading } from '../components/ScreenTitle';
 import { colors, space, styles } from '../theme';
-import { ApprovalItem, useShownInline, useUnfoldOnReveal } from './ApprovalCard';
+import { ApprovalItem, useShownInline, useStakes, useUnfoldOnReveal } from './ApprovalCard';
 import { AssistantMark } from './AssistantMark';
 import { expiresIn } from './dates';
 import { useApprovals } from './hooks';
@@ -34,6 +34,8 @@ function Waiting({
   useUnfoldOnReveal(approval.id, setOpen);
   const summary = approval.summary ?? approval.action;
   const byAssistant = approval.requestedBy === 'agent';
+  // The level it waits at and the amount: what is at stake, before it is opened.
+  const stakes = useStakes(approval);
   if (open) {
     return (
       <View style={s.open}>
@@ -71,6 +73,7 @@ function Waiting({
         <Text
           style={[styles.muted, { color: byAssistant ? colors.assistant : colors.approvalText }]}
         >
+          {stakes ? `${stakes} · ` : ''}
           {byAssistant ? t('approval.askedBy') : t('approval.askedByYou')} ·{' '}
           {expiresIn(approval.expiresAt)}
         </Text>

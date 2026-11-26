@@ -1,21 +1,29 @@
 /**
- * THE DOMAIN: the sample business this template ships with (meetings, notes, to-dos).
- * Replace this folder to bring another domain; the framework reads only `domain` below.
- * See DOMAIN.md at the repository root for every folder a domain owns.
+ * Every module's specs, for the apps and anything else that needs them all
+ * (`@application/domain/contracts`): isomorphic, like the module folders it gathers. The server
+ * takes the modules themselves (../modules). One line per module, in module order.
  */
-import { defineDomain } from '@hykr/contracts';
-import { CloseMeetingSpec, RescheduleMeetingSpec } from './commands.js';
-import { MeetingSpec } from './meeting.js';
-import { NoteSpec } from './note.js';
-import { TodoSpec } from './todo.js';
+import { accountSpec } from '../modules/account/contracts/index.js';
+import { briefsSpec } from '../modules/briefs/contracts/index.js';
+import { meetingsSpec } from '../modules/meetings/contracts/index.js';
+import { notesSpec } from '../modules/notes/contracts/index.js';
+import { ordersSpec } from '../modules/orders/contracts/index.js';
+import { todosSpec } from '../modules/todos/contracts/index.js';
 
-export * from './commands.js';
-export * from './meeting.js';
-export * from './note.js';
-export * from './todo.js';
+export * from '../modules/account/contracts/index.js';
+export * from '../modules/briefs/contracts/index.js';
+export * from '../modules/meetings/contracts/index.js';
+export * from '../modules/notes/contracts/index.js';
+export * from '../modules/orders/contracts/index.js';
+export * from '../modules/todos/contracts/index.js';
 
-export const domain = defineDomain({
-  name: 'Meetings',
-  entities: { todos: TodoSpec, notes: NoteSpec, meetings: MeetingSpec },
-  commands: [CloseMeetingSpec, RescheduleMeetingSpec],
-});
+/** Every module's specs, in module order: `createCatalog(...moduleSpecs)`. */
+export const moduleSpecs = [
+  todosSpec,
+  notesSpec,
+  meetingsSpec,
+  ordersSpec,
+  accountSpec,
+  briefsSpec,
+  // basecamp module add: one line per module, above this one.
+] as const;

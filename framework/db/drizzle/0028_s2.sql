@@ -1,0 +1,1 @@
+ALTER TABLE "app"."integration_inbound" ADD COLUMN "sender_id" text;

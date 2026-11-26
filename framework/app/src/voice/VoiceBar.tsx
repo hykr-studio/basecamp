@@ -1,15 +1,15 @@
 import type { VoiceLang } from '@hykr/contracts';
-import { LANG_NAMES } from '@hykr/i18n';
+import { languageName } from '@hykr/i18n';
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Platform, Pressable, View } from 'react-native';
 import { Text } from '../components/ui/text';
 import { Icon, type IconName } from '../framework/Icon';
 import { useT } from '../framework/lang';
 import { colors } from '../theme';
+import { nextVoiceChoice } from './choices';
 import { VoiceOrb } from './VoiceOrb';
 import { useVoice, type VoiceStatus } from './VoiceProvider';
 
-const CHOICES: VoiceLang[] = ['auto', 'en-IN', 'hi-IN', 'te-IN'];
 const STATUS: Record<Exclude<VoiceStatus, 'off'>, Parameters<ReturnType<typeof useT>['t']>[0]> = {
   connecting: 'voice.connecting',
   listening: 'voice.listening',
@@ -56,7 +56,7 @@ function CompactBar({ name }: { name: (v: VoiceLang) => string }) {
   const voice = useVoice();
   const { t } = useT();
   if (voice.status === 'off') return null;
-  const next = CHOICES[(CHOICES.indexOf(voice.lang) + 1) % CHOICES.length];
+  const next = nextVoiceChoice(voice.lang);
   const level = () => {
     const { you, reply } = voice.levels();
     return voice.status === 'speaking' ? reply : you;
@@ -119,9 +119,8 @@ export function VoiceBar({ compact = false }: { compact?: boolean }) {
       </Text>
     ) : null;
 
-  const next = CHOICES[(CHOICES.indexOf(voice.lang) + 1) % CHOICES.length];
-  const name = (v: VoiceLang) =>
-    v === 'auto' ? t('voice.auto') : LANG_NAMES[v.slice(0, 2) as keyof typeof LANG_NAMES];
+  const next = nextVoiceChoice(voice.lang);
+  const name = (v: VoiceLang) => (v === 'auto' ? t('voice.auto') : languageName(v));
   if (compact)
     return (
       <View className="gap-1">

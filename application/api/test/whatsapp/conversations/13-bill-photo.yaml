@@ -1,0 +1,20 @@
+name: a photo of a bill is read in the same turn and becomes a to-do with its cost, waiting for approval
+steps:
+  - linkOwner: {}
+  - photo: { as: owner, caption: add this bill, sees: "Amount: 1250 Vendor: Sharma Hardware" }
+  - expect: { to: owner, text: "/asked for your approval/" }
+  # Nothing is written until the owner approves: the assistant's to-do with a cost waits.
+  - expectDb:
+      sql: >
+        select count(*)::int as n from app.todos
+        where tenant_id = $1 and title = 'Pay Sharma Hardware'
+      params: [$tenant]
+      rows: [{ n: 0 }]
+  - expectDb:
+      sql: >
+        select status from app.approvals
+        where tenant_id = $1 and payload::text like '%Pay Sharma Hardware%'
+          and payload::text like '%125000%'
+      params: [$tenant]
+      rows: [{ status: pending }]
+  - expectAudit: { action: file.read_by_model, count: 1 }

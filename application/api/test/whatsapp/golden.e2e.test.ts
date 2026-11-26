@@ -3,7 +3,16 @@
 // queues inline and the scripted model. Each file is one conversation; see README.md there for
 // the steps and expectations a file may use.
 import { readdirSync, readFileSync } from 'node:fs';
-import { asAssistant, boot, me, Person, pool, server, shutdown } from '@hykr/api/testing';
+import {
+  asAssistant,
+  boot,
+  me,
+  Person,
+  pool,
+  server,
+  setTenantSettings,
+  shutdown,
+} from '@hykr/api/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -16,6 +25,9 @@ const WHALOC = process.env.WHALOC_TEST_URL ?? 'http://localhost:8090';
 const NUMBER = '573542517421699';
 const MAILPIT = process.env.MAILPIT_URL ?? 'http://localhost:8025';
 const DIR = new URL('./conversations/', import.meta.url);
+/** The smallest PNG there is: one transparent pixel. */
+const PIXEL_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
 type Step = Record<string, unknown>;
 type Conversation = { name: string; steps: Step[] };
@@ -125,10 +137,7 @@ beforeAll(async () => {
   expect(
     (await owner.call('POST', '/api/channels/whatsapp/number', { phoneNumberId: NUMBER })).status,
   ).toBe(201);
-  await pool.query(
-    `update app.tenants set settings = settings || '{"quietHours":{"from":"00:00","to":"00:00"}}' where id = $1`,
-    [tenantId],
-  );
+  await setTenantSettings(tenantId, { quietHours: { from: '00:00', to: '00:00' } });
   // Templates as a fresh install has them: created at the provider, then approved.
   const { TemplateSync } = await import('@hykr/api/testing/internals');
   const { WHATSAPP } = await import('@hykr/api/testing/internals');
@@ -257,6 +266,23 @@ class Run {
         return this.inbound(String(arg.as), {
           type: 'audio',
           media: { id: data.id, voice: true },
+        });
+      }
+      case 'photo': {
+        // A photo: a 1x1 PNG whose bytes carry what the scripted vision model "sees" in it.
+        const bytes = Buffer.concat([
+          Buffer.from(PIXEL_PNG, 'base64'),
+          Buffer.from(`FAKE-VISION:${arg.sees}`, 'utf8'),
+        ]);
+        const form = new FormData();
+        form.append('file', new Blob([bytes], { type: 'image/png' }), 'photo.png');
+        form.append('phoneNumberId', NUMBER);
+        form.append('type', 'image/png');
+        const res = await fetch(`${WHALOC}/api/inbound-media`, { method: 'POST', body: form });
+        const { data } = (await res.json()) as { data: { id: string } };
+        return this.inbound(String(arg.as), {
+          type: 'image',
+          media: { id: data.id, ...(arg.caption ? { caption: String(arg.caption) } : {}) },
         });
       }
       case 'tap':

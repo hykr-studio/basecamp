@@ -2,6 +2,18 @@ import { ApiError, createApiClient } from '@hykr/api-client';
 import { backOfficeConfig } from './config';
 
 /**
+ * The business the back office works in when it names one: an operator's support access to it
+ * (B19). Null: the person's own default business.
+ */
+let workingIn: string | null = null;
+
+/** Work in this business (sent as `x-tenant-id` on every call), or back in one's own (null). */
+export function workIn(tenantId: string | null) {
+  workingIn = tenantId;
+}
+export const workingInBusiness = () => workingIn;
+
+/**
  * The back office is a client like the app: the typed API client, with the browser's session
  * cookie. Nothing here reaches past the API.
  */
@@ -11,6 +23,7 @@ export const api = createApiClient({
     return backOfficeConfig().apiUrl;
   },
   credentials: 'include',
+  headers: (): Record<string, string> => (workingIn ? { 'x-tenant-id': workingIn } : {}),
 });
 
 export type SessionUser = { id: string; name: string; email: string };

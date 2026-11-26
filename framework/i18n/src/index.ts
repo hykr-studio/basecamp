@@ -4,3 +4,4 @@
 export * from './format.js';
 export * from './lang.js';
 export * from './messages.js';
+export * from './money.js';

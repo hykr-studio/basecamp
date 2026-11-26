@@ -1,12 +1,13 @@
 import { useAISDKChat } from '@assistant-ui/ai-sdk';
 import {
   langOfVoice,
+  pausedSentenceKey,
   UI_PARTS_TOPIC,
   VOICE_HEARS_ATTRIBUTE,
   VOICE_LANG_TOPIC,
   type VoiceLang,
 } from '@hykr/contracts';
-import { type Lang, scriptOf } from '@hykr/i18n';
+import { type Lang, scriptOf, speechTagOf } from '@hykr/i18n';
 import { useQueryClient } from '@tanstack/react-query';
 import type { UIMessage } from 'ai';
 import * as Speech from 'expo-speech';
@@ -43,7 +44,13 @@ export type VoiceStatus = 'off' | 'connecting' | 'listening' | 'thinking' | 'spe
 type Voice = {
   status: VoiceStatus;
   /** Why voice is not working (no microphone, today's minutes used, …), as a catalog key. */
-  problem?: 'voice.noMic' | 'voice.budget' | 'voice.failed' | 'voice.noAnswer';
+  problem?:
+    | 'voice.noMic'
+    | 'voice.budget'
+    | 'voice.failed'
+    | 'voice.noAnswer'
+    | 'credits.paused'
+    | 'credits.suspended';
   muted: boolean;
   /** The microphone is on and published: mute means something. */
   micReady: boolean;
@@ -176,7 +183,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
   const readAloud = useCallback((text: string, as: Lang) => {
     Speech.stop();
     Speech.speak(text, {
-      language: `${as}-IN`,
+      language: speechTagOf(as),
       onStart: () => setReadingAloud(true),
       onDone: () => setReadingAloud(false),
       onStopped: () => setReadingAloud(false),
@@ -337,8 +344,16 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       if (pinned) setSpoken(pinned);
     } catch (e) {
       if (stale()) return;
-      const code = (e as { status?: number }).status;
-      setProblem(code === 429 ? 'voice.budget' : 'voice.failed');
+      const { status: code, body } = e as { status?: number; body?: { rule?: unknown } };
+      // 429: the person's voice minutes today; 402: the business's credits, its voice limit or
+      // its operator's pause (a sentence of its own).
+      setProblem(
+        code === 429
+          ? 'voice.budget'
+          : code === 402
+            ? pausedSentenceKey(body?.rule)
+            : 'voice.failed',
+      );
       roomRef.current = null;
       await room.disconnect().catch(() => {});
       await stopAudio().catch(() => {});
@@ -368,7 +383,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       unblockAudio();
       setLangState(next);
       setSpoken(langOfVoice(next));
-      listener.current?.setLang(`${langOfVoice(next) ?? 'en'}-IN`);
+      listener.current?.setLang(speechTagOf(langOfVoice(next) ?? 'en'));
       void roomRef.current?.localParticipant
         .sendText(next, { topic: VOICE_LANG_TOPIC })
         .catch(() => {});
@@ -401,7 +416,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!live || hears !== 'text' || !canListen()) return;
     const l = listen(
-      `${langOfVoice(langRef.current) ?? 'en'}-IN`,
+      speechTagOf(langOfVoice(langRef.current) ?? 'en'),
       (text, final) => (final ? void sendRef.current(text) : userSaidRef.current(text, false)),
       (error) => setProblem(error === 'not-allowed' ? 'voice.noMic' : 'voice.failed'),
     );

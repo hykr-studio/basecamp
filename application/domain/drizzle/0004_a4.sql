@@ -1,0 +1,1 @@
+ALTER TABLE "app"."todos" ADD COLUMN "cost" integer;

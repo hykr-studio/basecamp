@@ -1,6 +1,7 @@
 import type { Principal } from '@hykr/contracts';
 import {
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   Inject,
@@ -18,6 +19,19 @@ import {
   RequestMeta,
   type RequestMetaValue,
 } from './principal.js';
+
+/**
+ * A platform operator's support access looks, never decides: the business's own people decide
+ * what waits for them.
+ */
+function notSupport(p: Principal) {
+  if (p.onBehalfOf?.kind === 'support')
+    throw new ForbiddenException({
+      error: 'forbidden',
+      rule: 'support_cannot_decide',
+      reason: "Support access does not decide the business's requests",
+    });
+}
 
 /** People only: the agent can never see or decide approvals. Works for any parked command. */
 @Controller('api/approvals')
@@ -43,6 +57,7 @@ export class ApprovalsController {
     @Param('id', ParseUUIDPipe) id: string,
     @RequestMeta() meta: RequestMetaValue,
   ) {
+    notSupport(p);
     return this.approvals.decide(p, id, true, meta.requestId);
   }
 
@@ -53,6 +68,7 @@ export class ApprovalsController {
     @Param('id', ParseUUIDPipe) id: string,
     @RequestMeta() meta: RequestMetaValue,
   ) {
+    notSupport(p);
     return this.approvals.decide(p, id, false, meta.requestId);
   }
 }

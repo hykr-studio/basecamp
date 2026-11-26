@@ -6,7 +6,13 @@ import { ThreadsService } from '../../modules/threads/threads.service.js';
 
 const { handoffs } = schema;
 export type Handoff = typeof handoffs.$inferSelect;
-export type HandoffReason = 'customer_asked' | 'agent_failed' | 'staff_took' | 'agent_tool';
+export type HandoffReason =
+  | 'customer_asked'
+  | 'agent_failed'
+  | 'staff_took'
+  | 'agent_tool'
+  /** The business's assistant is paused (its credits are used up). */
+  | 'assistant_paused';
 
 /**
  * A thread staff have taken from the assistant. While one is open the assistant stays silent

@@ -1,0 +1,36 @@
+// The framework's features, one export per line (a union merge keeps lines added in parallel).
+// Each is a `defineFeature(...)` in its own folder; FeaturesModule loads every one of them.
+
+export { acceptanceFeature } from './acceptance/index.js';
+export { agentsFeature } from './agents/index.js';
+export { approvalsFeature } from './approvals/index.js';
+export { calendarFeature } from './calendar/index.js';
+export { callsFeature } from './calls/index.js';
+export { commentsFeature } from './comments/index.js';
+export { creditsFeature } from './credits/index.js';
+export { documentsFeature } from './documents/index.js';
+export { eventsFeature } from './events/index.js';
+export { exportFeature } from './export/index.js';
+export { filesFeature } from './files/index.js';
+export { importsFeature } from './imports/index.js';
+export { inboxFeature } from './inbox/index.js';
+export { integrationsFeature } from './integrations/index.js';
+export { jobsFeature } from './jobs/index.js';
+export { liveFeature } from './live/index.js';
+export { mcpFeature } from './mcp/index.js';
+export { membersFeature } from './members/index.js';
+export { memoryFeature } from './memory/index.js';
+export { modelsFeature } from './models/index.js';
+export { moneyFeature } from './money/index.js';
+export { notificationsFeature } from './notifications/index.js';
+export { offlineFeature } from './offline/index.js';
+export { partiesFeature } from './parties/index.js';
+export { platformFeature } from './platform/index.js';
+export { privacyFeature } from './privacy/index.js';
+export { pushFeature } from './push/index.js';
+export { resumeFeature } from './resume/index.js';
+export { settingsFeature } from './settings/index.js';
+export { shareFeature } from './share/index.js';
+export { slaFeature } from './sla/index.js';
+export { statesFeature } from './states/index.js';
+export { versionsFeature } from './versions/index.js';

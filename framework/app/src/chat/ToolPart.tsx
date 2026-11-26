@@ -1,15 +1,21 @@
 import type { ToolCallMessagePartProps } from '@assistant-ui/react-native';
 import type { Present } from '@hykr/contracts';
+import type { MessageKey } from '@hykr/i18n';
 import { useEffect } from 'react';
 import { ActivityIndicator, Pressable, View } from 'react-native';
 import { applyCanvasIntent, useCanvas } from '../canvas/store';
 import { Text } from '../components/ui/text';
 import { useApprovalStatus } from '../framework/ApprovalCard';
 import { Icon, type IconName } from '../framework/Icon';
+import { useT } from '../framework/lang';
 import { getRegistry } from '../runtime';
 import { colors } from '../theme';
 import { InlineView } from '../views/InlineView';
+import { useLookup } from './lookup';
 import { toolWords } from './toolWords';
+
+/** How a resumed call's request was decided (@hykr/core tools: durable.ts). */
+const DECIDED = new Set(['approved', 'rejected', 'expired']);
 
 /** What every tool returns (@hykr/core tools: tool-factory.ts). */
 export type ToolOutput = {
@@ -65,20 +71,31 @@ function ParkedLine({
   approvalId: string;
   withCard: boolean;
 }) {
-  const { status } = useApprovalStatus(approvalId);
+  const { approval, status } = useApprovalStatus(approvalId);
+  const { t } = useT();
   const asked = toolWords(tool).asked;
   if (withCard) return <Line icon="clock" tone={colors.approvalText} tool={tool} label={asked} />;
-  const [icon, tone, state]: [IconName, string, string] =
+  // Someone else decides it (a capability's holders, a named person): never "by you".
+  const theirs = approval?.canDecide === false;
+  const [icon, tone, state]: [IconName, string, MessageKey] =
     status === 'approved'
-      ? ['check-circle', colors.success, 'approved by you']
+      ? [
+          'check-circle',
+          colors.success,
+          theirs ? 'approval.line.approved' : 'approval.line.approvedByYou',
+        ]
       : status === 'rejected'
-        ? ['slash', colors.muted, 'rejected by you; nothing changed']
+        ? ['slash', colors.muted, theirs ? 'approval.line.rejected' : 'approval.line.rejectedByYou']
         : status === 'failed'
-          ? ['x-circle', colors.danger, "approved, but it couldn't be done"]
+          ? ['x-circle', colors.danger, 'approval.line.failed']
           : status === 'expired'
-            ? ['clock', colors.muted, 'expired; nothing changed']
-            : ['clock', colors.approvalText, 'waiting for your approval'];
-  return <Line icon={icon} tone={tone} tool={tool} label={`${asked}: ${state}`} />;
+            ? ['clock', colors.muted, 'approval.line.expired']
+            : [
+                'clock',
+                colors.approvalText,
+                theirs ? 'approval.line.waitingTeam' : 'approval.line.waitingYou',
+              ];
+  return <Line icon={icon} tone={tone} tool={tool} label={`${asked}: ${t(state)}`} />;
 }
 
 /** What a canvas intent did, in the thread; tapping it brings the canvas back. */
@@ -117,14 +134,16 @@ function Shown({ present, toolCallId }: { present: Present; toolCallId: string }
 
 /**
  * Every tool call in the thread renders here (assistant-ui's Fallback): a line saying what
- * it amounted to. What a result shows (a view, the canvas) is added by the present intent.
+ * it amounted to. What a result shows (a view, the canvas) is added by the present intent,
+ * unless the call only looked up what the reply then changed (`useLookup`).
  */
 export function ToolPart(props: ToolCallMessagePartProps) {
   const out = props.result as ToolOutput | undefined;
+  const lookup = useLookup(props.toolCallId);
   return (
     <View className="gap-2">
       <ToolLine {...props} />
-      {props.status.type !== 'running' && out?.ok && out.present ? (
+      {props.status.type !== 'running' && out?.ok && out.present && !lookup ? (
         <Shown present={out.present} toolCallId={props.toolCallId} />
       ) : null}
     </View>
@@ -162,6 +181,10 @@ function ToolLine({ toolName, result, status }: ToolCallMessagePartProps) {
         withCard={out.present?.kind === 'inline'}
       />
     );
+  }
+  // A run that waited went on (durable runs): the call says how its request was decided.
+  if (out.result?.approval && DECIDED.has(out.result.status ?? '')) {
+    return <ParkedLine tool={toolName} approvalId={out.result.approval.id} withCard={false} />;
   }
   return <Line icon="check" tone={colors.muted} tool={toolName} label={said.did} />;
 }

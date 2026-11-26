@@ -1,0 +1,180 @@
+import type { Principal } from '@hykr/contracts';
+import {
+  CurrentPrincipal,
+  HumanOnlyGuard,
+  PrincipalGuard,
+  RequestMeta,
+  type RequestMetaValue,
+} from '@hykr/core';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Header,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  Redirect,
+  UseGuards,
+} from '@nestjs/common';
+import { AllowAnonymous, OptionalAuth } from '@thallesp/nestjs-better-auth';
+import { CalendarService, providerParam } from './calendar.service.js';
+import { InvitesService } from './invites.js';
+
+const uuid = new ParseUUIDPipe();
+
+/**
+ * A person's calendars, feeds and free time. Connecting, disconnecting and feeds are the
+ * person's own (never the assistant's); busy and free time and a record's invites the assistant
+ * reads for them. Sending invites is the `calendar.invite` command.
+ */
+@Controller('api/calendar')
+@OptionalAuth()
+@UseGuards(PrincipalGuard)
+export class CalendarController {
+  constructor(
+    private readonly calendar: CalendarService,
+    private readonly invites: InvitesService,
+  ) {}
+
+  @Get('providers')
+  providers() {
+    return this.calendar.providers();
+  }
+
+  /** Start connecting, the provider in the body. Kept for one release: use `:provider/start`. */
+  @Post('connections')
+  @UseGuards(HumanOnlyGuard)
+  connect(@CurrentPrincipal() p: Principal, @Body() body: unknown) {
+    return this.calendar.start(p, body);
+  }
+
+  /** The consent screen's URL for this provider. */
+  @Post(':provider/start')
+  @UseGuards(HumanOnlyGuard)
+  start(
+    @CurrentPrincipal() p: Principal,
+    @Param('provider') provider: string,
+    @Body() body: unknown,
+  ) {
+    return this.calendar.start(p, body, providerParam(provider));
+  }
+
+  /**
+   * The app, back from the provider with its code and state: only their starter finishes them.
+   * `google/complete` was the only one before; it is this route with the provider `google`.
+   */
+  @Post(':provider/complete')
+  @UseGuards(HumanOnlyGuard)
+  complete(
+    @CurrentPrincipal() p: Principal,
+    @RequestMeta() meta: RequestMetaValue,
+    @Param('provider') provider: string,
+    @Body() body: unknown,
+  ) {
+    return this.calendar.complete(p, meta, body, providerParam(provider));
+  }
+
+  @Get('connections')
+  @UseGuards(HumanOnlyGuard)
+  connections(@CurrentPrincipal() p: Principal) {
+    return this.calendar.list(p);
+  }
+
+  /** `{ writeTo: true }`: the person's records are written to this calendar of theirs. */
+  @Patch('connections/:id')
+  @UseGuards(HumanOnlyGuard)
+  setTarget(
+    @CurrentPrincipal() p: Principal,
+    @RequestMeta() meta: RequestMetaValue,
+    @Param('id', uuid) id: string,
+    @Body() body: unknown,
+  ) {
+    return this.calendar.setTarget(p, meta, id, body);
+  }
+
+  @Delete('connections/:id')
+  @UseGuards(HumanOnlyGuard)
+  disconnect(
+    @CurrentPrincipal() p: Principal,
+    @RequestMeta() meta: RequestMetaValue,
+    @Param('id', uuid) id: string,
+  ) {
+    return this.calendar.disconnect(p, meta, id);
+  }
+
+  @Get('busy')
+  busy(@CurrentPrincipal() p: Principal, @Query() query: Record<string, unknown>) {
+    return this.calendar.busy(p, query);
+  }
+
+  @Get('free')
+  free(@CurrentPrincipal() p: Principal, @Query() query: Record<string, unknown>) {
+    return this.calendar.free(p, query);
+  }
+
+  @Get('invites')
+  async listInvites(
+    @CurrentPrincipal() p: Principal,
+    @Query() q: { entity?: string; id?: string },
+  ) {
+    if (!q.entity || !q.id)
+      throw new BadRequestException({ error: 'invalid', message: 'Give entity and id' });
+    return { items: await this.invites.list(p, q.entity, q.id) };
+  }
+
+  @Get('feeds')
+  @UseGuards(HumanOnlyGuard)
+  feeds(@CurrentPrincipal() p: Principal) {
+    return this.calendar.feeds(p);
+  }
+
+  @Post('feeds')
+  @UseGuards(HumanOnlyGuard)
+  createFeed(
+    @CurrentPrincipal() p: Principal,
+    @RequestMeta() meta: RequestMetaValue,
+    @Body() body: unknown,
+  ) {
+    return this.calendar.createFeed(p, meta, body);
+  }
+
+  @Delete('feeds/:id')
+  @UseGuards(HumanOnlyGuard)
+  revokeFeed(
+    @CurrentPrincipal() p: Principal,
+    @RequestMeta() meta: RequestMetaValue,
+    @Param('id', uuid) id: string,
+  ) {
+    return this.calendar.revokeFeed(p, meta, id);
+  }
+}
+
+/**
+ * What arrives without a session: a provider sending the browser back (nothing is exchanged here:
+ * the browser goes on to the app, which finishes under its session), and a calendar app reading
+ * a feed (the token says whose).
+ */
+@Controller('api/calendar')
+@AllowAnonymous()
+export class CalendarPublicController {
+  constructor(private readonly calendar: CalendarService) {}
+
+  /** Each provider's redirect URL; `google/callback` is this route with the provider `google`. */
+  @Get(':provider/callback')
+  @Redirect()
+  async callback(@Param('provider') provider: string, @Query() query: Record<string, unknown>) {
+    return { url: await this.calendar.callback(query, providerParam(provider)), statusCode: 302 };
+  }
+
+  @Get('feed/:token')
+  @Header('content-type', 'text/calendar; charset=utf-8')
+  @Header('cache-control', 'private, max-age=300')
+  feed(@Param('token') token: string) {
+    return this.calendar.renderFeed(token);
+  }
+}

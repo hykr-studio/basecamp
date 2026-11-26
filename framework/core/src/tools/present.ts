@@ -1,4 +1,3 @@
-import type { ApiClient } from '@hykr/api-client';
 import {
   type Choice,
   drawsComponents,
@@ -6,7 +5,7 @@ import {
   type Present,
   type Surface,
 } from '@hykr/contracts';
-import { isLang, type Lang, t } from '@hykr/i18n';
+import { isLang, type Lang, pick, t } from '@hykr/i18n';
 import type { ViewDef } from '@hykr/ui-registry';
 import type { ToolContext, ToolKit } from './tool-factory.js';
 
@@ -36,13 +35,16 @@ async function inWords(
   present: Extract<Present, { kind: 'inline' }>,
   surfaces: Surface[],
   ctx: ToolContext | undefined,
-  client: ApiClient,
-): Promise<{ text: string; choices?: Choice[] } | undefined> {
-  const props: Record<string, unknown> = { ...present.props };
+  kit: ToolKit,
+): Promise<{ text: string; heading?: string; choices?: Choice[] } | undefined> {
+  const client = kit.clientFor(ctx);
+  let props: Record<string, unknown> = { ...present.props };
   let rows: Record<string, unknown>[] | undefined;
   if (view.source) {
     const api = client.entity(view.source.entity);
     if (view.source.by === 'id') props[view.source.into] = await api.get(String(props.id));
+    else if (view.source.by === 'summary')
+      props[view.source.into] = await api.summary(present.query ?? {});
     else {
       rows = (await api.list({ ...present.query, limit: view.textLimit })).items as Record<
         string,
@@ -51,17 +53,32 @@ async function inWords(
       props[view.source.into] = rows;
     }
   }
+  const timeZone = (ctx?.requestContext?.get('timeZone') as string | undefined) ?? 'UTC';
+  const lang = langOf(ctx);
+  // A view that fetches for itself (kpi.row's summary), as the reader, through the same API.
+  if (view.load)
+    props = (await view.load(props as never, {
+      timeZone,
+      lang,
+      summary: (plural, query) => client.summary(plural, query),
+      entity: (plural) => kit.registry.entity(plural),
+    })) as Record<string, unknown>;
   const parsed = view.props.safeParse(props);
   if (!parsed.success) return undefined;
-  const timeZone = (ctx?.requestContext?.get('timeZone') as string | undefined) ?? 'UTC';
   const words = surfaces.includes('text') ? view.text : view.speak;
-  const text = words(parsed.data, { timeZone, lang: langOf(ctx) });
+  const text = words(parsed.data, { timeZone, lang });
   // A list's rows, to tap on a channel that has buttons: what they are called, and their ids.
   const choices = rows?.flatMap((r) => {
     const title = r.title ?? r.name;
     return typeof r.id === 'string' && typeof title === 'string' ? [{ id: r.id, title }] : [];
   });
-  return { text, ...(choices?.length ? { choices } : {}) };
+  // What heads the rows: the title it was shown with, else the view's own, in the language.
+  const title = typeof props.title === 'string' && props.title.trim() ? props.title : undefined;
+  const heading = title ?? (view.labels.title ? pick(view.labels.title, lang) : undefined);
+  return {
+    text,
+    ...(choices?.length ? { choices, ...(heading ? { heading } : {}) } : {}),
+  };
 }
 
 /**
@@ -81,7 +98,7 @@ async function spoken(
   const view = kit.registry.getViewDef(present.view);
   // The words are extra: a failed lookup must never turn a done write into a refusal.
   try {
-    const words = view && (await inWords(view, present, ['speech'], ctx, kit.clientFor(ctx)));
+    const words = view && (await inWords(view, present, ['speech'], ctx, kit));
     return words?.text || onScreen;
   } catch {
     return onScreen;
@@ -111,9 +128,7 @@ export async function resolvePresent(
       : { present: checked.present };
   if (present.kind === 'inline' && !drawsComponents(surfaces)) {
     const view = kit.registry.getViewDef(present.view);
-    const words = view
-      ? await inWords(view, present, surfaces, ctx, kit.clientFor(ctx))
-      : undefined;
+    const words = view ? await inWords(view, present, surfaces, ctx, kit) : undefined;
     return words ? { present: { kind: 'text', ...words } } : {};
   }
   return {};

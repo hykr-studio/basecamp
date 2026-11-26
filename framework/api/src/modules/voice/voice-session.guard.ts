@@ -1,10 +1,9 @@
 import { VOICE_ROOM_HEADER } from '@hykr/contracts';
-import { type ApiRequest, CORE_OPTIONS, type CoreOptions, header } from '@hykr/core';
+import { type ApiRequest, header } from '@hykr/core';
 import {
   type CanActivate,
   type ExecutionContext,
   ForbiddenException,
-  Inject,
   Injectable,
 } from '@nestjs/common';
 import { VoiceService } from './voice.service.js';
@@ -16,16 +15,12 @@ import { VoiceService } from './voice.service.js';
  */
 @Injectable()
 export class VoiceSessionGuard implements CanActivate {
-  constructor(
-    @Inject(CORE_OPTIONS) private readonly options: CoreOptions,
-    private readonly voice: VoiceService,
-  ) {}
+  constructor(private readonly voice: VoiceService) {}
 
   async canActivate(context: ExecutionContext) {
     const req = context.switchToHttp().getRequest<ApiRequest>();
     const p = req.principal;
-    const relay = this.options.agents.find((a) => a.id === p?.actor.id)?.relay;
-    if (p?.actor.kind !== 'agent' || !relay) return true;
+    if (p?.actor.kind !== 'agent' || !req.agent?.relay) return true;
     const room = header(req, VOICE_ROOM_HEADER);
     const userId = p.actingFor?.userId;
     const session = room && userId ? await this.voice.openSession(room, userId) : undefined;

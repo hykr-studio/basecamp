@@ -8,4 +8,4 @@ steps:
   - expectDb:
       sql: select locale, customer_id is not null as customer from channel.contacts where address = $1
       params: ["${address.lakshmi}"]
-      rows: [{ locale: te-IN, customer: true }]
+      rows: [{ locale: te, customer: true }]

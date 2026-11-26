@@ -51,12 +51,18 @@ describe('accessFor', () => {
   };
 
   it('each role reaches its own rows', () => {
-    expect(accessFor(person(), meetings, 'read')).toEqual({ kind: 'grants', grants: ['own'] });
-    expect(accessFor(person({ roles: ['owner', 'ops'] }), meetings, 'read')).toEqual({
+    expect(accessFor(person(), meetings, 'read')).toMatchObject({
+      kind: 'grants',
+      grants: ['own'],
+    });
+    expect(accessFor(person({ roles: ['owner', 'ops'] }), meetings, 'read')).toMatchObject({
       kind: 'grants',
       grants: ['own', 'tenant'],
     });
-    expect(accessFor(contact, meetings, 'read')).toEqual({ kind: 'grants', grants: ['customer'] });
+    expect(accessFor(contact, meetings, 'read')).toMatchObject({
+      kind: 'grants',
+      grants: ['customer'],
+    });
   });
 
   it('a WhatsApp number alone cannot do what needs a signed-in account', () => {

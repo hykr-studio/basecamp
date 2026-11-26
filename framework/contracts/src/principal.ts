@@ -1,23 +1,31 @@
 import { z } from 'zod';
 import { Channel } from './voice.js';
 
-/** @deprecated The actor's role is replaced by the tenant roles below; kept for old payloads. */
-export const Role = z.enum(['admin', 'ops', 'owner', 'operator', 'builder', 'agent']);
+/** A role's name: lower case, letters, digits and underscores ('owner', 'team_lead'). */
+export const ROLE_NAME = /^[a-z][a-z0-9_]{0,31}$/;
 
 /**
- * What someone may do in a business (a tenant). A person can hold several: the business
- * owner, ops (sees and decides for the whole tenant), staff, and customer (their own records).
+ * A role someone holds in a business (a tenant): a name from the role registry (`roles` in
+ * roles.ts). A person can hold several. A name nobody registered grants nothing.
  */
-export const TenantRole = z.enum(['owner', 'admin', 'ops', 'staff', 'customer']);
+export const TenantRole = z.string().regex(ROLE_NAME);
 export type TenantRole = z.infer<typeof TenantRole>;
 
 /**
- * How sure we are who this is: a signed-in session, or only a WhatsApp number (WhatsApp vouches
- * for the number, nothing more). Ordered: anything needing 'session' refuses 'whatsapp_number'.
+ * Who makes the call: a person, an agent acting for one, the server's own background work
+ * (`systemPrincipal()` in @hykr/core, never from a request), or a guest holding a share link.
  */
-export const Assurance = z.enum(['whatsapp_number', 'session']);
+export const ActorKind = z.enum(['user', 'agent', 'system', 'guest']);
+export type ActorKind = z.infer<typeof ActorKind>;
+
+/**
+ * How sure we are who this is, weakest first: only a WhatsApp number (WhatsApp vouches for
+ * the number, nothing more), a one-time code they just entered, or a signed-in session.
+ * Anything needing 'session' refuses the other two.
+ */
+export const Assurance = z.enum(['whatsapp_number', 'otp', 'session']);
 export type Assurance = z.infer<typeof Assurance>;
-export const ASSURANCE_ORDER: readonly Assurance[] = ['whatsapp_number', 'session'];
+export const ASSURANCE_ORDER: readonly Assurance[] = ['whatsapp_number', 'otp', 'session'];
 export const atLeast = (have: Assurance | undefined, need: Assurance) =>
   ASSURANCE_ORDER.indexOf(have ?? 'whatsapp_number') >= ASSURANCE_ORDER.indexOf(need);
 
@@ -28,8 +36,46 @@ export const Subject = z.discriminatedUnion('kind', [
 ]);
 export type Subject = z.infer<typeof Subject>;
 
+/**
+ * How a person is in a business: a `member` of its team (a membership with roles), a
+ * `participant` (a member of one of its parties, put on its records; never a member), a platform
+ * operator's `support` access (time-boxed, consented by the business), or an `operator` working
+ * in the platform's own business (platform scope). The last two are never memberships.
+ */
+export const BusinessStanding = z.enum(['member', 'participant', 'support', 'operator']);
+export type BusinessStanding = z.infer<typeof BusinessStanding>;
+
+/**
+ * Someone acting in a business through the platform rather than their own standing there, set by
+ * the server only: an operator's platform action (the actor is the system job doing it) or an
+ * operator's support access (the actor is the operator, with what the business consented to).
+ * Audited as `on_behalf_of`: `operator:<operatorId>` or `support:<grantId>`.
+ */
+export const OnBehalfOf = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('operator'), operatorId: z.string() }),
+  z.object({
+    kind: z.literal('support'),
+    operatorId: z.string(),
+    grantId: z.string(),
+    /** `read`: GET and HEAD only. */
+    access: z.enum(['read', 'write']),
+    /** When the access ends (ISO). */
+    until: z.string(),
+  }),
+]);
+export type OnBehalfOf = z.infer<typeof OnBehalfOf>;
+
+/** As audit stores it: `operator:<id>` or `support:<grantId>`. */
+export const onBehalfOfKey = (o: OnBehalfOf | undefined): string | null =>
+  o ? (o.kind === 'support' ? `support:${o.grantId}` : `operator:${o.operatorId}`) : null;
+
 export const Principal = z.object({
-  actor: z.object({ kind: z.enum(['user', 'agent']), id: z.string(), role: Role }),
+  actor: z.object({
+    kind: ActorKind,
+    id: z.string(),
+    /** Unused. Only an old line in the WhatsApp inbound processor still sets it (decisions F4). */
+    role: z.string().optional(),
+  }),
   /** Whom the agent acts for; userId for a person, contactId for a contact without an account. */
   actingFor: z
     .object({ userId: z.string().optional(), contactId: z.string().optional() })
@@ -41,16 +87,36 @@ export const Principal = z.object({
   subject: Subject.optional(),
   tenantId: z.string().optional(),
   roles: z.array(TenantRole).optional(),
+  /**
+   * What its roles allow in this business, by capability name ('backoffice.use'). Worked out
+   * by the server when it resolves the request (or given to `systemPrincipal`), never sent by
+   * a client. Absent: nothing. Check it with `can(p, capability)` from @hykr/policy.
+   */
+  capabilities: z.array(z.string()).optional(),
   /** The customer record this principal is, when they act as a customer. */
   customerId: z.string().optional(),
+  /**
+   * A person's standing in this business, set by the server: a member of its team, or a
+   * participant (no membership; what the participant grant reaches). Absent for a contact.
+   */
+  standing: BusinessStanding.optional(),
+  /** Acting through the platform (an operator's action or support access). Server-set only. */
+  onBehalfOf: OnBehalfOf.optional(),
   assurance: Assurance.optional(),
   runId: z.string().optional(),
   agentVersion: z.string().optional(),
   scopes: z.array(z.string()),
   /** Set when a person approved this parked operation; it is being replayed for them. */
   approvedBy: z.string().optional(),
-  /** How the turn reached the assistant (app, voice, whatsapp), carried into every audit row. */
+  /** How the call reached the server (app, voice, whatsapp, mcp…), carried into every audit row. */
   channel: Channel.optional(),
+  /**
+   * A guest's share link (`actor.kind: 'guest'`), set by the share guard only: the link, and how
+   * far it reaches. `link`: what the link names (the `share` grant); `sharer`: a shared page's
+   * blocks, read as the link's maker sees them, without their capabilities; `form`: a public
+   * form's submission, which creates one customer's record.
+   */
+  share: z.object({ linkId: z.string(), reach: z.enum(['link', 'sharer', 'form']) }).optional(),
 });
 export type Principal = z.infer<typeof Principal>;
 
@@ -67,22 +133,49 @@ export function parseSubjectKey(value: string): Subject | undefined {
   return undefined;
 }
 
+/** One business a person is in, for the switcher. */
+export const Business = z.object({
+  tenantId: z.string(),
+  name: z.string(),
+  as: BusinessStanding,
+  /** Their roles there: a member's, or the roles every participant holds there. */
+  roles: z.array(TenantRole),
+  /** As a participant: the participant roles their parties hold on its records. */
+  participantRoles: z.array(z.string()),
+  /** The business a session works in when it names none (a membership's). */
+  isDefault: z.boolean(),
+});
+export type Business = z.infer<typeof Business>;
+
 /** What the signed-in person is, in the business they are working in (GET /api/me). */
 export const Me = z.object({
   userId: z.string(),
-  tenantId: z.string(),
+  /** Null: they are in no business yet (sign-up made none, and nobody invited them). */
+  tenantId: z.string().nullable(),
   roles: z.array(TenantRole),
+  /** What those roles allow here, by name: what a client checks before showing a feature. */
+  capabilities: z.array(z.string()),
   customerId: z.string().nullable(),
+  /** How they are in this business; null with no business. */
+  as: BusinessStanding.nullable(),
+  /** Every business they are in, as a member or a participant. Send `x-tenant-id` to switch. */
+  businesses: z.array(Business),
+  /** The declared feature flags that are on in this business (`featureFlags`): off otherwise. */
+  features: z.array(z.string()),
 });
 export type Me = z.infer<typeof Me>;
 
 /**
- * How a business works on its channels. Every field has a default, so a new business works
- * as is; the business changes them as it grows.
+ * How a business works on its channels. Every field has a default or is optional, so a new
+ * business works as is; the business changes them as it grows. Nothing here is a market's: an
+ * unset zone or contact is the deployment's (DEFAULT_TIME_ZONE, DEFAULT_GRIEVANCE_CONTACT).
  */
 export const TenantSettings = z.object({
-  /** Who to contact about personal data (DPDP grievance officer): named in HELP. */
-  grievanceContact: z.string().default('privacy@example.in'),
+  /**
+   * Who to contact about personal data (the business's grievance or data-protection officer):
+   * on the privacy register and in WhatsApp's HELP. Unset: the deployment's, else none.
+   */
+  grievanceContact: z.string().optional(),
   privacyUrl: z.string().optional(),
   /** What the handoff message promises, e.g. "2 hours". */
   replyTime: z.string().default('2 hours'),
@@ -90,8 +183,24 @@ export const TenantSettings = z.object({
   quietHours: z
     .object({ from: z.string().default('21:00'), to: z.string().default('09:00') })
     .default({ from: '21:00', to: '09:00' }),
-  timeZone: z.string().default('Asia/Kolkata'),
+  /**
+   * The business's IANA time zone: its periods (number series, credits, summaries), business
+   * hours, quiet hours and dates. Read it with `tenantZone` (@hykr/core): unset, or a zone this
+   * process does not know, is the deployment's DEFAULT_TIME_ZONE, else UTC.
+   */
+  timeZone: z.string().optional(),
   /** Marketing messages per customer per week, at most. */
   marketingPerWeek: z.number().int().min(0).default(1),
+  /** Features switched on for this business, by key. A key that is absent is off. */
+  features: z.record(z.string(), z.boolean()).default({}),
 });
 export type TenantSettings = z.infer<typeof TenantSettings>;
+
+/**
+ * Is this feature switched on in these settings? Only `true` is on: a key that is absent, or
+ * any other value, is off. `TenantConfigService.isEnabled` in @hykr/core reads it per business.
+ */
+export const featureEnabled = (
+  settings: { features?: Readonly<Record<string, unknown>> } | undefined,
+  key: string,
+): boolean => settings?.features?.[key] === true;

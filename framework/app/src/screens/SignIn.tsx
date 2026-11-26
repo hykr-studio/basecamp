@@ -1,11 +1,46 @@
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Text, View } from 'react-native';
-import { auth, type SessionUser } from '../api';
+import { Image, Platform, Text, View } from 'react-native';
+import { api, auth, type SessionUser } from '../api';
 import { Button } from '../components/Button';
 import { Field } from '../framework/Field';
 import { errorMessage } from '../framework/hooks';
-import { getAppDomain } from '../runtime';
+import { getApp } from '../runtime';
 import { space, styles } from '../theme';
+
+/** The page's own address on the web, when it could be a business's (https); nothing elsewhere. */
+const pageOrigin = () => {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+  const { origin } = window.location;
+  return origin.startsWith('https://') ? origin : null;
+};
+
+/**
+ * Before signing in: on a business's verified address (A11), its name and logo; anywhere else
+ * (the product's own address, a refused request) the product's name.
+ */
+function DomainBrand() {
+  const origin = pageOrigin();
+  const brand = useQuery({
+    queryKey: ['branding', 'public', origin],
+    queryFn: () => api.settings.publicBranding(origin ?? undefined),
+    enabled: origin !== null,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm }}>
+      {brand.data?.logoUrl ? (
+        <Image
+          source={{ uri: brand.data.logoUrl }}
+          accessibilityIgnoresInvertColors
+          style={{ width: 36, height: 36, borderRadius: 8 }}
+        />
+      ) : null}
+      <Text style={styles.title}>{brand.data?.name ?? getApp().title}</Text>
+    </View>
+  );
+}
 
 export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void }) {
   const [mode, setMode] = useState<'signIn' | 'signUp'>('signIn');
@@ -44,10 +79,10 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: SessionUser) => void
   return (
     <View style={[styles.content, { maxWidth: 440, marginTop: 56 }]}>
       <View style={{ gap: space.xs }}>
-        <Text style={styles.title}>{getAppDomain().title}</Text>
+        <DomainBrand />
         <Text style={styles.muted}>
           The agentic development stack: an assistant acts for you through the same API, and
-          anything risky waits for your approval.
+          anything risky waits for approval.
         </Text>
       </View>
       <View style={styles.card}>

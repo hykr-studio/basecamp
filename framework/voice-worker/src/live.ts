@@ -7,10 +7,10 @@ import type { Session } from './room.js';
 import { runTurn } from './turn.js';
 
 /**
- * The Bulbul voice for each language. One voice speaks all three today; give a language its
- * own speaker here (any bulbul:v3 speaker) and switches between languages are heard too.
+ * The Bulbul voice. One speaker speaks every language (each in the language's speech tag,
+ * `speech` in its declaration); any bulbul:v3 speaker can take its place.
  */
-const SPEAKER = { en: 'shubh', hi: 'shubh', te: 'shubh' } as const;
+const SPEAKER = 'shubh';
 
 /**
  * The session needs an LLM to take turns at all; this one never runs, because ApiAgent's
@@ -96,7 +96,7 @@ export async function runLive(ctx: JobContext, session: Session, vad: VAD) {
   const tts = new sarvam.TTS({
     model: 'bulbul:v3',
     targetLanguageCode: session.lang.ttsLanguage,
-    speaker: SPEAKER[session.lang.lang],
+    speaker: SPEAKER,
   });
   const agentSession = new voice.AgentSession({
     vad,
@@ -116,7 +116,7 @@ export async function runLive(ctx: JobContext, session: Session, vad: VAD) {
   const voiceFollows = () =>
     tts.updateOptions({
       targetLanguageCode: session.lang.ttsLanguage,
-      speaker: SPEAKER[session.lang.lang],
+      speaker: SPEAKER,
     });
   session.onLangChange = voiceFollows;
 

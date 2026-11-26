@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  langOfVoice,
   type Principal,
   parseVoiceRoom,
   VOICE_AGENT_ID,
@@ -10,6 +11,7 @@ import {
   voiceRoom,
 } from '@hykr/contracts';
 import { type Database, writeAudit } from '@hykr/db';
+import { languages } from '@hykr/i18n';
 import {
   ForbiddenException,
   HttpException,
@@ -22,6 +24,7 @@ import { sql } from 'drizzle-orm';
 import { AccessToken, RoomAgentDispatch, RoomConfiguration } from 'livekit-server-sdk';
 import { config } from '../../config.js';
 import { DB } from '../../infra/db.module.js';
+import { metering } from '../../metering.js';
 import { ThreadsService, threadOwnerOf } from '../threads/threads.service.js';
 
 /** The start of today in UTC: the day the budget counts. */
@@ -54,12 +57,34 @@ export class VoiceService {
         HttpStatus.TOO_MANY_REQUESTS,
       );
 
+    // The business's caps: a paused business starts no session, and one runs no longer than
+    // what is left of its voice limit and its credits.
+    const meter = metering();
+    let left: number | undefined;
+    if (meter && p.tenantId) {
+      // Why, in the session's language when it is pinned.
+      const refused = await meter.check({
+        tenantId: p.tenantId,
+        meter: 'voice_seconds',
+        lang: langOfVoice(input.lang),
+      });
+      if (refused)
+        throw new HttpException(
+          { error: 'credits_paused', rule: refused.rule, reason: refused.reason },
+          HttpStatus.PAYMENT_REQUIRED,
+        );
+      left = await meter.headroom({ tenantId: p.tenantId, meter: 'voice_seconds' });
+    }
+
     const thread = input.threadId
       ? await this.threads.owned(input.threadId, threadOwnerOf(p))
       : await this.threads.current(threadOwnerOf(p));
     // One room per session: LiveKit dispatches the worker when a room is created.
     const room = voiceRoom(userId, thread.id, randomUUID().slice(0, 8));
-    const maxSeconds = Math.max(1, Math.min(config.voiceMaxSeconds, limit - used));
+    const maxSeconds = Math.max(
+      1,
+      Math.min(config.voiceMaxSeconds, limit - used, left ?? Number.POSITIVE_INFINITY),
+    );
 
     const token = new AccessToken(config.livekit.apiKey, config.livekit.apiSecret, {
       identity: userId,
@@ -82,6 +107,8 @@ export class VoiceService {
             lang: input.lang,
             timeZone: input.timeZone,
             maxSeconds,
+            // The application's languages: the worker does not load the application.
+            languages: languages().toWire(),
           } satisfies VoiceDispatch),
         }),
       ],
@@ -93,6 +120,8 @@ export class VoiceService {
       resourceId: thread.id,
       actorKind: 'user',
       actorId: userId,
+      // The business the session's minutes count against.
+      tenantId: p.tenantId ?? null,
       channel: 'voice',
       after: { room, lang: input.lang, maxSeconds },
     });
@@ -120,7 +149,10 @@ export class VoiceService {
     return rows[0]?.open ? named : undefined;
   }
 
-  /** The worker reports a finished session, once: its length counts against the person's day. */
+  /**
+   * The worker reports a finished session, once: its length counts against the person's day and
+   * the business's voice seconds.
+   */
   async end(p: Principal, input: VoiceSessionEnd) {
     const userId = p.actingFor?.userId;
     if (p.actor.kind !== 'agent' || p.actor.id !== VOICE_AGENT_ID || !userId)
@@ -128,6 +160,22 @@ export class VoiceService {
     const room = await this.openSession(input.room, userId);
     // Already ended (a retry) or not this person's: nothing to record.
     if (!room) return;
+    const seconds = Math.min(input.seconds, config.voiceMaxSeconds);
+    const { rows } = await this.db.execute<{ tenant_id: string | null }>(sql`
+      select tenant_id from audit.events
+      where action = 'voice.session.start' and after->>'room' = ${input.room} limit 1`);
+    const tenantId = rows[0]?.tenant_id ?? p.tenantId;
+    if (tenantId)
+      await metering()?.record({
+        tenantId,
+        meter: 'voice_seconds',
+        quantity: seconds,
+        subject: `user:${userId}`,
+        runId: p.runId ?? null,
+        channel: 'voice',
+        source: 'voice',
+        ref: input.room,
+      });
     await writeAudit(this.db, {
       action: 'voice.session.end',
       resourceType: 'thread',
@@ -137,7 +185,7 @@ export class VoiceService {
       actingFor: userId,
       runId: p.runId ?? null,
       channel: 'voice',
-      after: { ...input, seconds: Math.min(input.seconds, config.voiceMaxSeconds) },
+      after: { ...input, seconds },
     });
   }
 

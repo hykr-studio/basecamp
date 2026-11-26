@@ -9,7 +9,7 @@ import {
   type NamedEvent,
 } from '@hykr/core';
 import type { Access } from '@hykr/policy';
-import { Module } from '@nestjs/common';
+import { Controller, Get, Module, Req } from '@nestjs/common';
 import { RescheduleVisitSpec, TaskSpec, VisitSpec } from './contracts.js';
 import { tasks, visits } from './schema.js';
 
@@ -60,12 +60,25 @@ export const RescheduleVisit = defineCommand(RescheduleVisitSpec, {
   },
 });
 
+/** What reached a route: the API's own HTTP setup (`configureHttp`) under test. */
+@Controller('api/fixture-echo')
+export class EchoController {
+  @Get()
+  echo(@Req() req: { headers: Record<string, unknown>; ip?: string }) {
+    return { clientAddress: req.headers['x-hykr-client-address'] ?? null, ip: req.ip ?? null };
+  }
+}
+
+/** The tasks module's routes and handlers (and the echo, for the HTTP setup's tests). */
 @Module({
-  controllers: [
-    entityController(Task),
-    entityController(Visit),
-    commandController(RescheduleVisit),
-  ],
-  providers: [...entityHandlers(Task), ...entityHandlers(Visit), commandHandler(RescheduleVisit)],
+  controllers: [entityController(Task), EchoController],
+  providers: [...entityHandlers(Task)],
 })
-export class FixtureModule {}
+export class TasksModule {}
+
+/** The visits module's routes and handlers. */
+@Module({
+  controllers: [entityController(Visit), commandController(RescheduleVisit)],
+  providers: [...entityHandlers(Visit), commandHandler(RescheduleVisit)],
+})
+export class VisitsModule {}

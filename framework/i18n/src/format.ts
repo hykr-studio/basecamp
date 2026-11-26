@@ -1,16 +1,15 @@
-import type { Lang, Noun } from './lang.js';
+import { type Lang, localeOf, type Noun, pick } from './lang.js';
 import { t } from './messages.js';
 
 /**
  * Words for dates, times and counts, in the person's language and time zone; no ids, no ISO
- * strings. English keeps the day-month order people here read ("Mon 5 Oct, 14:30").
+ * strings. Each language is written in its declared locale (`localeOf`); English's default,
+ * en-GB, keeps the day-month order ("Mon 5 Oct, 14:30").
  */
-const LOCALE: Record<Lang, string> = { en: 'en-GB', hi: 'hi-IN', te: 'te-IN' };
-export const localeOf = (lang: Lang) => LOCALE[lang];
 
 /** "Mon 5 Oct", from YYYY-MM-DD. */
 export function dayText(ymd: string, lang: Lang = 'en'): string {
-  return new Date(`${ymd}T00:00:00Z`).toLocaleDateString(LOCALE[lang], {
+  return new Date(`${ymd}T00:00:00Z`).toLocaleDateString(localeOf(lang), {
     weekday: 'short',
     day: 'numeric',
     month: 'short',
@@ -20,7 +19,7 @@ export function dayText(ymd: string, lang: Lang = 'en'): string {
 
 /** "Mon 5 Oct, 14:30", from an ISO date-time. */
 export function whenText(iso: string, timeZone: string, lang: Lang = 'en'): string {
-  return new Date(iso).toLocaleString(LOCALE[lang], {
+  return new Date(iso).toLocaleString(localeOf(lang), {
     weekday: 'short',
     day: 'numeric',
     month: 'short',
@@ -32,7 +31,7 @@ export function whenText(iso: string, timeZone: string, lang: Lang = 'en'): stri
 
 /** "14:30". */
 export function clockText(iso: string, timeZone: string, lang: Lang = 'en'): string {
-  return new Date(iso).toLocaleTimeString(LOCALE[lang], {
+  return new Date(iso).toLocaleTimeString(localeOf(lang), {
     hour: '2-digit',
     minute: '2-digit',
     timeZone,
@@ -44,7 +43,7 @@ export function clockText(iso: string, timeZone: string, lang: Lang = 'en'): str
  * "02:30") read as clipped words and digits.
  */
 export function spokenWhen(iso: string, timeZone: string, lang: Lang = 'en'): string {
-  return new Date(iso).toLocaleString(LOCALE[lang], {
+  return new Date(iso).toLocaleString(localeOf(lang), {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
@@ -56,7 +55,7 @@ export function spokenWhen(iso: string, timeZone: string, lang: Lang = 'en'): st
 
 /** "Monday 5 October", from YYYY-MM-DD, to say aloud. */
 export function spokenDay(ymd: string, lang: Lang = 'en'): string {
-  return new Date(`${ymd}T00:00:00Z`).toLocaleDateString(LOCALE[lang], {
+  return new Date(`${ymd}T00:00:00Z`).toLocaleDateString(localeOf(lang), {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
@@ -67,13 +66,13 @@ export function spokenDay(ymd: string, lang: Lang = 'en'): string {
 /** Singular or plural: Intl's rule where the runtime has it (Hermes may not), else n === 1. */
 function isOne(n: number, lang: Lang) {
   return typeof Intl.PluralRules === 'function'
-    ? new Intl.PluralRules(LOCALE[lang]).select(n) === 'one'
+    ? new Intl.PluralRules(localeOf(lang)).select(n) === 'one'
     : n === 1;
 }
 
 /** "3 to-dos", "1 to-do"; "3 काम". */
 export function count(n: number, noun: Noun, lang: Lang = 'en'): string {
-  const [one, many] = noun[lang];
+  const [one, many] = pick(noun, lang);
   return `${n} ${isOne(n, lang) ? one : many}`;
 }
 

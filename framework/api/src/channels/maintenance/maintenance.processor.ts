@@ -9,15 +9,18 @@ import { ErasureService } from './erasure.service.js';
 
 export type MaintenanceJob =
   | { kind: 'erase'; contactId: string }
+  /** Retired: retention is the privacy feature's runner now (a scheduler left in Redis). */
   | { kind: 'retention' }
   | { kind: 'stale-handoffs' };
 
-/** Raw webhook payloads are kept for debugging and replay, for 30 days. */
-const RETENTION_DAYS = 30;
 /** A handoff nobody has taken for this long is flagged to the business. */
 const STALE_HOURS = 24;
 
-/** Housekeeping: erasing a contact's data, clearing old payloads, flagging forgotten handoffs. */
+/**
+ * Housekeeping: erasing a contact's data ("delete my data", through the privacy feature) and
+ * flagging forgotten handoffs. Raw webhook payloads are cleared by the privacy feature's
+ * retention runner (`channel.inbound-payloads`), after the period the application declares.
+ */
 @Processor(QUEUES.maintenance)
 export class MaintenanceProcessor extends WorkerHost implements OnModuleInit {
   constructor(
@@ -29,11 +32,8 @@ export class MaintenanceProcessor extends WorkerHost implements OnModuleInit {
   }
 
   async onModuleInit() {
-    await this.queue.upsertJobScheduler(
-      'retention',
-      { every: 24 * 60 * 60 * 1000 },
-      { name: 'retention', data: { kind: 'retention' } },
-    );
+    // The old daily payload clearing is the privacy feature's retention runner now.
+    await this.queue.removeJobScheduler('retention').catch(() => undefined);
     await this.queue.upsertJobScheduler(
       'stale-handoffs',
       { every: 60 * 60 * 1000 },
@@ -44,12 +44,6 @@ export class MaintenanceProcessor extends WorkerHost implements OnModuleInit {
   async process(job: Job<MaintenanceJob>) {
     if (job.data.kind === 'erase') return this.erasure.erase(job.data.contactId);
     if (job.data.kind === 'stale-handoffs') return this.flagStale();
-    await this.db
-      .update(schema.inboundEvents)
-      .set({ payload: null })
-      .where(
-        lt(schema.inboundEvents.receivedAt, sql`now() - make_interval(days => ${RETENTION_DAYS})`),
-      );
   }
 
   /** Open for a day with nobody on it: flagged, so the inbox shows it first. */
